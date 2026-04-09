@@ -1,0 +1,45 @@
+{
+  "name": "Nombre de ejemplo - Servicio de ejemplo - Ciudad de ejemplo",
+  "description": "Resumen del lead\\n\\nTelefono: +56911111111\\nCanal: WhatsApp\\nRequerimiento: Necesito mas informacion sobre el servicio.",
+  "assignees": [
+    "CLICKUP_USER_ID"
+  ],
+  "custom_fields": [
+    {
+      "id": "CLICKUP_CF_WHATSAPP_NAME_ID",
+      "value": "Nombre de ejemplo"
+    },
+    {
+      "id": "CLICKUP_CF_PHONE_ID",
+      "value": "+56911111111"
+    },
+    {
+      "id": "CLICKUP_CF_SERVICE_ID",
+      "value": "Servicio de ejemplo"
+    },
+    {
+      "id": "CLICKUP_CF_CITY_ID",
+      "value": "Ciudad de ejemplo"
+    },
+    {
+      "id": "CLICKUP_CF_REQUIREMENT_ID",
+      "value": "Necesito mas informacion sobre el servicio."
+    },
+    {
+      "id": "CLICKUP_CF_CHANNEL_ID",
+      "value": "CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID"
+    },
+    {
+      "id": "CLICKUP_CF_INTERNAL_LEAD_ID",
+      "value": "lead_000001"
+    },
+    {
+      "id": "CLICKUP_CF_SOURCE_NUMBER_ID",
+      "value": "WHATSAPP_PHONE_NUMBER_ID"
+    }
+  ],
+  "comment": {
+    "title": "Conversación Completa Cliente",
+    "body": "2026-04-09 10:00 Cliente: Hola, quiero informacion.\\n2026-04-09 10:01 Bot: ¿Qué servicio estás buscando?"
+  }
+}

@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.local
+.env.*.local
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# Datos locales y temporales
+tmp/
+data/
+
+# n8n
+.n8n/
+
+# Python
+__pycache__/
+*.pyc
+

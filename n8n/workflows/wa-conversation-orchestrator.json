@@ -1,0 +1,101 @@
+{
+  "name": "WA - Conversation Orchestrator",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Leer o crear la conversacion activa por telefono\nSELECT 1;"
+      },
+      "id": "2",
+      "name": "Load Conversation State",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Consolida contexto, extrae campos utiles, evalua intencion real y decide el siguiente paso.\n// En la siguiente fase este nodo implementara la logica 2 de 3 + intencion.\nreturn items;"
+      },
+      "id": "3",
+      "name": "Evaluate Conversation Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Persistir actualizaciones de conversacion, mensajes, estados y auditoria\nSELECT 1;"
+      },
+      "id": "4",
+      "name": "Persist Conversation State",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Load Conversation State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Conversation State": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Conversation Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Conversation Step": {
+      "main": [
+        [
+          {
+            "node": "Persist Conversation State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "10000000-0000-0000-0000-000000000002",
+  "meta": {},
+  "tags": []
+}

@@ -1,0 +1,101 @@
+{
+  "name": "CRM - Seller Notification Dispatch",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Construye el mensaje al vendedor y define el canal primario.\nreturn items;"
+      },
+      "id": "2",
+      "name": "Build Seller Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://example.invalid/internal-notification"
+      },
+      "id": "3",
+      "name": "Dispatch Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Guardar resultado de notificacion, auditoria e incidente operativo si falla\nSELECT 1;"
+      },
+      "id": "4",
+      "name": "Persist Notification Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Build Seller Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Seller Notification": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Notification": {
+      "main": [
+        [
+          {
+            "node": "Persist Notification Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "10000000-0000-0000-0000-000000000006",
+  "meta": {},
+  "tags": []
+}

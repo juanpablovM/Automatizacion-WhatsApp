@@ -1,0 +1,76 @@
+{
+  "name": "OPS - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Normaliza el error, identifica entidad afectada y prepara auditoria operativa.\nreturn items;"
+      },
+      "id": "2",
+      "name": "Normalize Error Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Insertar auditoria de error y marcar incidente operativo cuando corresponda\nSELECT 1;"
+      },
+      "id": "3",
+      "name": "Persist Error Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Workflow Error": {
+      "main": [
+        [
+          {
+            "node": "Normalize Error Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Error Context": {
+      "main": [
+        [
+          {
+            "node": "Persist Error Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "10000000-0000-0000-0000-000000000007",
+  "meta": {},
+  "tags": []
+}

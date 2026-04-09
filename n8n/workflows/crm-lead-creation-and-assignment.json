@@ -1,0 +1,101 @@
+{
+  "name": "CRM - Lead Creation And Assignment",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Buscar lead previo, conversacion activa y datos heredables\nSELECT 1;"
+      },
+      "id": "2",
+      "name": "Load CRM Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Consolida el lead, decide si hereda datos previos y prepara la asignacion round robin.\nreturn items;"
+      },
+      "id": "3",
+      "name": "Prepare Lead Assignment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Crear lead, actualizar puntero de round robin y registrar historial de asignacion\nSELECT 1;"
+      },
+      "id": "4",
+      "name": "Persist Lead And Rotation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Load CRM Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load CRM Context": {
+      "main": [
+        [
+          {
+            "node": "Prepare Lead Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Lead Assignment": {
+      "main": [
+        [
+          {
+            "node": "Persist Lead And Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "10000000-0000-0000-0000-000000000004",
+  "meta": {},
+  "tags": []
+}

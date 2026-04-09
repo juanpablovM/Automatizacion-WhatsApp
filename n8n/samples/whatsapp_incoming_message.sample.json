@@ -1,0 +1,40 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "56900000000",
+              "phone_number_id": "WHATSAPP_PHONE_NUMBER_ID"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Nombre de ejemplo"
+                },
+                "wa_id": "56911111111"
+              }
+            ],
+            "messages": [
+              {
+                "from": "56911111111",
+                "id": "wamid.EXAMPLE",
+                "timestamp": "1712500000",
+                "type": "text",
+                "text": {
+                  "body": "Hola, estoy interesado en sus servicios"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+
