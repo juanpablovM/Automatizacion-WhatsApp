@@ -1,6 +1,6 @@
 # CRM WhatsApp Automatizado
 
-Base inicial del proyecto para automatizar la captura, calificacion, registro y asignacion de leads desde WhatsApp usando `n8n` self-hosted, `PostgreSQL` y `Docker Compose`.
+Base inicial del proyecto para automatizar la captura, calificacion, registro y asignacion de leads desde WhatsApp usando `n8n` self-hosted, `PostgreSQL`, `Evolution API` y `Docker Compose`.
 
 ## Estado actual
 
@@ -15,13 +15,15 @@ En esta etapa:
 - se implemento la base de datos inicial del CRM
 - se separo la base interna de `n8n` de la base del CRM
 - se documento el flujo funcional y la arquitectura de workflows
-- no se implementaron todavia los workflows reales ni las integraciones externas
+- se implementaron workflows base con logica real del CRM
+- ClickUp ya fue validado con una prueba real
+- la capa de WhatsApp fue migrada de Cloud API a `Evolution API`
 
 ## Objetivo del proyecto
 
 Construir una automatizacion mantenible para:
 
-- recibir mensajes entrantes desde WhatsApp oficial
+- recibir mensajes entrantes desde WhatsApp via `Evolution API`
 - calificar leads con un flujo conversacional guiado
 - registrar leads en ClickUp
 - asignar leads con round robin
@@ -45,6 +47,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Arquitectura n8n](./docs/n8n-workflows.md)
 - [Base de datos](./docs/base-de-datos.md)
 - [Integraciones](./docs/integraciones.md)
+- [Evolution API](./docs/evolution-api.md)
 - [Configuracion ClickUp](./docs/clickup-configuracion.md)
 - [Handoff Actual](./docs/handoff-actual.md)
 - [Operacion local](./docs/operacion-local.md)
@@ -54,6 +57,7 @@ scripts/             Utilidades de desarrollo y operacion
 - `docker-compose.yml`: punto de entrada de la orquestacion local
 - `.env.example`: plantilla de variables de entorno
 - `n8n/workflows/`: workflows exportados y versionados
+- `n8n/workflow-links.json`: manifest de enlaces entre workflows por nombre
 - `n8n/samples/`: payloads de ejemplo para pruebas y diseno
 - `infra/postgres/migrations/`: migraciones versionadas
 
@@ -74,16 +78,21 @@ Puertos locales del proyecto:
 
 - `n8n`: `127.0.0.1:5678`
 - `PostgreSQL`: `127.0.0.1:5433`
+- `Evolution API`: `127.0.0.1:8080`
 
 Bases de datos locales:
 
 - `crm_whatsapp`: base interna de `n8n`
 - `crm_whatsapp_app`: base del CRM y la logica de negocio
+- `evolution_api`: base tecnica de `Evolution API`
 
 ## Siguiente paso sugerido
 
-La siguiente implementacion recomendada es:
+La operacion recomendada para workflows versionados es:
 
-- construir los workflows reales en `n8n`
-- definir queries SQL operativas por workflow
-- preparar las credenciales e integraciones reales con WhatsApp y ClickUp
+```bash
+sh scripts/dev/sync-n8n-workflows.sh --preflight
+sh scripts/dev/sync-n8n-workflows.sh
+```
+
+El script usa el CLI oficial de `n8n` para importar workflows, resuelve los sub-workflows por nombre desde `n8n/workflow-links.json` y conecta `OPS - Error Handler` como workflow de errores.

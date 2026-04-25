@@ -15,7 +15,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Normaliza el error, identifica entidad afectada y prepara auditoria operativa.\nreturn items;"
+        "jsCode": "const payload = items[0]?.json ?? {};\nconst execution = payload.execution ?? {};\nconst workflow = payload.workflow ?? {};\nconst error = payload.error ?? payload;\n\nconst parseLeadId = () => {\n  const candidates = [\n    payload.lead_id,\n    payload.leadId,\n    execution?.data?.resultData?.lastNodeExecutedData?.lead_id,\n    execution?.data?.lead_id,\n    error?.lead_id,\n  ];\n\n  for (const value of candidates) {\n    if (value === undefined || value === null || value === '') continue;\n    const numeric = Number(value);\n    if (Number.isFinite(numeric)) return numeric;\n  }\n\n  return null;\n};\n\nconst leadId = parseLeadId();\nconst workflowName = workflow.name || execution.workflowData?.name || 'unknown_workflow';\nconst message = error.message || error.description || 'Unhandled n8n workflow error';\nconst stack = error.stack || null;\nconst lastNode = execution.lastNodeExecuted || execution.data?.resultData?.lastNodeExecuted || null;\n\nreturn [\n  {\n    json: {\n      lead_id: leadId,\n      event_name: 'workflow_execution_error',\n      entity_type: leadId ? 'lead' : 'workflow',\n      entity_id: leadId,\n      result: 'error',\n      before_payload_json: JSON.stringify({ workflow_name: workflowName, last_node: lastNode }),\n      after_payload_json: JSON.stringify({ message, stack }),\n      metadata_json: JSON.stringify({\n        workflow_name: workflowName,\n        workflow_id: workflow.id || execution.workflowId || null,\n        last_node: lastNode,\n        execution_status: execution.status || null,\n      }),\n    },\n  },\n];"
       },
       "id": "2",
       "name": "Normalize Error Context",
@@ -29,12 +29,23 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Insertar auditoria de error y marcar incidente operativo cuando corresponda\nSELECT 1;"
+        "query": "WITH audit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  VALUES (\n    $1::text,\n    $2::text,\n    NULLIF($3::text, '')::bigint,\n    'system',\n    'n8n',\n    $4::text,\n    COALESCE(NULLIF($5::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($6::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb)\n  )\n  RETURNING id\n),\nlead_update AS (\n  UPDATE leads l\n  SET\n    lead_status_id = ls.id,\n    updated_at = NOW()\n  FROM lead_statuses ls\n  WHERE NULLIF($8::text, '') IS NOT NULL\n    AND l.id = NULLIF($8::text, '')::bigint\n    AND ls.code = 'error'\n  RETURNING l.id\n)\nSELECT\n  ai.id AS audit_id,\n  lu.id AS updated_lead_id\nFROM audit_insert ai\nLEFT JOIN lead_update lu ON TRUE;"
+        ,
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "event_name,entity_type,entity_id,result,before_payload_json,after_payload_json,metadata_json,lead_id"
+        }
       },
       "id": "3",
       "name": "Persist Error Audit",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
       "position": [
         780,
         300

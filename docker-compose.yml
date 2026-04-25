@@ -22,6 +22,22 @@ services:
     networks:
       - crm_network
 
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    container_name: ${PROJECT_NAME:-crm-whatsapp-automatizado}-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - crm_network
+
   n8n:
     image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:1.123.29}
     container_name: ${PROJECT_NAME:-crm-whatsapp-automatizado}-n8n
@@ -47,12 +63,73 @@ services:
       N8N_RUNNERS_ENABLED: ${N8N_RUNNERS_ENABLED:-true}
       N8N_DIAGNOSTICS_ENABLED: ${N8N_DIAGNOSTICS_ENABLED:-false}
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: ${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: ${N8N_BLOCK_ENV_ACCESS_IN_NODE:-false}
+      N8N_GIT_NODE_DISABLE_BARE_REPOS: ${N8N_GIT_NODE_DISABLE_BARE_REPOS:-true}
       GENERIC_TIMEZONE: ${TZ:-America/Santiago}
       TZ: ${TZ:-America/Santiago}
+      EVOLUTION_API_BASE_URL: ${EVOLUTION_API_BASE_URL:-http://evolution-api:8080}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-change_me}
+      EVOLUTION_DEFAULT_INSTANCE: ${EVOLUTION_DEFAULT_INSTANCE:-principal}
+      INTERNAL_NOTIFICATION_CHANNEL: ${INTERNAL_NOTIFICATION_CHANNEL:-whatsapp}
+      CLICKUP_API_TOKEN: ${CLICKUP_API_TOKEN:-__PENDIENTE__}
+      CLICKUP_LIST_ID: ${CLICKUP_LIST_ID:-__PENDIENTE__}
+      CLICKUP_CF_WHATSAPP_NAME_ID: ${CLICKUP_CF_WHATSAPP_NAME_ID:-__PENDIENTE__}
+      CLICKUP_CF_PHONE_ID: ${CLICKUP_CF_PHONE_ID:-__PENDIENTE__}
+      CLICKUP_CF_SERVICE_ID: ${CLICKUP_CF_SERVICE_ID:-__PENDIENTE__}
+      CLICKUP_CF_CITY_ID: ${CLICKUP_CF_CITY_ID:-__PENDIENTE__}
+      CLICKUP_CF_REQUIREMENT_ID: ${CLICKUP_CF_REQUIREMENT_ID:-__PENDIENTE__}
+      CLICKUP_CF_CHANNEL_ID: ${CLICKUP_CF_CHANNEL_ID:-__PENDIENTE__}
+      CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID: ${CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID:-__PENDIENTE__}
+      CLICKUP_CF_INTERNAL_LEAD_ID: ${CLICKUP_CF_INTERNAL_LEAD_ID:-__PENDIENTE__}
+      CLICKUP_CF_SOURCE_NUMBER_ID: ${CLICKUP_CF_SOURCE_NUMBER_ID:-__PENDIENTE__}
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
+    networks:
+      crm_network:
+        aliases:
+          - n8n.internal.crm
+
+  evolution-api:
+    image: ${EVOLUTION_API_IMAGE:-evoapicloud/evolution-api:v2.3.7}
+    container_name: ${PROJECT_NAME:-crm-whatsapp-automatizado}-evolution-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_TYPE: ${EVOLUTION_SERVER_TYPE:-http}
+      SERVER_PORT: 8080
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change_me}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: ${EVOLUTION_EXPOSE_INSTANCES:-true}
+      LANGUAGE: ${EVOLUTION_LANGUAGE:-en}
+      DEL_INSTANCE: ${EVOLUTION_DEL_INSTANCE:-false}
+      DATABASE_ENABLED: true
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${EVOLUTION_POSTGRES_DB:-evolution_api}?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: ${EVOLUTION_DB_CLIENT_NAME:-evolution_exchange}
+      DATABASE_SAVE_DATA_INSTANCE: ${EVOLUTION_SAVE_INSTANCE_DATA:-true}
+      DATABASE_SAVE_DATA_NEW_MESSAGE: ${EVOLUTION_SAVE_NEW_MESSAGES:-true}
+      DATABASE_SAVE_MESSAGE_UPDATE: ${EVOLUTION_SAVE_MESSAGE_UPDATE:-true}
+      DATABASE_SAVE_DATA_CONTACTS: ${EVOLUTION_SAVE_CONTACTS:-true}
+      DATABASE_SAVE_DATA_CHATS: ${EVOLUTION_SAVE_CHATS:-true}
+      DATABASE_SAVE_DATA_LABELS: ${EVOLUTION_SAVE_LABELS:-false}
+      DATABASE_SAVE_DATA_HISTORIC: ${EVOLUTION_SAVE_HISTORIC:-true}
+      CACHE_REDIS_ENABLED: ${EVOLUTION_REDIS_ENABLED:-true}
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: ${EVOLUTION_REDIS_PREFIX:-evolution}
+      CACHE_REDIS_SAVE_INSTANCES: ${EVOLUTION_SAVE_INSTANCES_IN_REDIS:-true}
+      CACHE_LOCAL_ENABLED: true
+      TELEMETRY: ${EVOLUTION_TELEMETRY:-false}
+      TZ: ${TZ:-America/Santiago}
+    ports:
+      - "127.0.0.1:${EVOLUTION_API_PORT:-8080}:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
     networks:
       - crm_network
 
@@ -61,6 +138,10 @@ volumes:
     name: ${PROJECT_NAME:-crm-whatsapp-automatizado}_postgres_data
   n8n_data:
     name: ${PROJECT_NAME:-crm-whatsapp-automatizado}_n8n_data
+  redis_data:
+    name: ${PROJECT_NAME:-crm-whatsapp-automatizado}_redis_data
+  evolution_instances:
+    name: ${PROJECT_NAME:-crm-whatsapp-automatizado}_evolution_instances
 
 networks:
   crm_network:

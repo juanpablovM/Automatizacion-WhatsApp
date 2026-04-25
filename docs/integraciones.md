@@ -6,10 +6,11 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 
 ## Integraciones previstas
 
-### WhatsApp Cloud API
+### Evolution API
 
-- recepcion de mensajes entrantes
+- recepcion de mensajes entrantes por webhook
 - envio de respuestas automaticas
+- gestion de instancias por numero
 - soporte futuro para multiples numeros
 
 ### ClickUp API
@@ -23,8 +24,8 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 
 ### Notificacion interna
 
-- canal prioritario: WhatsApp interno
-- respaldo operativo: ClickUp
+- canal prioritario: ClickUp
+- comentario asignado al vendedor en la tarea del lead
 - reintentos automaticos
 - auditoria e incidente operativo si la notificacion falla
 
@@ -34,14 +35,16 @@ Los secretos reales no se guardan en el repositorio. Solo se dejan placeholders 
 
 ## Estado actual de integraciones
 
-En esta fase las integraciones externas aun no estan conectadas. La infraestructura local queda lista para:
+En esta fase las integraciones externas ya quedaron parcialmente conectadas. La infraestructura local queda lista para:
 
 - levantar el orquestador `n8n`
 - persistir configuracion y ejecuciones en `PostgreSQL`
-- preparar credenciales futuras sin versionar secretos
+- operar `Evolution API` localmente
+- usar ClickUp real sin versionar secretos
 
 ## Pendientes
 
 - confirmar entorno de prueba o produccion por integracion
-- definir credenciales efectivas
-- decidir estrategia de prueba para WhatsApp oficial
+- crear la primera instancia de `Evolution API`
+- escanear el QR del numero inicial
+- decidir estrategia operativa para multiples instancias

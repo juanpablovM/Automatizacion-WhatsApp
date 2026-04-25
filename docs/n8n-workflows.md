@@ -44,7 +44,7 @@ Se evita un workflow unico grande porque:
 - validacion del payload entrante
 - secuencia del flujo conversacional
 - extraccion y normalizacion de datos
-- llamadas a WhatsApp
+- llamadas a `Evolution API`
 - llamadas a ClickUp
 - notificacion interna
 - reintentos operativos
@@ -81,14 +81,13 @@ Regla:
 
 Responsabilidad:
 
-- recibir eventos entrantes desde WhatsApp
-- validar challenge del webhook cuando corresponda
+- recibir eventos entrantes desde `Evolution API`
 - normalizar el payload inicial
 - enrutar eventos utiles al procesamiento conversacional
 
 Entrada:
 
-- webhook HTTP desde WhatsApp Cloud API
+- webhook HTTP desde `Evolution API`
 
 Salida:
 
@@ -105,7 +104,7 @@ Nodos principales:
 
 Notas:
 
-- debe soportar mensajes y verificacion de webhook
+- debe soportar mensajes utilies desde eventos `MESSAGES_UPSERT`
 - debe detectar rapidamente si el evento no corresponde a mensaje util
 
 ### 2. `conversation_orchestrator`
@@ -143,7 +142,8 @@ Uso de `Code`:
 - deteccion de campos ya respondidos
 - seleccion de pregunta pendiente
 - conteo de intentos de comprension
-- evaluacion `2 de 3 + intencion`
+- separacion entre intencion detectada y datos suficientes
+- confirmacion de `servicio + ciudad + requerimiento concreto`
 
 Uso de IA:
 
@@ -154,7 +154,7 @@ Uso de IA:
 
 Responsabilidad:
 
-- enviar mensajes salientes al cliente por WhatsApp
+- enviar mensajes salientes al cliente por `Evolution API`
 - aplicar reintentos
 - registrar auditoria y estado del envio
 
@@ -278,8 +278,8 @@ Nodos principales:
 Diseño:
 
 - subworkflow abstracto
-- canal primario: WhatsApp interno
-- respaldo operativo: ClickUp
+- canal primario: ClickUp
+- comenta la tarea creada y asigna el comentario al `clickup_user_id`
 - mas adelante puede admitir otro canal sin cambiar el resto
 
 ### 7. `operational_error_handler`
@@ -339,18 +339,18 @@ Nodos principales:
 
 ### Ya preparadas en el proyecto
 
-- `WHATSAPP_ACCESS_TOKEN`
-- `WHATSAPP_PHONE_NUMBER_ID`
-- `WHATSAPP_VERIFY_TOKEN`
-- `WHATSAPP_BUSINESS_ACCOUNT_ID`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_API_BASE_URL`
+- `EVOLUTION_DEFAULT_INSTANCE`
+- `EVOLUTION_WEBHOOK_URL`
 - `CLICKUP_API_TOKEN`
 - `CLICKUP_LIST_ID`
 - `CLICKUP_TEAM_ID`
 
 ### Credenciales/nodos a configurar en n8n
 
-- conexion HTTP para WhatsApp Cloud API
-- conexion HTTP para ClickUp API
+- llamadas HTTP hacia `Evolution API`
+- llamadas HTTP hacia ClickUp API
 - conexion PostgreSQL a `crm_whatsapp_app`
 
 ## Conexion PostgreSQL desde n8n
@@ -385,6 +385,17 @@ Se recomienda guardar en `n8n/workflows/`:
 - `crm-clickup-sync-lead.json`
 - `crm-seller-notification-dispatch.json`
 - `ops-error-handler.json`
+
+Los enlaces entre workflows se versionan por nombre en `n8n/workflow-links.json`. Los IDs visibles dentro de los exports de `n8n` no son la fuente de verdad: `scripts/dev/sync-n8n-workflows.sh` importa con el CLI oficial, consulta los IDs actuales de la instancia y genera copias temporales resueltas antes de reimportar.
+
+Comandos recomendados:
+
+```bash
+sh scripts/dev/sync-n8n-workflows.sh --preflight
+sh scripts/dev/sync-n8n-workflows.sh
+```
+
+El script tambien configura `OPS - Error Handler` como `errorWorkflow` de todos los workflows versionados, excepto el propio handler.
 
 ## Libreria de queries SQL
 

@@ -8,56 +8,217 @@
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
       "position": [
-        260,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "// Construye payload de ClickUp, descripcion resumen, comentario de conversacion completa y adjuntos.\nreturn items;"
-      },
-      "id": "2",
-      "name": "Build ClickUp Payload",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        520,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://api.clickup.com/api/v2/list/CLICKUP_LIST_ID/task"
-      },
-      "id": "3",
-      "name": "Create ClickUp Task",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
-      "position": [
-        780,
-        300
+        220,
+        320
       ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Guardar clickup_task_id, clickup_task_url y auditoria de sincronizacion\nSELECT 1;"
+        "query": "SELECT\n  l.id AS lead_id,\n  l.whatsapp_name,\n  l.phone_number,\n  l.service,\n  l.city,\n  l.requirement,\n  l.channel,\n  l.source_number_id,\n  s.id AS seller_id,\n  s.name AS seller_name,\n  s.clickup_user_id,\n  s.whatsapp_number AS seller_whatsapp_number,\n  COALESCE(\n    (\n      SELECT string_agg(\n        CONCAT(\n          to_char(COALESCE(m.external_timestamp, m.created_at), 'YYYY-MM-DD HH24:MI'),\n          ' ',\n          CASE WHEN m.direction = 'incoming' THEN 'Cliente' ELSE 'Bot' END,\n          ': ',\n          COALESCE(m.text_body, CONCAT('[', m.message_type, ']'))\n        ),\n        E'\\n'\n        ORDER BY COALESCE(m.external_timestamp, m.created_at)\n      )\n      FROM messages m\n      WHERE m.lead_id = l.id\n        AND m.deleted_at IS NULL\n    ),\n    ''\n  ) AS full_conversation,\n  COALESCE(\n    (\n      SELECT json_agg(\n        json_build_object(\n          'attachment_id', ma.id,\n          'attachment_type', ma.attachment_type,\n          'mime_type', ma.mime_type,\n          'filename', ma.filename,\n          'external_media_id', ma.external_media_id,\n          'external_url', ma.external_url,\n          'file_size', ma.file_size\n        )\n      )\n      FROM message_attachments ma\n      JOIN messages m ON m.id = ma.message_id\n      WHERE m.lead_id = l.id\n        AND ma.deleted_at IS NULL\n    ),\n    '[]'::json\n  ) AS attachments_json\nFROM leads l\nLEFT JOIN sellers s ON s.id = l.assigned_seller_id\nWHERE l.id = $1::bigint\n  AND l.deleted_at IS NULL;",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryParams": "lead_id"
+        }
+      },
+      "id": "2",
+      "name": "Load ClickUp Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        460,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst configured = (value) => !!value && !String(value).includes('__PENDIENTE__');\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst asInt = (value) => {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : null;\n};\nconst normalizePhone = (value) => {\n  const raw = safe(value);\n  if (!raw) return '';\n\n  const compact = raw.replace(/\\s+/g, '');\n  if (compact.startsWith('+')) {\n    const digits = compact.slice(1).replace(/\\D/g, '');\n    return digits ? `+${digits}` : '';\n  }\n\n  const digits = compact.replace(/\\D/g, '');\n  return digits ? `+${digits}` : '';\n};\n\nconst leadId = row.lead_id;\nif (!leadId) {\n  throw new Error('CRM - ClickUp Sync Lead requiere lead_id');\n}\n\nconst listId = $env.CLICKUP_LIST_ID;\nif (!configured(listId)) {\n  throw new Error('CLICKUP_LIST_ID no esta configurado');\n}\n\nconst whatsappName = safe(row.whatsapp_name, 'Sin Nombre');\nconst service = safe(row.service, 'Sin Servicio');\nconst city = safe(row.city, 'Sin Ciudad');\nconst requirement = safe(row.requirement, 'Sin requerimiento informado');\nconst phoneNumber = safe(row.phone_number);\nconst clickupPhoneNumber = normalizePhone(phoneNumber);\nconst channel = safe(row.channel, 'whatsapp');\nconst sourceNumberId = safe(row.source_number_id);\nconst fullConversation = safe(row.full_conversation);\n\nconst taskName = `${whatsappName} - ${service} - ${city}`;\nconst description = [\n  'Resumen del lead',\n  '',\n  `Telefono: ${clickupPhoneNumber || phoneNumber || 'No informado'}`,\n  `Canal: ${channel || 'whatsapp'}`,\n  `Ciudad: ${city}`,\n  `Servicio: ${service}`,\n  `Requerimiento: ${requirement}`,\n  sourceNumberId ? `Numero de Ingreso: ${sourceNumberId}` : null,\n].filter(Boolean).join('\\n');\n\nconst customFields = [];\nconst pushCustomField = (fieldId, value) => {\n  if (!configured(fieldId)) return;\n  if (value === undefined || value === null || value === '') return;\n  customFields.push({ id: fieldId, value });\n};\n\npushCustomField($env.CLICKUP_CF_WHATSAPP_NAME_ID, whatsappName);\npushCustomField($env.CLICKUP_CF_PHONE_ID, clickupPhoneNumber || phoneNumber);\npushCustomField($env.CLICKUP_CF_SERVICE_ID, service);\npushCustomField($env.CLICKUP_CF_CITY_ID, city);\npushCustomField($env.CLICKUP_CF_REQUIREMENT_ID, requirement);\npushCustomField($env.CLICKUP_CF_INTERNAL_LEAD_ID, String(leadId));\npushCustomField($env.CLICKUP_CF_SOURCE_NUMBER_ID, sourceNumberId || null);\nif (configured($env.CLICKUP_CF_CHANNEL_ID) && configured($env.CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID)) {\n  customFields.push({\n    id: $env.CLICKUP_CF_CHANNEL_ID,\n    value: $env.CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID,\n  });\n}\n\nconst assigneeId = asInt(row.clickup_user_id);\nconst taskPayload = {\n  name: taskName,\n  description,\n  notify_all: false,\n  assignees: assigneeId ? [assigneeId] : [],\n  custom_fields: customFields,\n};\n\nconst commentText = fullConversation\n  ? `Conversación Completa Cliente\\n\\n${fullConversation}`\n  : '';\n\nreturn [\n  {\n    json: {\n      lead_id: leadId,\n      task_name: taskName,\n      task_description: description,\n      attachments_json: row.attachments_json || [],\n      clickup_task_url: `https://api.clickup.com/api/v2/list/${listId}/task`,\n      clickup_task_payload: taskPayload,\n      comment_text: commentText,\n      comment_enabled: Boolean(commentText),\n    },\n  },\n];"
+      },
+      "id": "3",
+      "name": "Build ClickUp Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.clickup_task_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $env.CLICKUP_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.clickup_task_payload }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "id": "4",
+      "name": "Create ClickUp Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        700,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "5",
+      "name": "Merge ClickUp Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst isSuccess = statusCode >= 200 && statusCode < 300 && !!responseBody?.id;\nconst taskId = isSuccess ? String(responseBody.id) : null;\nconst taskUrl = isSuccess ? String(responseBody.url || `https://app.clickup.com/t/${responseBody.id}`) : null;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      clickup_task_id: taskId,\n      clickup_task_url: taskUrl,\n      is_success: isSuccess,\n      event_name: 'clickup_task_sync',\n      result: isSuccess ? 'success' : 'error',\n      comment_enabled: Boolean(row.comment_enabled_1 || row.comment_enabled),\n      comment_text: row.comment_text_1 || row.comment_text || '',\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n      }),\n      metadata_json: JSON.stringify({\n        task_name: row.task_name_1 || row.task_name || null,\n        attachments_count: Array.isArray(row.attachments_json_1) ? row.attachments_json_1.length : 0,\n      }),\n    },\n  },\n];"
+      },
+      "id": "6",
+      "name": "Normalize ClickUp Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH updated_lead AS (\n  UPDATE leads l\n  SET\n    clickup_task_id = CASE WHEN $2::boolean THEN COALESCE(NULLIF($3::text, ''), l.clickup_task_id) ELSE l.clickup_task_id END,\n    clickup_task_url = CASE WHEN $2::boolean THEN COALESCE(NULLIF($4::text, ''), l.clickup_task_url) ELSE l.clickup_task_url END,\n    lead_status_id = ls.id,\n    updated_at = NOW()\n  FROM lead_statuses ls\n  WHERE l.id = $1::bigint\n    AND ls.code = CASE WHEN $2::boolean THEN 'created_in_clickup' ELSE 'error' END\n  RETURNING l.id, l.clickup_task_id, l.clickup_task_url\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $5::text,\n    'lead',\n    ul.id,\n    'system',\n    'n8n',\n    $6::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($8::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_lead ul\n  RETURNING id\n)\nSELECT\n  ul.id AS lead_id,\n  ul.clickup_task_id,\n  ul.clickup_task_url,\n  ai.id AS audit_id\nFROM updated_lead ul\nLEFT JOIN audit_insert ai ON TRUE;",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "lead_id,is_success,clickup_task_id,clickup_task_url,event_name,result,after_payload_json,metadata_json"
+        }
+      },
+      "id": "7",
       "name": "Persist ClickUp Result",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
       "position": [
-        1040,
-        300
+        1440,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nif (!row.is_success || !row.clickup_task_id || !row.comment_enabled || !row.comment_text) {\n  return [];\n}\n\nreturn [\n  {\n    json: {\n      clickup_task_id: row.clickup_task_id,\n      comment_url: `https://api.clickup.com/api/v2/task/${row.clickup_task_id}/comment`,\n      comment_payload: {\n        comment_text: row.comment_text,\n        notify_all: false,\n      },\n    },\n  },\n];"
+      },
+      "id": "8",
+      "name": "Build Task Comment Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.comment_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $env.CLICKUP_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.comment_payload }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "9",
+      "name": "Create Conversation Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1700,
+        520
       ]
     }
   ],
   "pinData": {},
   "connections": {
     "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Load ClickUp Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load ClickUp Context": {
       "main": [
         [
           {
@@ -72,6 +233,11 @@
       "main": [
         [
           {
+            "node": "Merge ClickUp Context",
+            "type": "main",
+            "index": 0
+          },
+          {
             "node": "Create ClickUp Task",
             "type": "main",
             "index": 0
@@ -83,7 +249,45 @@
       "main": [
         [
           {
+            "node": "Merge ClickUp Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge ClickUp Context": {
+      "main": [
+        [
+          {
+            "node": "Normalize ClickUp Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize ClickUp Result": {
+      "main": [
+        [
+          {
             "node": "Persist ClickUp Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Task Comment Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Task Comment Payload": {
+      "main": [
+        [
+          {
+            "node": "Create Conversation Comment",
             "type": "main",
             "index": 0
           }

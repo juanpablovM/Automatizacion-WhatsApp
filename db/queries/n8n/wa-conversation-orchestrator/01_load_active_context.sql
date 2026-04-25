@@ -21,6 +21,20 @@ WITH latest_conversation AS (
   ORDER BY c.started_at DESC
   LIMIT 1
 ),
+latest_conversation_state AS (
+  SELECT
+    al.after_payload->>'service' AS state_service,
+    al.after_payload->>'city' AS state_city,
+    al.after_payload->>'requirement' AS state_requirement,
+    al.after_payload->>'current_step' AS state_current_step
+  FROM audit_logs al
+  JOIN latest_conversation lc ON TRUE
+  WHERE al.entity_type = 'conversation'
+    AND al.entity_id = lc.conversation_id
+    AND al.event_name = 'conversation_state_evaluated'
+  ORDER BY al.created_at DESC, al.id DESC
+  LIMIT 1
+),
 latest_lead AS (
   SELECT
     l.id AS previous_lead_id,
@@ -54,6 +68,10 @@ SELECT
     THEN TRUE
     ELSE FALSE
   END AS has_active_conversation,
+  lcs.state_service,
+  lcs.state_city,
+  lcs.state_requirement,
+  lcs.state_current_step,
   ll.previous_lead_id,
   ll.whatsapp_name AS previous_whatsapp_name,
   ll.service AS previous_service,
@@ -61,5 +79,5 @@ SELECT
   ll.requirement AS previous_requirement,
   ll.lead_status_code AS previous_lead_status_code
 FROM latest_conversation lc
+LEFT JOIN latest_conversation_state lcs ON TRUE
 FULL OUTER JOIN latest_lead ll ON TRUE;
-

@@ -3,68 +3,375 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
+        "httpMethod": "GET",
         "path": "wa-inbound-entry",
         "responseMode": "responseNode",
         "options": {}
       },
       "id": "1",
-      "name": "WhatsApp Webhook",
+      "name": "InboundHealthCheck",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
         260,
-        300
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ok', provider: 'evolution_api' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "2",
+      "name": "Respond Health Check",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        520,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-inbound-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3",
+      "name": "EvolutionWebhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        420
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Normaliza el payload entrante de WhatsApp y prepara un objeto canonico.\n// En la siguiente fase este nodo validara challenge, tipo de evento y payload de mensaje.\nreturn items;"
+        "jsCode": "const item = items[0]?.json ?? {};\nconst body = item.body ?? item;\nconst eventName = String(body.event || body.type || '').trim();\nconst normalizedEvent = eventName.replace(/[.:-]+/g, '_').toUpperCase();\nconst instanceName = body.instance || body.instanceName || body.sender || null;\nconst data = body.data ?? body.message ?? {};\nconst key = data.key ?? {};\nconst remoteJid = String(key.remoteJid || data.key?.remoteJid || '').trim();\nconst isGroup = remoteJid.endsWith('@g.us');\nconst isFromMe = Boolean(key.fromMe ?? data.fromMe ?? false);\n\nconst pickText = (message) => {\n  if (!message || typeof message !== 'object') return null;\n  if (typeof message.conversation === 'string') return message.conversation;\n  if (typeof message.extendedTextMessage?.text === 'string') return message.extendedTextMessage.text;\n  if (typeof message.imageMessage?.caption === 'string') return message.imageMessage.caption;\n  if (typeof message.videoMessage?.caption === 'string') return message.videoMessage.caption;\n  if (typeof message.documentMessage?.caption === 'string') return message.documentMessage.caption;\n  if (typeof message.buttonsResponseMessage?.selectedButtonId === 'string') return message.buttonsResponseMessage.selectedButtonId;\n  if (typeof message.listResponseMessage?.title === 'string') return message.listResponseMessage.title;\n  if (typeof message.templateButtonReplyMessage?.selectedDisplayText === 'string') return message.templateButtonReplyMessage.selectedDisplayText;\n  if (typeof message.locationMessage?.name === 'string') return message.locationMessage.name;\n  return null;\n};\n\nconst buildAttachment = (message) => {\n  const definitions = [\n    ['imageMessage', 'image'],\n    ['audioMessage', 'audio'],\n    ['documentMessage', 'document'],\n    ['videoMessage', 'video'],\n    ['stickerMessage', 'sticker'],\n  ];\n\n  for (const [field, attachmentType] of definitions) {\n    if (message?.[field]) {\n      const attachment = message[field];\n      return {\n        attachment_type: attachmentType,\n        mime_type: attachment.mimetype ?? null,\n        filename: attachment.fileName ?? null,\n        external_media_id: attachment.mediaKey ?? attachment.directPath ?? null,\n        external_url: attachment.url ?? null,\n        sha256: attachment.fileSha256 ?? null,\n        file_size: attachment.fileLength ?? null,\n      };\n    }\n  }\n\n  return {\n    attachment_type: null,\n    mime_type: null,\n    filename: null,\n    external_media_id: null,\n    external_url: null,\n    sha256: null,\n    file_size: null,\n  };\n};\n\nif (normalizedEvent !== 'MESSAGES_UPSERT' || isFromMe || !remoteJid || isGroup) {\n  return [\n    {\n      json: {\n        should_process: false,\n        event_type: eventName || 'ignored_event',\n        normalized_event: normalizedEvent,\n        raw_payload_json: JSON.stringify(body),\n      },\n    },\n  ];\n}\n\nconst message = data.message ?? {};\nconst textBody = pickText(message);\nconst attachment = buildAttachment(message);\nconst phoneNumber = remoteJid.includes('@') ? remoteJid.split('@')[0] : remoteJid;\nconst externalTimestamp = data.messageTimestamp || body.date_time || null;\n\nreturn [\n  {\n    json: {\n      should_process: true,\n      event_type: eventName,\n      normalized_event: normalizedEvent,\n      instance_name: instanceName,\n      phone_number: phoneNumber || null,\n      source_number_id: null,\n      whatsapp_name: data.pushName || data.pushname || data.notifyName || null,\n      external_contact_id: remoteJid || null,\n      external_message_id: key.id || data.key?.id || null,\n      external_timestamp: externalTimestamp,\n      message_type: attachment.attachment_type ? attachment.attachment_type : 'text',\n      text_body: textBody,\n      raw_payload_json: JSON.stringify(body),\n      ...attachment,\n    },\n  },\n];"
       },
-      "id": "2",
-      "name": "Normalize Incoming",
+      "id": "4",
+      "name": "Normalize Evolution Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         520,
-        300
+        420
       ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ { status: 'accepted' } }}",
-        "options": {}
+        "options": {
+          "responseCode": 200
+        }
       },
-      "id": "3",
+      "id": "5",
       "name": "Respond Accepted",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
         780,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.filter((item) => Boolean(item?.json?.should_process)).map((item) => item.json);"
+      },
+      "id": "6",
+      "name": "Filter Processable Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "RSpKCzHpoSVWLxRV",
+          "mode": "list",
+          "cachedResultName": "WA - Conversation Orchestrator"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "7",
+      "name": "Execute Conversation Orchestrator",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.filter((item) => String(item?.json?.response_text || '').trim().length > 0).map((item) => item.json);"
+      },
+      "id": "8",
+      "name": "Filter Outbound Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
         300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "Njf3OjhyPWLkVJo1",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "9",
+      "name": "Execute Outbound Messages",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        1820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const shouldCreateLead = (value) => {\n  if (value === true || value === 1) return true;\n  if (typeof value === 'string') {\n    const normalized = value.trim().toLowerCase();\n    return normalized === 'true' || normalized === '1';\n  }\n  return false;\n};\n\nreturn items\n  .filter((item) => shouldCreateLead(item?.json?.should_create_lead))\n  .map((item) => item.json);"
+      },
+      "id": "10",
+      "name": "Filter Lead Creation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "Jv0sFsQsLUcag1ml",
+          "mode": "list",
+          "cachedResultName": "CRM - Lead Creation And Assignment"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "11",
+      "name": "Execute Lead Creation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1820,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "by9twGB9iSQp9gzT",
+          "mode": "list",
+          "cachedResultName": "CRM - ClickUp Sync Lead"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "12",
+      "name": "Execute ClickUp Sync",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        2080,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "wOCHWXatCnBz81Mq",
+          "mode": "list",
+          "cachedResultName": "CRM - Seller Notification Dispatch"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "13",
+      "name": "Execute Seller Notification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        2600,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items\n  .filter((item) => String(item?.json?.clickup_task_id || '').trim().length > 0)\n  .map((item) => item.json);"
+      },
+      "id": "14",
+      "name": "Filter ClickUp Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        560
       ]
     }
   ],
   "pinData": {},
   "connections": {
-    "WhatsApp Webhook": {
+    "InboundHealthCheck": {
       "main": [
         [
           {
-            "node": "Normalize Incoming",
+            "node": "Respond Health Check",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalize Incoming": {
+    "EvolutionWebhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Evolution Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Evolution Payload": {
       "main": [
         [
           {
             "node": "Respond Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Accepted": {
+      "main": [
+        [
+          {
+            "node": "Filter Processable Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Processable Events": {
+      "main": [
+        [
+          {
+            "node": "Execute Conversation Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Conversation Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Filter Lead Creation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter Outbound Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Outbound Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Outbound Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Lead Creation": {
+      "main": [
+        [
+          {
+            "node": "Execute Lead Creation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Lead Creation": {
+      "main": [
+        [
+          {
+            "node": "Execute ClickUp Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute ClickUp Sync": {
+      "main": [
+        [
+          {
+            "node": "Filter ClickUp Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter ClickUp Ready": {
+      "main": [
+        [
+          {
+            "node": "Execute Seller Notification",
             "type": "main",
             "index": 0
           }
@@ -76,7 +383,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "10000000-0000-0000-0000-000000000001",
+  "versionId": "10000000-0000-0000-0000-000000000003",
   "meta": {},
   "tags": []
 }

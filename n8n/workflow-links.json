@@ -1,0 +1,37 @@
+{
+  "errorWorkflow": {
+    "name": "OPS - Error Handler"
+  },
+  "links": [
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute Conversation Orchestrator",
+      "targetWorkflow": "WA - Conversation Orchestrator"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute Outbound Messages",
+      "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute Lead Creation",
+      "targetWorkflow": "CRM - Lead Creation And Assignment"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute ClickUp Sync",
+      "targetWorkflow": "CRM - ClickUp Sync Lead"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute Seller Notification",
+      "targetWorkflow": "CRM - Seller Notification Dispatch"
+    },
+    {
+      "sourceWorkflow": "TEST - ClickUp Sync Smoke",
+      "node": "Execute ClickUp Sync Lead",
+      "targetWorkflow": "CRM - ClickUp Sync Lead"
+    }
+  ]
+}

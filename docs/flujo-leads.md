@@ -13,11 +13,11 @@ Describir el flujo funcional del lead desde el primer mensaje entrante hasta la 
    - ciudad
    - requerimiento
 4. Si el cliente ya entrego datos utiles en un mensaje libre, el sistema los extrae y salta preguntas ya resueltas.
-5. Si el sistema obtiene `2 de 3 + intencion real`, crea el lead.
-6. Si falla la comprension dos veces, deriva igual al vendedor y crea el lead como parcial.
+5. Si hay intencion pero faltan datos, el sistema pregunta por el dato pendiente.
+6. Antes de crear el lead, el sistema confirma `servicio + ciudad + requerimiento concreto`.
 7. Antes de crear la tarea en ClickUp, el sistema asigna vendedor por round robin.
 8. El lead se crea en ClickUp en la lista `Leads Entrantes`.
-9. Se notifica al vendedor asignado por WhatsApp interno y queda respaldo operativo en ClickUp.
+9. Se notifica al vendedor asignado directamente en ClickUp cuando la tarea ya existe.
 
 ## Textos base del bot
 
@@ -27,15 +27,15 @@ Describir el flujo funcional del lead desde el primer mensaje entrante hasta la 
 
 ### Pregunta por servicio
 
-`¿Qué servicio estás buscando?`
+`¿Qué producto o servicio específico necesitas cotizar?`
 
 ### Pregunta por ciudad
 
-`¿Desde qué ciudad nos escribes?`
+`¿Desde qué ciudad necesitas el servicio?`
 
 ### Pregunta por requerimiento
 
-`Cuéntame brevemente qué necesitas o qué tipo de requerimiento tienes.`
+`Cuéntame brevemente qué necesitas resolver, instalar, reparar o comprar.`
 
 ### Reencauce por respuesta fuera de flujo
 
@@ -49,21 +49,21 @@ Primer intento de aclaracion:
 
 `No logré entender bien tu respuesta. ¿Podrías indicármelo de otra forma?`
 
-Segundo intento fallido:
+Confirmacion antes de derivar:
 
-`Voy a derivar tu solicitud a una asesora para continuar la atención contigo directamente.`
+`Tengo esto: servicio X, ciudad Y, requerimiento Z. ¿Está correcto?`
 
 ### Derivacion correcta
 
-`Perfecto, ya tengo la información necesaria. Voy a derivar tu solicitud a una asesora para que continúe contigo.`
+`Perfecto, ya tengo la información confirmada. Voy a derivar tu solicitud para que continúen contigo.`
 
 ## Datos funcionales validados
 
 - canal principal: WhatsApp oficial
 - calificacion: guiada con capacidad de extraer contexto libre
-- criterio base de creacion: `2 de 3 + intencion`
-- politica de duplicados: mismo telefono, con ventana de 24 horas para retomar conversacion
-- estrategia de notificacion: WhatsApp interno con respaldo operativo en ClickUp
+- criterio base de creacion: `servicio + ciudad + requerimiento concreto + confirmacion`
+- politica de duplicados: mismo telefono, con ventana de 24 horas para retomar conversacion y confirmacion antes de reutilizar datos previos
+- estrategia de notificacion: comentario/asignacion directa en ClickUp
 - asignacion: round robin secuencial simple
 - adjuntos: se registran como metadata y luego se agregan a la tarea en ClickUp
 
@@ -98,17 +98,18 @@ Reglas:
 - si el cliente ya respondio un dato, se salta esa pregunta
 - si una respuesta queda incompleta, el flujo puede pasar a la siguiente y completar luego
 - si el usuario responde fuera de flujo, el sistema intenta reencauzar
-- si falla la comprension dos veces, el lead se crea igual y se deriva como parcial
+- si hay solo intencion y ciudad, se pregunta por producto o servicio especifico
+- si hay servicio y ciudad, se pregunta por requerimiento concreto
 
 ### 4. Regla de calificacion
 
 Se considera que el lead puede crearse cuando:
 
 - existe intencion real
-- y el sistema obtuvo al menos `2 de 3` entre:
-  - `service`
-  - `city`
-  - `requirement`
+- existe `service`
+- existe `city`
+- existe `requirement` concreto
+- el cliente confirmo los datos o los completo claramente dentro del flujo
 
 ### 5. Definicion de intencion real
 
@@ -116,6 +117,7 @@ Se considera intencion real cuando:
 
 - el cliente envia al menos una respuesta util no vacia
 - y la respuesta no es solo un saludo aislado o texto irrelevante
+- detectar intencion no equivale a tener datos suficientes para crear lead
 
 ### 6. Duplicados y continuidad
 
@@ -124,10 +126,11 @@ Si el mismo telefono vuelve a escribir:
 - dentro de 24 horas:
   - se retoma la conversacion activa
   - se continúa desde la ultima pregunta pendiente
+  - si la conversacion ya fue derivada, se pregunta si quiere continuar o iniciar una nueva
 
 - despues de 24 horas:
   - se inicia nueva conversacion
-  - se envia nueva bienvenida
+  - si existe un lead previo, se pregunta si quiere continuar con esa solicitud o iniciar una nueva
   - se puede crear un nuevo lead enlazado al anterior
   - si no hay datos nuevos, el nuevo lead puede heredar datos previos
 
@@ -155,18 +158,20 @@ Si el cliente envia imagen, PDF, audio u otro adjunto:
 
 El lead se crea cuando:
 
-- se cumple `2 de 3 + intencion real`
-- o cuando falla la comprension dos veces
+- se cumple `servicio + ciudad + requerimiento concreto`
+- el cliente confirma el resumen antes de derivar
 
 ### Cuándo no se crea
 
 - si no hay respuesta util todavia
 - si solo hubo saludo o mensaje sin contenido aprovechable
+- si solo hay intencion inicial, por ejemplo `quiero cotizar en Santiago`
+- si falta requerimiento concreto
 
 ### Estado esperado
 
-- si la informacion esta incompleta pero hubo derivacion, el lead queda como parcial
-- si la informacion es suficiente, queda como completo
+- si la informacion no esta completa, el lead no se crea
+- si la informacion fue confirmada, queda como completo
 
 ## Asignacion round robin
 
@@ -210,11 +215,12 @@ La tarea debe incluir:
 
 ### Canal principal
 
-- WhatsApp interno
+- ClickUp
 
-### Respaldo operativo
+### Mecanismo
 
-- asignacion visible en ClickUp
+- la tarea queda asignada al vendedor
+- el workflow agrega un comentario en la tarea y lo asigna al `clickup_user_id`
 
 ### Contenido minimo
 

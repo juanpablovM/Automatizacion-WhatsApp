@@ -8,56 +8,163 @@
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
       "position": [
-        260,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "// Construye el mensaje al vendedor y define el canal primario.\nreturn items;"
-      },
-      "id": "2",
-      "name": "Build Seller Notification",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        520,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://example.invalid/internal-notification"
-      },
-      "id": "3",
-      "name": "Dispatch Notification",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
-      "position": [
-        780,
-        300
+        220,
+        320
       ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Guardar resultado de notificacion, auditoria e incidente operativo si falla\nSELECT 1;"
+        "query": "SELECT\n  l.id AS lead_id,\n  l.whatsapp_name,\n  l.phone_number,\n  l.service,\n  l.city,\n  l.requirement,\n  l.clickup_task_id,\n  l.clickup_task_url,\n  s.id AS seller_id,\n  s.name AS seller_name,\n  s.whatsapp_number AS seller_whatsapp_number,\n  s.clickup_user_id\nFROM leads l\nJOIN sellers s ON s.id = l.assigned_seller_id\nWHERE l.id = $1::bigint\n  AND l.deleted_at IS NULL;",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryParams": "lead_id"
+        }
+      },
+      "id": "2",
+      "name": "Load Notification Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        460,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst asInt = (value) => {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : null;\n};\n\nconst leadId = row.lead_id;\nconst clickupTaskId = safe(row.clickup_task_id);\nconst sellerClickUpUserId = asInt(row.clickup_user_id);\n\nif (!leadId) {\n  throw new Error('CRM - Seller Notification Dispatch requiere lead_id');\n}\n\nif (!clickupTaskId) {\n  throw new Error('El lead aun no tiene tarea ClickUp creada; no se notifica al vendedor');\n}\n\nif (!sellerClickUpUserId) {\n  throw new Error('El vendedor asignado no tiene clickup_user_id configurado');\n}\n\nif (!safe($env.CLICKUP_API_TOKEN)) {\n  throw new Error('CLICKUP_API_TOKEN no esta configurado para notificaciones internas');\n}\n\nconst sellerName = safe(row.seller_name, 'Equipo Comercial');\nconst leadName = safe(row.whatsapp_name, 'Lead sin nombre');\nconst service = safe(row.service, 'Sin servicio');\nconst city = safe(row.city, 'Sin ciudad');\nconst requirement = safe(row.requirement, 'Sin requerimiento informado');\nconst customerPhone = safe(row.phone_number, 'No informado');\nconst clickupUrl = safe(row.clickup_task_url);\n\nconst notificationText = [\n  'Nuevo lead listo para gestionar.',\n  '',\n  'Vendedor: ' + sellerName,\n  'Nombre: ' + leadName,\n  'Telefono: ' + customerPhone,\n  'Servicio: ' + service,\n  'Ciudad: ' + city,\n  'Requerimiento: ' + requirement,\n  clickupUrl ? 'ClickUp: ' + clickupUrl : null,\n].filter(Boolean).join('\\n');\n\nreturn [\n  {\n    json: {\n      lead_id: leadId,\n      seller_id: row.seller_id,\n      seller_name: sellerName,\n      seller_clickup_user_id: sellerClickUpUserId,\n      notification_channel: 'clickup',\n      notification_url: 'https://api.clickup.com/api/v2/task/' + encodeURIComponent(clickupTaskId) + '/comment',\n      notification_payload: {\n        comment_text: notificationText,\n        assignee: sellerClickUpUserId,\n        notify_all: false,\n      },\n    },\n  },\n];"
+      },
+      "id": "3",
+      "name": "Build Seller Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.notification_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $env.CLICKUP_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.notification_payload }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "id": "4",
+      "name": "Dispatch Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        700,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "5",
+      "name": "Merge Notification Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst isSuccess = statusCode >= 200 && statusCode < 300;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      event_name: 'seller_notification_dispatch',\n      result: isSuccess ? 'success' : 'error',\n      is_success: isSuccess,\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n      }),\n      metadata_json: JSON.stringify({\n        channel: row.notification_channel_1 || row.notification_channel || 'clickup',\n        seller_id: row.seller_id_1 || row.seller_id || null,\n        provider: 'clickup',\n      }),\n    },\n  },\n];"
+      },
+      "id": "6",
+      "name": "Normalize Notification Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH updated_lead AS (\n  UPDATE leads l\n  SET\n    lead_status_id = ls.id,\n    updated_at = NOW()\n  FROM lead_statuses ls\n  WHERE l.id = $1::bigint\n    AND ls.code = CASE WHEN $2::boolean THEN 'notified' ELSE 'error' END\n  RETURNING l.id\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $3::text,\n    'lead',\n    ul.id,\n    'system',\n    'n8n',\n    $4::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($5::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($6::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_lead ul\n  RETURNING id\n)\nSELECT ul.id AS lead_id, ai.id AS audit_id\nFROM updated_lead ul\nLEFT JOIN audit_insert ai ON TRUE;",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "lead_id,is_success,event_name,result,after_payload_json,metadata_json"
+        }
+      },
+      "id": "7",
       "name": "Persist Notification Result",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
       "position": [
-        1040,
-        300
+        1440,
+        420
       ]
     }
   ],
   "pinData": {},
   "connections": {
     "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Load Notification Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Notification Context": {
       "main": [
         [
           {
@@ -72,6 +179,11 @@
       "main": [
         [
           {
+            "node": "Merge Notification Context",
+            "type": "main",
+            "index": 0
+          },
+          {
             "node": "Dispatch Notification",
             "type": "main",
             "index": 0
@@ -80,6 +192,28 @@
       ]
     },
     "Dispatch Notification": {
+      "main": [
+        [
+          {
+            "node": "Merge Notification Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Notification Context": {
+      "main": [
+        [
+          {
+            "node": "Normalize Notification Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Notification Result": {
       "main": [
         [
           {
@@ -95,7 +229,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "10000000-0000-0000-0000-000000000006",
+  "versionId": "10000000-0000-0000-0000-000000000007",
   "meta": {},
   "tags": []
 }
