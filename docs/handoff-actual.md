@@ -45,7 +45,6 @@ Hoy el proyecto ya tiene:
 
 Lo que aun no esta operativo de punta a punta:
 
-- cerrar limpieza o rotulado de datos de prueba creados durante la validacion real
 - ejecutar una matriz corta de pruebas conversacionales con casos variados
 - implementar seguridad y recuperacion minima antes de incorporar AI
 
@@ -244,7 +243,8 @@ Evidencia de tareas ClickUp creadas durante pruebas reales:
 
 Notas de prueba:
 
-- estos leads/tareas son datos de validacion y deben limpiarse, cerrarse o marcarse como prueba antes de operar con clientes reales
+- estos leads/tareas son datos de validacion y ya fueron revisados/marcados como prueba en ClickUp
+- no deben considerarse oportunidades comerciales reales ni usarse para metricas de negocio
 - durante la validacion se corrigieron loops conversacionales y problemas de interpretacion deterministica
 - commits relevantes:
   - `65e1124 fix: handle initial whatsapp greetings`
@@ -252,16 +252,21 @@ Notas de prueba:
   - `374df38 fix: prevent conversational loops`
   - `7103479 fix: reset previous context without reusing command`
 
+Estado de limpieza de datos de prueba:
+
+- leads `14`, `15` y `16` identificados como pruebas de validacion
+- tareas ClickUp `86ah3h2ew`, `86ah3h2m6` y `86ah3h2q6` revisadas y marcadas/gestionadas como prueba
+- queda pendiente no mezclar estos registros con reportes reales de operacion
+
 ## Siguiente paso recomendado
 
-1. limpiar o marcar como prueba los leads/tareas creados durante la validacion real
-2. ejecutar una matriz corta de pruebas conversacionales con casos variados
-3. implementar seguridad y recuperacion minima:
+1. ejecutar una matriz corta de pruebas conversacionales con casos variados
+2. implementar seguridad y recuperacion minima:
    - proteccion del webhook
    - backup de PostgreSQL
    - backup del volumen de `n8n`
    - prueba controlada de `OPS - Error Handler`
-4. despues iniciar `AI - Lead Qualification Assistant` como capa controlada
+3. despues iniciar `AI - Lead Qualification Assistant` como capa controlada
 
 ## Siguiente fase planificada
 
@@ -280,7 +285,7 @@ Decision sobre AI:
 Prioridades recomendadas:
 
 1. Cerrar validacion real:
-   - limpiar o marcar datos de prueba
+   - datos de prueba ya identificados y marcados/gestionados en ClickUp
    - dejar evidencia de casos probados
    - registrar bugs relevantes y fixes aplicados
 2. Cargar o revisar datos reales minimos:
