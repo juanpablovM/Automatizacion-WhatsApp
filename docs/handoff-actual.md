@@ -45,9 +45,9 @@ Hoy el proyecto ya tiene:
 
 Lo que aun no esta operativo de punta a punta:
 
-- obtener y escanear el QR del primer numero en `Evolution API`
-- cargar vendedores reales en la base
-- probar el circuito completo con mensajes reales
+- cerrar limpieza o rotulado de datos de prueba creados durante la validacion real
+- ejecutar una matriz corta de pruebas conversacionales con casos variados
+- implementar seguridad y recuperacion minima antes de incorporar AI
 
 ## Infraestructura local
 
@@ -203,6 +203,7 @@ Estado actual:
 - `docker-compose.yml` ya incluye `redis` y `evolution-api`
 - `.env` y `.env.example` ya fueron adaptados
 - instancia `principal` ya creada con exito en `Evolution API`
+- instancia `principal` ya conectada y en estado `open`
 - webhook de `principal` ya persistido apuntando a `host.docker.internal`
 - scripts listos:
   - [`scripts/dev/evolution-create-instance.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-create-instance.sh)
@@ -210,14 +211,57 @@ Estado actual:
 
 Pendiente:
 
-- solicitar el QR
-- validar mensaje real extremo a extremo
+- mantener el QR/reconexion como procedimiento operativo, no como bloqueo actual
+
+## Validacion Real End-to-End
+
+Estado: completada a nivel funcional inicial.
+
+Se valido con mensajes reales por WhatsApp que el sistema:
+
+- recibe mensajes desde `Evolution API`
+- ejecuta `WA - Inbound Entry`
+- mantiene estado conversacional en PostgreSQL
+- responde por WhatsApp
+- crea lead en PostgreSQL
+- asigna vendedor por round robin
+- crea tarea en ClickUp
+
+Evidencia de tareas ClickUp creadas durante pruebas reales:
+
+- lead `14`
+  - tarea ClickUp: `86ah3h2ew`
+  - URL: `https://app.clickup.com/t/86ah3h2ew`
+  - vendedor: `Valentina Rojas`
+- lead `15`
+  - tarea ClickUp: `86ah3h2m6`
+  - URL: `https://app.clickup.com/t/86ah3h2m6`
+  - vendedor: `Martina Perez`
+- lead `16`
+  - tarea ClickUp: `86ah3h2q6`
+  - URL: `https://app.clickup.com/t/86ah3h2q6`
+  - vendedor: `Camila Soto`
+
+Notas de prueba:
+
+- estos leads/tareas son datos de validacion y deben limpiarse, cerrarse o marcarse como prueba antes de operar con clientes reales
+- durante la validacion se corrigieron loops conversacionales y problemas de interpretacion deterministica
+- commits relevantes:
+  - `65e1124 fix: handle initial whatsapp greetings`
+  - `86eea4c fix: accept direct service answers`
+  - `374df38 fix: prevent conversational loops`
+  - `7103479 fix: reset previous context without reusing command`
 
 ## Siguiente paso recomendado
 
-1. solicitar nuevamente el QR de `principal` y escanearlo
-2. verificar que `principal` cambie de `close` a `open`
-3. probar una conversacion real
+1. limpiar o marcar como prueba los leads/tareas creados durante la validacion real
+2. ejecutar una matriz corta de pruebas conversacionales con casos variados
+3. implementar seguridad y recuperacion minima:
+   - proteccion del webhook
+   - backup de PostgreSQL
+   - backup del volumen de `n8n`
+   - prueba controlada de `OPS - Error Handler`
+4. despues iniciar `AI - Lead Qualification Assistant` como capa controlada
 
 ## Siguiente fase planificada
 
@@ -235,16 +279,15 @@ Decision sobre AI:
 
 Prioridades recomendadas:
 
-1. Probar el flujo real de punta a punta:
-   - escanear QR de `Evolution API`
-   - confirmar que la instancia `principal` quede conectada
-   - enviar un WhatsApp real
-   - verificar que pase por `n8n`, cree conversacion, cree lead, cree tarea en ClickUp y notifique al vendedor
-2. Cargar datos reales minimos:
+1. Cerrar validacion real:
+   - limpiar o marcar datos de prueba
+   - dejar evidencia de casos probados
+   - registrar bugs relevantes y fixes aplicados
+2. Cargar o revisar datos reales minimos:
    - vendedores reales en PostgreSQL
    - numeros reales de WhatsApp
    - `clickup_user_id` de cada vendedor si se usara asignacion en ClickUp
-3. Corregir lo que falle en la prueba real:
+3. Corregir lo que aparezca en la matriz corta de pruebas:
    - payloads de `Evolution API`
    - textos del bot
    - deteccion de datos
