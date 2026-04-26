@@ -50,6 +50,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Evolution API](./docs/evolution-api.md)
 - [Configuracion ClickUp](./docs/clickup-configuracion.md)
 - [Handoff Actual](./docs/handoff-actual.md)
+- [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
 
 ## Archivos clave
