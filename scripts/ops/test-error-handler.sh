@@ -4,10 +4,41 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
+usage() {
+  cat <<'EOF'
+Uso:
+  sh scripts/ops/test-error-handler.sh [telefono-sin-plus]
+
+Envia un evento sintetico autorizado al webhook local de WA - Inbound Entry
+con un timestamp invalido para forzar un fallo controlado y verificar que
+OPS - Error Handler registre audit_logs.event_name='workflow_execution_error'.
+
+No usar durante pruebas comerciales reales: genera auditoria operativa.
+EOF
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "ERROR: falta dependencia '$1'" >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
 if [ ! -f "$ROOT_DIR/.env" ]; then
   echo "ERROR: no existe .env en $ROOT_DIR" >&2
   exit 1
 fi
+
+require_cmd curl
+require_cmd docker
+require_cmd jq
 
 . "$ROOT_DIR/.env"
 
@@ -48,11 +79,20 @@ http_status=$(curl -sS -o /tmp/ops-error-handler-response.json -w '%{http_code}'
   "$WEBHOOK_URL" \
   -d "$payload")
 
-sleep 3
+after="$before"
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+  sleep 1
+  after=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+    psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
+    -c "SELECT count(*) FROM audit_logs WHERE event_name='workflow_execution_error';")
 
-after=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
-  psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
-  -c "SELECT count(*) FROM audit_logs WHERE event_name='workflow_execution_error';")
+  if [ "$after" -gt "$before" ]; then
+    break
+  fi
+
+  attempt=$((attempt + 1))
+done
 
 if [ "$after" -le "$before" ]; then
   echo "ERROR: no se registro auditoria nueva de error" >&2

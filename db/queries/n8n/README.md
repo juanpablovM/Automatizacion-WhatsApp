@@ -29,6 +29,20 @@ Estos valores deben ser reemplazados o mapeados desde `n8n` en la fase de implem
 - `crm-seller-notification-dispatch/`
 - `ops-error-handler/`
 
+## Queries operativas fuera de n8n
+
+Las consultas bajo `db/queries/ops/` son read-only y sirven para readiness,
+soporte y reportes manuales. No son nodos de workflow.
+
+- `ops/clickup-readiness/01_seller_notifiability_audit.sql`
+  - revisa vendedores activos, `clickup_user_id`, posibles datos de prueba y duplicados de usuario ClickUp
+- `ops/clickup-readiness/02_round_robin_readiness.sql`
+  - valida puntero de round robin, vendedores notificables y fallos recientes `no_notifiable_seller`
+- `ops/clickup-readiness/03_validation_data_candidates.sql`
+  - lista leads/tareas candidatos a datos de validacion usando IDs documentados y heuristicas conservadoras
+- `ops/clickup-readiness/04_metrics_excluding_validation.sql`
+  - plantilla de metricas que excluye datos de validacion conocidos
+
 ## Base objetivo
 
 Las queries del CRM deben apuntar a:
@@ -39,4 +53,3 @@ Las queries del CRM deben apuntar a:
 ## Nota
 
 Las queries privilegian claridad y versionado sobre microoptimizacion prematura.
-

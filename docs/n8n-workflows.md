@@ -64,7 +64,7 @@ Se usa primero una capa simple y explicable con `Code`:
 - normalizacion basica de ciudad
 - consolidacion de campos ya detectados
 
-### Capa 2: extraccion asistida por IA
+### Capa 2: extraccion asistida por AI
 
 Queda implementada como sub-workflow independiente y apagable:
 
@@ -72,10 +72,12 @@ Queda implementada como sub-workflow independiente y apagable:
 - proponer `service`, `city` y `requirement`
 - devolver estructura JSON controlada
 - nunca sustituir la persistencia ni la logica central
+- usar NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM como proveedor actual
 
 Regla:
 
-- la IA complementa, no gobierna el estado del sistema
+- la AI complementa, no gobierna el estado del sistema
+- `n8n` y PostgreSQL siguen siendo la fuente de decision
 
 ## Workflows implementados
 
@@ -148,17 +150,19 @@ Uso de `Code`:
 - separacion entre intencion detectada y datos suficientes
 - confirmacion de `servicio + ciudad + requerimiento concreto`
 
-Uso de IA:
+Uso de AI:
 
 - subpaso opcional cuando el mensaje libre trae bastante contexto
 - resultado siempre validado antes de persistir
-- `AI - Lead Qualification Assistant` ya existe como sub-workflow independiente, pero aun no esta conectado al orquestador
+- se invoca solo si `AI_LEAD_ASSISTANT_ENABLED=true`
+- con el flag apagado, el flujo debe comportarse igual que el flujo deterministico base
+- no puede crear leads directamente ni sobrescribir datos confirmados salvo correccion explicita del usuario
 
 ### 3. `AI - Lead Qualification Assistant`
 
 Responsabilidad:
 
-- llamar a un proveedor AI compatible con OpenAI (`NVIDIA NIM`, `Ollama` u `OpenAI`)
+- llamar a NVIDIA MiniMax (`minimaxai/minimax-m2.5`) mediante NVIDIA NIM y una API compatible con `chat_completions`
 - extraer intencion, calidad del lead, servicio, ciudad y requerimiento
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
@@ -179,6 +183,7 @@ Salida:
 - `city`
 - `requirement`
 - `missing_fields`
+- `confirmation_status`
 - `should_create_lead`
 - `needs_confirmation`
 - `confidence`
@@ -187,13 +192,20 @@ Salida:
 
 Estado:
 
-- desactivado por defecto mediante `AI_LEAD_ASSISTANT_ENABLED=false`
+- desactivado en la plantilla mediante `AI_LEAD_ASSISTANT_ENABLED=false`
 - preparado para NVIDIA API Catalog mediante `AI_BASE_URL=https://integrate.api.nvidia.com/v1`
-- soporta `AI_API_MODE=responses` y `AI_API_MODE=chat_completions`
+- modo operativo actual: `AI_API_MODE=chat_completions`
+- modelo actual: `AI_MODEL=minimaxai/minimax-m2.5`
 - no escribe en PostgreSQL
 - no crea tareas en ClickUp
 - no asigna vendedores
+- usa `chat_completions` con `response_format.type=json_schema`, `strict=true` y `minimaxai/minimax-m2.5` para NVIDIA
+- parsea respuestas desde `choices[0].message.content` y tambien soporta contenido por partes
+- fuerza `should_create_lead=false` si falta confirmacion explicita
+- descarta campos nuevos cuando `confidence < 0.75`; solo conserva campos existentes del contexto
+- ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
+- solo el integrador debe cargar `AI_API_KEY` real y ejecutar pruebas contra NVIDIA
 
 ### 4. `WA - Outbound Messages`
 
@@ -431,6 +443,7 @@ Los exports versionados viven en `n8n/workflows/`:
 - `crm-lead-creation-and-assignment.json`
 - `crm-clickup-sync-lead.json`
 - `crm-seller-notification-dispatch.json`
+- `ai-lead-qualification-assistant.json`
 - `ops-error-handler.json`
 
 Los enlaces entre workflows se versionan por nombre en `n8n/workflow-links.json`. Los IDs visibles dentro de los exports de `n8n` no son la fuente de verdad: `scripts/dev/sync-n8n-workflows.sh` importa con el CLI oficial, consulta los IDs actuales de la instancia y genera copias temporales resueltas antes de reimportar.
@@ -466,14 +479,18 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
 1. WhatsApp entrega webhook a `WA - Inbound Entry`
 2. el payload canonico pasa a `WA - Conversation Orchestrator`
-3. si corresponde responder, llama a `WA - Outbound Messages`
-4. si corresponde crear lead, llama a `CRM - Lead Creation And Assignment`
-5. luego llama a `CRM - ClickUp Sync Lead`
-6. despues llama a `CRM - Seller Notification Dispatch`
-7. cualquier error relevante pasa a `OPS - Error Handler`
+3. si el mensaje libre no queda resuelto por logica deterministica y `AI_LEAD_ASSISTANT_ENABLED=true`, el orquestador puede consultar `AI - Lead Qualification Assistant`
+4. el orquestador valida cualquier sugerencia de AI contra reglas locales y estado confirmado
+5. si corresponde responder, llama a `WA - Outbound Messages`
+6. si corresponde crear lead, llama a `CRM - Lead Creation And Assignment`
+7. luego llama a `CRM - ClickUp Sync Lead`
+8. despues llama a `CRM - Seller Notification Dispatch`
+9. cualquier error relevante pasa a `OPS - Error Handler`
 
 ## Lo que queda para la siguiente fase
 
-- validar reintentos con fallos externos reales o simulados
-- validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI
-- conectar `AI - Lead Qualification Assistant` al orquestador como capa de asistencia, manteniendo fallback deterministico
+- sincronizar workflows versionados en la instancia viva y confirmar que `WA - Inbound Entry` queda activo
+- ejecutar baseline con AI apagada
+- rotar/cargar la clave NVIDIA real solo en `.env` del integrador
+- validar `AI - Lead Qualification Assistant` con NVIDIA MiniMax desde el workspace del integrador
+- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla NVIDIA

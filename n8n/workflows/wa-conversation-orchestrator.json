@@ -70,7 +70,7 @@
         }
       },
       "position": [
-        1040,
+        1820,
         300
       ]
     },
@@ -92,7 +92,7 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1300,
+        2080,
         300
       ]
     },
@@ -106,8 +106,67 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1560,
+        2340,
         300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "AI - Lead Qualification Assistant"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "7",
+      "name": "Execute AI Lead Qualification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        1040,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "8",
+      "name": "Merge AI Assistance",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst pick = (...values) => {\n  for (const value of values) {\n    if (value === undefined || value === null) continue;\n    if (typeof value === 'string' && value.trim() === '') continue;\n    return value;\n  }\n  return null;\n};\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst hasValue = (value) => safe(value).length > 0;\nconst normalizeText = (value) =>\n  String(value ?? '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase()\n    .replace(/[^a-z0-9ñ\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\nconst decodeStepState = (encoded) => {\n  if (!encoded) return {};\n  try {\n    const parsed = JSON.parse(decodeURIComponent(encoded));\n    return parsed && typeof parsed === 'object' ? parsed : {};\n  } catch (_error) {\n    return {};\n  }\n};\nconst parseStep = (value) => {\n  const raw = safe(value, 'city');\n  const [field, encodedState] = raw.split('|');\n  return { field: field.replace(/_retry_\\d+$/, ''), state: decodeStepState(encodedState) };\n};\nconst encodeStep = (field, state) => {\n  const payload = {\n    service: state.service || null,\n    city: state.city || null,\n    requirement: state.requirement || null,\n  };\n  const hasPayload = Object.values(payload).some((value) => safe(value));\n  return hasPayload ? field + '|' + encodeURIComponent(JSON.stringify(payload)) : field;\n};\nconst confirmationText = (state) => [\n  'Tengo esto:',\n  'Servicio: ' + state.service,\n  'Ciudad: ' + state.city,\n  'Requerimiento: ' + state.requirement,\n  '',\n  '¿Está correcto?',\n].join('\\n');\nconst nextQuestion = (missing) => {\n  if (missing === 'city') return '¿Desde qué ciudad nos escribes?';\n  if (missing === 'service') return '¿Qué servicio estás buscando?';\n  if (missing === 'requirement') return 'Cuéntame brevemente qué necesitas resolver, instalar, reparar o comprar.';\n  return '¿Está correcto?';\n};\nconst missingFieldsFor = (state) => {\n  if (!hasValue(state.city)) return 'city';\n  if (!hasValue(state.service)) return 'service';\n  if (!hasValue(state.requirement)) return 'requirement';\n  return 'confirm';\n};\n\nconst aiEnabled = String($env.AI_LEAD_ASSISTANT_ENABLED || 'false').toLowerCase() === 'true';\nconst deterministicFields = [\n  'phone_number',\n  'source_number_id',\n  'instance_name',\n  'whatsapp_name',\n  'external_contact_id',\n  'external_message_id',\n  'external_timestamp',\n  'message_type',\n  'text_body',\n  'raw_payload_json',\n  'attachment_type',\n  'mime_type',\n  'filename',\n  'external_media_id',\n  'external_url',\n  'sha256',\n  'file_size',\n  'conversation_id',\n  'lead_id',\n  'reset_conversation_lead',\n  'previous_lead_id',\n  'service',\n  'city',\n  'requirement',\n  'current_step',\n  'conversation_status_code',\n  'should_create_lead',\n  'is_partial',\n  'response_text',\n  'response_kind',\n  'normalized_text',\n  'completed_fields_count',\n  'has_intent',\n  'audit_event_name',\n  'audit_result',\n  'before_payload_json',\n  'after_payload_json',\n  'metadata_json',\n];\nconst deterministicValue = (field) => (Object.prototype.hasOwnProperty.call(row, field + '_1') ? row[field + '_1'] : row[field]);\nconst deterministic = {};\nfor (const field of deterministicFields) {\n  deterministic[field] = deterministicValue(field);\n}\ndeterministic.should_create_lead = Boolean(deterministic.should_create_lead);\ndeterministic.completed_fields_count = Number(deterministic.completed_fields_count || 0);\ndeterministic.has_intent = Boolean(deterministic.has_intent);\ndeterministic.is_partial = Boolean(deterministic.is_partial);\ndeterministic.reset_conversation_lead = Boolean(deterministic.reset_conversation_lead);\n\nconst ai = {\n  skipped: Boolean(pick(row.ai_skipped, row.ai_skipped_1, false)),\n  skip_reason: pick(row.ai_skip_reason, row.ai_skip_reason_1),\n  fallback_reason: pick(row.ai_fallback_reason, row.ai_fallback_reason_1),\n  parse_error: pick(row.ai_parse_error, row.ai_parse_error_1),\n  status_code: pick(row.ai_status_code, row.ai_status_code_1),\n  retry_exhausted: Boolean(pick(row.ai_retry_exhausted, row.ai_retry_exhausted_1, false)),\n  intent: safe(pick(row.intent, row.intent_1)),\n  service: safe(row.service),\n  city: safe(row.city),\n  requirement: safe(row.requirement),\n  confirmation_status: safe(pick(row.confirmation_status, row.confirmation_status_1)),\n  confidence: Number(pick(row.confidence, row.confidence_1, 0)),\n  reply_text: safe(pick(row.reply_text, row.reply_text_1)),\n  should_create_lead: Boolean(pick(row.should_create_lead, false)),\n};\n\nconst currentStepInfo = parseStep(deterministic.current_step);\nconst normalizedText = normalizeText(deterministic.normalized_text || deterministic.text_body);\nconst explicitCorrection = ai.intent === 'correction' || /\\b(corregir|corrijo|correccion|corrección|cambiar|cambio|modificar|modifico|quise decir|me equivoque|me equivoqué)\\b/.test(normalizedText);\nconst deterministicResolvedClearly = deterministic.should_create_lead || ['handoff_ready', 'confirmation_question', 'previous_context_choice', 'confirmation_rejected'].includes(safe(deterministic.response_kind));\nconst aiHealthy = aiEnabled && !ai.skipped && !ai.parse_error && !ai.fallback_reason && !ai.retry_exhausted && ai.confidence >= 0.75;\nconst aiEligible = aiHealthy && (!deterministicResolvedClearly || explicitCorrection);\n\nconst state = {\n  service: safe(deterministic.service),\n  city: safe(deterministic.city),\n  requirement: safe(deterministic.requirement),\n};\nconst beforeState = { ...state };\nconst acceptedAiFields = [];\n\nconst maybeApply = (field) => {\n  const value = safe(ai[field]);\n  if (!value) return;\n  if (!hasValue(state[field]) || explicitCorrection) {\n    state[field] = value;\n    acceptedAiFields.push(field);\n  }\n};\n\nif (aiEligible) {\n  maybeApply('city');\n  maybeApply('service');\n  maybeApply('requirement');\n}\n\nconst missing = missingFieldsFor(state);\nconst nextStepField = missing === 'confirm' ? 'confirm' : missing;\nconst currentStep = acceptedAiFields.length ? encodeStep(nextStepField, state) : deterministic.current_step;\nconst responseText = acceptedAiFields.length\n  ? (missing === 'confirm' ? confirmationText(state) : nextQuestion(missing))\n  : deterministic.response_text;\nconst responseKind = acceptedAiFields.length\n  ? (missing === 'confirm' ? 'confirmation_question' : 'ai_assisted_question')\n  : deterministic.response_kind;\nconst completedFieldsCount = ['service', 'city', 'requirement'].filter((field) => hasValue(state[field])).length;\n\nconst originalMetadata = (() => {\n  try {\n    return JSON.parse(deterministic.metadata_json || '{}');\n  } catch (_error) {\n    return {};\n  }\n})();\nconst originalAfter = (() => {\n  try {\n    return JSON.parse(deterministic.after_payload_json || '{}');\n  } catch (_error) {\n    return {};\n  }\n})();\nconst afterPayload = {\n  ...originalAfter,\n  service: state.service || null,\n  city: state.city || null,\n  requirement: state.requirement || null,\n  current_step: currentStep,\n  current_step_field: nextStepField,\n  should_create_lead: Boolean(deterministic.should_create_lead),\n};\nconst aiMetadata = {\n  ...originalMetadata,\n  ai_enabled: aiEnabled,\n  ai_invoked: aiEnabled,\n  ai_applied: acceptedAiFields.length > 0,\n  ai_eligible: aiEligible,\n  ai_intent: ai.intent || null,\n  ai_confidence: Number.isFinite(ai.confidence) ? ai.confidence : 0,\n  ai_confirmation_status: ai.confirmation_status || null,\n  ai_fallback_reason: ai.fallback_reason || ai.skip_reason || ai.parse_error || null,\n  ai_accepted_fields: acceptedAiFields,\n  ai_before_fields: beforeState,\n  ai_model_requested_create_lead: ai.should_create_lead,\n  ai_creation_blocked_by_orchestrator: ai.should_create_lead && !deterministic.should_create_lead,\n};\n\nreturn [\n  {\n    json: {\n      ...deterministic,\n      service: state.service || null,\n      city: state.city || null,\n      requirement: state.requirement || null,\n      current_step: currentStep,\n      should_create_lead: Boolean(deterministic.should_create_lead),\n      response_text: responseText,\n      response_kind: responseKind,\n      completed_fields_count: completedFieldsCount,\n      audit_result: deterministic.should_create_lead ? 'handed_to_sales' : 'waiting_user',\n      after_payload_json: JSON.stringify(afterPayload),\n      metadata_json: JSON.stringify(aiMetadata),\n      ai_applied: acceptedAiFields.length > 0,\n      ai_accepted_fields: acceptedAiFields,\n      ai_fallback_reason: ai.fallback_reason || ai.skip_reason || ai.parse_error || null,\n    },\n  },\n];"
+      },
+      "id": "9",
+      "name": "Apply AI Assistance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        260
       ]
     }
   ],
@@ -136,6 +195,44 @@
       ]
     },
     "Evaluate Conversation Step": {
+      "main": [
+        [
+          {
+            "node": "Execute AI Lead Qualification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge AI Assistance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute AI Lead Qualification": {
+      "main": [
+        [
+          {
+            "node": "Merge AI Assistance",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge AI Assistance": {
+      "main": [
+        [
+          {
+            "node": "Apply AI Assistance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply AI Assistance": {
       "main": [
         [
           {

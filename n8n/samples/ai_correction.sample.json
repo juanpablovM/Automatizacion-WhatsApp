@@ -1,0 +1,16 @@
+{
+  "message_current": "Perdon, no es Santiago, es en Valparaiso",
+  "message_type": "text",
+  "conversation_status_code": "waiting_user",
+  "current_step": "confirm",
+  "service": "Baldosas",
+  "city": "Santiago",
+  "requirement": "Renovar un baño",
+  "previous_lead": {},
+  "recent_messages": [
+    {
+      "role": "assistant",
+      "content": "Tengo esto:\nServicio: Baldosas\nCiudad: Santiago\nRequerimiento: Renovar un baño\n\n¿Está correcto?"
+    }
+  ]
+}

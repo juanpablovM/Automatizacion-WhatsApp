@@ -114,6 +114,37 @@ Opcionalmente:
 sh scripts/dev/evolution-connect-instance.sh nombre-instancia
 ```
 
+Procedimiento de reconexion:
+
+1. Revisar estado:
+
+```bash
+sh scripts/dev/evolution-doctor.sh
+```
+
+2. Si la instancia no existe, crearla:
+
+```bash
+sh scripts/dev/evolution-create-instance.sh
+```
+
+3. Solicitar QR o pairing data:
+
+```bash
+sh scripts/dev/evolution-connect-instance.sh
+```
+
+4. Escanear el QR desde WhatsApp o completar el pairing.
+
+5. Verificar que la instancia quede `open` y repersistir webhook:
+
+```bash
+sh scripts/dev/evolution-doctor.sh
+sh scripts/dev/evolution-set-webhook.sh
+```
+
+No usar borrado de volumenes ni eliminar la instancia para una reconexion normal. Eso queda reservado para reset deliberado de sesion.
+
 ### Persistir webhook
 
 ```bash
@@ -155,6 +186,4 @@ Solo cambia:
 
 ## Pendientes
 
-- documentar procedimiento operativo de reconexion QR
-- activar y probar el secreto del webhook antes de cualquier exposicion publica
 - definir estrategia para multiples instancias si se operan varios numeros

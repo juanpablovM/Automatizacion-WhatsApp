@@ -4,10 +4,47 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
+usage() {
+  cat <<'EOF'
+Uso:
+  sh scripts/ops/backup-local.sh
+
+Crea un backup local de:
+  - base CRM de negocio
+  - base interna de n8n
+  - volumen n8n_data
+
+El resultado queda en backups/<YYYYMMDD-HHMMSS>/ salvo que BACKUP_ROOT
+defina otro directorio.
+EOF
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "ERROR: falta dependencia '$1'" >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  "")
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
+
 if [ ! -f "$ROOT_DIR/.env" ]; then
   echo "ERROR: no existe .env en $ROOT_DIR" >&2
   exit 1
 fi
+
+require_cmd docker
 
 . "$ROOT_DIR/.env"
 

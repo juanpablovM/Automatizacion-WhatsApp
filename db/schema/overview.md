@@ -62,4 +62,6 @@ erDiagram
 - Un mismo telefono puede tener multiples leads a lo largo del tiempo.
 - Una conversacion puede existir antes de que el lead se cree en ClickUp.
 - Los adjuntos se registran como metadata, no como binario.
-
+- Un vendedor notificable debe cumplir: `deleted_at IS NULL`, `is_active = TRUE` y `clickup_user_id` no vacio.
+- El round robin operativo solo debe considerar vendedores notificables; si no existe ninguno, el flujo registra fallo `no_notifiable_seller`.
+- El esquema actual no tiene una marca formal de ambiente o dato de prueba. Antes de reportar metricas comerciales, excluir los leads de validacion documentados o agregar una marca formal en una fase posterior.

@@ -4,10 +4,42 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
+usage() {
+  cat <<'EOF'
+Uso:
+  sh scripts/ops/verify-backup-local.sh [directorio-backup]
+
+Verifica un backup sin tocar las bases reales:
+  - restaura dumps en bases temporales *_restore_check_<timestamp>
+  - valida conteos basicos de tablas, leads y workflows
+  - valida que n8n_data.tar.gz sea legible
+  - elimina las bases temporales al terminar
+
+Si no se indica directorio, usa el ultimo backup en backups/.
+EOF
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "ERROR: falta dependencia '$1'" >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
 if [ ! -f "$ROOT_DIR/.env" ]; then
   echo "ERROR: no existe .env en $ROOT_DIR" >&2
   exit 1
 fi
+
+require_cmd docker
+require_cmd tar
 
 . "$ROOT_DIR/.env"
 
@@ -48,6 +80,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Verificando backup: $BACKUP_DIR"
+echo "Bases temporales de verificacion:"
+printf "  %s\n" "$APP_RESTORE_DB"
+printf "  %s\n" "$N8N_RESTORE_DB"
 
 compose cp "$APP_DUMP" "postgres:/tmp/crm_whatsapp_app_restore.dump" >/dev/null
 compose cp "$N8N_DUMP" "postgres:/tmp/crm_whatsapp_n8n_restore.dump" >/dev/null

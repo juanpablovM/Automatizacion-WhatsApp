@@ -1,0 +1,390 @@
+{
+  "suite": "post_ai_conversation_regression",
+  "version": 1,
+  "required_evidence": [
+    "conversation_id",
+    "lead_id",
+    "clickup_task_id",
+    "vendedor",
+    "auditorias"
+  ],
+  "lead_creation_gate": [
+    "servicio",
+    "ciudad",
+    "requerimiento",
+    "confirmacion"
+  ],
+  "cases": [
+    {
+      "id": "CP-01",
+      "title": "Saludo simple",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Hola"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "next_step_any": [
+          "city",
+          "service"
+        ],
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-02",
+      "title": "Mensaje completo desde el inicio",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Hola, necesito comprar baldosas en Santiago para renovar un bano"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "fields_detected": [
+          "servicio",
+          "ciudad",
+          "requerimiento"
+        ],
+        "next_step": "confirm",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-03",
+      "title": "Confirmacion final",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Si, correcto"
+        ],
+        "precondition": "CP-02 en current_step=confirm",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "clickup_task_created": true,
+        "confirmed_by_user": true,
+        "seller_assigned": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-04",
+      "title": "Respuestas fuera de orden",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Necesito instalar en Valparaiso"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "fields_detected": [
+          "ciudad"
+        ],
+        "asks_only_missing_data": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-05",
+      "title": "Comprador con datos incompletos",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Quiero cotizar en Santiago"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "fields_detected": [
+          "ciudad"
+        ],
+        "asks_for": "servicio",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-06",
+      "title": "Respuesta directa de servicio",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Baldosas"
+        ],
+        "precondition": "orquestador pregunta por servicio",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "fields_detected": [
+          "servicio"
+        ],
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-07",
+      "title": "Requerimiento vago",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Algo para la casa"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "asks_for_clarification": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-08",
+      "title": "Rechazo en confirmacion",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "No, quiero corregir"
+        ],
+        "precondition": "current_step=confirm",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "correction_flow": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-09",
+      "title": "Nuevo lead desde numero repetido",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "nueva"
+        ],
+        "precondition": "numero con lead previo",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "reset_previous_lead": true,
+        "does_not_store_message_as_service": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-10",
+      "title": "Continuar solicitud anterior",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "continuar con la anterior"
+        ],
+        "precondition": "numero con lead previo",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "previous_lead_reused": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-11",
+      "title": "Mensaje con adjunto y texto",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "Imagen con caption: Necesito estas baldosas en Santiago"
+        ],
+        "message_type": "image",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "attachment_metadata_recorded": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CP-12",
+      "title": "Evento no procesable",
+      "ai_mode": "both",
+      "input": {
+        "messages": [
+          "mensaje desde grupo"
+        ],
+        "processable": false
+      },
+      "expected": {
+        "conversation_created": false,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "ignored": true,
+        "audit_required": false
+      }
+    },
+    {
+      "id": "AI-01",
+      "title": "AI apagada conserva comportamiento deterministico",
+      "ai_mode": "off",
+      "input": {
+        "messages": [
+          "Hola, necesito comprar baldosas en Santiago para renovar un bano"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "feature_flag_required": "AI_LEAD_ASSISTANT_ENABLED=false",
+        "fallback_deterministic": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AI-02",
+      "title": "AI encendida con salida valida",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Hola, necesito comprar baldosas en Santiago para renovar un bano"
+        ],
+        "mock_ai": {
+          "valid_json": true,
+          "confidence": 0.92,
+          "should_create_lead": false
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "ai_creates_lead_directly": false,
+        "ai_fields_can_be_used": true,
+        "next_step": "confirm",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AI-03",
+      "title": "AI invalida o falla",
+      "ai_mode": "on_invalid_or_failure",
+      "input": {
+        "messages": [
+          "Hola, necesito comprar baldosas en Santiago para renovar un bano"
+        ],
+        "mock_ai": {
+          "valid_json": false,
+          "http_failure": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "ai_creates_lead_directly": false,
+        "fallback_deterministic": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AI-04",
+      "title": "AI baja confianza",
+      "ai_mode": "on_low_confidence",
+      "input": {
+        "messages": [
+          "Algo para la casa"
+        ],
+        "mock_ai": {
+          "valid_json": true,
+          "confidence": 0.52,
+          "suggested_fields": [
+            "servicio"
+          ]
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "ai_creates_lead_directly": false,
+        "accepted_ai_fields": [],
+        "fallback_deterministic": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AI-05",
+      "title": "Correccion explicita del usuario",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "No, es en Valparaiso y para instalar porcelanato"
+        ],
+        "precondition": "current_step=confirm con datos previos",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "ai_creates_lead_directly": false,
+        "explicit_correction_required_to_overwrite": true,
+        "next_step": "confirm",
+        "audit_required": true
+      }
+    }
+  ]
+}

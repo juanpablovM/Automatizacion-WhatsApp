@@ -20,6 +20,7 @@ El proyecto ya tiene implementadas las bases de:
 - separacion entre base interna de `n8n` y base del CRM
 - ClickUp conectado y validado con prueba real
 - migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
+- sub-workflow `AI - Lead Qualification Assistant` definido para NVIDIA MiniMax via NVIDIA NIM, bajo feature flag
 
 ## Resumen ejecutivo rapido
 
@@ -39,13 +40,17 @@ Hoy el proyecto ya tiene:
 - `CRM - ClickUp Sync Lead` con payload real, comentario conversacional completo y retorno estable hacia el workflow padre
 - `CRM - Seller Notification Dispatch` con despacho real de notificacion interna
 - `OPS - Error Handler` con logica real de auditoria y marcado de lead en error
+- `AI - Lead Qualification Assistant` como capa asistiva controlada; no decide persistencia ni crea leads por si sola
 - ClickUp ya validado con tarea real:
   - `86agtc6z3`
   - `https://app.clickup.com/t/86agtc6z3`
 
-Lo que aun falta cerrar:
+Lo que aun falta cerrar por el integrador:
 
-- implementar seguridad y recuperacion minima antes de incorporar AI
+- integrar las ramas de la fase multiagente en el orden definido
+- ejecutar baseline con AI apagada
+- activar AI solo con secretos reales en el workspace del integrador
+- validar NVIDIA MiniMax y matriz conversacional con servicios vivos
 
 ## Infraestructura local
 
@@ -98,6 +103,12 @@ Variables clave ya contempladas:
 - `CLICKUP_LIST_ID=901326797183`
 - `CLICKUP_TEAM_ID=9013271719`
 - `CLICKUP_CF_*` ya cargados en `.env`
+- `AI_LEAD_ASSISTANT_ENABLED=false` en `.env.example`; se activa solo para pruebas controladas
+- `AI_PROVIDER=nvidia`
+- `AI_BASE_URL=https://integrate.api.nvidia.com/v1`
+- `AI_API_MODE=chat_completions`
+- `AI_MODEL=minimaxai/minimax-m2.5`
+- `AI_API_KEY` real solo debe existir en el workspace del integrador y nunca en Git
 
 ## Documentacion clave
 
@@ -116,6 +127,7 @@ Leer al retomar:
 
 - canal de entrada funcional: WhatsApp
 - proveedor actual elegido: `Evolution API`
+- proveedor AI actual elegido: NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
 - flujo guiado con extraccion de contexto libre
 - preguntas base:
   - servicio
@@ -132,6 +144,16 @@ Leer al retomar:
   - despues de 24 horas puede crear nuevo lead enlazado al anterior
 - asignacion:
   - round robin secuencial simple
+- politica AI:
+  - AI recomienda, `n8n` y PostgreSQL deciden
+  - la AI no escribe directamente en PostgreSQL
+  - la AI no crea tareas en ClickUp
+  - la AI no asigna vendedores
+  - si NVIDIA falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
+- politica de secretos:
+  - `.env` real no se commitea ni se comparte entre agentes
+  - agentes no integradores trabajan con `.env.example`, samples, mocks y tests locales
+  - el integrador es el unico rol autorizado para usar `AI_API_KEY`, `CLICKUP_API_TOKEN`, `EVOLUTION_API_KEY` y credenciales reales
 
 ## Workflows existentes en n8n
 
@@ -143,6 +165,7 @@ Ya importados:
 - `CRM - Lead Creation And Assignment`
 - `CRM - ClickUp Sync Lead`
 - `CRM - Seller Notification Dispatch`
+- `AI - Lead Qualification Assistant`
 - `OPS - Error Handler`
 
 JSON versionados en:
@@ -181,6 +204,11 @@ Estado real de implementacion:
   - notificacion interna por comentario asignado en ClickUp
 - `OPS - Error Handler`
   - auditoria y marcado de lead en error
+- `AI - Lead Qualification Assistant`
+  - contrato JSON controlado para asistencia de extraccion y redaccion
+  - preparado para NVIDIA MiniMax con `chat_completions`
+  - prueba local con mocks: `sh scripts/ops/test-ai-assistant-local.sh`
+  - no usa secretos reales fuera del workspace del integrador
 
 ## ClickUp
 
@@ -273,10 +301,16 @@ Estado de limpieza de datos de prueba:
 
 ## Siguiente paso recomendado
 
-1. cerrar recuperacion minima:
-   - definir si basta la verificacion no destructiva de restore o si se hara restore completo en entorno aislado
-2. validar reintentos con fallos externos reales o simulados
-3. validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI y conectarlo al orquestador como capa controlada
+1. correr baseline local:
+   - `sh scripts/dev/sync-n8n-workflows.sh --preflight`
+   - `sh scripts/ops/test-ai-assistant-local.sh`
+   - `sh scripts/ops/test-conversation-regression-local.sh`
+   - healthcheck de `n8n`
+2. sincronizar workflows y verificar que `WA - Inbound Entry` quede activo
+3. ejecutar matriz conversacional con AI apagada
+4. rotar la clave NVIDIA expuesta fuera del repo, cargar la nueva en `.env` y activar `AI_LEAD_ASSISTANT_ENABLED=true`
+5. validar NVIDIA MiniMax desde el workspace del integrador
+6. ejecutar matriz conversacional con AI encendida, incluyendo falla NVIDIA, baja confianza y respuesta invalida
 
 ## Siguiente fase planificada
 
@@ -286,6 +320,8 @@ Decision sobre AI:
 
 - se incorporara AI como asistente de extraccion, clasificacion y redaccion
 - no se partira con un agente autonomo completo
+- proveedor actual: NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
+- modo actual: `chat_completions`
 - la regla operativa es: AI recomienda, `n8n` y PostgreSQL deciden
 - la AI no escribe directamente en PostgreSQL
 - la AI no crea tareas en ClickUp por si sola
@@ -313,6 +349,8 @@ Prioridades recomendadas:
    - usar AI para entender intencion, detectar datos faltantes, sugerir respuesta y generar resumen para ClickUp
    - validar `confidence`, campos faltantes y reglas del flujo antes de crear lead
    - si falta informacion o hay baja confianza, preguntar o pedir aclaracion
+   - no aceptar campos sugeridos con `confidence < 0.75`
+   - mantener `should_create_lead=false` si falta confirmacion
 4. Validar reintentos en APIs externas:
    - ClickUp
    - `Evolution API` saliente
@@ -360,5 +398,5 @@ Quedan para mas adelante, solo si el uso real lo justifica:
 ## Prompt sugerido para un nuevo chat
 
 ```text
-Continúa este proyecto desde /Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md y n8n/workflows/. Retoma desde el siguiente paso recomendado y no asumas nada fuera de lo documentado.
+Continúa este proyecto desde /Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: AI recomienda, n8n/PostgreSQL deciden, y ClickUp solo recibe leads confirmados.
 ```

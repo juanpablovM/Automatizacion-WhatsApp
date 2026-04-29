@@ -1,0 +1,11 @@
+{
+  "message_current": "Quiero algo para la casa",
+  "message_type": "text",
+  "conversation_status_code": "waiting_user",
+  "current_step": "service",
+  "service": "",
+  "city": "Santiago",
+  "requirement": "",
+  "previous_lead": {},
+  "recent_messages": []
+}

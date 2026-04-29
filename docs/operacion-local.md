@@ -117,6 +117,8 @@ Estado validado:
 - los sub-workflows se ejecutan desde `WA - Inbound Entry`
 - `OPS - Error Handler` queda configurado como workflow de errores
 
+El procedimiento operativo completo esta en [`runbook-operacion.md`](./runbook-operacion.md).
+
 ## Persistir webhook de Evolution API
 
 Cuando cambie `EVOLUTION_WEBHOOK_URL`, `EVOLUTION_WEBHOOK_EVENTS` o `EVOLUTION_WEBHOOK_SECRET`, actualiza la configuracion persistida de la instancia:
@@ -155,19 +157,21 @@ Esto detiene los contenedores, pero no elimina los volumenes.
 
 ## Backup local
 
-El proyecto incluye un script inicial para respaldar la base del CRM, la base interna de `n8n` y el volumen `n8n_data`:
+El proyecto incluye un script para respaldar la base del CRM, la base interna de `n8n` y el volumen `n8n_data`:
 
 ```bash
 sh scripts/ops/backup-local.sh
 ```
 
-El resultado queda en `backups/<fecha>/`, fuera de Git. El restore todavia debe probarse de forma controlada antes de considerar el entorno recuperable para produccion.
+El resultado queda en `backups/<fecha>/`, fuera de Git.
 
 Para verificar el ultimo backup sin tocar las bases reales:
 
 ```bash
 sh scripts/ops/verify-backup-local.sh
 ```
+
+Esta verificacion crea bases temporales `*_restore_check_<timestamp>`, restaura los dumps ahi, valida conteos basicos y elimina esas bases al terminar. No es un restore destructivo sobre las bases reales.
 
 Tambien puedes indicar un directorio especifico:
 
@@ -197,7 +201,7 @@ Variables:
 
 ## AI Lead Assistant
 
-El sub-workflow `AI - Lead Qualification Assistant` queda desactivado por defecto:
+La plantilla local mantiene la capa AI apagada hasta que el integrador active el flag con secretos reales:
 
 ```bash
 AI_LEAD_ASSISTANT_ENABLED=false
@@ -215,7 +219,25 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
+La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor y modo AI desactivado. No usa `.env` real ni llama a NVIDIA.
+
+Guardrails actuales del sub-workflow:
+
+- `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
+- si falta confirmacion, `missing_fields` incluye `confirmation` y el resumen ClickUp queda vacio.
+- si `confidence < 0.75`, no se aceptan campos nuevos sugeridos por AI; solo se conservan campos ya existentes en el contexto.
+- si `choices[0].message.content` no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
+
 Para usar NVIDIA API Catalog, crea una API key en `build.nvidia.com`, configura `AI_API_KEY`, activa `AI_LEAD_ASSISTANT_ENABLED=true`, recrea `n8n` con `docker compose --env-file .env up -d n8n` y ejecuta una prueba controlada. MiniMax M2.5 queda configurado con `AI_API_MODE=chat_completions`.
+
+Rollback operativo:
+
+```bash
+AI_LEAD_ASSISTANT_ENABLED=false
+docker compose --env-file .env up -d n8n
+```
+
+Regla de seguridad: AI recomienda; `n8n` y PostgreSQL deciden. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
 
 ## Alcance actual
 
@@ -235,12 +257,11 @@ En esta fase ya puedes:
 
 Antes de considerar el entorno listo para produccion falta:
 
-- probar restore antes de confiar en los backups
+- ejecutar matriz E2E completa despues de cada cambio de AI/orquestador
 - operar multiples instancias con una estrategia final documentada
-- considerar produccion lista sin backup/restore probado
+- validar restore completo en entorno aislado si se requiere recuperacion total, no solo verify restore no destructivo
 
 ## Pendientes
 
-- documentar el procedimiento operativo de reconexion QR
-- activar y probar el secreto del webhook antes de cualquier exposicion publica
-- probar restore desde un backup local
+- definir estrategia para multiples instancias si se operan varios numeros
+- validar restore completo en entorno aislado antes de declarar produccion recuperable

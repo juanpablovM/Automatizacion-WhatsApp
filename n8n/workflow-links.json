@@ -32,6 +32,11 @@
       "sourceWorkflow": "TEST - ClickUp Sync Smoke",
       "node": "Execute ClickUp Sync Lead",
       "targetWorkflow": "CRM - ClickUp Sync Lead"
+    },
+    {
+      "sourceWorkflow": "WA - Conversation Orchestrator",
+      "node": "Execute AI Lead Qualification",
+      "targetWorkflow": "AI - Lead Qualification Assistant"
     }
   ]
 }

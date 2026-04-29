@@ -46,6 +46,4 @@ Las integraciones principales ya quedaron conectadas y validadas en entorno loca
 
 ## Pendientes
 
-- activar y probar el secreto del webhook antes de exposicion publica
-- probar restore operativo desde los backups locales
 - decidir estrategia operativa para multiples instancias

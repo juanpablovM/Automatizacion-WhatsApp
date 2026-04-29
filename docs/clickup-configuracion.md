@@ -19,6 +19,33 @@ Estado validado:
 
 Las tareas creadas durante la validacion real estan documentadas como datos de prueba en [`docs/handoff-actual.md`](./handoff-actual.md).
 
+## Readiness de vendedores
+
+Un vendedor solo debe considerarse listo para recibir leads si tiene `clickup_user_id` real cargado en PostgreSQL. Ese dato no es decorativo: el flujo lo usa para asignar la tarea y para crear el comentario de notificacion dirigido al vendedor.
+
+Requisito para vendedor notificable:
+
+- activo en `sellers.is_active`
+- sin borrado logico en `sellers.deleted_at`
+- `sellers.clickup_user_id` no vacio
+- usuario correspondiente existe en el workspace/lista de ClickUp usada por el proyecto
+
+El round robin actual excluye vendedores activos sin `clickup_user_id`. Si no queda ningun vendedor notificable, el flujo registra `no_notifiable_seller` en `lead_assignments` y no hay notificacion comercial util para ese lead.
+
+Consulta recomendada antes de cualquier prueba real:
+
+```bash
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  -f db/queries/ops/clickup-readiness/01_seller_notifiability_audit.sql
+
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  -f db/queries/ops/clickup-readiness/02_round_robin_readiness.sql
+```
+
+No se debe usar un `clickup_user_id` temporal de una prueba como dato definitivo de produccion.
+
 ## Enfoque recomendado
 
 Se recomienda usar:
@@ -166,6 +193,39 @@ El proyecto usa variables para los IDs de ClickUp. En `.env.example` quedan plac
 - para campos `drop_down`, el valor enviado debe ser el `option_id`, no el texto visible
 - si mas adelante cambias el nombre visible de un campo, el `field_id` sigue siendo la referencia estable
 
+## Datos de prueba y metricas
+
+Las tareas ClickUp creadas durante validacion real no deben mezclarse con oportunidades comerciales ni con metricas de conversion. Mientras no exista una marca formal en el modelo, el criterio operativo es:
+
+- identificar en ClickUp las tareas de validacion con una etiqueta, estado, prefijo o comentario interno acordado por el equipo
+- excluir de reportes los IDs de lead y tareas documentados en el handoff
+- excluir telefonos sinteticos y textos con marcadores de prueba
+- no usar vendedores temporales ni `clickup_user_id` prestados como base de reportes de productividad
+
+Consultas de apoyo:
+
+```bash
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  -f db/queries/ops/clickup-readiness/03_validation_data_candidates.sql
+
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  -f db/queries/ops/clickup-readiness/04_metrics_excluding_validation.sql
+```
+
+Antes de declarar produccion, debe existir un criterio estable para que los reportes comerciales no dependan de memoria historica del equipo. La opcion minima es mantener una lista versionada de exclusiones; la opcion mas robusta es agregar una marca formal de ambiente o validacion en datos.
+
+## Adjuntos ClickUp
+
+Estado actual:
+
+- PostgreSQL guarda metadata de adjuntos en `message_attachments`
+- `CRM - ClickUp Sync Lead` ya lee `attachments_json`
+- la carga del binario real como adjunto de tarea queda pendiente
+
+No implementar adjuntos en esta fase salvo correccion menor que no altere el flujo. La implementacion futura debe resolver descarga segura desde Evolution/API origen, manejo de tamanos, MIME types, reintentos y evidencia en auditoria.
+
 ## Siguiente paso
 
 Para ClickUp, el siguiente trabajo no es conectar desde cero sino endurecer operacion:
@@ -173,4 +233,4 @@ Para ClickUp, el siguiente trabajo no es conectar desde cero sino endurecer oper
 1. revisar que los datos de prueba no se mezclen con metricas comerciales
 2. cargar `clickup_user_id` real para cada vendedor que deba recibir leads
 3. validar los reintentos con backoff de creacion de tarea y comentarios usando fallos simulados
-4. definir como se manejaran adjuntos reales en la tarea
+4. definir como se manejaran adjuntos reales en la tarea, sin implementarlo hasta cerrar el contrato operativo

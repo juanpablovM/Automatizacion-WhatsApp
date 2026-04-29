@@ -1,0 +1,11 @@
+{
+  "message_current": "Hola, buenas tardes",
+  "message_type": "text",
+  "conversation_status_code": "waiting_user",
+  "current_step": "",
+  "service": "",
+  "city": "",
+  "requirement": "",
+  "previous_lead": {},
+  "recent_messages": []
+}

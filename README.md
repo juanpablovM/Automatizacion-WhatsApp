@@ -20,11 +20,16 @@ Estado implementado:
 - se corrigieron loops conversacionales detectados durante validacion real
 - se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
 - se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
-- se agrego `AI - Lead Qualification Assistant` como sub-workflow independiente y desactivado por defecto
+- se agrego `AI - Lead Qualification Assistant` para NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
+- se conecto el asistente AI al orquestador como capa opcional bajo `AI_LEAD_ASSISTANT_ENABLED`
+- se definio la politica de AI controlada: AI recomienda, `n8n` y PostgreSQL deciden, y ClickUp solo recibe leads confirmados
+- `.env.example` mantiene `AI_LEAD_ASSISTANT_ENABLED=false`; la activacion real con secretos queda reservada al integrador
 
 Pendiente inmediato:
 
-- validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI y luego conectarlo al orquestador
+- sincronizar workflows en la instancia viva y verificar que `WA - Inbound Entry` quede activo
+- ejecutar baseline deterministico y prueba real de NVIDIA MiniMax solo desde el workspace del integrador con clave rotada
+- validar matriz conversacional con AI apagada y AI encendida antes de considerar produccion
 
 ## Objetivo del proyecto
 
@@ -60,6 +65,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Handoff Actual](./docs/handoff-actual.md)
 - [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
+- [Runbook operativo](./docs/runbook-operacion.md)
 
 ## Archivos clave
 
@@ -95,24 +101,28 @@ Bases de datos locales:
 - `crm_whatsapp_app`: base del CRM y la logica de negocio
 - `evolution_api`: base tecnica de `Evolution API`
 
-## Siguiente paso sugerido
+## Operacion y recuperacion
 
-La matriz conversacional corta ya quedo versionada y cerrada en [`docs/matriz-pruebas-conversacionales.md`](./docs/matriz-pruebas-conversacionales.md). El siguiente paso recomendado es completar seguridad y recuperacion minima:
+La matriz conversacional corta ya quedo versionada en [`docs/matriz-pruebas-conversacionales.md`](./docs/matriz-pruebas-conversacionales.md). La operacion diaria y recuperacion minima quedan consolidadas en [`docs/runbook-operacion.md`](./docs/runbook-operacion.md).
 
-- proteccion del webhook de `WA - Inbound Entry`
-- backup de PostgreSQL
-- backup del volumen de `n8n`
-- prueba controlada de `OPS - Error Handler`
+Orden operativo recomendado:
 
-El proyecto ya incluye un primer script local de backup:
+1. correr preflight de workflows y prueba local del asistente AI con mocks
+2. sincronizar workflows versionados
+3. validar healthcheck de `n8n`
+4. correr backup y verify restore no destructivo
+5. validar `OPS - Error Handler` con fallo controlado
+6. ejecutar matriz conversacional con `AI_LEAD_ASSISTANT_ENABLED=false`
+7. activar AI solo en el entorno del integrador y probar NVIDIA MiniMax con servicios vivos
+8. verificar que ningun lead se cree sin `servicio + ciudad + requerimiento + confirmacion`
+
+Scripts operativos relevantes:
 
 ```bash
 sh scripts/ops/backup-local.sh
-```
-
-Para resincronizar workflows versionados cuando corresponda:
-
-```bash
+sh scripts/ops/verify-backup-local.sh
+sh scripts/ops/test-error-handler.sh
+sh scripts/ops/test-ai-assistant-local.sh
 sh scripts/dev/sync-n8n-workflows.sh --preflight
 sh scripts/dev/sync-n8n-workflows.sh
 ```
