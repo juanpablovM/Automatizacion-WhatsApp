@@ -2,11 +2,13 @@
 
 ## Objetivo
 
-Definir la arquitectura de workflows de `n8n` para implementar la automatizacion de leads por WhatsApp sin dejar decisiones abiertas para la siguiente fase.
+Documentar la arquitectura de workflows de `n8n` implementada para la automatizacion de leads por WhatsApp.
+
+Este documento conserva la intencion de diseno original, pero el estado actual ya no es solo propuesto: los workflows principales existen, estan versionados en `n8n/workflows/`, fueron importados en `n8n` y se validaron con mensajes reales.
 
 ## Principios de diseno
 
-- `n8n` actua como orquestador de eventos, integraciones y reintentos
+- `n8n` actua como orquestador de eventos, integraciones y manejo operativo de errores
 - `PostgreSQL` actua como fuente de verdad del estado conversacional y del dominio CRM
 - la extraccion de datos usa enfoque hibrido:
   - primero logica deterministica
@@ -64,7 +66,7 @@ Se usa primero una capa simple y explicable con `Code`:
 
 ### Capa 2: extraccion asistida por IA
 
-Se deja preparada como mejora o capa complementaria:
+Queda implementada como sub-workflow independiente y apagable:
 
 - tomar un mensaje libre amplio del cliente
 - proponer `service`, `city` y `requirement`
@@ -75,15 +77,17 @@ Regla:
 
 - la IA complementa, no gobierna el estado del sistema
 
-## Workflows propuestos
+## Workflows implementados
 
-### 1. `wa_inbound_entry`
+### 1. `WA - Inbound Entry`
 
 Responsabilidad:
 
 - recibir eventos entrantes desde `Evolution API`
 - normalizar el payload inicial
 - enrutar eventos utiles al procesamiento conversacional
+- responder rapido `accepted` al webhook
+- encadenar orquestacion conversacional, respuesta saliente, creacion de lead, ClickUp y notificacion
 
 Entrada:
 
@@ -97,17 +101,18 @@ Salida:
 Nodos principales:
 
 - `Webhook`
-- `IF`
 - `Respond to Webhook`
 - `Code`
 - `Execute Workflow`
 
 Notas:
 
-- debe soportar mensajes utilies desde eventos `MESSAGES_UPSERT`
-- debe detectar rapidamente si el evento no corresponde a mensaje util
+- soporta mensajes utiles desde eventos `MESSAGES_UPSERT`
+- ignora mensajes propios, grupos y eventos no procesables
+- soporta validacion opcional por secreto compartido con `EVOLUTION_WEBHOOK_SECRET`; si la variable esta vacia, no bloquea eventos para no romper el entorno local existente
+- antes de exposicion publica se debe configurar el secreto real en `.env`, persistir el webhook de Evolution con `?token=...` o header equivalente y probar rechazo de eventos sin secreto
 
-### 2. `conversation_orchestrator`
+### 2. `WA - Conversation Orchestrator`
 
 Responsabilidad:
 
@@ -120,7 +125,7 @@ Responsabilidad:
 
 Entrada:
 
-- payload canonico desde `wa_inbound_entry`
+- payload canonico desde `WA - Inbound Entry`
 
 Salida:
 
@@ -130,11 +135,9 @@ Salida:
 
 Nodos principales:
 
-- `Execute Query` o `Postgres`
+- `Postgres`
 - `Code`
-- `Switch`
-- `IF`
-- `Execute Workflow`
+- `Merge`
 
 Uso de `Code`:
 
@@ -149,13 +152,55 @@ Uso de IA:
 
 - subpaso opcional cuando el mensaje libre trae bastante contexto
 - resultado siempre validado antes de persistir
+- `AI - Lead Qualification Assistant` ya existe como sub-workflow independiente, pero aun no esta conectado al orquestador
 
-### 3. `wa_outbound_messages`
+### 3. `AI - Lead Qualification Assistant`
+
+Responsabilidad:
+
+- llamar a un proveedor AI compatible con OpenAI (`NVIDIA NIM`, `Ollama` u `OpenAI`)
+- extraer intencion, calidad del lead, servicio, ciudad y requerimiento
+- proponer texto de respuesta y resumen para ClickUp
+- aplicar guardrails basicos antes de devolver `should_create_lead`
+
+Entrada:
+
+- mensaje actual
+- estado conversacional actual
+- ultimos mensajes relevantes
+- campos ya detectados
+- lead previo si existe
+
+Salida:
+
+- `intent`
+- `lead_quality`
+- `service`
+- `city`
+- `requirement`
+- `missing_fields`
+- `should_create_lead`
+- `needs_confirmation`
+- `confidence`
+- `reply_text`
+- `clickup_summary`
+
+Estado:
+
+- desactivado por defecto mediante `AI_LEAD_ASSISTANT_ENABLED=false`
+- preparado para NVIDIA API Catalog mediante `AI_BASE_URL=https://integrate.api.nvidia.com/v1`
+- soporta `AI_API_MODE=responses` y `AI_API_MODE=chat_completions`
+- no escribe en PostgreSQL
+- no crea tareas en ClickUp
+- no asigna vendedores
+- prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
+
+### 4. `WA - Outbound Messages`
 
 Responsabilidad:
 
 - enviar mensajes salientes al cliente por `Evolution API`
-- aplicar reintentos
+- registrar intento de envio
 - registrar auditoria y estado del envio
 
 Entrada:
@@ -169,11 +214,9 @@ Salida:
 
 Nodos principales:
 
-- `HTTP Request`
 - `Code`
-- `IF`
-- `Wait`
-- `Execute Query` o `Postgres`
+- `Postgres`
+- `Merge`
 
 Casos cubiertos:
 
@@ -181,8 +224,9 @@ Casos cubiertos:
 - pregunta pendiente
 - reencauce
 - derivacion final
+- reintentos con backoff para estados reintentables de `Evolution API` y errores de red
 
-### 4. `lead_creation_and_assignment`
+### 5. `CRM - Lead Creation And Assignment`
 
 Responsabilidad:
 
@@ -202,10 +246,8 @@ Salida:
 
 Nodos principales:
 
-- `Execute Query` o `Postgres`
+- `Postgres`
 - `Code`
-- `IF`
-- `Execute Workflow`
 
 Uso de SQL:
 
@@ -215,14 +257,15 @@ Uso de SQL:
 - insercion en `lead_assignments`
 - auditoria
 
-### 5. `clickup_sync_lead`
+### 6. `CRM - ClickUp Sync Lead`
 
 Responsabilidad:
 
 - construir el payload de ClickUp
 - crear la tarea en `Leads Entrantes`
-- asignar vendedor si existe `clickup_user_id`
-- cargar comentario con conversacion completa
+- asignar vendedor con `clickup_user_id`
+- devolver siempre `lead_id`, `clickup_task_id` y `clickup_task_url` al workflow padre
+- crear comentario con conversacion completa cuando hay historial disponible
 - preparar carga de adjuntos
 - registrar exito o error
 
@@ -240,22 +283,22 @@ Nodos principales:
 
 - `HTTP Request`
 - `Code`
-- `IF`
-- `Wait`
-- `Execute Query` o `Postgres`
+- `Postgres`
+- `Merge`
 
 Notas:
 
-- los custom fields se parametrizan cuando se definan en ClickUp
-- la conversacion completa se publica como comentario
+- los custom fields se parametrizan por variables `CLICKUP_*`
+- la salida final pasa por `Create Conversation Comment If Present`, que conserva el payload aunque el comentario se salte o falle
+- la creacion de tarea y el comentario conversacional completo tienen reintentos con backoff para estados reintentables
+- la creacion de tareas fue validada con ClickUp real
 
-### 6. `seller_notification_dispatch`
+### 7. `CRM - Seller Notification Dispatch`
 
 Responsabilidad:
 
 - enviar la notificacion al vendedor
 - dejar el canal desacoplado
-- soportar reintentos
 - registrar incidente operativo si falla
 
 Entrada:
@@ -269,20 +312,20 @@ Salida:
 
 Nodos principales:
 
-- `Switch`
-- `HTTP Request`
 - `Code`
-- `Wait`
-- `Execute Query` o `Postgres`
+- `Postgres`
+- `Merge`
 
 Diseño:
 
 - subworkflow abstracto
 - canal primario: ClickUp
 - comenta la tarea creada y asigna el comentario al `clickup_user_id`
+- requiere que el lead tenga vendedor con `clickup_user_id`
 - mas adelante puede admitir otro canal sin cambiar el resto
+- usa reintentos con backoff para estados reintentables de ClickUp y errores de red
 
-### 7. `operational_error_handler`
+### 8. `OPS - Error Handler`
 
 Responsabilidad:
 
@@ -305,8 +348,13 @@ Nodos principales:
 
 - `Error Trigger`
 - `Code`
-- `Execute Query` o `Postgres`
-- `IF`
+- `Postgres`
+
+Estado:
+
+- esta conectado como `errorWorkflow` de los workflows versionados por el script de sincronizacion
+- se valido con un fallo controlado desde webhook autorizado; registra workflow, nodo y mensaje de error especifico
+- la prueba reproducible esta en `scripts/ops/test-error-handler.sh`
 
 ## Reparto de nodos nativos y Code
 
@@ -315,11 +363,9 @@ Nodos principales:
 - `Webhook`
 - `Respond to Webhook`
 - `HTTP Request`
-- `IF`
-- `Switch`
-- `Wait`
 - `Execute Workflow`
-- `Postgres` o `Execute Query`
+- `Postgres`
+- `Merge`
 
 ### Uso recomendado de `Code`
 
@@ -349,13 +395,13 @@ Nodos principales:
 
 ### Credenciales/nodos a configurar en n8n
 
-- llamadas HTTP hacia `Evolution API`
-- llamadas HTTP hacia ClickUp API
-- conexion PostgreSQL a `crm_whatsapp_app`
+- credencial PostgreSQL `Postgres CRM App Local`
+- variables de entorno para llamadas HTTP hacia `Evolution API`
+- variables de entorno para llamadas HTTP hacia ClickUp API
 
 ## Conexion PostgreSQL desde n8n
 
-Cuando se configure la credencial PostgreSQL dentro de `n8n`, debe usar:
+La credencial PostgreSQL dentro de `n8n` debe usar:
 
 - host: `postgres`
 - port: `5432`
@@ -364,7 +410,7 @@ Cuando se configure la credencial PostgreSQL dentro de `n8n`, debe usar:
 - password: valor de `POSTGRES_PASSWORD`
 - schema: `public`
 
-## Nombres recomendados de workflows
+## Nombres de workflows versionados
 
 - `WA - Inbound Entry`
 - `WA - Conversation Orchestrator`
@@ -372,11 +418,12 @@ Cuando se configure la credencial PostgreSQL dentro de `n8n`, debe usar:
 - `CRM - Lead Creation And Assignment`
 - `CRM - ClickUp Sync Lead`
 - `CRM - Seller Notification Dispatch`
+- `AI - Lead Qualification Assistant`
 - `OPS - Error Handler`
 
 ## Estructura de exportacion versionada
 
-Se recomienda guardar en `n8n/workflows/`:
+Los exports versionados viven en `n8n/workflows/`:
 
 - `wa-inbound-entry.json`
 - `wa-conversation-orchestrator.json`
@@ -406,7 +453,7 @@ Las queries versionadas para los nodos `Postgres` viven en:
 - [db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql)
 - [db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql)
 
-Cada workflow ya tiene un set de queries sugeridas en `db/queries/n8n/` para:
+Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
 - lectura de contexto
 - escritura de dominio
@@ -427,8 +474,6 @@ Cada workflow ya tiene un set de queries sugeridas en `db/queries/n8n/` para:
 
 ## Lo que queda para la siguiente fase
 
-- construir los workflows reales en `n8n`
-- definir queries SQL exactas por workflow
-- definir custom fields exactos de ClickUp
-- conectar credenciales reales de WhatsApp y ClickUp
-- decidir si se activa la capa IA desde el inicio o se deja como segundo paso
+- validar reintentos con fallos externos reales o simulados
+- validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI
+- conectar `AI - Lead Qualification Assistant` al orquestador como capa de asistencia, manteniendo fallback deterministico

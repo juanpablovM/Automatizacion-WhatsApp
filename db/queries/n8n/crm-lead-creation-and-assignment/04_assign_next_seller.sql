@@ -23,6 +23,7 @@ selected_seller AS (
   JOIN sellers s ON s.id = tr.next_seller_id
   WHERE s.deleted_at IS NULL
     AND s.is_active = TRUE
+    AND NULLIF(s.clickup_user_id, '') IS NOT NULL
   UNION ALL
   SELECT
     s.id,
@@ -37,6 +38,7 @@ selected_seller AS (
     FROM sellers
     WHERE deleted_at IS NULL
       AND is_active = TRUE
+      AND NULLIF(clickup_user_id, '') IS NOT NULL
     ORDER BY sort_order ASC
     LIMIT 1
   ) s ON TRUE
@@ -46,6 +48,7 @@ selected_seller AS (
     WHERE sx.id = tr.next_seller_id
       AND sx.deleted_at IS NULL
       AND sx.is_active = TRUE
+      AND NULLIF(sx.clickup_user_id, '') IS NOT NULL
   )
   LIMIT 1
 ),
@@ -58,6 +61,7 @@ next_candidate AS (
         JOIN selected_seller cur ON TRUE
         WHERE s2.deleted_at IS NULL
           AND s2.is_active = TRUE
+          AND NULLIF(s2.clickup_user_id, '') IS NOT NULL
           AND s2.sort_order > cur.sort_order
         ORDER BY s2.sort_order ASC
         LIMIT 1
@@ -67,6 +71,7 @@ next_candidate AS (
         FROM sellers s3
         WHERE s3.deleted_at IS NULL
           AND s3.is_active = TRUE
+          AND NULLIF(s3.clickup_user_id, '') IS NOT NULL
         ORDER BY s3.sort_order ASC
         LIMIT 1
       )
@@ -134,4 +139,3 @@ SELECT
 FROM updated_lead ul
 JOIN updated_seller us ON TRUE
 JOIN updated_rotation ur ON TRUE;
-

@@ -14,12 +14,28 @@ Documentar la adaptacion del proyecto para usar `Evolution API` como capa de Wha
 
 - `Evolution API`: `http://127.0.0.1:8080`
 
+## Estado actual
+
+La integracion con `Evolution API` ya fue validada con WhatsApp real.
+
+Estado observado en la ultima validacion:
+
+- imagen configurada: `evoapicloud/evolution-api:v2.3.7`
+- runtime API: `2.3.7`
+- instancia default: `principal`
+- estado de `principal`: `open`
+- webhook persistido hacia `n8n`
+- evento operativo: `MESSAGES_UPSERT`
+
+El script `scripts/dev/evolution-doctor.sh` es la forma recomendada de confirmar este estado antes de una prueba.
+
 ## Variables principales
 
 - `EVOLUTION_SERVER_URL`
 - `EVOLUTION_API_BASE_URL`
 - `EVOLUTION_API_KEY`
 - `EVOLUTION_DEFAULT_INSTANCE`
+- `EVOLUTION_WEBHOOK_SECRET`
 - `EVOLUTION_WEBHOOK_URL`
 - `EVOLUTION_WEBHOOK_EVENTS`
 - `EVOLUTION_POSTGRES_DB`
@@ -59,9 +75,11 @@ Este script valida:
 
 `Evolution API` debe apuntar a:
 
-- `http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry`
+- `http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 
 Este valor funciona bien en Docker Desktop para macOS porque `Evolution API` puede alcanzar el puerto publicado de `n8n` a traves de `host.docker.internal`, sin exponer el webhook a internet.
+
+La validacion del secreto queda inactiva si `EVOLUTION_WEBHOOK_SECRET` esta vacio. En el entorno local actual ya quedo configurado un valor real en `.env` y el webhook de `principal` fue repersistido con `?token=<redacted>`.
 
 ## Estrategia de instancias
 
@@ -96,6 +114,14 @@ Opcionalmente:
 sh scripts/dev/evolution-connect-instance.sh nombre-instancia
 ```
 
+### Persistir webhook
+
+```bash
+sh scripts/dev/evolution-set-webhook.sh
+```
+
+El script toma `EVOLUTION_WEBHOOK_URL`, `EVOLUTION_WEBHOOK_EVENTS` y, si existe, `EVOLUTION_WEBHOOK_SECRET`. Si el secreto esta configurado pero la URL no trae `token` ni `secret`, agrega `?token=<EVOLUTION_WEBHOOK_SECRET>` antes de enviarla a Evolution API.
+
 ## Eventos configurados
 
 Por defecto:
@@ -126,3 +152,9 @@ Solo cambia:
 - capa de entrada y salida de WhatsApp
 - variables de entorno de WhatsApp
 - servicio de infraestructura del canal
+
+## Pendientes
+
+- documentar procedimiento operativo de reconexion QR
+- activar y probar el secreto del webhook antes de cualquier exposicion publica
+- definir estrategia para multiples instancias si se operan varios numeros

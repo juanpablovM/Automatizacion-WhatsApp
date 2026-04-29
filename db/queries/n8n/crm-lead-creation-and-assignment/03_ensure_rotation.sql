@@ -15,7 +15,7 @@ SELECT
 FROM sellers s
 WHERE s.deleted_at IS NULL
   AND s.is_active = TRUE
+  AND NULLIF(s.clickup_user_id, '') IS NOT NULL
 ORDER BY s.sort_order ASC
 LIMIT 1
 ON CONFLICT (rotation_key) DO NOTHING;
-

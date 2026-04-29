@@ -1,0 +1,100 @@
+{
+  "name": "AI - Lead Qualification Assistant",
+  "id": null,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst compactObject = (value) => value && typeof value === 'object' ? value : {};\nconst aiEnabled = String($env.AI_LEAD_ASSISTANT_ENABLED || 'false').toLowerCase() === 'true';\nconst provider = safe($env.AI_PROVIDER, safe($env.OPENAI_API_KEY ? 'openai' : 'nvidia')).toLowerCase();\nconst defaultBaseUrl = provider === 'nvidia'\n  ? 'https://integrate.api.nvidia.com/v1'\n  : provider === 'ollama'\n    ? 'http://host.docker.internal:11434/v1'\n    : 'https://api.openai.com/v1';\nconst baseUrl = safe($env.AI_BASE_URL, defaultBaseUrl).replace(/\\/+$/, '');\nconst apiMode = safe($env.AI_API_MODE, 'chat_completions').toLowerCase() === 'responses' ? 'responses' : 'chat_completions';\nconst model = safe($env.AI_MODEL, safe($env.OPENAI_MODEL, provider === 'nvidia' ? 'minimaxai/minimax-m2.5' : 'gpt-5.4-mini'));\nconst apiKey = safe($env.AI_API_KEY, safe($env.OPENAI_API_KEY));\nconst apiKeyRequired = String($env.AI_API_KEY_REQUIRED || (provider === 'ollama' ? 'false' : 'true')).toLowerCase() === 'true';\n\nconst currentContext = {\n  message_current: safe(row.message_current, safe(row.text_body)),\n  message_type: safe(row.message_type, 'text'),\n  conversation_status: safe(row.conversation_status_code, safe(row.conversation_status)),\n  current_step: safe(row.current_step),\n  existing_fields: {\n    service: safe(row.service),\n    city: safe(row.city),\n    requirement: safe(row.requirement),\n  },\n  previous_lead: compactObject(row.previous_lead),\n  recent_messages: Array.isArray(row.recent_messages) ? row.recent_messages.slice(-8) : [],\n};\n\nconst responseSchema = {\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"intent\",\n    \"lead_quality\",\n    \"service\",\n    \"city\",\n    \"requirement\",\n    \"missing_fields\",\n    \"should_create_lead\",\n    \"needs_confirmation\",\n    \"confidence\",\n    \"reply_text\",\n    \"clickup_summary\"\n  ],\n  \"properties\": {\n    \"intent\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"greeting\",\n        \"quote_request\",\n        \"provide_info\",\n        \"correction\",\n        \"confirmation_yes\",\n        \"confirmation_no\",\n        \"new_request\",\n        \"continue_previous\",\n        \"irrelevant\",\n        \"unknown\"\n      ]\n    },\n    \"lead_quality\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"none\",\n        \"low\",\n        \"medium\",\n        \"high\"\n      ]\n    },\n    \"service\": {\n      \"type\": \"string\"\n    },\n    \"city\": {\n      \"type\": \"string\"\n    },\n    \"requirement\": {\n      \"type\": \"string\"\n    },\n    \"missing_fields\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\",\n        \"enum\": [\n          \"service\",\n          \"city\",\n          \"requirement\",\n          \"confirmation\"\n        ]\n      }\n    },\n    \"should_create_lead\": {\n      \"type\": \"boolean\"\n    },\n    \"needs_confirmation\": {\n      \"type\": \"boolean\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"minimum\": 0,\n      \"maximum\": 1\n    },\n    \"reply_text\": {\n      \"type\": \"string\"\n    },\n    \"clickup_summary\": {\n      \"type\": \"string\"\n    }\n  }\n};\n\nif (!aiEnabled || (apiKeyRequired && !apiKey)) {\n  return [\n    {\n      json: {\n        ai_skipped: true,\n        ai_skip_reason: !aiEnabled ? 'disabled' : 'missing_ai_api_key',\n        ai_provider: provider,\n        ai_model: model,\n        ai_base_url: baseUrl,\n        ai_api_mode: apiMode,\n        ai_context: currentContext,\n        response_schema: responseSchema,\n      },\n    },\n  ];\n}\n\nconst systemPrompt = [\n  'Eres AI - Lead Qualification Assistant para un CRM por WhatsApp.',\n  'Tu tarea es extraer y recomendar, no decidir ni modificar estado.',\n  'Devuelve solo datos compatibles con el JSON Schema.',\n  'Reglas de negocio:',\n  '- No recomiendes crear lead si falta servicio, ciudad, requerimiento concreto o confirmacion.',\n  '- Si hay baja confianza, pide aclaracion y marca needs_confirmation=true.',\n  '- Usa espanol claro y breve para reply_text.',\n  '- Mantén service, city y requirement vacios si no hay evidencia suficiente.',\n  '- No inventes datos. Puedes conservar datos existentes si el mensaje no los contradice.',\n].join('\\n');\n\nconst userPrompt = JSON.stringify(currentContext, null, 2);\nconst messages = [\n  { role: 'system', content: systemPrompt },\n  { role: 'user', content: userPrompt },\n];\nconst responseFormat = {\n  type: 'json_schema',\n  json_schema: {\n    name: 'lead_qualification_result',\n    strict: true,\n    schema: responseSchema,\n  },\n};\nconst responsesFormat = {\n  type: 'json_schema',\n  name: 'lead_qualification_result',\n  strict: true,\n  schema: responseSchema,\n};\nconst aiRequest = apiMode === 'chat_completions'\n  ? {\n      model,\n      messages,\n      response_format: responseFormat,\n      max_tokens: 900,\n      temperature: 0.1,\n    }\n  : {\n      model,\n      input: messages,\n      text: {\n        format: responsesFormat,\n      },\n      max_output_tokens: 900,\n    };\n\nreturn [\n  {\n    json: {\n      ai_skipped: false,\n      ai_provider: provider,\n      ai_model: model,\n      ai_base_url: baseUrl,\n      ai_api_mode: apiMode,\n      ai_context: currentContext,\n      response_schema: responseSchema,\n      ai_request: aiRequest,\n      ai_request_path: apiMode === 'chat_completions' ? '/chat/completions' : '/responses',\n    },\n  },\n];"
+      },
+      "id": "2",
+      "name": "Build AI Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nif (row.ai_skipped) {\n  return [{ json: { ...row, ai_status_code: null, ai_response: null, ai_retry_attempts: 0 } }];\n}\n\nconst retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\nconst maxAttempts = Number($env.EXTERNAL_HTTP_MAX_ATTEMPTS || 4);\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 250);\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst baseUrl = safe(row.ai_base_url, 'https://api.openai.com/v1').replace(/\\/+$/, '');\nconst path = safe(row.ai_request_path, row.ai_api_mode === 'chat_completions' ? '/chat/completions' : '/responses');\nconst url = baseUrl + (path.startsWith('/') ? path : '/' + path);\nconst apiKey = safe($env.AI_API_KEY, safe($env.OPENAI_API_KEY));\n\nlet lastError = null;\n\nfor (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n  try {\n    const headers = { 'Content-Type': 'application/json' };\n    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;\n\n    const response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers,\n      body: row.ai_request,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const statusCode = Number(response.statusCode || 0);\n    const shouldRetry = retryableStatusCodes.has(statusCode) && attempt < maxAttempts;\n    if (!shouldRetry) {\n      return [\n        {\n          json: {\n            ...row,\n            ai_status_code: statusCode,\n            ai_response: response.body || {},\n            ai_retry_attempts: attempt,\n            ai_retry_exhausted: retryableStatusCodes.has(statusCode) && attempt >= maxAttempts,\n            ai_retry_last_error: null,\n          },\n        },\n      ];\n    }\n  } catch (error) {\n    lastError = error;\n    if (attempt >= maxAttempts) {\n      return [\n        {\n          json: {\n            ...row,\n            ai_status_code: 0,\n            ai_response: { error: { message: error.message } },\n            ai_retry_attempts: attempt,\n            ai_retry_exhausted: true,\n            ai_retry_last_error: error.message,\n          },\n        },\n      ];\n    }\n  }\n\n  await sleep(retryDelay(attempt));\n}\n\nreturn [{ json: { ...row, ai_status_code: 0, ai_response: { error: { message: lastError?.message || 'AI provider retry exhausted' } }, ai_retry_attempts: maxAttempts, ai_retry_exhausted: true, ai_retry_last_error: lastError?.message || null } }];"
+      },
+      "id": "3",
+      "name": "Call AI Provider",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst clampConfidence = (value) => {\n  const number = Number(value);\n  if (!Number.isFinite(number)) return 0;\n  return Math.max(0, Math.min(1, number));\n};\nconst extractTextFromContent = (content) => {\n  if (typeof content === 'string') return content;\n  if (!Array.isArray(content)) return '';\n  return content\n    .map((entry) => {\n      if (typeof entry === 'string') return entry;\n      if (!entry || typeof entry !== 'object') return '';\n      return safe(entry.text, safe(entry.output_text));\n    })\n    .filter(Boolean)\n    .join('\\n');\n};\nconst extractOutputText = (response) => {\n  if (!response || typeof response !== 'object') return '';\n  if (typeof response.output_text === 'string') return response.output_text;\n\n  const output = Array.isArray(response.output) ? response.output : [];\n  const responseParts = [];\n  for (const item of output) {\n    const content = Array.isArray(item.content) ? item.content : [];\n    for (const entry of content) {\n      if (typeof entry.text === 'string') responseParts.push(entry.text);\n      if (typeof entry.output_text === 'string') responseParts.push(entry.output_text);\n    }\n  }\n  if (responseParts.length) return responseParts.join('\\n').trim();\n\n  const choices = Array.isArray(response.choices) ? response.choices : [];\n  const chatParts = [];\n  for (const choice of choices) {\n    if (typeof choice.text === 'string') chatParts.push(choice.text);\n    const messageContent = choice.message?.content;\n    const text = extractTextFromContent(messageContent);\n    if (text) chatParts.push(text);\n  }\n  return chatParts.join('\\n').trim();\n};\n\nconst existing = row.ai_context?.existing_fields || {};\nconst fallbackMissing = ['service', 'city', 'requirement'].filter((field) => !safe(existing[field]));\nconst skippedResult = {\n  intent: 'unknown',\n  lead_quality: 'none',\n  service: safe(existing.service),\n  city: safe(existing.city),\n  requirement: safe(existing.requirement),\n  missing_fields: fallbackMissing,\n  should_create_lead: false,\n  needs_confirmation: true,\n  confidence: 0,\n  reply_text: '',\n  clickup_summary: '',\n};\n\nlet parsed = skippedResult;\nlet parseError = null;\nconst statusCode = Number(row.ai_status_code || 0);\n\nif (!row.ai_skipped && statusCode >= 200 && statusCode < 300) {\n  const outputText = extractOutputText(row.ai_response);\n  try {\n    parsed = JSON.parse(outputText);\n  } catch (error) {\n    parseError = error.message;\n  }\n}\n\nconst allowedIntent = new Set(['greeting', 'quote_request', 'provide_info', 'correction', 'confirmation_yes', 'confirmation_no', 'new_request', 'continue_previous', 'irrelevant', 'unknown']);\nconst allowedQuality = new Set(['none', 'low', 'medium', 'high']);\nconst allowedMissing = new Set(['service', 'city', 'requirement', 'confirmation']);\n\nconst service = safe(parsed.service, safe(existing.service));\nconst city = safe(parsed.city, safe(existing.city));\nconst requirement = safe(parsed.requirement, safe(existing.requirement));\nconst missingFields = Array.isArray(parsed.missing_fields)\n  ? parsed.missing_fields.filter((field) => allowedMissing.has(field))\n  : ['service', 'city', 'requirement'].filter((field) => !safe({ service, city, requirement }[field]));\nconst confidence = clampConfidence(parsed.confidence);\nconst hasRequiredLeadFields = Boolean(service && city && requirement);\nconst modelShouldCreateLead = Boolean(parsed.should_create_lead);\nconst guardedShouldCreateLead = modelShouldCreateLead && hasRequiredLeadFields && !missingFields.includes('confirmation') && confidence >= 0.75;\n\nreturn [\n  {\n    json: {\n      ai_skipped: Boolean(row.ai_skipped),\n      ai_skip_reason: row.ai_skip_reason || null,\n      ai_provider: row.ai_provider || null,\n      ai_model: row.ai_model || null,\n      ai_api_mode: row.ai_api_mode || null,\n      ai_status_code: row.ai_status_code || null,\n      ai_retry_attempts: row.ai_retry_attempts || 0,\n      ai_retry_exhausted: Boolean(row.ai_retry_exhausted),\n      ai_parse_error: parseError,\n      intent: allowedIntent.has(parsed.intent) ? parsed.intent : 'unknown',\n      lead_quality: allowedQuality.has(parsed.lead_quality) ? parsed.lead_quality : 'none',\n      service,\n      city,\n      requirement,\n      missing_fields: missingFields,\n      should_create_lead: guardedShouldCreateLead,\n      model_should_create_lead_raw: modelShouldCreateLead,\n      needs_confirmation: Boolean(parsed.needs_confirmation || !guardedShouldCreateLead),\n      confidence,\n      reply_text: safe(parsed.reply_text),\n      clickup_summary: safe(parsed.clickup_summary),\n      metadata_json: JSON.stringify({\n        provider: row.ai_provider || null,\n        model: row.ai_model || null,\n        api_mode: row.ai_api_mode || null,\n        status_code: row.ai_status_code || null,\n        retry_attempts: row.ai_retry_attempts || 0,\n        retry_exhausted: Boolean(row.ai_retry_exhausted),\n        parse_error: parseError,\n        model_should_create_lead_raw: modelShouldCreateLead,\n        guardrail_has_required_lead_fields: hasRequiredLeadFields,\n      }),\n    },\n  },\n];"
+      },
+      "id": "4",
+      "name": "Normalize AI Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Build AI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Request": {
+      "main": [
+        [
+          {
+            "node": "Call AI Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AI Provider": {
+      "main": [
+        [
+          {
+            "node": "Normalize AI Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

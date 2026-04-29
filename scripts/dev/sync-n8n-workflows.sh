@@ -277,6 +277,18 @@ verify_remote() {
   echo "Verificacion remota OK"
 }
 
+activate_inbound_workflow() {
+  inbound_id=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
+    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1;\"")
+  if [ -z "$inbound_id" ]; then
+    echo "ERROR: no existe workflow 'WA - Inbound Entry' en n8n" >&2
+    exit 1
+  fi
+  compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$inbound_id" --active=true >/dev/null
+  compose_cmd restart "$N8N_SERVICE" >/dev/null
+  echo "Workflow de entrada activado: WA - Inbound Entry"
+}
+
 sync_workflows() {
   validate_local
   require_command docker
@@ -308,6 +320,7 @@ sync_workflows() {
   prepare_import_dir "$after_ids_json" "$resolved_dir" "yes"
   copy_and_import "$resolved_dir" "links resueltos"
   verify_remote "$after_ids_json" "$remote_json"
+  activate_inbound_workflow
 
   compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$CONTAINER_TMP'" >/dev/null 2>&1 || true
   echo "Workflows sincronizados con CLI oficial de n8n"

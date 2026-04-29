@@ -28,8 +28,24 @@ SELECT
         ORDER BY COALESCE(m.external_timestamp, m.created_at)
       )
       FROM messages m
-      WHERE m.lead_id = l.id
+      LEFT JOIN conversations c ON c.id = m.conversation_id
+      WHERE (m.lead_id = l.id OR c.lead_id = l.id)
         AND m.deleted_at IS NULL
+        AND m.created_at >= COALESCE(
+          (
+            SELECT previous.created_at
+            FROM leads previous
+            WHERE previous.phone_number = l.phone_number
+              AND previous.id <> l.id
+              AND previous.created_at < l.created_at
+              AND previous.deleted_at IS NULL
+            ORDER BY previous.created_at DESC
+            LIMIT 1
+          ),
+          c.started_at,
+          l.created_at - INTERVAL '1 day'
+        )
+        AND m.created_at <= l.created_at + INTERVAL '5 minutes'
     ),
     ''
   ) AS full_conversation,
@@ -48,8 +64,24 @@ SELECT
       )
       FROM message_attachments ma
       JOIN messages m ON m.id = ma.message_id
-      WHERE m.lead_id = l.id
+      LEFT JOIN conversations c ON c.id = m.conversation_id
+      WHERE (m.lead_id = l.id OR c.lead_id = l.id)
         AND ma.deleted_at IS NULL
+        AND m.created_at >= COALESCE(
+          (
+            SELECT previous.created_at
+            FROM leads previous
+            WHERE previous.phone_number = l.phone_number
+              AND previous.id <> l.id
+              AND previous.created_at < l.created_at
+              AND previous.deleted_at IS NULL
+            ORDER BY previous.created_at DESC
+            LIMIT 1
+          ),
+          c.started_at,
+          l.created_at - INTERVAL '1 day'
+        )
+        AND m.created_at <= l.created_at + INTERVAL '5 minutes'
     ),
     '[]'::json
   ) AS attachments_json
@@ -57,4 +89,3 @@ FROM leads l
 LEFT JOIN sellers s ON s.id = l.assigned_seller_id
 WHERE l.id = :lead_id
   AND l.deleted_at IS NULL;
-

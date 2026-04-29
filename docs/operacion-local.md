@@ -19,7 +19,7 @@ No necesitas instalar `n8n` ni `PostgreSQL` de forma nativa.
 - `PostgreSQL`: `127.0.0.1:5433`
 - `Evolution API`: `http://127.0.0.1:8080`
 
-Ambos puertos se publican solo en `127.0.0.1`, por lo que quedan accesibles desde tu Mac y no expuestos publicamente por defecto.
+Los puertos publicados quedan ligados a `127.0.0.1`, por lo que son accesibles desde tu Mac y no quedan expuestos publicamente por defecto.
 
 Nota:
 
@@ -110,6 +110,21 @@ sh scripts/dev/sync-n8n-workflows.sh
 
 Este script importa con `n8n import:workflow` dentro del contenedor, resuelve IDs reales desde los nombres de workflows y verifica que `OPS - Error Handler` quede configurado como workflow de errores. No se debe actualizar `workflow_entity` manualmente.
 
+Estado validado:
+
+- los workflows versionados ya fueron importados
+- `WA - Inbound Entry` queda activo para recibir el webhook
+- los sub-workflows se ejecutan desde `WA - Inbound Entry`
+- `OPS - Error Handler` queda configurado como workflow de errores
+
+## Persistir webhook de Evolution API
+
+Cuando cambie `EVOLUTION_WEBHOOK_URL`, `EVOLUTION_WEBHOOK_EVENTS` o `EVOLUTION_WEBHOOK_SECRET`, actualiza la configuracion persistida de la instancia:
+
+```bash
+sh scripts/dev/evolution-set-webhook.sh
+```
+
 ## Redis de Evolution API
 
 Redis queda habilitado por defecto desde `docker-compose.yml` y `.env.example` con:
@@ -138,6 +153,70 @@ docker compose --env-file .env down
 
 Esto detiene los contenedores, pero no elimina los volumenes.
 
+## Backup local
+
+El proyecto incluye un script inicial para respaldar la base del CRM, la base interna de `n8n` y el volumen `n8n_data`:
+
+```bash
+sh scripts/ops/backup-local.sh
+```
+
+El resultado queda en `backups/<fecha>/`, fuera de Git. El restore todavia debe probarse de forma controlada antes de considerar el entorno recuperable para produccion.
+
+Para verificar el ultimo backup sin tocar las bases reales:
+
+```bash
+sh scripts/ops/verify-backup-local.sh
+```
+
+Tambien puedes indicar un directorio especifico:
+
+```bash
+sh scripts/ops/verify-backup-local.sh backups/20260427-163804
+```
+
+## Probar error handler
+
+Para validar que `OPS - Error Handler` recibe fallos reales desde n8n:
+
+```bash
+sh scripts/ops/test-error-handler.sh
+```
+
+El script envia un evento sintetico autorizado con timestamp invalido, espera la auditoria y muestra los ultimos errores registrados.
+
+## Reintentos HTTP externos
+
+Los workflows de ClickUp, notificacion interna y WhatsApp saliente usan retry con backoff para errores de red y estados `408`, `409`, `425`, `429`, `500`, `502`, `503` y `504`.
+
+Variables:
+
+- `EXTERNAL_HTTP_MAX_ATTEMPTS`
+- `EXTERNAL_HTTP_RETRY_BASE_MS`
+- `EXTERNAL_HTTP_RETRY_MAX_MS`
+
+## AI Lead Assistant
+
+El sub-workflow `AI - Lead Qualification Assistant` queda desactivado por defecto:
+
+```bash
+AI_LEAD_ASSISTANT_ENABLED=false
+AI_PROVIDER=nvidia
+AI_BASE_URL=https://integrate.api.nvidia.com/v1
+AI_API_MODE=chat_completions
+AI_API_KEY=__PENDIENTE__
+AI_API_KEY_REQUIRED=true
+AI_MODEL=minimaxai/minimax-m2.5
+```
+
+Para validar el contrato local sin llamar al proveedor real:
+
+```bash
+sh scripts/ops/test-ai-assistant-local.sh
+```
+
+Para usar NVIDIA API Catalog, crea una API key en `build.nvidia.com`, configura `AI_API_KEY`, activa `AI_LEAD_ASSISTANT_ENABLED=true`, recrea `n8n` con `docker compose --env-file .env up -d n8n` y ejecuta una prueba controlada. MiniMax M2.5 queda configurado con `AI_API_MODE=chat_completions`.
+
 ## Alcance actual
 
 En esta fase ya puedes:
@@ -147,15 +226,21 @@ En esta fase ya puedes:
 - levantar `Evolution API`
 - acceder al editor de `n8n`
 - validar conectividad local entre servicios
-- crear una instancia local de `Evolution API`
-- solicitar el QR del numero a conectar
+- crear o revisar una instancia local de `Evolution API`
+- solicitar QR o pairing data para reconexion
+- recibir mensajes reales desde la instancia conectada
+- crear leads en PostgreSQL
+- crear tareas en ClickUp desde leads confirmados
+- notificar al vendedor en ClickUp
 
-En esta fase todavia no puedes:
+Antes de considerar el entorno listo para produccion falta:
 
-- recibir webhooks reales desde internet sin exponer el entorno
-- operar multiples instancias sin definir la estrategia final
+- probar restore antes de confiar en los backups
+- operar multiples instancias con una estrategia final documentada
+- considerar produccion lista sin backup/restore probado
 
 ## Pendientes
 
-- exponer el entorno a internet si quieres usar webhooks fuera de Docker local
-- documentar el alta operativa del primer numero conectado
+- documentar el procedimiento operativo de reconexion QR
+- activar y probar el secreto del webhook antes de cualquier exposicion publica
+- probar restore desde un backup local

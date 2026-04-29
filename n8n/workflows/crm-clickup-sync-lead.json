@@ -15,7 +15,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  l.id AS lead_id,\n  l.whatsapp_name,\n  l.phone_number,\n  l.service,\n  l.city,\n  l.requirement,\n  l.channel,\n  l.source_number_id,\n  s.id AS seller_id,\n  s.name AS seller_name,\n  s.clickup_user_id,\n  s.whatsapp_number AS seller_whatsapp_number,\n  COALESCE(\n    (\n      SELECT string_agg(\n        CONCAT(\n          to_char(COALESCE(m.external_timestamp, m.created_at), 'YYYY-MM-DD HH24:MI'),\n          ' ',\n          CASE WHEN m.direction = 'incoming' THEN 'Cliente' ELSE 'Bot' END,\n          ': ',\n          COALESCE(m.text_body, CONCAT('[', m.message_type, ']'))\n        ),\n        E'\\n'\n        ORDER BY COALESCE(m.external_timestamp, m.created_at)\n      )\n      FROM messages m\n      WHERE m.lead_id = l.id\n        AND m.deleted_at IS NULL\n    ),\n    ''\n  ) AS full_conversation,\n  COALESCE(\n    (\n      SELECT json_agg(\n        json_build_object(\n          'attachment_id', ma.id,\n          'attachment_type', ma.attachment_type,\n          'mime_type', ma.mime_type,\n          'filename', ma.filename,\n          'external_media_id', ma.external_media_id,\n          'external_url', ma.external_url,\n          'file_size', ma.file_size\n        )\n      )\n      FROM message_attachments ma\n      JOIN messages m ON m.id = ma.message_id\n      WHERE m.lead_id = l.id\n        AND ma.deleted_at IS NULL\n    ),\n    '[]'::json\n  ) AS attachments_json\nFROM leads l\nLEFT JOIN sellers s ON s.id = l.assigned_seller_id\nWHERE l.id = $1::bigint\n  AND l.deleted_at IS NULL;",
+        "query": "SELECT\n  l.id AS lead_id,\n  l.whatsapp_name,\n  l.phone_number,\n  l.service,\n  l.city,\n  l.requirement,\n  l.channel,\n  l.source_number_id,\n  s.id AS seller_id,\n  s.name AS seller_name,\n  s.clickup_user_id,\n  s.whatsapp_number AS seller_whatsapp_number,\n  COALESCE(\n    (\n      SELECT string_agg(\n        CONCAT(\n          to_char(COALESCE(m.external_timestamp, m.created_at), 'YYYY-MM-DD HH24:MI'),\n          ' ',\n          CASE WHEN m.direction = 'incoming' THEN 'Cliente' ELSE 'Bot' END,\n          ': ',\n          COALESCE(m.text_body, CONCAT('[', m.message_type, ']'))\n        ),\n        E'\\n'\n        ORDER BY COALESCE(m.external_timestamp, m.created_at)\n      )\n      FROM messages m\n      LEFT JOIN conversations c ON c.id = m.conversation_id\n      WHERE (m.lead_id = l.id OR c.lead_id = l.id)\n        AND m.deleted_at IS NULL\n        AND m.created_at >= COALESCE(\n          (\n            SELECT previous.created_at\n            FROM leads previous\n            WHERE previous.phone_number = l.phone_number\n              AND previous.id <> l.id\n              AND previous.created_at < l.created_at\n              AND previous.deleted_at IS NULL\n            ORDER BY previous.created_at DESC\n            LIMIT 1\n          ),\n          c.started_at,\n          l.created_at - INTERVAL '1 day'\n        )\n        AND m.created_at <= l.created_at + INTERVAL '5 minutes'\n    ),\n    ''\n  ) AS full_conversation,\n  COALESCE(\n    (\n      SELECT json_agg(\n        json_build_object(\n          'attachment_id', ma.id,\n          'attachment_type', ma.attachment_type,\n          'mime_type', ma.mime_type,\n          'filename', ma.filename,\n          'external_media_id', ma.external_media_id,\n          'external_url', ma.external_url,\n          'file_size', ma.file_size\n        )\n      )\n      FROM message_attachments ma\n      JOIN messages m ON m.id = ma.message_id\n      LEFT JOIN conversations c ON c.id = m.conversation_id\n      WHERE (m.lead_id = l.id OR c.lead_id = l.id)\n        AND ma.deleted_at IS NULL\n        AND m.created_at >= COALESCE(\n          (\n            SELECT previous.created_at\n            FROM leads previous\n            WHERE previous.phone_number = l.phone_number\n              AND previous.id <> l.id\n              AND previous.created_at < l.created_at\n              AND previous.deleted_at IS NULL\n            ORDER BY previous.created_at DESC\n            LIMIT 1\n          ),\n          c.started_at,\n          l.created_at - INTERVAL '1 day'\n        )\n        AND m.created_at <= l.created_at + INTERVAL '5 minutes'\n    ),\n    '[]'::json\n  ) AS attachments_json\nFROM leads l\nLEFT JOIN sellers s ON s.id = l.assigned_seller_id\nWHERE l.id = $1::bigint\n  AND l.deleted_at IS NULL;",
         "additionalFields": {
           "mode": "multiple",
           "queryParams": "lead_id"
@@ -52,39 +52,14 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ $json.clickup_task_url }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "={{ $env.CLICKUP_API_TOKEN }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "json",
-        "specifyBody": "json",
-        "jsonBody": "={{ $json.clickup_task_payload }}",
-        "options": {
-          "response": {
-            "response": {
-              "fullResponse": true,
-              "neverError": true,
-              "responseFormat": "json"
-            }
-          }
-        }
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\nconst maxAttempts = Number($env.EXTERNAL_HTTP_MAX_ATTEMPTS || 4);\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => {\n  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));\n  const jitter = Math.floor(Math.random() * 250);\n  return exponential + jitter;\n};\n\nconst normalizeBody = (value) => {\n  if (typeof value === 'string') {\n    try {\n      return JSON.parse(value);\n    } catch (_error) {\n      return { raw: value };\n    }\n  }\n  return value || {};\n};\n\nconst row = items[0]?.json ?? {};\nconst url = String(row.clickup_task_url || '').trim();\nconst body = row.clickup_task_payload;\n\nif (!url) throw new Error('Create ClickUp Task requiere clickup_task_url');\nif (!body) throw new Error('Create ClickUp Task requiere clickup_task_payload');\n\nlet lastError = null;\n\nfor (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n  try {\n    const response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers: {\n        Authorization: $env.CLICKUP_API_TOKEN,\n        'Content-Type': 'application/json',\n      },\n      body,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const statusCode = Number(response.statusCode || 0);\n    const shouldRetry = retryableStatusCodes.has(statusCode) && attempt < maxAttempts;\n    if (!shouldRetry) {\n      return [\n        {\n          json: {\n            statusCode,\n            body: normalizeBody(response.body),\n            headers: response.headers || {},\n            retry_attempts: attempt,\n            retry_exhausted: retryableStatusCodes.has(statusCode) && attempt >= maxAttempts,\n            retry_last_error: null,\n          },\n        },\n      ];\n    }\n  } catch (error) {\n    lastError = error;\n    if (attempt >= maxAttempts) {\n      return [\n        {\n          json: {\n            statusCode: 0,\n            body: { message: error.message },\n            headers: {},\n            retry_attempts: attempt,\n            retry_exhausted: true,\n            retry_last_error: error.message,\n          },\n        },\n      ];\n    }\n  }\n\n  await sleep(retryDelay(attempt));\n}\n\nreturn [{ json: { statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];"
       },
       "id": "4",
       "name": "Create ClickUp Task",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         700,
         540
@@ -115,7 +90,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst isSuccess = statusCode >= 200 && statusCode < 300 && !!responseBody?.id;\nconst taskId = isSuccess ? String(responseBody.id) : null;\nconst taskUrl = isSuccess ? String(responseBody.url || `https://app.clickup.com/t/${responseBody.id}`) : null;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      clickup_task_id: taskId,\n      clickup_task_url: taskUrl,\n      is_success: isSuccess,\n      event_name: 'clickup_task_sync',\n      result: isSuccess ? 'success' : 'error',\n      comment_enabled: Boolean(row.comment_enabled_1 || row.comment_enabled),\n      comment_text: row.comment_text_1 || row.comment_text || '',\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n      }),\n      metadata_json: JSON.stringify({\n        task_name: row.task_name_1 || row.task_name || null,\n        attachments_count: Array.isArray(row.attachments_json_1) ? row.attachments_json_1.length : 0,\n      }),\n    },\n  },\n];"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst retryAttempts = Number(row.retry_attempts_2 || row.retry_attempts || 1);\nconst retryExhausted = Boolean(row.retry_exhausted_2 || row.retry_exhausted || false);\nconst retryLastError = row.retry_last_error_2 || row.retry_last_error || null;\nconst isSuccess = statusCode >= 200 && statusCode < 300 && !!responseBody?.id;\nconst taskId = isSuccess ? String(responseBody.id) : null;\nconst taskUrl = isSuccess ? String(responseBody.url || `https://app.clickup.com/t/${responseBody.id}`) : null;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      clickup_task_id: taskId,\n      clickup_task_url: taskUrl,\n      is_success: isSuccess,\n      event_name: 'clickup_task_sync',\n      result: isSuccess ? 'success' : 'error',\n      comment_enabled: Boolean(row.comment_enabled_1 || row.comment_enabled),\n      comment_text: row.comment_text_1 || row.comment_text || '',\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n        retry_last_error: retryLastError,\n      }),\n      metadata_json: JSON.stringify({\n        task_name: row.task_name_1 || row.task_name || null,\n        attachments_count: Array.isArray(row.attachments_json_1) ? row.attachments_json_1.length : 0,\n        provider: 'clickup',\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n      }),\n    },\n  },\n];"
       },
       "id": "6",
       "name": "Normalize ClickUp Result",
@@ -129,10 +104,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH updated_lead AS (\n  UPDATE leads l\n  SET\n    clickup_task_id = CASE WHEN $2::boolean THEN COALESCE(NULLIF($3::text, ''), l.clickup_task_id) ELSE l.clickup_task_id END,\n    clickup_task_url = CASE WHEN $2::boolean THEN COALESCE(NULLIF($4::text, ''), l.clickup_task_url) ELSE l.clickup_task_url END,\n    lead_status_id = ls.id,\n    updated_at = NOW()\n  FROM lead_statuses ls\n  WHERE l.id = $1::bigint\n    AND ls.code = CASE WHEN $2::boolean THEN 'created_in_clickup' ELSE 'error' END\n  RETURNING l.id, l.clickup_task_id, l.clickup_task_url\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $5::text,\n    'lead',\n    ul.id,\n    'system',\n    'n8n',\n    $6::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($8::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_lead ul\n  RETURNING id\n)\nSELECT\n  ul.id AS lead_id,\n  ul.clickup_task_id,\n  ul.clickup_task_url,\n  ai.id AS audit_id\nFROM updated_lead ul\nLEFT JOIN audit_insert ai ON TRUE;",
+        "query": "WITH updated_lead AS (\n  UPDATE leads l\n  SET\n    clickup_task_id = CASE WHEN $2::boolean THEN COALESCE(NULLIF($3::text, ''), l.clickup_task_id) ELSE l.clickup_task_id END,\n    clickup_task_url = CASE WHEN $2::boolean THEN COALESCE(NULLIF($4::text, ''), l.clickup_task_url) ELSE l.clickup_task_url END,\n    lead_status_id = ls.id,\n    updated_at = NOW()\n  FROM lead_statuses ls\n  WHERE l.id = $1::bigint\n    AND ls.code = CASE WHEN $2::boolean THEN 'created_in_clickup' ELSE 'error' END\n  RETURNING l.id, l.clickup_task_id, l.clickup_task_url\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $5::text,\n    'lead',\n    ul.id,\n    'system',\n    'n8n',\n    $6::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($8::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_lead ul\n  RETURNING id\n)\nSELECT\n  ul.id AS lead_id,\n  ul.clickup_task_id,\n  ul.clickup_task_url,\n  ai.id AS audit_id,\n  $9::boolean AS comment_enabled,\n  $10::text AS comment_text\nFROM updated_lead ul\nLEFT JOIN audit_insert ai ON TRUE;",
         "additionalFields": {
           "mode": "transaction",
-          "queryParams": "lead_id,is_success,clickup_task_id,clickup_task_url,event_name,result,after_payload_json,metadata_json"
+          "queryParams": "lead_id,is_success,clickup_task_id,clickup_task_url,event_name,result,after_payload_json,metadata_json,comment_enabled,comment_text"
         }
       },
       "id": "7",
@@ -153,55 +128,29 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nif (!row.is_success || !row.clickup_task_id || !row.comment_enabled || !row.comment_text) {\n  return [];\n}\n\nreturn [\n  {\n    json: {\n      clickup_task_id: row.clickup_task_id,\n      comment_url: `https://api.clickup.com/api/v2/task/${row.clickup_task_id}/comment`,\n      comment_payload: {\n        comment_text: row.comment_text,\n        notify_all: false,\n      },\n    },\n  },\n];"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\nconst maxAttempts = Number($env.EXTERNAL_HTTP_MAX_ATTEMPTS || 4);\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => {\n  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));\n  const jitter = Math.floor(Math.random() * 250);\n  return exponential + jitter;\n};\n\nconst clickupTaskId = String(row.clickup_task_id || '').trim();\nconst commentText = String(row.comment_text || '').trim();\nconst shouldComment = Boolean(row.comment_enabled) && clickupTaskId && commentText;\n\nlet conversationCommentStatus = 'skipped';\nlet conversationCommentStatusCode = null;\nlet conversationCommentId = null;\nlet conversationCommentError = null;\nlet conversationCommentAttempts = 0;\nlet conversationCommentRetryExhausted = false;\n\nif (shouldComment) {\n  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n    conversationCommentAttempts = attempt;\n    try {\n      const response = await helpers.httpRequest({\n        method: 'POST',\n        url: 'https://api.clickup.com/api/v2/task/' + encodeURIComponent(clickupTaskId) + '/comment',\n        headers: {\n          Authorization: $env.CLICKUP_API_TOKEN,\n          'Content-Type': 'application/json',\n        },\n        body: {\n          comment_text: commentText,\n          notify_all: false,\n        },\n        json: true,\n        returnFullResponse: true,\n        ignoreHttpStatusErrors: true,\n      });\n\n      conversationCommentStatusCode = Number(response.statusCode || 0);\n      const responseBody = response.body || {};\n      conversationCommentId = responseBody?.id || responseBody?.comment?.id || null;\n      conversationCommentStatus = conversationCommentStatusCode >= 200 && conversationCommentStatusCode < 300 ? 'created' : 'error';\n      conversationCommentError = conversationCommentStatus === 'error' ? JSON.stringify(responseBody) : null;\n\n      const shouldRetry = retryableStatusCodes.has(conversationCommentStatusCode) && attempt < maxAttempts;\n      if (!shouldRetry) {\n        conversationCommentRetryExhausted = retryableStatusCodes.has(conversationCommentStatusCode) && attempt >= maxAttempts;\n        break;\n      }\n    } catch (error) {\n      conversationCommentStatus = 'error';\n      conversationCommentError = error.message;\n      if (attempt >= maxAttempts) {\n        conversationCommentRetryExhausted = true;\n        break;\n      }\n    }\n\n    await sleep(retryDelay(attempt));\n  }\n}\n\nreturn [\n  {\n    json: {\n      ...row,\n      conversation_comment_status: conversationCommentStatus,\n      conversation_comment_status_code: conversationCommentStatusCode,\n      conversation_comment_id: conversationCommentId,\n      conversation_comment_error: conversationCommentError,\n      conversation_comment_attempts: conversationCommentAttempts,\n      conversation_comment_retry_exhausted: conversationCommentRetryExhausted,\n    },\n  },\n];"
       },
       "id": "8",
-      "name": "Build Task Comment Payload",
+      "name": "Create Conversation Comment If Present",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1440,
-        520
+        1700,
+        420
       ]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ $json.comment_url }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "={{ $env.CLICKUP_API_TOKEN }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "json",
-        "specifyBody": "json",
-        "jsonBody": "={{ $json.comment_payload }}",
-        "options": {
-          "response": {
-            "response": {
-              "fullResponse": true,
-              "neverError": true,
-              "responseFormat": "json"
-            }
-          }
-        }
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items\n  .filter((item) => String(item?.json?.clickup_task_id || '').trim().length > 0)\n  .map((item) => ({\n    json: {\n      lead_id: item.json.lead_id,\n      clickup_task_id: item.json.clickup_task_id,\n      clickup_task_url: item.json.clickup_task_url,\n      audit_id: item.json.audit_id || null,\n      conversation_comment_status: item.json.conversation_comment_status || 'skipped',\n      conversation_comment_id: item.json.conversation_comment_id || null,\n    },\n  }));"
       },
-      "id": "9",
-      "name": "Create Conversation Comment",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
+      "id": "11",
+      "name": "Return ClickUp Sync Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        1700,
-        520
+        1940,
+        420
       ]
     }
   ],
@@ -274,20 +223,26 @@
             "node": "Persist ClickUp Result",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Persist ClickUp Result": {
+      "main": [
+        [
           {
-            "node": "Build Task Comment Payload",
+            "node": "Create Conversation Comment If Present",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Build Task Comment Payload": {
+    "Create Conversation Comment If Present": {
       "main": [
         [
           {
-            "node": "Create Conversation Comment",
+            "node": "Return ClickUp Sync Result",
             "type": "main",
             "index": 0
           }

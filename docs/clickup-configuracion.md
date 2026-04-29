@@ -4,6 +4,21 @@
 
 Definir la configuracion recomendada de ClickUp para que el CRM automatizado sea consistente, portable y facil de integrar con `n8n`.
 
+## Estado actual
+
+ClickUp ya fue configurado y validado con el workflow `CRM - ClickUp Sync Lead`.
+
+Estado validado:
+
+- lista real `Leads Entrantes`
+- custom fields reales mapeados por variables `CLICKUP_*`
+- creacion de tareas desde leads confirmados
+- asignacion inicial a vendedores activos con `clickup_user_id`
+- comentario `Conversación Completa Cliente` creado desde el historial conversacional
+- notificacion interna al vendedor mediante comentario asignado
+
+Las tareas creadas durante la validacion real estan documentadas como datos de prueba en [`docs/handoff-actual.md`](./handoff-actual.md).
+
 ## Enfoque recomendado
 
 Se recomienda usar:
@@ -103,7 +118,7 @@ Ese comentario debe incluir el historial conversacional completo para no sobreca
   - `Nombre WhatsApp - Servicio - Ciudad`
 
 - `assignees`:
-  - `clickup_user_id` del vendedor asignado
+  - `clickup_user_id` del vendedor asignado; el round robin actual solo considera vendedores activos con este dato
 
 - `custom field Nombre WhatsApp`:
   - `whatsapp_name`
@@ -129,9 +144,9 @@ Ese comentario debe incluir el historial conversacional completo para no sobreca
 - `custom field Numero de Ingreso`:
   - `source_number_id` o numero propio recibido desde WhatsApp
 
-## Placeholders preparados en el proyecto
+## Variables preparadas en el proyecto
 
-El proyecto ya deja variables para los IDs de ClickUp:
+El proyecto usa variables para los IDs de ClickUp. En `.env.example` quedan placeholders y en `.env` local se mantienen los valores reales:
 
 - `CLICKUP_LIST_ID`
 - `CLICKUP_TEAM_ID`
@@ -145,16 +160,6 @@ El proyecto ya deja variables para los IDs de ClickUp:
 - `CLICKUP_CF_INTERNAL_LEAD_ID`
 - `CLICKUP_CF_SOURCE_NUMBER_ID`
 
-## Recomendacion de implementacion
-
-Orden sugerido:
-
-1. crear la lista `Leads Entrantes`
-2. crear los custom fields recomendados
-3. obtener y guardar los IDs reales de lista, campos y opcion `WhatsApp`
-4. probar manualmente la creacion de una tarea via API
-5. mapear esos IDs en `n8n`
-
 ## Notas de API
 
 - ClickUp trabaja con `field_id`, no con nombres de campo
@@ -163,10 +168,9 @@ Orden sugerido:
 
 ## Siguiente paso
 
-Cuando quieras conectar ClickUp de verdad, el siguiente trabajo correcto es:
+Para ClickUp, el siguiente trabajo no es conectar desde cero sino endurecer operacion:
 
-1. crear estos campos en tu espacio/lista real
-2. recuperar sus IDs reales
-3. completar las variables `CLICKUP_*` en `.env`
-4. ajustar el workflow `CRM - ClickUp Sync Lead`
-
+1. revisar que los datos de prueba no se mezclen con metricas comerciales
+2. cargar `clickup_user_id` real para cada vendedor que deba recibir leads
+3. validar los reintentos con backoff de creacion de tarea y comentarios usando fallos simulados
+4. definir como se manejaran adjuntos reales en la tarea

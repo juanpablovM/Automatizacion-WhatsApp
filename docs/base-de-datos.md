@@ -6,7 +6,7 @@ Documentar el diseno de persistencia del proyecto y su evolucion mediante migrac
 
 ## Estado actual
 
-La base inicial ya fue implementada en migraciones SQL versionadas y seeds de catalogos.
+La base inicial ya fue implementada en migraciones SQL versionadas y seeds de catalogos. En el entorno local validado ya existen datos operativos de prueba generados por la validacion real del flujo WhatsApp -> ClickUp.
 
 La arquitectura de persistencia queda separada asi:
 
@@ -67,6 +67,18 @@ La arquitectura de persistencia queda separada asi:
 - auditoria general
 - catalogos de estados
 
+## Estado runtime observado
+
+En el entorno local usado para validacion existen registros reales de prueba:
+
+- leads creados por el flujo
+- conversaciones con estado `waiting_user` y `handed_to_sales`
+- mensajes entrantes y salientes
+- vendedores cargados para round robin
+- auditorias de conversacion, ClickUp, notificacion y envio Evolution
+
+Los datos de validacion no deben usarse como metricas comerciales.
+
 ## Documentacion complementaria
 
 - [Resumen del esquema](../db/schema/overview.md)
@@ -108,6 +120,7 @@ Estos comandos suponen que mantienes los valores por defecto de `.env` para:
 ## Pendientes
 
 - automatizar la ejecucion de migraciones y seeds si mas adelante lo apruebas
-- cargar vendedores reales
-- cargar numeros reales de WhatsApp
+- revisar o reemplazar vendedores de prueba por vendedores reales antes de operar comercialmente
+- cargar o documentar numeros reales de WhatsApp si se operaran multiples numeros
 - documentar consultas operativas iniciales
+- probar restore desde los backups generados por `scripts/ops/backup-local.sh`; existe verificacion no destructiva en `scripts/ops/verify-backup-local.sh`

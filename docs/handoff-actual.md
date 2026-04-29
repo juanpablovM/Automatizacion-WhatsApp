@@ -36,16 +36,15 @@ Hoy el proyecto ya tiene:
 - `WA - Inbound Entry` adaptado a `Evolution API`
 - `WA - Outbound Messages` adaptado a `Evolution API`
 - `CRM - Lead Creation And Assignment` con logica SQL real
-- `CRM - ClickUp Sync Lead` con payload real y comentario conversacional
+- `CRM - ClickUp Sync Lead` con payload real, comentario conversacional completo y retorno estable hacia el workflow padre
 - `CRM - Seller Notification Dispatch` con despacho real de notificacion interna
 - `OPS - Error Handler` con logica real de auditoria y marcado de lead en error
 - ClickUp ya validado con tarea real:
   - `86agtc6z3`
   - `https://app.clickup.com/t/86agtc6z3`
 
-Lo que aun no esta operativo de punta a punta:
+Lo que aun falta cerrar:
 
-- ejecutar una matriz corta de pruebas conversacionales con casos variados
 - implementar seguridad y recuperacion minima antes de incorporar AI
 
 ## Infraestructura local
@@ -91,7 +90,8 @@ Variables clave ya contempladas:
 - `EVOLUTION_API_BASE_URL=http://evolution-api:8080`
 - `EVOLUTION_API_KEY=...`
 - `EVOLUTION_DEFAULT_INSTANCE=principal`
-- `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry`
+- `EVOLUTION_WEBHOOK_SECRET=...`
+- `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 - `EVOLUTION_REDIS_ENABLED=true`
 - `EVOLUTION_SAVE_INSTANCES_IN_REDIS=true`
 - `CLICKUP_API_TOKEN=...`
@@ -174,7 +174,9 @@ Estado real de implementacion:
   - creacion de lead solo con datos confirmados y round robin real
 - `CRM - ClickUp Sync Lead`
   - payload real de ClickUp
-  - tarea y comentario conversacional
+  - tarea real en ClickUp
+  - comentario `Conversación Completa Cliente`
+  - retorno estable con `lead_id`, `clickup_task_id` y `clickup_task_url`
 - `CRM - Seller Notification Dispatch`
   - notificacion interna por comentario asignado en ClickUp
 - `OPS - Error Handler`
@@ -190,7 +192,16 @@ Estado actual:
 - tarea de prueba creada:
   - `86agtc6z3`
   - `https://app.clickup.com/t/86agtc6z3`
-- comentario `Conversación Completa Cliente` creado con exito
+- prueba end-to-end validada con lead 22:
+  - tarea `86ah3ntj1`
+  - notificacion `seller_notification_dispatch` exitosa
+- prueba end-to-end con comentario completo validada con lead 24:
+  - tarea `86ah3pba6`
+  - comentario completo creado con id `90130257660080`
+  - notificacion `seller_notification_dispatch` exitosa
+- lead real 20 recuperado con notificacion interna exitosa:
+  - tarea `86ah3nq8a`
+  - audit id `194`
 
 Workflow auxiliar temporal:
 
@@ -208,6 +219,7 @@ Estado actual:
 - scripts listos:
   - [`scripts/dev/evolution-create-instance.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-create-instance.sh)
   - [`scripts/dev/evolution-connect-instance.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-connect-instance.sh)
+  - [`scripts/dev/evolution-set-webhook.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-set-webhook.sh)
 
 Pendiente:
 
@@ -261,13 +273,10 @@ Estado de limpieza de datos de prueba:
 
 ## Siguiente paso recomendado
 
-1. ejecutar una matriz corta de pruebas conversacionales con casos variados
-2. implementar seguridad y recuperacion minima:
-   - proteccion del webhook
-   - backup de PostgreSQL
-   - backup del volumen de `n8n`
-   - prueba controlada de `OPS - Error Handler`
-3. despues iniciar `AI - Lead Qualification Assistant` como capa controlada
+1. cerrar recuperacion minima:
+   - definir si basta la verificacion no destructiva de restore o si se hara restore completo en entorno aislado
+2. validar reintentos con fallos externos reales o simulados
+3. validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI y conectarlo al orquestador como capa controlada
 
 ## Siguiente fase planificada
 
@@ -285,22 +294,7 @@ Decision sobre AI:
 
 Prioridades recomendadas:
 
-1. Cerrar validacion real:
-   - datos de prueba ya identificados y marcados/gestionados en ClickUp
-   - dejar evidencia de casos probados
-   - registrar bugs relevantes y fixes aplicados
-2. Cargar o revisar datos reales minimos:
-   - vendedores reales en PostgreSQL
-   - numeros reales de WhatsApp
-   - `clickup_user_id` de cada vendedor si se usara asignacion en ClickUp
-3. Corregir lo que aparezca en la matriz corta de pruebas:
-   - payloads de `Evolution API`
-   - textos del bot
-   - deteccion de datos
-   - round robin
-   - ClickUp
-   - notificacion interna
-4. Agregar seguridad y estabilidad base:
+1. Agregar seguridad y estabilidad base:
    - validar que solo `Evolution API` pueda llamar al webhook
    - usar HMAC si queda soportado de forma simple, o un secreto/token compartido si resulta mas robusto para `n8n`
    - revisar secretos y credenciales
@@ -308,34 +302,38 @@ Prioridades recomendadas:
    - backup del volumen de `n8n`
    - prueba de restauracion
    - validar `OPS - Error Handler` con un fallo controlado
-5. Incorporar AI controlada para calificacion conversacional:
-   - crear futuro sub-workflow `AI - Lead Qualification Assistant`
+2. Cargar o revisar datos reales minimos:
+   - vendedores reales en PostgreSQL
+   - numeros reales de WhatsApp
+   - `clickup_user_id` de cada vendedor activo que deba recibir leads por ClickUp
+3. Incorporar AI controlada para calificacion conversacional:
+   - validar sub-workflow `AI - Lead Qualification Assistant`
    - enviar mensaje actual, estado conversacional, ultimos mensajes relevantes, datos ya detectados y lead previo si existe
    - exigir salida JSON estructurada
    - usar AI para entender intencion, detectar datos faltantes, sugerir respuesta y generar resumen para ClickUp
    - validar `confidence`, campos faltantes y reglas del flujo antes de crear lead
    - si falta informacion o hay baja confianza, preguntar o pedir aclaracion
-6. Agregar reintentos en APIs externas:
+4. Validar reintentos en APIs externas:
    - ClickUp
    - `Evolution API` saliente
    - notificacion al vendedor
    - registro del fallo final si los reintentos no resuelven el problema
-7. Crear o ampliar smoke test end-to-end:
+5. Crear o ampliar smoke test end-to-end:
    - entrada simulada
    - conversacion
    - lead
    - ClickUp
    - ejecucion antes de cambios importantes
-8. Agregar observabilidad simple:
+6. Agregar observabilidad simple:
    - mensajes procesados hoy
    - leads creados hoy
    - errores de las ultimas 24 horas
    - leads por vendedor
    - partir con consultas SQL o vista simple antes de Grafana
-9. Agregar logging y correlation ID:
+7. Agregar logging y correlation ID:
    - identificador trazable entre workflows, mensajes, lead y ClickUp
    - apoyo para diagnosticar fallos sin revisar manualmente cada ejecucion
-10. Documentar operacion y limpieza:
+8. Documentar operacion y limpieza:
     - runbook para reiniciar servicios
     - revisar logs
     - reconectar QR

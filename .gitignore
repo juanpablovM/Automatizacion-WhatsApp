@@ -11,6 +11,7 @@
 # Datos locales y temporales
 tmp/
 data/
+backups/
 
 # n8n
 .n8n/
@@ -18,4 +19,3 @@ data/
 # Python
 __pycache__/
 *.pyc
-

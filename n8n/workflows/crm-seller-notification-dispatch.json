@@ -52,39 +52,14 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ $json.notification_url }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "={{ $env.CLICKUP_API_TOKEN }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "json",
-        "specifyBody": "json",
-        "jsonBody": "={{ $json.notification_payload }}",
-        "options": {
-          "response": {
-            "response": {
-              "fullResponse": true,
-              "neverError": true,
-              "responseFormat": "json"
-            }
-          }
-        }
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\nconst maxAttempts = Number($env.EXTERNAL_HTTP_MAX_ATTEMPTS || 4);\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => {\n  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));\n  const jitter = Math.floor(Math.random() * 250);\n  return exponential + jitter;\n};\n\nconst normalizeBody = (value) => {\n  if (typeof value === 'string') {\n    try {\n      return JSON.parse(value);\n    } catch (_error) {\n      return { raw: value };\n    }\n  }\n  return value || {};\n};\n\nconst row = items[0]?.json ?? {};\nconst url = String(row.notification_url || '').trim();\nconst body = row.notification_payload;\n\nif (!url) throw new Error('Dispatch Notification requiere notification_url');\nif (!body) throw new Error('Dispatch Notification requiere notification_payload');\n\nlet lastError = null;\n\nfor (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n  try {\n    const response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers: {\n        Authorization: $env.CLICKUP_API_TOKEN,\n        'Content-Type': 'application/json',\n      },\n      body,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const statusCode = Number(response.statusCode || 0);\n    const shouldRetry = retryableStatusCodes.has(statusCode) && attempt < maxAttempts;\n    if (!shouldRetry) {\n      return [\n        {\n          json: {\n            statusCode,\n            body: normalizeBody(response.body),\n            headers: response.headers || {},\n            retry_attempts: attempt,\n            retry_exhausted: retryableStatusCodes.has(statusCode) && attempt >= maxAttempts,\n            retry_last_error: null,\n          },\n        },\n      ];\n    }\n  } catch (error) {\n    lastError = error;\n    if (attempt >= maxAttempts) {\n      return [\n        {\n          json: {\n            statusCode: 0,\n            body: { message: error.message },\n            headers: {},\n            retry_attempts: attempt,\n            retry_exhausted: true,\n            retry_last_error: error.message,\n          },\n        },\n      ];\n    }\n  }\n\n  await sleep(retryDelay(attempt));\n}\n\nreturn [{ json: { statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];"
       },
       "id": "4",
       "name": "Dispatch Notification",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         700,
         540
@@ -115,7 +90,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst isSuccess = statusCode >= 200 && statusCode < 300;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      event_name: 'seller_notification_dispatch',\n      result: isSuccess ? 'success' : 'error',\n      is_success: isSuccess,\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n      }),\n      metadata_json: JSON.stringify({\n        channel: row.notification_channel_1 || row.notification_channel || 'clickup',\n        seller_id: row.seller_id_1 || row.seller_id || null,\n        provider: 'clickup',\n      }),\n    },\n  },\n];"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst retryAttempts = Number(row.retry_attempts_2 || row.retry_attempts || 1);\nconst retryExhausted = Boolean(row.retry_exhausted_2 || row.retry_exhausted || false);\nconst retryLastError = row.retry_last_error_2 || row.retry_last_error || null;\nconst isSuccess = statusCode >= 200 && statusCode < 300;\n\nreturn [\n  {\n    json: {\n      lead_id: row.lead_id_1 || row.lead_id,\n      event_name: 'seller_notification_dispatch',\n      result: isSuccess ? 'success' : 'error',\n      is_success: isSuccess,\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n        retry_last_error: retryLastError,\n      }),\n      metadata_json: JSON.stringify({\n        channel: row.notification_channel_1 || row.notification_channel || 'clickup',\n        seller_id: row.seller_id_1 || row.seller_id || null,\n        provider: 'clickup',\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n      }),\n    },\n  },\n];"
       },
       "id": "6",
       "name": "Normalize Notification Result",

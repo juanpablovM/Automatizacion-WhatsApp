@@ -176,9 +176,10 @@ El lead se crea cuando:
 ## Asignacion round robin
 
 - la asignacion ocurre antes de crear la tarea en ClickUp
-- la asignacion es secuencial simple
+- la asignacion es secuencial simple entre vendedores notificables
+- un vendedor notificable debe estar activo y tener `clickup_user_id`
 - se registra en historial de asignaciones
-- si existe `clickup_user_id`, el vendedor queda tambien como assignee en ClickUp
+- el vendedor queda tambien como assignee en ClickUp
 
 ## Creacion en ClickUp
 
@@ -204,8 +205,9 @@ La tarea debe incluir:
 ### Historial conversacional
 
 - el resumen principal puede ir en la descripcion
-- la conversacion completa debe agregarse como comentario con el titulo:
+- la conversacion completa se agrega como comentario con el titulo:
   - `Conversación Completa Cliente`
+- el comentario no bloquea la salida del subworkflow ni la notificacion al vendedor si falla
 
 ### Adjuntos
 
@@ -233,15 +235,14 @@ La tarea debe incluir:
 
 ### Politica de fallo
 
-- se realizan 3 reintentos
-- si falla, se registra auditoria
-- y el lead debe quedar marcado con incidente operativo
+- se realizan reintentos con backoff para errores de red y estados reintentables
+- si el fallo persiste, se registra auditoria y se marca incidente cuando corresponde
 
 ## Errores y reintentos
 
 ### WhatsApp saliente
 
-Se aplican reintentos automaticos a:
+Existe reintento con backoff para:
 
 - bienvenida
 - preguntas de calificacion
@@ -252,7 +253,7 @@ Se aplican reintentos automaticos a:
 
 Si falla la creacion de tarea:
 
-- se realizan reintentos automaticos
+- se reintenta con backoff antes de marcar fallo final
 - si no resulta, el lead queda en error para revision
 - la asignacion previa no se pierde
 
@@ -293,7 +294,7 @@ Estados operativos relevantes:
 
 ## Pendientes de fases siguientes
 
-- definir campos exactos en ClickUp
-- construir workflows concretos en `n8n`
-- conectar WhatsApp oficial
-- conectar ClickUp API
+- revisar los casos con mensajes salientes marcados como fallidos durante validacion
+- mantener activo `EVOLUTION_WEBHOOK_SECRET` antes de cualquier exposicion publica
+- validar reintentos con fallos externos reales o simulados
+- incorporar `AI - Lead Qualification Assistant` como capa controlada despues de seguridad y recuperacion minima

@@ -3,15 +3,20 @@
 -- :current_step (nullable)
 -- :conversation_status_code
 -- :lead_id (nullable)
+-- :reset_conversation_lead (boolean, default false)
 
 UPDATE conversations c
 SET
   current_step = COALESCE(:current_step, c.current_step),
   conversation_status_id = cs.id,
-  lead_id = COALESCE(:lead_id, c.lead_id),
+  lead_id = CASE
+    WHEN COALESCE(:reset_conversation_lead, FALSE) THEN NULL
+    ELSE COALESCE(:lead_id, c.lead_id)
+  END,
   last_message_at = NOW(),
   handed_to_sales_at = CASE
-    WHEN cs.code = 'handed_to_sales' THEN COALESCE(c.handed_to_sales_at, NOW())
+    WHEN cs.code = 'handed_to_sales' THEN NOW()
+    WHEN COALESCE(:reset_conversation_lead, FALSE) THEN NULL
     ELSE c.handed_to_sales_at
   END,
   closed_at = CASE
@@ -23,4 +28,3 @@ FROM conversation_statuses cs
 WHERE c.id = :conversation_id
   AND cs.code = :conversation_status_code
 RETURNING c.*;
-

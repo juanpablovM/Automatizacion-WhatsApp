@@ -1,23 +1,30 @@
 # CRM WhatsApp Automatizado
 
-Base inicial del proyecto para automatizar la captura, calificacion, registro y asignacion de leads desde WhatsApp usando `n8n` self-hosted, `PostgreSQL`, `Evolution API` y `Docker Compose`.
+Proyecto para automatizar la captura, calificacion, registro y asignacion de leads desde WhatsApp usando `n8n` self-hosted, `PostgreSQL`, `Evolution API`, `ClickUp` y `Docker Compose`.
 
 ## Estado actual
 
-Se implementaron la estructura base, la infraestructura local, la base de datos inicial y la documentacion funcional correspondientes a las FASES 2 a 6.
+El proyecto ya tiene una validacion funcional real de punta a punta con WhatsApp, `Evolution API`, `n8n`, `PostgreSQL`, round robin y ClickUp.
 
-En esta etapa:
+Estado implementado:
 
 - se definio la estructura de carpetas del proyecto
 - se dejaron archivos base versionables
-- se prepararon placeholders para infraestructura, seeds, samples y workflows
-- se dejo `Docker Compose` operativo para `n8n` y `PostgreSQL`
+- se dejo `Docker Compose` operativo para `n8n`, `PostgreSQL`, `Redis` y `Evolution API`
 - se implemento la base de datos inicial del CRM
 - se separo la base interna de `n8n` de la base del CRM
-- se documento el flujo funcional y la arquitectura de workflows
 - se implementaron workflows base con logica real del CRM
-- ClickUp ya fue validado con una prueba real
-- la capa de WhatsApp fue migrada de Cloud API a `Evolution API`
+- se sincronizaron workflows versionados en `n8n`
+- se conecto y valido WhatsApp real con `Evolution API`
+- se valido ClickUp con tareas reales de prueba
+- se corrigieron loops conversacionales detectados durante validacion real
+- se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
+- se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
+- se agrego `AI - Lead Qualification Assistant` como sub-workflow independiente y desactivado por defecto
+
+Pendiente inmediato:
+
+- validar `AI - Lead Qualification Assistant` con NVIDIA NIM u otro proveedor compatible con OpenAI y luego conectarlo al orquestador
 
 ## Objetivo del proyecto
 
@@ -49,6 +56,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Integraciones](./docs/integraciones.md)
 - [Evolution API](./docs/evolution-api.md)
 - [Configuracion ClickUp](./docs/clickup-configuracion.md)
+- [Matriz de pruebas conversacionales](./docs/matriz-pruebas-conversacionales.md)
 - [Handoff Actual](./docs/handoff-actual.md)
 - [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
@@ -89,7 +97,20 @@ Bases de datos locales:
 
 ## Siguiente paso sugerido
 
-La operacion recomendada para workflows versionados es:
+La matriz conversacional corta ya quedo versionada y cerrada en [`docs/matriz-pruebas-conversacionales.md`](./docs/matriz-pruebas-conversacionales.md). El siguiente paso recomendado es completar seguridad y recuperacion minima:
+
+- proteccion del webhook de `WA - Inbound Entry`
+- backup de PostgreSQL
+- backup del volumen de `n8n`
+- prueba controlada de `OPS - Error Handler`
+
+El proyecto ya incluye un primer script local de backup:
+
+```bash
+sh scripts/ops/backup-local.sh
+```
+
+Para resincronizar workflows versionados cuando corresponda:
 
 ```bash
 sh scripts/dev/sync-n8n-workflows.sh --preflight
