@@ -97,6 +97,29 @@
         1300,
         300
       ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Group Notification"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "6",
+      "name": "Execute Group Notification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        1560,
+        300
+      ]
     }
   ],
   "pinData": {},
@@ -139,6 +162,17 @@
         [
           {
             "node": "Finalize Lead Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Lead Assignment": {
+      "main": [
+        [
+          {
+            "node": "Execute Group Notification",
             "type": "main",
             "index": 0
           }

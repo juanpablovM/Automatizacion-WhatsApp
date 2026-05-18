@@ -494,3 +494,35 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 - rotar/cargar la clave NVIDIA real solo en `.env` del integrador
 - validar `AI - Lead Qualification Assistant` con NVIDIA MiniMax desde el workspace del integrador
 - ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla NVIDIA
+
+---
+
+## WA - Group Notification (nuevo 2026-05-17)
+
+### Propósito
+Enviar notificación al grupo de WhatsApp del equipo cuando se crea un lead nuevo.
+
+### Trigger
+- Execute Workflow (llamado desde `CRM - Lead Creation and Assignment`)
+
+### Input
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| lead_id | bigint | ID del lead recién creado |
+
+### Flujo
+1. **Load Lead Data**: consulta lead + vendedor asignado desde PostgreSQL
+2. **Build Notification**: construye texto formateado con datos del lead
+3. **Send Group Notification**: envía mensaje al grupo vía `sendText` de Evolution API
+4. **Prepare Audit Payload**: normaliza resultado para auditoría
+5. **Persist Notification Audit**: registra en `audit_logs`
+
+### Env variables requeridas
+- `EVOLUTION_API_BASE_URL`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_DEFAULT_INSTANCE`
+- `WHATSAPP_NOTIFICATION_GROUP_ID`
+
+### Notas
+- `continueOnFail=true` en auditoría para no bloquear el flujo principal
+- Envío es fire-and-forget (no espera confirmación del sub-workflow)

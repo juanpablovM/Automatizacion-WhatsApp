@@ -1,0 +1,154 @@
+{
+  "name": "WA - Group Notification",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  l.id AS lead_id,\n  l.phone_number,\n  l.whatsapp_name,\n  l.service,\n  l.city,\n  l.requirement,\n  l.created_at,\n  s.name AS seller_name\nFROM leads l\nLEFT JOIN sellers s ON s.id = l.assigned_seller_id\nWHERE l.id = $1::bigint\n  AND l.deleted_at IS NULL",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryParams": "lead_id"
+        }
+      },
+      "id": "2",
+      "name": "Load Lead Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst leadId = row.lead_id;\nconst phoneNumber = row.phone_number || 'N/A';\nconst whatsappName = row.whatsapp_name || 'Sin nombre';\nconst service = row.service || 'No especificado';\nconst city = row.city || 'No especificada';\nconst requirement = row.requirement || 'No especificado';\nconst sellerName = row.seller_name || 'Sin asignar';\nconst createdAt = row.created_at ? new Date(row.created_at).toLocaleString('es-CL') : 'N/A';\n\nconst notificationText = [\n  '🆕 *Nuevo Lead*',\n  '',\n  '👤 Nombre: ' + whatsappName,\n  '📱 Teléfono: ' + phoneNumber,\n  '🔧 Servicio: ' + service,\n  '📍 Ciudad: ' + city,\n  '📝 Requerimiento: ' + requirement,\n  '👤 Vendedor asignado: ' + sellerName,\n  '🕐 Fecha: ' + createdAt,\n  '',\n  'ID Lead: #' + leadId,\n].join('\\n');\n\nconst apiBaseUrl = String($env.EVOLUTION_API_BASE_URL || '').replace(/\\/$/, '');\nconst apiKey = String($env.EVOLUTION_API_KEY || '').trim();\nconst instanceName = String($env.EVOLUTION_DEFAULT_INSTANCE || 'principal').trim();\nconst groupId = String($env.WHATSAPP_NOTIFICATION_GROUP_ID || '').trim();\n\nif (!apiBaseUrl || !apiKey || !groupId) {\n  throw new Error('WA - Group Notification: faltan variables de entorno (EVOLUTION_API_BASE_URL, EVOLUTION_API_KEY o WHATSAPP_NOTIFICATION_GROUP_ID)');\n}\n\nconst outboundBody = {\n  number: groupId,\n  text: notificationText,\n  delay: 0,\n  linkPreview: false,\n};\n\nreturn [\n  {\n    json: {\n      lead_id: leadId,\n      notification_text: notificationText,\n      group_id: groupId,\n      outbound_url: apiBaseUrl + '/message/sendText/' + encodeURIComponent(instanceName),\n      outbound_body: outboundBody,\n    },\n  },\n];"
+      },
+      "id": "3",
+      "name": "Build Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\nconst url = String(row.outbound_url || '').trim();\nconst body = row.outbound_body;\n\nif (!url || !body) {\n  return [{ json: { statusCode: 0, body: { message: 'Missing outbound_url or outbound_body' }, success: false } }];\n}\n\ntry {\n  const response = await helpers.httpRequest({\n    method: 'POST',\n    url,\n    headers: {\n      apikey: $env.EVOLUTION_API_KEY,\n      'Content-Type': 'application/json',\n    },\n    body,\n    json: true,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true,\n  });\n\n  const statusCode = Number(response.statusCode || 0);\n  const success = statusCode >= 200 && statusCode < 300;\n\n  return [{\n    json: {\n      lead_id: row.lead_id,\n      group_id: row.group_id,\n      statusCode,\n      success,\n      external_message_id: response.body?.key?.id || null,\n    },\n  }];\n} catch (error) {\n  return [{\n    json: {\n      lead_id: row.lead_id,\n      group_id: row.group_id,\n      statusCode: 0,\n      success: false,\n      error: error.message,\n    },\n  }];\n}"
+      },
+      "id": "4",
+      "name": "Send Group Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (\n  event_name,\n  entity_type,\n  entity_id,\n  actor_type,\n  actor_id,\n  result,\n  before_payload,\n  after_payload,\n  metadata\n) VALUES (\n  'whatsapp_group_notification',\n  'lead',\n  $1::bigint,\n  'system',\n  'n8n',\n  CASE WHEN $2::boolean THEN 'sent' ELSE 'failed' END,\n  '{}'::jsonb,\n  COALESCE(NULLIF($3::text, '')::jsonb, '{}'::jsonb),\n  COALESCE(NULLIF($4::text, '')::jsonb, '{}'::jsonb)\n) RETURNING id;",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryParams": "lead_id,success,after_payload_json,metadata_json"
+        }
+      },
+      "id": "5",
+      "name": "Persist Notification Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "continueOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [1220, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst afterPayload = JSON.stringify({\n  group_id: row.group_id || null,\n  status_code: row.statusCode || 0,\n  external_message_id: row.external_message_id || null,\n});\n\nconst metadata = JSON.stringify({\n  provider: 'evolution_api',\n  channel: 'whatsapp_group',\n  success: row.success || false,\n  error: row.error || null,\n});\n\nreturn [{\n  json: {\n    lead_id: row.lead_id,\n    success: String(row.success || false),\n    after_payload_json: afterPayload,\n    metadata_json: metadata,\n  },\n}];"
+      },
+      "id": "6",
+      "name": "Prepare Audit Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Load Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Build Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Group Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Group Notification": {
+      "main": [
+        [
+          {
+            "node": "Prepare Audit Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Audit Payload": {
+      "main": [
+        [
+          {
+            "node": "Persist Notification Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "10000000-0000-0000-0000-000000000005",
+  "meta": {},
+  "tags": []
+}
