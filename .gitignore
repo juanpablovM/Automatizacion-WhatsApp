@@ -12,6 +12,7 @@
 tmp/
 data/
 backups/
+.hermes/
 
 # n8n
 .n8n/

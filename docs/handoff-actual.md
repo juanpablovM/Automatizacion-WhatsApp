@@ -22,6 +22,17 @@ El proyecto ya tiene implementadas las bases de:
 - migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
 - sub-workflow `AI - Lead Qualification Assistant` definido para NVIDIA MiniMax via NVIDIA NIM, bajo feature flag
 
+Estado real validado en la instancia local actual:
+
+- la sesion de WhatsApp fue reabierta y enlazada nuevamente
+- la instancia activa real es `wahormiglass`
+- el webhook actual apunta al workflow activo `WA - Inbound Entry`
+- se confirmo una conversacion real procesada de punta a punta
+- se confirmo salida real por WhatsApp con estado `sent`
+- se confirmo derivacion comercial y `clickup_task_sync` en auditoria
+- se corrigio `scripts/dev/evolution-connect-instance.sh` para tomar la instancia real desde `.env`
+- se actualizo el smoke `scripts/ops/test-error-handler.sh` para usar una bandera de prueba explicita en vez de un timestamp basura
+
 ## Resumen ejecutivo rapido
 
 Hoy el proyecto ya tiene:
@@ -51,6 +62,14 @@ Lo que aun falta cerrar por el integrador:
 - ejecutar baseline con AI apagada
 - activar AI solo con secretos reales en el workspace del integrador
 - validar NVIDIA MiniMax y matriz conversacional con servicios vivos
+- cerrar completamente el smoke de `OPS - Error Handler`
+- completar la checklist de salida a produccion
+
+Nota de orden documental:
+
+- la carpeta `.hermes` fue eliminada del workspace
+- no debe reintroducirse como fuente paralela de planificacion
+- el estado real y los pendientes vigentes viven en `README.md`, este handoff y `docs/guia-produccion.md`
 
 ## Infraestructura local
 
@@ -95,8 +114,10 @@ Variables clave ya contempladas:
 - `EVOLUTION_API_BASE_URL=http://evolution-api:8080`
 - `EVOLUTION_API_KEY=...`
 - `EVOLUTION_DEFAULT_INSTANCE=principal`
+- estado real actual en el workspace local:
+  - `EVOLUTION_DEFAULT_INSTANCE=wahormiglass`
 - `EVOLUTION_WEBHOOK_SECRET=...`
-- `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
+- `EVOLUTION_WEBHOOK_URL=http://n8n:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 - `EVOLUTION_REDIS_ENABLED=true`
 - `EVOLUTION_SAVE_INSTANCES_IN_REDIS=true`
 - `CLICKUP_API_TOKEN=...`
@@ -122,6 +143,7 @@ Leer al retomar:
 - [`docs/clickup-configuracion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/clickup-configuracion.md)
 - [`docs/evolution-api.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/evolution-api.md)
 - [`docs/bitacora-validacion-ai.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/bitacora-validacion-ai.md)
+- [`docs/guia-produccion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/guia-produccion.md)
 
 ## Decisiones funcionales ya cerradas
 
@@ -187,12 +209,15 @@ Estado real de implementacion:
   - adaptado a payload entrante de `Evolution API`
   - responde `accepted`
   - encadena conversacion, salida, lead, ClickUp y notificacion
+  - el webhook activo actual es `6TgrfXCUUixpJOWh/evolutionwebhook/wa-inbound-entry`
 - `WA - Conversation Orchestrator`
   - lectura de contexto, evaluacion conversacional, confirmacion, persistencia y salida combinada
+  - flujo real validado con conversacion completa y derivacion
 - `WA - Outbound Messages`
   - encola mensaje saliente
   - usa endpoint `sendText` de `Evolution API`
   - persiste resultado de entrega y auditoria
+  - salida real validada nuevamente despues de reabrir la sesion de WhatsApp
 - `CRM - Lead Creation And Assignment`
   - creacion de lead solo con datos confirmados y round robin real
 - `CRM - ClickUp Sync Lead`
@@ -204,6 +229,7 @@ Estado real de implementacion:
   - notificacion interna por comentario asignado en ClickUp
 - `OPS - Error Handler`
   - auditoria y marcado de lead en error
+  - pendiente de cierre fino en smoke test controlado
 - `AI - Lead Qualification Assistant`
   - contrato JSON controlado para asistencia de extraccion y redaccion
   - preparado para NVIDIA MiniMax con `chat_completions`

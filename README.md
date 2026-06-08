@@ -66,6 +66,24 @@ scripts/             Utilidades de desarrollo y operacion
 - [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
 - [Runbook operativo](./docs/runbook-operacion.md)
+- [Guia de produccion](./docs/guia-produccion.md)
+
+## Estado real actual
+
+Estado confirmado sobre el entorno local actual:
+
+- sesion de WhatsApp `wahormiglass` reconectada y operativa
+- `WA - Inbound Entry` activo en `n8n`
+- webhook actual persistido hacia el workflow correcto
+- prueba real de conversacion completada de punta a punta
+- respuestas salientes confirmadas con estado `sent`
+- derivacion comercial y `clickup_task_sync` vistos en auditoria real
+
+Pendientes conocidos que aun no deben confundirse con una caida del flujo principal:
+
+- existen logs historicos de webhooks viejos que ya no son configuracion activa
+- el smoke de `OPS - Error Handler` todavia necesita cierre fino
+- sigue faltando el checklist formal de salida a produccion
 
 ## Archivos clave
 
@@ -128,3 +146,7 @@ sh scripts/dev/sync-n8n-workflows.sh
 ```
 
 El script usa el CLI oficial de `n8n` para importar workflows, resuelve los sub-workflows por nombre desde `n8n/workflow-links.json` y conecta `OPS - Error Handler` como workflow de errores.
+
+La hoja de ruta de salida a produccion del proyecto quedo consolidada en [`docs/guia-produccion.md`](./docs/guia-produccion.md).
+
+La carpeta `.hermes` fue retirada del workspace porque contenia un plan multiagente historico y parcialmente desactualizado. La fuente vigente para estado, handoff y pendientes del proyecto queda en `README.md` y `docs/`.

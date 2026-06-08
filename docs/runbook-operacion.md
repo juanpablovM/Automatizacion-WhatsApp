@@ -187,7 +187,7 @@ Opcionalmente usar un telefono sintetico distinto:
 sh scripts/ops/test-error-handler.sh 56999999099
 ```
 
-El script envia un evento autorizado al webhook local de `WA - Inbound Entry` con `messageTimestamp` invalido. Eso fuerza un fallo controlado en n8n y verifica que `OPS - Error Handler` registre una auditoria nueva con `event_name='workflow_execution_error'`.
+El script envia un evento autorizado al webhook local de `WA - Inbound Entry` con una bandera interna de prueba. El objetivo es forzar un fallo controlado sin volver a introducir ruido artificial por timestamps invalidos.
 
 Resultado esperado:
 
@@ -196,6 +196,18 @@ Resultado esperado:
 - Fila reciente en `audit_logs` con workflow y ultimo nodo.
 
 Esta prueba genera auditoria operativa. No ejecutarla durante una prueba comercial real sin registrar la evidencia como smoke test.
+
+Estado real actual:
+
+- el smoke fue actualizado para usar una bandera explicita de prueba
+- al momento del ultimo handoff, la prueba aun requiere ajuste adicional para registrar consistentemente la auditoria nueva
+- no usar su resultado como unico indicador de salud del flujo principal de WhatsApp
+
+## Pendientes operativos conocidos
+
+- Persisten lineas historicas en logs de `n8n` asociadas a webhooks viejos. No corresponden a la configuracion activa actual.
+- El flujo principal de WhatsApp ya fue validado nuevamente con una conversacion real completa.
+- La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/guia-produccion.md).
 
 ## Reconectar Evolution API por QR
 

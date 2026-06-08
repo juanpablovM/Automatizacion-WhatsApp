@@ -63,7 +63,7 @@ payload=$(jq -nc \
     webhook: {
       enabled: true,
       url: $webhook_url,
-      byEvents: true,
+      byEvents: false,
       base64: true,
       events: ($webhook_event | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))
     }

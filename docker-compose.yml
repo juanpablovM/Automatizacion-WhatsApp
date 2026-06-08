@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
       TZ: ${TZ:-America/Santiago}
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "0.0.0.0:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -96,7 +96,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
     ports:
-      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+      - "0.0.0.0:${N8N_PORT:-5678}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
@@ -140,7 +140,7 @@ services:
       TELEMETRY: ${EVOLUTION_TELEMETRY:-false}
       TZ: ${TZ:-America/Santiago}
     ports:
-      - "127.0.0.1:${EVOLUTION_API_PORT:-8080}:8080"
+      - "0.0.0.0:${EVOLUTION_API_PORT:-8080}:8080"
     volumes:
       - evolution_instances:/evolution/instances
     networks:

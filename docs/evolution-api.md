@@ -75,9 +75,10 @@ Este script valida:
 
 `Evolution API` debe apuntar a:
 
-- `http://host.docker.internal:5678/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
+- `http://host.docker.internal:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 
 Este valor funciona bien en Docker Desktop para macOS porque `Evolution API` puede alcanzar el puerto publicado de `n8n` a traves de `host.docker.internal`, sin exponer el webhook a internet.
+En Docker Compose local tambien puede usarse `http://n8n:5678/...`. El ID real se obtiene despues de sincronizar workflows; no reutilices IDs de instalaciones anteriores.
 
 La validacion del secreto queda inactiva si `EVOLUTION_WEBHOOK_SECRET` esta vacio. En el entorno local actual ya quedo configurado un valor real en `.env` y el webhook de `principal` fue repersistido con `?token=<redacted>`.
 

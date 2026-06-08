@@ -10,8 +10,8 @@ Uso:
   sh scripts/ops/test-error-handler.sh [telefono-sin-plus]
 
 Envia un evento sintetico autorizado al webhook local de WA - Inbound Entry
-con un timestamp invalido para forzar un fallo controlado y verificar que
-OPS - Error Handler registre audit_logs.event_name='workflow_execution_error'.
+con una bandera interna de prueba para forzar un fallo controlado y verificar
+que OPS - Error Handler registre audit_logs.event_name='workflow_execution_error'.
 
 No usar durante pruebas comerciales reales: genera auditoria operativa.
 EOF
@@ -48,7 +48,21 @@ if [ -z "${EVOLUTION_WEBHOOK_SECRET:-}" ]; then
 fi
 
 PHONE_NUMBER="${1:-56999999099}"
-WEBHOOK_URL="http://127.0.0.1:${N8N_PORT:-5678}/webhook/mXz1XhLO0cd9PME6/evolutionwebhook/wa-inbound-entry?token=${EVOLUTION_WEBHOOK_SECRET}"
+webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
+  -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' LIMIT 1;")
+
+if [ -z "$webhook_path" ]; then
+  echo "ERROR: no se encontro webhook POST activo para 'WA - Inbound Entry'. Ejecuta scripts/dev/sync-n8n-workflows.sh" >&2
+  exit 1
+fi
+
+WEBHOOK_URL="http://127.0.0.1:${N8N_PORT:-5678}/webhook/${webhook_path}"
+case "$WEBHOOK_URL" in
+  *"token="*|*"secret="*) ;;
+  *"?"*) WEBHOOK_URL="${WEBHOOK_URL}&token=${EVOLUTION_WEBHOOK_SECRET}" ;;
+  *) WEBHOOK_URL="${WEBHOOK_URL}?token=${EVOLUTION_WEBHOOK_SECRET}" ;;
+esac
 
 before=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
   psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
@@ -57,20 +71,23 @@ before=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
 payload=$(jq -nc \
   --arg phone "${PHONE_NUMBER}@s.whatsapp.net" \
   --arg message_id "ops-error-handler-smoke-$(date +%s)" \
+  --arg instance_name "${EVOLUTION_DEFAULT_INSTANCE:-principal}" \
+  --arg now "$(date +%s)" \
   '{
     event: "messages.upsert",
-    instance: "principal",
+    instance: $instance_name,
     data: {
       key: {
         remoteJid: $phone,
         fromMe: false,
         id: $message_id
       },
-      messageTimestamp: "not-a-valid-timestamp",
+      messageTimestamp: ($now | tonumber),
       message: {
         conversation: "Prueba controlada de OPS Error Handler"
       }
-    }
+    },
+    __force_error_handler_test: true
   }')
 
 http_status=$(curl -sS -o /tmp/ops-error-handler-response.json -w '%{http_code}' \
