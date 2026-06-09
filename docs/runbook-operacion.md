@@ -19,7 +19,7 @@ Los scripts operativos cargan `.env`. Solo el integrador o la persona a cargo de
 
 - No commitear `.env`, backups, logs ni salidas con secretos.
 - Usar `.env.example` para documentacion, muestras y pruebas mock.
-- Redactar `EVOLUTION_API_KEY`, `EVOLUTION_WEBHOOK_SECRET`, `AI_API_KEY` y tokens de ClickUp en cualquier evidencia.
+- Redactar `EVOLUTION_API_KEY`, `EVOLUTION_WEBHOOK_SECRET`, `OPENCLAW_BRIDGE_TOKEN` y tokens de ClickUp en cualquier evidencia.
 - Antes de exponer webhooks fuera del entorno local, verificar que `EVOLUTION_WEBHOOK_SECRET` exista y que el webhook persistido incluya `token` o `secret`.
 
 ## Healthcheck minimo
@@ -260,25 +260,15 @@ AI_LEAD_ASSISTANT_ENABLED=false
 docker compose --env-file .env up -d n8n
 ```
 
-Activar AI para prueba controlada:
+AI queda activada por defecto con OpenClaw. Para operar, levantar primero el bridge local:
 
 ```bash
-# editar .env
-AI_LEAD_ASSISTANT_ENABLED=true
-AI_PROVIDER=nvidia
-AI_BASE_URL=https://integrate.api.nvidia.com/v1
-AI_API_MODE=chat_completions
-AI_MODEL=minimaxai/minimax-m2.5
-AI_API_KEY=<redacted>
-docker compose --env-file .env up -d n8n
+OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
 ```
 
-Activar AI via OpenClaw local solo cuando el agente `hormi-atencion` ya este validado:
+Configuracion esperada para AI:
 
 ```bash
-# terminal del host
-OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
-
 # editar .env
 AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=openclaw
@@ -291,21 +281,22 @@ docker compose --env-file .env up -d n8n
 
 Checklist antes de activar:
 
-- API key vigente y no expuesta en Git.
-- El agente `hormi-atencion` existe en OpenClaw y fue validado con respuestas JSON compatibles.
+- Token vigente y no expuesto en Git.
+- El agente `hormi-atencion` existe en OpenClaw y responde con JSON compatible.
 - Si se usa OpenClaw, `curl http://localhost:9090/health` responde `ok: true` y `auth_configured: true`.
 - `OPENCLAW_BRIDGE_TOKEN` debe existir tanto en el proceso del bridge como en `.env` para `n8n`.
-- Revisar [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md) antes de activar `AI_PROVIDER=openclaw`.
+- Revisar [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
 - Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.
 
 Reglas operativas:
 
-- AI recomienda; n8n y PostgreSQL deciden.
-- AI no crea leads, no escribe directo en PostgreSQL y no crea tareas ClickUp.
+- Hormi Atencion decide la conversacion y puede habilitar leads confirmados.
+- n8n y PostgreSQL ejecutan persistencia, ClickUp y asignacion.
+- Hormi Atencion no escribe directo en PostgreSQL ni crea tareas ClickUp fuera del workflow.
 - Un lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
-- Si NVIDIA/OpenClaw falla o devuelve baja confianza, el flujo debe caer a logica deterministica.
+- Si OpenClaw falla o devuelve baja confianza, el flujo debe caer a logica deterministica.
 
 ## Cierre de una ventana operativa
 

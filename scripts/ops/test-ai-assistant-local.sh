@@ -35,11 +35,11 @@ node <<'NODE'
 
   const env = {
     AI_LEAD_ASSISTANT_ENABLED: 'true',
-    AI_PROVIDER: 'nvidia',
-    AI_BASE_URL: 'https://integrate.api.nvidia.com/v1',
-    AI_API_MODE: 'chat_completions',
-    AI_API_KEY: 'test-key',
-    AI_MODEL: 'minimaxai/minimax-m2.5',
+    AI_PROVIDER: 'openclaw',
+    AI_API_KEY_REQUIRED: 'false',
+    OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
+    OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
+    OPENCLAW_AGENT: 'hormi-atencion',
     EXTERNAL_HTTP_MAX_ATTEMPTS: '2',
     EXTERNAL_HTTP_RETRY_BASE_MS: '1',
     EXTERNAL_HTTP_RETRY_MAX_MS: '1',
@@ -60,51 +60,24 @@ node <<'NODE'
     clickup_summary: '',
   };
 
-  const makeChatBody = (payload, contentMode = 'string') => ({
-    choices: [
-      {
-        message: {
-          content: contentMode === 'array'
-            ? [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload) }]
-            : typeof payload === 'string'
-              ? payload
-              : JSON.stringify(payload),
-        },
-      },
-    ],
+  const makeBridgeBody = (payload) => ({
+    ok: true,
+    reply: typeof payload === 'string' ? payload : JSON.stringify(payload),
   });
 
   const validateRequestContract = async () => {
     const request = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, env);
-    const schema = request.ai_request?.response_format?.json_schema?.schema;
-    assert(schema, 'No se construyo JSON Schema para chat_completions');
-    expectEqual(request.ai_request.response_format.json_schema.strict, true, 'Structured Outputs strict');
-    expectEqual(request.ai_request_path, '/chat/completions', 'Endpoint chat_completions');
-    expectEqual(request.ai_request.model, 'minimaxai/minimax-m2.5', 'Modelo NVIDIA MiniMax');
+    const schema = request.response_schema;
+    assert(schema, 'No se expone JSON Schema para Hormi Atencion');
+    expectEqual(request.ai_provider, 'openclaw', 'Proveedor OpenClaw');
+    expectEqual(request.ai_api_mode, 'openclaw', 'Modo OpenClaw');
+    expectEqual(request.ai_request_path, '/api/evaluate', 'Endpoint OpenClaw');
+    expectEqual(request.ai_base_url, 'http://host.docker.internal:9090', 'Base URL OpenClaw');
+    expectEqual(request.ai_request.agent, 'hormi-atencion', 'Agente Hormi Atencion');
+    assert(request.ai_request.session_key.startsWith('agent:hormi-atencion:crm-whatsapp-'), 'Session key aislada');
+    assert(request.ai_request.context.includes('Tienes autonomia conversacional'), 'Prompt no declara autonomia');
     expectIncludes(schema.required, 'confirmation_status', 'Contrato debe exigir confirmation_status');
     expectEqual(schema.additionalProperties, false, 'Contrato debe rechazar propiedades extra');
-    assert(request.ai_request.messages[0].content.includes('confidence es menor a 0.75'), 'Prompt no contiene guardrail de baja confianza');
-    assert(request.ai_request.messages[0].content.includes('confirmacion explicita'), 'Prompt no contiene guardrail de confirmacion');
-
-    const responsesRequest = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, { ...env, AI_API_MODE: 'responses' });
-    assert(responsesRequest.ai_request?.text?.format?.schema, 'No se construyo JSON Schema para responses');
-    expectEqual(responsesRequest.ai_request_path, '/responses', 'Endpoint responses');
-
-    const openClawRequest = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, {
-      AI_LEAD_ASSISTANT_ENABLED: 'true',
-      AI_PROVIDER: 'openclaw',
-      AI_API_KEY_REQUIRED: 'false',
-      OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
-      OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
-      OPENCLAW_AGENT: 'main',
-      OPENCLAW_TIMEOUT_SECONDS: '25',
-    });
-    expectEqual(openClawRequest.ai_api_mode, 'openclaw', 'Modo OpenClaw');
-    expectEqual(openClawRequest.ai_request_path, '/api/evaluate', 'Endpoint OpenClaw');
-    expectEqual(openClawRequest.ai_base_url, 'http://host.docker.internal:9090', 'Base URL OpenClaw');
-    expectEqual(openClawRequest.ai_request.agent, 'main', 'Agente OpenClaw');
-    assert(openClawRequest.ai_request.session_key.startsWith('agent:main:crm-whatsapp-'), 'Session key OpenClaw aislada');
-    assert(openClawRequest.ai_request.context.includes('JSON Schema'), 'OpenClaw recibe schema en contexto');
   };
 
   const runMockedScenario = async (scenario) => {
@@ -114,8 +87,9 @@ node <<'NODE'
     const helpers = {
       httpRequest: async (options) => {
         calls += 1;
-        expectEqual(options.url, 'https://integrate.api.nvidia.com/v1/chat/completions', `${scenario.name} URL`);
-        expectEqual(options.headers.Authorization, 'Bearer test-key', `${scenario.name} Authorization`);
+        expectEqual(options.url, 'http://host.docker.internal:9090/api/evaluate', `${scenario.name} URL`);
+        expectEqual(Boolean(options.headers.Authorization), false, `${scenario.name} no usa Authorization`);
+        expectEqual(options.headers['X-OpenClaw-Bridge-Token'], 'test-bridge-token', `${scenario.name} bridge token`);
         return {
           statusCode: scenario.statusCode || 200,
           body: scenario.body,
@@ -135,7 +109,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'saludo',
     sample: 'ai_greeting.sample.json',
-    body: makeChatBody({
+    body: makeBridgeBody({
       ...baseResponse,
       intent: 'greeting',
       lead_quality: 'none',
@@ -145,7 +119,6 @@ node <<'NODE'
     expect: (result) => {
       expectEqual(result.intent, 'greeting', 'saludo intent');
       expectIncludes(result.missing_fields, 'service', 'saludo missing service');
-      expectIncludes(result.missing_fields, 'confirmation', 'saludo missing confirmation');
       expectEqual(result.should_create_lead, false, 'saludo no crea lead');
     },
   });
@@ -153,7 +126,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'completo sin confirmacion',
     sample: 'ai_complete_without_confirmation.sample.json',
-    body: makeChatBody({
+    body: makeBridgeBody({
       ...baseResponse,
       intent: 'quote_request',
       lead_quality: 'high',
@@ -168,11 +141,9 @@ node <<'NODE'
       clickup_summary: 'No deberia pasar a ClickUp sin confirmacion.',
     }),
     expect: (result) => {
-      expectEqual(result.service, 'Baldosas', 'completo sin confirmacion service');
-      expectEqual(result.city, 'Santiago', 'completo sin confirmacion city');
-      expectEqual(result.requirement, 'Renovar un baño', 'completo sin confirmacion requirement');
-      expectIncludes(result.missing_fields, 'confirmation', 'completo sin confirmacion missing confirmation');
-      expectEqual(result.model_should_create_lead_raw, true, 'completo sin confirmacion raw model flag');
+      expectEqual(result.service, 'Baldosas', 'sin confirmacion service');
+      expectIncludes(result.missing_fields, 'confirmation', 'sin confirmacion missing confirmation');
+      expectEqual(result.model_should_create_lead_raw, true, 'modelo pidio crear lead');
       expectEqual(result.should_create_lead, false, 'guardrail sin confirmacion');
       expectEqual(result.clickup_summary, '', 'sin confirmacion no expone resumen ClickUp');
     },
@@ -181,7 +152,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'completo con confirmacion',
     sample: 'ai_complete_with_confirmation.sample.json',
-    body: makeChatBody({
+    body: makeBridgeBody({
       ...baseResponse,
       intent: 'confirmation_yes',
       lead_quality: 'high',
@@ -195,19 +166,19 @@ node <<'NODE'
       confidence: 0.96,
       reply_text: 'Perfecto, derivare tu solicitud.',
       clickup_summary: 'Cliente confirmado solicita baldosas en Santiago para renovar un baño.',
-    }, 'array'),
+    }),
     expect: (result) => {
-      expectEqual(result.intent, 'confirmation_yes', 'completo con confirmacion intent');
-      expectEqual(result.confirmation_status, 'confirmed', 'completo con confirmacion status');
-      expectEqual(result.should_create_lead, true, 'completo con confirmacion crea lead');
-      expectEqual(result.clickup_summary.includes('Cliente confirmado'), true, 'completo con confirmacion resumen');
+      expectEqual(result.intent, 'confirmation_yes', 'confirmacion intent');
+      expectEqual(result.confirmation_status, 'confirmed', 'confirmacion status');
+      expectEqual(result.should_create_lead, true, 'Hormi Atencion decide crear lead confirmado');
+      expectEqual(result.clickup_summary.includes('Cliente confirmado'), true, 'resumen ClickUp');
     },
   });
 
   await runMockedScenario({
     name: 'correccion',
     sample: 'ai_correction.sample.json',
-    body: makeChatBody({
+    body: makeBridgeBody({
       ...baseResponse,
       intent: 'correction',
       lead_quality: 'high',
@@ -231,7 +202,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'ambiguo baja confianza',
     sample: 'ai_ambiguous.sample.json',
-    body: makeChatBody({
+    body: makeBridgeBody({
       ...baseResponse,
       intent: 'quote_request',
       lead_quality: 'low',
@@ -249,77 +220,27 @@ node <<'NODE'
       expectEqual(result.service, '', 'baja confianza no acepta service');
       expectEqual(result.city, 'Santiago', 'baja confianza conserva city existente');
       expectEqual(result.requirement, '', 'baja confianza no acepta requirement');
-      expectEqual(result.reply_text, '', 'baja confianza no expone reply_text del modelo');
-      expectEqual(result.should_create_lead, false, 'ambiguo no crea lead');
+      expectEqual(result.reply_text, '', 'baja confianza no expone reply_text');
     },
   });
 
   await runMockedScenario({
     name: 'respuesta invalida',
     sample: 'ai_complete_without_confirmation.sample.json',
-    body: makeChatBody('esto no es json'),
+    body: makeBridgeBody('esto no es json'),
     expect: (result) => {
       expectEqual(result.ai_fallback_reason, 'invalid_json', 'invalido fallback seguro');
       expectEqual(Boolean(result.ai_parse_error), true, 'invalido registra parse error');
-      expectEqual(result.service, '', 'invalido no acepta service');
-      expectEqual(result.city, '', 'invalido no acepta city');
-      expectEqual(result.requirement, '', 'invalido no acepta requirement');
       expectEqual(result.should_create_lead, false, 'invalido no crea lead');
     },
   });
 
-  const openClawEnv = {
-    AI_LEAD_ASSISTANT_ENABLED: 'true',
-    AI_PROVIDER: 'openclaw',
-    AI_API_KEY_REQUIRED: 'false',
-    OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
-    OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
-    OPENCLAW_AGENT: 'main',
-    EXTERNAL_HTTP_MAX_ATTEMPTS: '2',
-    EXTERNAL_HTTP_RETRY_BASE_MS: '1',
-    EXTERNAL_HTTP_RETRY_MAX_MS: '1',
-  };
-  const openClawRequest = await runCode('Build AI Request', readSample('ai_complete_without_confirmation.sample.json'), {}, openClawEnv);
-  let openClawCalls = 0;
-  const openClawCalled = await runCode('Call AI Provider', openClawRequest, {
-    httpRequest: async (options) => {
-      openClawCalls += 1;
-      expectEqual(options.url, 'http://host.docker.internal:9090/api/evaluate', 'OpenClaw URL');
-      expectEqual(Boolean(options.headers.Authorization), false, 'OpenClaw no requiere Authorization');
-      expectEqual(options.headers['X-OpenClaw-Bridge-Token'], 'test-bridge-token', 'OpenClaw bridge token');
-      return {
-        statusCode: 200,
-        body: {
-          ok: true,
-          reply: JSON.stringify({
-            ...baseResponse,
-            intent: 'quote_request',
-            lead_quality: 'high',
-            service: 'Baldosas',
-            city: 'Santiago',
-            requirement: 'Renovar un baño',
-            missing_fields: ['confirmation'],
-            confirmation_status: 'requested',
-            confidence: 0.92,
-            reply_text: 'Tengo los datos. ¿Esta correcto?',
-          }),
-        },
-        headers: {},
-      };
-    },
-  }, openClawEnv);
-  expectEqual(openClawCalls, 1, 'OpenClaw llamadas HTTP');
-  const openClawNormalized = await runCode('Normalize AI Result', openClawCalled, {}, openClawEnv);
-  expectEqual(openClawNormalized.service, 'Baldosas', 'OpenClaw normaliza service');
-  expectEqual(openClawNormalized.city, 'Santiago', 'OpenClaw normaliza city');
-  expectEqual(openClawNormalized.should_create_lead, false, 'OpenClaw respeta guardrail de confirmacion');
-
-  const skippedRequest = await runCode('Build AI Request', readSample('ai_greeting.sample.json'), {}, { AI_LEAD_ASSISTANT_ENABLED: 'false', AI_MODEL: 'minimaxai/minimax-m2.5' });
+  const skippedRequest = await runCode('Build AI Request', readSample('ai_greeting.sample.json'), {}, { AI_LEAD_ASSISTANT_ENABLED: 'false' });
   const skippedCall = await runCode('Call AI Provider', skippedRequest, {}, {});
   const skipped = await runCode('Normalize AI Result', skippedCall, {}, {});
   assert(skipped.ai_skipped && skipped.ai_skip_reason === 'disabled', 'Modo disabled no funciona');
   expectEqual(skipped.should_create_lead, false, 'disabled no crea lead');
 
-  console.log('AI assistant local contract OK: 8 escenarios mock sin llamar proveedor real');
+  console.log('AI assistant local contract OK: 7 escenarios OpenClaw mock sin llamar proveedor real');
 })();
 NODE

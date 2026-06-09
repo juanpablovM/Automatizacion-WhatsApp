@@ -162,34 +162,36 @@ Commit documental:
 - `c4f9c5f docs: close initial end-to-end validation`
 - `589a281 docs: mark validation data as test records`
 
-## Decision Sobre AI
+## Decision Vigente Sobre AI
 
-Se decidio incorporar AI como capa controlada de comprension conversacional, no como agente autonomo completo.
+Se adopto OpenClaw como IA oficial del proyecto mediante el agente `hormi-atencion` (`Hormi Atencion`).
 
 Regla principal:
 
-- **AI recomienda**
-- **n8n y PostgreSQL deciden**
+- **Hormi Atencion decide la conversacion asistida**
+- **n8n y PostgreSQL ejecutan persistencia, ClickUp y asignacion**
 
-La AI se usara para:
+Hormi Atencion se usa para:
 
 - entender intencion del cliente
 - detectar servicio/producto
 - detectar ciudad
 - detectar requerimiento
 - identificar campos faltantes
-- sugerir una respuesta conversacional
+- responder al cliente
+- pedir o reconocer confirmacion
+- habilitar creacion de lead cuando existan campos completos, confirmacion explicita y confianza suficiente
 - generar resumen para ClickUp
 
-La AI no debe:
+Hormi Atencion no debe:
 
 - escribir directamente en PostgreSQL
-- crear tareas en ClickUp por si sola
-- asignar vendedores
+- crear tareas en ClickUp por fuera del workflow
+- asignar vendedores por fuera del round robin
 - saltarse la confirmacion del cliente
 - reemplazar las reglas de negocio centrales
 
-El sub-workflow futuro sera:
+El sub-workflow vigente es:
 
 - `AI - Lead Qualification Assistant`
 

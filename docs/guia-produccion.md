@@ -253,22 +253,22 @@ Criterio de salida:
 
 Objetivo:
 
-- validar la capa AI como mejora asistiva, no como dependencia estructural del flujo
+- validar Hormi Atencion/OpenClaw como capa conversacional oficial sin romper el flujo deterministico de respaldo
 
 Incluye:
 
-- activar AI solo en `staging` o workspace del integrador
-- validar respuestas reales de NVIDIA MiniMax
-- si se usa OpenClaw, validar primero el agente especializado de WhatsApp segun `docs/openclaw-configuracion.md`
+- activar AI en `staging` o workspace del integrador con `AI_PROVIDER=openclaw`
+- validar respuestas reales del agente `hormi-atencion`
+- validar el bridge y el token segun `docs/openclaw-configuracion.md`
 - confirmar fallback deterministico cuando AI falle
-- confirmar que AI no persiste ni asigna por su cuenta
+- confirmar que Hormi Atencion no persiste ni asigna por fuera de los workflows
 - comparar comportamiento con y sin AI sobre conversaciones reales de prueba
 
 Criterio de salida:
 
 - AI agrega valor sin romper el baseline
 - el sistema sigue siendo operable aunque el proveedor AI falle
-- queda claro si AI entra a produccion en primera salida o en una segunda etapa
+- queda evidencia de que Hormi Atencion puede operar en produccion con rollback a `AI_LEAD_ASSISTANT_ENABLED=false`
 
 ### Etapa 6. Preparar operacion diaria
 
@@ -369,7 +369,7 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Rotar `EVOLUTION_WEBHOOK_SECRET`
 - [ ] Rotar credenciales de PostgreSQL si fueron usadas en desarrollo
 - [ ] Rotar tokens de ClickUp si corresponde
-- [ ] Rotar `AI_API_KEY` si corresponde
+- [ ] Rotar `OPENCLAW_BRIDGE_TOKEN` si corresponde
 - [ ] Confirmar que `.env` real no se comparte ni se versiona
 - [ ] Confirmar que logs y evidencias no imprimen secretos
 - [ ] Definir responsable de custodiar secretos
@@ -443,13 +443,13 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 ### 10. AI
 
 - [ ] Ejecutar baseline con `AI_LEAD_ASSISTANT_ENABLED=false`
-- [ ] Activar AI solo en entorno controlado
-- [ ] Validar respuestas de NVIDIA MiniMax con trafico real
-- [ ] Para OpenClaw, confirmar que el agente `hormi-atencion` fue probado antes de activar `AI_PROVIDER=openclaw`
+- [ ] Activar AI en entorno controlado con `AI_PROVIDER=openclaw`
+- [ ] Validar respuestas de Hormi Atencion con trafico real
+- [ ] Confirmar que el agente `hormi-atencion` y el bridge fueron probados antes de produccion
 - [ ] Confirmar fallback deterministico cuando AI falle
-- [ ] Confirmar que AI no cree leads por su cuenta
-- [ ] Confirmar que AI no escriba directo a PostgreSQL
-- [ ] Confirmar que AI no cree tareas en ClickUp
+- [ ] Confirmar que Hormi Atencion solo habilite leads con confirmacion explicita
+- [ ] Confirmar que Hormi Atencion no escriba directo a PostgreSQL
+- [ ] Confirmar que Hormi Atencion no cree tareas en ClickUp fuera del workflow
 
 ### 11. Observabilidad
 

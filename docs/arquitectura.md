@@ -26,8 +26,7 @@ La arquitectura local ya fue implementada y validada funcionalmente con mensajes
 - `Redis` como dependencia operativa de `Evolution API`
 - ClickUp como CRM operativo de leads
 - ClickUp como canal interno inicial de notificacion al vendedor
-- NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM como proveedor AI actual para asistencia controlada
-- OpenClaw local preparado como proveedor alternativo mediante bridge HTTP; agente especializado de WhatsApp creado como `hormi-atencion`, pendiente de validacion
+- OpenClaw local como proveedor AI oficial mediante bridge HTTP y agente `hormi-atencion` (`Hormi Atencion`)
 
 ## Topologia local actual
 
@@ -40,8 +39,7 @@ flowchart LR
     EVO --> REDIS["Contenedor Redis"]
     EVO --> PG
     N8N --> CU["ClickUp API"]
-    N8N -.->|AI opcional<br/>flag controlado| AI["NVIDIA NIM<br/>MiniMax"]
-    N8N -.->|AI opcional preparada<br/>agente hormi-atencion pendiente de validacion| OC["OpenClaw local<br/>Bridge HTTP"]
+    N8N -.->|AI oficial<br/>Hormi Atencion| OC["OpenClaw local<br/>Bridge HTTP"]
     WA["WhatsApp real"] --> EVO
     EVO --> N8N
 ```
@@ -58,10 +56,10 @@ flowchart LR
 - `infra/postgres/init/` queda montado para scripts iniciales si luego se usan
 - el webhook actual funciona localmente desde `Evolution API` hacia `n8n` usando `host.docker.internal`
 - ClickUp ya fue integrado con creacion de tareas, comentario conversacional completo y notificacion inicial al vendedor
-- la capa AI es asistiva y opcional: recomienda extracciones/respuestas, pero `n8n` y PostgreSQL conservan la decision de estado
-- la AI no escribe en PostgreSQL, no crea tareas en ClickUp y no asigna vendedores
-- los secretos reales de NVIDIA, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
-- OpenClaw no debe activarse como proveedor real hasta validar el agente `hormi-atencion` documentado en `docs/openclaw-configuracion.md`
+- la capa AI oficial es Hormi Atencion en OpenClaw: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
+- `n8n` y PostgreSQL conservan la ejecucion del estado: la AI no escribe directo en PostgreSQL, no crea tareas ClickUp por fuera del workflow y no asigna vendedores por fuera del round robin
+- los secretos reales de OpenClaw, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
+- la configuracion operativa de OpenClaw vive en `docs/openclaw-configuracion.md`
 - la exposicion publica de webhooks no se implementa todavia; el entorno actual sigue pensado para operacion local controlada
 
 ## Autenticacion de n8n
@@ -71,7 +69,7 @@ En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo d
 ## Pendientes
 
 - validar matriz conversacional completa con AI apagada y AI encendida
-- probar NVIDIA MiniMax con servicios vivos desde el workspace del integrador
-- validar agente `hormi-atencion` en OpenClaw y ejecutar pruebas controladas antes de activar `AI_PROVIDER=openclaw`
+- validar Hormi Atencion con servicios vivos desde el workspace del integrador
+- ejecutar pruebas controladas con `AI_PROVIDER=openclaw` y `OPENCLAW_AGENT=hormi-atencion`
 - validar restore completo en entorno aislado si se requiere recuperacion total
 - documentar estrategia operativa de multiples instancias en `Evolution API`

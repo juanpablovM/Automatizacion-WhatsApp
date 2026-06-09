@@ -64,20 +64,21 @@ Se usa primero una capa simple y explicable con `Code`:
 - normalizacion basica de ciudad
 - consolidacion de campos ya detectados
 
-### Capa 2: extraccion asistida por AI
+### Capa 2: Hormi Atencion en OpenClaw
 
-Queda implementada como sub-workflow independiente y apagable:
+Queda implementada como sub-workflow independiente y apagable para regresiones:
 
 - tomar un mensaje libre amplio del cliente
 - proponer `service`, `city` y `requirement`
 - devolver estructura JSON controlada
-- nunca sustituir la persistencia ni la logica central
-- usar NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM como proveedor actual
+- responder de forma natural cuando el agente tiene confianza suficiente
+- habilitar la creacion de lead solo cuando el usuario confirma y existen los datos minimos
+- usar OpenClaw local con el agente `hormi-atencion`
 
 Regla:
 
-- la AI complementa, no gobierna el estado del sistema
-- `n8n` y PostgreSQL siguen siendo la fuente de decision
+- Hormi Atencion gobierna la conversacion asistida
+- `n8n` y PostgreSQL siguen siendo la fuente de ejecucion para persistencia, ClickUp y asignacion
 
 ## Workflows implementados
 
@@ -152,17 +153,18 @@ Uso de `Code`:
 
 Uso de AI:
 
-- subpaso opcional cuando el mensaje libre trae bastante contexto
+- subpaso oficial cuando el mensaje libre trae contexto suficiente o confirma datos
 - resultado siempre validado antes de persistir
 - se invoca solo si `AI_LEAD_ASSISTANT_ENABLED=true`
-- con el flag apagado, el flujo debe comportarse igual que el flujo deterministico base
-- no puede crear leads directamente ni sobrescribir datos confirmados salvo correccion explicita del usuario
+- con el flag apagado, el flujo debe comportarse igual que el flujo deterministico base para regresion
+- puede habilitar creacion de lead solo con confirmacion explicita, campos completos y confianza suficiente
+- no puede sobrescribir datos confirmados salvo correccion explicita del usuario
 
 ### 3. `AI - Lead Qualification Assistant`
 
 Responsabilidad:
 
-- llamar a NVIDIA MiniMax (`minimaxai/minimax-m2.5`) mediante NVIDIA NIM y una API compatible con `chat_completions`
+- llamar al bridge OpenClaw local mediante `POST /api/evaluate`
 - extraer intencion, calidad del lead, servicio, ciudad y requerimiento
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
@@ -192,25 +194,20 @@ Salida:
 
 Estado:
 
-- desactivado en la plantilla mediante `AI_LEAD_ASSISTANT_ENABLED=false`
-- preparado para NVIDIA API Catalog mediante `AI_BASE_URL=https://integrate.api.nvidia.com/v1`
-- tambien soporta OpenClaw local con `AI_PROVIDER=openclaw`, `AI_API_KEY_REQUIRED=false`, `OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090` y `OPENCLAW_BRIDGE_TOKEN`
-- estado OpenClaw: infraestructura preparada, agente especializado de WhatsApp creado como `hormi-atencion`, pendiente de validacion; no activar como proveedor real hasta completar `docs/openclaw-configuracion.md`
-- modo operativo actual: `AI_API_MODE=chat_completions`
-- modelo actual: `AI_MODEL=minimaxai/minimax-m2.5`
-- para OpenClaw, el bridge local `scripts/ai/hormi-atencion-bridge.js` ejecuta `openclaw agent --local --json` contra `OPENCLAW_AGENT=hormi-atencion` o una sesion configurada
-- no escribe en PostgreSQL
-- no crea tareas en ClickUp
-- no asigna vendedores
-- usa `chat_completions` con `response_format.type=json_schema`, `strict=true` y `minimaxai/minimax-m2.5` para NVIDIA
-- usa `POST /api/evaluate` con header `X-OpenClaw-Bridge-Token` y respuesta `{ reply: ... }` para OpenClaw
-- parsea respuestas desde `choices[0].message.content` y tambien soporta contenido por partes
-- parsea respuestas del bridge OpenClaw desde `reply`
+- activado en la plantilla mediante `AI_LEAD_ASSISTANT_ENABLED=true`
+- proveedor versionado: `AI_PROVIDER=openclaw`
+- requiere `AI_API_KEY_REQUIRED=false`, `OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090`, `OPENCLAW_BRIDGE_TOKEN` y `OPENCLAW_AGENT=hormi-atencion`
+- el bridge local `scripts/ai/hormi-atencion-bridge.js` ejecuta OpenClaw contra `OPENCLAW_AGENT=hormi-atencion` o una sesion configurada
+- no escribe directo en PostgreSQL
+- no crea tareas ClickUp fuera del workflow
+- no asigna vendedores fuera del round robin
+- usa `POST /api/evaluate` con header `X-OpenClaw-Bridge-Token`
+- parsea respuestas del bridge OpenClaw desde `reply`, `payloads[].text` o texto final del agente
 - fuerza `should_create_lead=false` si falta confirmacion explicita
 - descarta campos nuevos cuando `confidence < 0.75`; solo conserva campos existentes del contexto
 - ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
-- solo el integrador debe cargar secretos reales y ejecutar pruebas contra NVIDIA/OpenClaw
+- solo el integrador debe cargar secretos reales y ejecutar pruebas contra OpenClaw
 
 ### 4. `WA - Outbound Messages`
 
@@ -484,8 +481,8 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
 1. WhatsApp entrega webhook a `WA - Inbound Entry`
 2. el payload canonico pasa a `WA - Conversation Orchestrator`
-3. si el mensaje libre no queda resuelto por logica deterministica y `AI_LEAD_ASSISTANT_ENABLED=true`, el orquestador puede consultar `AI - Lead Qualification Assistant`
-4. el orquestador valida cualquier sugerencia de AI contra reglas locales y estado confirmado
+3. si `AI_LEAD_ASSISTANT_ENABLED=true`, el orquestador consulta `AI - Lead Qualification Assistant` cuando el mensaje trae contexto util o confirmacion
+4. el orquestador valida la decision de Hormi Atencion contra reglas locales y estado confirmado
 5. si corresponde responder, llama a `WA - Outbound Messages`
 6. si corresponde crear lead, llama a `CRM - Lead Creation And Assignment`
 7. luego llama a `CRM - ClickUp Sync Lead`
@@ -495,8 +492,8 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 ## Lo que queda para la siguiente fase
 
 - sincronizar workflows versionados en la instancia viva y confirmar que `WA - Inbound Entry` queda activo
-- ejecutar baseline con AI apagada
-- rotar/cargar la clave NVIDIA real solo en `.env` del integrador
-- validar `AI - Lead Qualification Assistant` con NVIDIA MiniMax desde el workspace del integrador
-- para OpenClaw, validar primero el agente `hormi-atencion` y seguir `docs/openclaw-configuracion.md`
-- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla del proveedor
+- ejecutar baseline con AI apagada como comparacion
+- levantar el bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion`
+- validar `AI - Lead Qualification Assistant` con Hormi Atencion desde el workspace del integrador
+- seguir `docs/openclaw-configuracion.md`
+- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla del bridge

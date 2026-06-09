@@ -2,9 +2,9 @@
 
 ## Objetivo
 
-Validar que el flujo conversacional sigue funcionando despues de introducir `AI - Lead Qualification Assistant` como capa controlada. La matriz mantiene los casos base `CP-01` a `CP-12` y agrega regresiones especificas de AI sin cambiar la regla principal: el lead solo se crea cuando existen `servicio + ciudad + requerimiento + confirmacion`.
+Validar que el flujo conversacional sigue funcionando con `AI - Lead Qualification Assistant` conectado a OpenClaw y al agente `hormi-atencion`. La matriz mantiene los casos base `CP-01` a `CP-12` y agrega regresiones especificas de AI sin cambiar la regla principal: el lead solo se crea cuando existen `servicio + ciudad + requerimiento + confirmacion`.
 
-La AI puede recomendar extracciones o una respuesta asistida. `n8n` y PostgreSQL siguen decidiendo el estado, la creacion del lead, ClickUp y la asignacion.
+Hormi Atencion puede extraer campos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma. `n8n` y PostgreSQL siguen ejecutando el estado, la creacion del lead, ClickUp y la asignacion.
 
 ## Alcance
 
@@ -25,7 +25,7 @@ No incluye:
 - pruebas de carga
 - multiples instancias de WhatsApp
 - restore destructivo
-- agente autonomo completo
+- escritura directa del agente fuera de los workflows
 - adjuntos ClickUp como funcionalidad nueva
 
 ## Preparacion para ejecucion real
@@ -47,13 +47,12 @@ Verificar:
 - instancia `principal` en estado `open`
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
-- para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true` y proveedor NVIDIA configurado
-- para pruebas con OpenClaw, primero debe estar validado el agente `hormi-atencion` y se debe seguir `docs/openclaw-configuracion.md`
+- para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true`, `AI_PROVIDER=openclaw`, bridge activo y `OPENCLAW_AGENT=hormi-atencion`
 - para regresion deterministica, `AI_LEAD_ASSISTANT_ENABLED=false`
 
 ## Smoke test local sin servicios reales
 
-El agente QA puede ejecutar esta validacion sin `.env`, NVIDIA, PostgreSQL, ClickUp ni Evolution:
+El agente QA puede ejecutar esta validacion sin `.env`, OpenClaw real, PostgreSQL, ClickUp ni Evolution:
 
 ```bash
 sh scripts/ops/test-conversation-regression-local.sh
@@ -62,10 +61,10 @@ sh scripts/ops/test-conversation-regression-local.sh
 El script valida el fixture `n8n/samples/conversation_regression_cases.sample.json` y asegura que:
 
 - existen los casos `CP-01` a `CP-12`
-- existen los casos AI `AI-01` a `AI-05`
+- existen los casos AI `AI-01` a `AI-06`
 - la evidencia obligatoria esta definida
 - ningun caso permite ClickUp sin lead confirmado
-- ningun caso permite que AI cree leads directamente
+- Hormi Atencion solo puede habilitar lead cuando el usuario confirma
 - los escenarios de AI invalida, falla o baja confianza quedan en fallback seguro
 
 Este smoke no sustituye la ejecucion real. Sirve para proteger la matriz y el contrato de regresion versionado.
@@ -143,7 +142,7 @@ Un caso pasa si:
 - asigna vendedor notificable cuando el flujo espera notificacion
 - deja auditoria suficiente para diagnosticar el caso
 - con AI apagada, el comportamiento critico se mantiene igual que antes
-- con AI encendida, AI solo mejora extraccion o respuesta
+- con AI encendida, Hormi Atencion mejora extraccion/respuesta y puede habilitar lead confirmado
 - si AI falla, responde invalido o tiene baja confianza, el flujo cae a logica deterministica
 
 ## Casos base CP-01 a CP-12
@@ -167,11 +166,12 @@ Un caso pasa si:
 
 | ID | Caso | Entrada | Resultado esperado | Guardrail |
 | --- | --- | --- | --- | --- |
-| AI-01 | AI apagada | CP-02 con `AI_LEAD_ASSISTANT_ENABLED=false` | Resultado equivalente al flujo deterministico: campos detectados y confirmacion solicitada, sin lead. | No debe existir dependencia de NVIDIA. |
-| AI-02 | AI encendida con salida valida | CP-02 con AI devolviendo JSON valido, `confidence>=0.75`, campos claros y `should_create_lead=false` | El orquestador puede usar campos sugeridos y respuesta asistida; queda en confirmacion, sin crear lead. | AI no crea lead directamente. |
+| AI-01 | AI apagada | CP-02 con `AI_LEAD_ASSISTANT_ENABLED=false` | Resultado equivalente al flujo deterministico: campos detectados y confirmacion solicitada, sin lead. | No debe existir dependencia del bridge OpenClaw. |
+| AI-02 | Hormi Atencion completa campos | CP-02 con OpenClaw devolviendo JSON valido, `confidence>=0.75`, campos claros y `should_create_lead=false` | El orquestador puede usar campos sugeridos y respuesta asistida; queda en confirmacion, sin crear lead. | No crea lead antes de confirmacion. |
 | AI-03 | AI invalida o falla | CP-02 con timeout, HTTP error o JSON invalido | El orquestador ignora AI, deja auditoria de falla y usa logica deterministica. | No debe bloquear la conversacion ni crear lead. |
 | AI-04 | AI baja confianza | `Algo para la casa` con `confidence<0.75` | No acepta campos sugeridos por AI; pide aclaracion deterministica. | Campos no confirmados no se sobrescriben. |
 | AI-05 | Correccion del usuario | En confirmacion: `No, es en Valparaiso y para instalar porcelanato` | Actualiza solo los campos corregidos explicitamente, vuelve a confirmar y no crea lead hasta nuevo `Si`. | Datos confirmados no se sobrescriben salvo correccion explicita. |
+| AI-06 | Hormi Atencion confirma lead | En confirmacion: `Si, correcto`, con servicio, ciudad y requerimiento completos, `confirmation_status=confirmed`, `intent=confirmation_yes`, `confidence>=0.75` y `should_create_lead=true` | El orquestador acepta la decision, marca handoff listo, crea lead, sincroniza ClickUp y asigna vendedor. | Solo permitido con confirmacion explicita y campos completos. |
 
 ## Plan reproducible de ejecucion real
 
@@ -198,7 +198,7 @@ docker compose --env-file .env ps
 
 5. Activar AI para pruebas controladas y resincronizar si corresponde.
 
-6. Ejecutar `AI-01` a `AI-05` y repetir los casos criticos `CP-02`, `CP-03`, `CP-08`, `CP-11` con AI encendida.
+6. Ejecutar `AI-01` a `AI-06` y repetir los casos criticos `CP-02`, `CP-03`, `CP-08`, `CP-11` con AI encendida.
 
 7. Registrar evidencia en la tabla de ejecucion.
 
@@ -233,6 +233,7 @@ docker compose --env-file .env ps
 | Pendiente | AI-03 | On invalida/falla |  |  |  |  |  | Pendiente | Debe dejar auditoria y fallback deterministico. |
 | Pendiente | AI-04 | On baja confianza |  |  |  |  |  | Pendiente | Debe rechazar campos sugeridos por AI. |
 | Pendiente | AI-05 | On correccion |  |  |  |  |  | Pendiente | Debe volver a confirmar antes de crear lead. |
+| Pendiente | AI-06 | On confirmada |  |  |  |  |  | Pendiente | Hormi Atencion puede habilitar lead solo con confirmacion explicita. |
 
 ## Correcciones historicas aplicadas durante CP-01 a CP-12
 
@@ -251,6 +252,6 @@ docker compose --env-file .env ps
 La matriz queda lista para regresion post-AI:
 
 - `CP-01` a `CP-12` son la base deterministica obligatoria
-- `AI-01` a `AI-05` cubren feature flag, salida valida, falla/invalidez, baja confianza y correccion de usuario
+- `AI-01` a `AI-06` cubren feature flag, salida valida, falla/invalidez, baja confianza, correccion de usuario y creacion confirmada
 - la evidencia requerida queda normalizada con `conversation_id`, `lead_id`, `clickup_task_id`, vendedor y auditorias
 - existe un smoke test local versionado para proteger la matriz sin servicios reales

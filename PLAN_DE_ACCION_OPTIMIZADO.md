@@ -1,17 +1,17 @@
 # Plan de Acción Optimizado: CRM WhatsApp Automatizado
-**Versión:** 1.2 (Pragmática para n8n + AI controlada)
-**Objetivo:** Llevar el sistema a producción con máxima confiabilidad, seguridad y el mínimo de complejidad innecesaria, incorporando AI como capa asistida de comprensión conversacional sin que gobierne el CRM.
+**Versión:** 1.3 (OpenClaw + Hormi Atencion)
+**Objetivo:** Llevar el sistema a producción con máxima confiabilidad, seguridad y el mínimo de complejidad innecesaria, usando OpenClaw como IA oficial para la conversación de WhatsApp.
 
 ---
 
 ## Principio Rector
 
-La AI complementa el flujo actual, pero no reemplaza las reglas del sistema.
+Hormi Atencion gobierna la conversación asistida, pero no ejecuta directamente las integraciones criticas del CRM.
 
-- **AI recomienda:** intención, calidad del lead, datos extraídos, respuesta sugerida y resumen.
-- **n8n decide:** siguiente paso del workflow, validaciones, errores y llamadas externas.
+- **Hormi Atencion decide la conversacion:** intención, calidad del lead, datos extraídos, respuesta, resumen y habilitación de lead confirmado.
+- **n8n ejecuta:** siguiente paso del workflow, validaciones finales, errores y llamadas externas.
 - **PostgreSQL gobierna el estado:** conversaciones, leads, auditoría, asignación y deduplicación.
-- **ClickUp recibe leads confirmados:** no tareas creadas directamente por AI.
+- **ClickUp recibe leads confirmados:** no tareas creadas directamente fuera del workflow.
 
 ---
 
@@ -54,12 +54,12 @@ La AI complementa el flujo actual, pero no reemplaza las reglas del sistema.
 
 ---
 
-## Sprint 2: AI Controlada para Calificación Conversacional
-*Enfoque: Mejorar comprensión, extracción y respuesta sin delegar decisiones críticas a un agente autónomo.*
+## Sprint 2: Hormi Atencion en OpenClaw
+*Enfoque: Mejorar comprensión, extracción, respuesta y confirmación usando el agente oficial `hormi-atencion`.*
 
 ### 2.1 Sub-workflow `AI - Lead Qualification Assistant`
 - **Acción:** Diseñar e implementar un sub-workflow llamado `AI - Lead Qualification Assistant`.
-- **Responsabilidad:** Analizar el mensaje y contexto conversacional para proponer datos estructurados, respuesta sugerida y resumen para ClickUp.
+- **Responsabilidad:** Analizar el mensaje y contexto conversacional para devolver datos estructurados, respuesta al cliente, resumen para ClickUp y decisión de lead confirmado.
 - **Por qué:** Mantiene la AI encapsulada, testeable y fácil de activar/desactivar.
 
 ### 2.2 Entrada del Sub-workflow AI
@@ -84,20 +84,20 @@ La AI complementa el flujo actual, pero no reemplaza las reglas del sistema.
   - `confidence`
   - `reply_text`
   - `clickup_summary`
-- **Por qué:** n8n puede validar campos y decidir con reglas explícitas.
+- **Por qué:** n8n puede validar campos y ejecutar con reglas explícitas.
 
 ### 2.4 Reglas de Control
 - **Acción:** Documentar e implementar guardrails:
-  - AI no escribe directamente en PostgreSQL
-  - AI no crea tareas en ClickUp
-  - AI no asigna vendedores
+  - Hormi Atencion no escribe directamente en PostgreSQL
+  - Hormi Atencion no crea tareas en ClickUp fuera del workflow
+  - Hormi Atencion no asigna vendedores fuera del round robin
   - si falta información o la confianza es baja, se pregunta o pide aclaración
   - la creación de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmación`
-- **Por qué:** Evita que una respuesta probabilística controle el CRM.
+- **Por qué:** Permite mas autonomia conversacional sin saltarse los controles operativos.
 
 ### 2.5 Uso Inicial Recomendado
-- **Acción:** Activar AI primero para extracción, clasificación y redacción controlada.
-- **Por qué:** Es el punto de mayor valor con menor riesgo. Un agente autónomo completo queda descartado para la primera versión.
+- **Acción:** Activar OpenClaw por defecto con `AI_PROVIDER=openclaw` y `OPENCLAW_AGENT=hormi-atencion`.
+- **Por qué:** El proyecto adopta Hormi Atencion como IA oficial, manteniendo rollback simple con `AI_LEAD_ASSISTANT_ENABLED=false`.
 
 ---
 

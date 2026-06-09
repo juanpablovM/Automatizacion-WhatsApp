@@ -20,18 +20,18 @@ Estado implementado:
 - se corrigieron loops conversacionales detectados durante validacion real
 - se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
 - se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
-- se agrego `AI - Lead Qualification Assistant` para NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
-- se dejo preparado soporte opcional de OpenClaw local mediante `scripts/ai/hormi-atencion-bridge.js`; el agente especializado de WhatsApp ya existe como `hormi-atencion` y queda pendiente validarlo
-- se conecto el asistente AI al orquestador como capa opcional bajo `AI_LEAD_ASSISTANT_ENABLED`
-- se definio la politica de AI controlada: AI recomienda, `n8n` y PostgreSQL deciden, y ClickUp solo recibe leads confirmados
-- `.env.example` mantiene `AI_LEAD_ASSISTANT_ENABLED=false`; la activacion real con secretos queda reservada al integrador
+- se dejo `AI - Lead Qualification Assistant` alineado con OpenClaw y el agente oficial `hormi-atencion` (`Hormi Atencion`)
+- se conecto OpenClaw mediante `scripts/ai/hormi-atencion-bridge.js` y `POST /api/evaluate`
+- `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=openclaw` quedan como valores versionados por defecto
+- se definio la politica actual: Hormi Atencion tiene autonomia conversacional para extraer, responder y habilitar la creacion de lead cuando exista confirmacion; `n8n`/PostgreSQL ejecutan persistencia, ClickUp y asignacion
+- los secretos reales quedan fuera de Git; `.env.example` solo contiene placeholders seguros
 
 Pendiente inmediato:
 
 - sincronizar workflows en la instancia viva y verificar que `WA - Inbound Entry` quede activo
-- validar el agente especializado `hormi-atencion` antes de activar `AI_PROVIDER=openclaw`
-- ejecutar baseline deterministico y prueba real de NVIDIA MiniMax u OpenClaw solo desde el workspace del integrador
-- validar matriz conversacional con AI apagada y AI encendida antes de considerar produccion
+- levantar el bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion` y el mismo `OPENCLAW_BRIDGE_TOKEN` configurado para `n8n`
+- ejecutar baseline deterministico con AI apagada solo como regresion comparativa
+- validar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
 
 ## Objetivo del proyecto
 
@@ -134,7 +134,7 @@ Orden operativo recomendado:
 4. correr backup y verify restore no destructivo
 5. validar `OPS - Error Handler` con fallo controlado
 6. ejecutar matriz conversacional con `AI_LEAD_ASSISTANT_ENABLED=false`
-7. activar AI solo en el entorno del integrador; para OpenClaw, hacerlo solo cuando el agente `hormi-atencion` este validado
+7. levantar el bridge OpenClaw en el entorno del integrador con `OPENCLAW_AGENT=hormi-atencion`
 8. verificar que ningun lead se cree sin `servicio + ciudad + requerimiento + confirmacion`
 
 Scripts operativos relevantes:

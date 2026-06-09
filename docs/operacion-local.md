@@ -201,16 +201,10 @@ Variables:
 
 ## AI Lead Assistant
 
-La plantilla local mantiene la capa AI apagada hasta que el integrador active el flag con secretos reales:
+La plantilla local mantiene Hormi Atencion/OpenClaw activado por defecto. Para operar localmente, el bridge debe estar corriendo en el host con el mismo token configurado para `n8n`:
 
 ```bash
-AI_LEAD_ASSISTANT_ENABLED=false
-AI_PROVIDER=nvidia
-AI_BASE_URL=https://integrate.api.nvidia.com/v1
-AI_API_MODE=chat_completions
-AI_API_KEY=__PENDIENTE__
-AI_API_KEY_REQUIRED=true
-AI_MODEL=minimaxai/minimax-m2.5
+OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
 ```
 
 Para validar el contrato local sin llamar al proveedor real:
@@ -219,18 +213,28 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato OpenClaw. No usa `.env` real ni llama a NVIDIA/OpenClaw.
+La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato OpenClaw. No usa `.env` real ni llama a OpenClaw.
 
 Guardrails actuales del sub-workflow:
 
 - `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
 - si falta confirmacion, `missing_fields` incluye `confirmation` y el resumen ClickUp queda vacio.
 - si `confidence < 0.75`, no se aceptan campos nuevos sugeridos por AI; solo se conservan campos ya existentes en el contexto.
-- si `choices[0].message.content` no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
+- si la respuesta del bridge no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
 
-Para usar NVIDIA API Catalog, crea una API key en `build.nvidia.com`, configura `AI_API_KEY`, activa `AI_LEAD_ASSISTANT_ENABLED=true`, recrea `n8n` con `docker compose --env-file .env up -d n8n` y ejecuta una prueba controlada. MiniMax M2.5 queda configurado con `AI_API_MODE=chat_completions`.
+Variables esperadas en `.env`:
 
-Para usar OpenClaw, primero debe estar validado el agente `hormi-atencion`. La guia vigente esta en [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md). Mientras la validacion de ese agente este pendiente, mantener `AI_PROVIDER=nvidia` o `AI_LEAD_ASSISTANT_ENABLED=false` segun el tipo de prueba.
+```bash
+AI_LEAD_ASSISTANT_ENABLED=true
+AI_PROVIDER=openclaw
+AI_API_KEY_REQUIRED=false
+OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090
+OPENCLAW_BRIDGE_TOKEN=<mismo valor redacted>
+OPENCLAW_AGENT=hormi-atencion
+OPENCLAW_TIMEOUT_SECONDS=25
+```
+
+La guia vigente esta en [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md).
 
 Rollback operativo:
 
@@ -239,7 +243,7 @@ AI_LEAD_ASSISTANT_ENABLED=false
 docker compose --env-file .env up -d n8n
 ```
 
-Regla de seguridad: AI recomienda; `n8n` y PostgreSQL deciden. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
+Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar lead confirmado; `n8n` y PostgreSQL ejecutan persistencia, ClickUp y asignacion. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
 
 ## Alcance actual
 

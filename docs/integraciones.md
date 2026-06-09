@@ -33,10 +33,10 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 
 ### OpenClaw local
 
-- integracion preparada como proveedor AI alternativo mediante bridge HTTP local
+- integracion AI oficial mediante bridge HTTP local
 - requiere `OPENCLAW_BRIDGE_TOKEN` para aceptar llamadas desde `n8n`
-- requiere un agente `hormi-atencion` validado antes de activar `AI_PROVIDER=openclaw`
-- estado actual: preparado en codigo y documentacion, pendiente de validacion real del agente
+- usa el agente `hormi-atencion`
+- estado actual: preparado en codigo y documentacion como proveedor por defecto
 - guia vigente: [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
 
 ## Placeholders definidos
@@ -51,9 +51,9 @@ Las integraciones principales ya quedaron conectadas y validadas en entorno loca
 - `n8n` procesa la conversacion, persiste estado y coordina sub-workflows
 - `PostgreSQL` conserva leads, conversaciones, mensajes, asignaciones y auditoria
 - ClickUp recibe leads confirmados, comentario conversacional completo y notificacion al vendedor
-- OpenClaw esta preparado como ruta opcional, pero no debe considerarse activo hasta validar el agente `hormi-atencion`
+- OpenClaw/Hormi Atencion queda como ruta AI oficial del proyecto
 
 ## Pendientes
 
 - decidir estrategia operativa para multiples instancias
-- validar agente `hormi-atencion` en OpenClaw
+- validar agente `hormi-atencion` en OpenClaw con servicios vivos

@@ -288,7 +288,7 @@
     },
     {
       "id": "AI-02",
-      "title": "AI encendida con salida valida",
+      "title": "Hormi Atencion completa campos y pide confirmacion",
       "ai_mode": "on_valid",
       "input": {
         "messages": [
@@ -383,6 +383,34 @@
         "ai_creates_lead_directly": false,
         "explicit_correction_required_to_overwrite": true,
         "next_step": "confirm",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AI-06",
+      "title": "Hormi Atencion confirma y habilita creacion de lead",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Si, correcto"
+        ],
+        "precondition": "current_step=confirm con servicio, ciudad y requerimiento completos",
+        "mock_ai": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "clickup_task_created": true,
+        "confirmed_by_user": true,
+        "ai_creates_lead_directly": true,
+        "seller_assigned": true,
         "audit_required": true
       }
     }

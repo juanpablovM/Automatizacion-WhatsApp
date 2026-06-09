@@ -26,7 +26,7 @@ const requiredEvidence = [
 const requiredBaseCases = Array.from({ length: 12 }, (_, index) =>
   `CP-${String(index + 1).padStart(2, '0')}`
 );
-const requiredAiCases = ['AI-01', 'AI-02', 'AI-03', 'AI-04', 'AI-05'];
+const requiredAiCases = ['AI-01', 'AI-02', 'AI-03', 'AI-04', 'AI-05', 'AI-06'];
 const requiredGate = ['servicio', 'ciudad', 'requerimiento', 'confirmacion'];
 
 const fail = (message) => {
@@ -83,8 +83,8 @@ for (const testCase of suite.cases) {
   if (expected.clickup_task_created && !expected.confirmed_by_user) {
     fail(`${testCase.id}: ClickUp no puede crearse sin confirmacion`);
   }
-  if (testCase.id.startsWith('AI-') && expected.ai_creates_lead_directly === true) {
-    fail(`${testCase.id}: AI no puede crear leads directamente`);
+  if (testCase.id.startsWith('AI-') && expected.ai_creates_lead_directly === true && expected.confirmed_by_user !== true) {
+    fail(`${testCase.id}: Hormi Atencion solo puede decidir crear lead con confirmacion`);
   }
   if (testCase.id === 'AI-03' && expected.fallback_deterministic !== true) {
     fail('AI-03 debe caer a fallback deterministico');
@@ -97,6 +97,14 @@ for (const testCase of suite.cases) {
   }
   if (testCase.id === 'AI-05' && expected.explicit_correction_required_to_overwrite !== true) {
     fail('AI-05 debe exigir correccion explicita para sobrescribir campos');
+  }
+  if (testCase.id === 'AI-06') {
+    if (expected.confirmed_by_user !== true || expected.lead_created !== true) {
+      fail('AI-06 debe cubrir lead confirmado creado por Hormi Atencion');
+    }
+    if (expected.ai_creates_lead_directly !== true) {
+      fail('AI-06 debe dejar explicita la autonomia confirmada de Hormi Atencion');
+    }
   }
 }
 
@@ -173,8 +181,31 @@ const validAi = await runApplyAi(mergedAiShape(baseDeterministic, {
 }));
 if (validAi.ai_applied !== true) fail('AI valida debio asistir extraccion');
 if (validAi.service !== 'Baldosas' || validAi.requirement !== 'Renovar un baño') fail('AI valida no mezclo campos esperados');
-if (validAi.should_create_lead !== false) fail('Orquestador no puede aceptar creacion directa por AI');
+if (validAi.should_create_lead !== false) fail('Hormi Atencion no puede crear lead sin confirmacion');
 if (!String(validAi.current_step).startsWith('confirm|')) fail('AI valida con campos completos debe pedir confirmacion');
+
+const confirmedAi = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  current_step: 'confirm',
+  response_kind: 'confirmation_question',
+  response_text: '¿Está correcto?',
+  completed_fields_count: 3,
+}, {
+  ai_skipped_1: false,
+  intent_1: 'confirmation_yes',
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  confirmation_status: 'confirmed',
+  confidence: 0.95,
+  should_create_lead: true,
+  reply_text: 'Perfecto, derivare tu solicitud.',
+}));
+if (confirmedAi.should_create_lead !== true) fail('Hormi Atencion debe poder decidir crear lead confirmado');
+if (confirmedAi.response_kind !== 'handoff_ready') fail('Lead confirmado por Hormi Atencion debe quedar listo para handoff');
 
 const lowConfidence = await runApplyAi(mergedAiShape(baseDeterministic, {
   ai_skipped_1: false,
@@ -200,7 +231,7 @@ const correction = await runApplyAi(mergedAiShape({
   confidence: 0.9,
 }));
 if (correction.service !== 'Baldosas') fail('Correccion explicita debe permitir sobrescribir campo');
-if (correction.should_create_lead !== false) fail('Correccion AI no puede crear lead directo');
+if (correction.should_create_lead !== false) fail('Correccion AI no puede crear lead sin confirmacion');
 
 console.log(`Conversation regression local smoke OK: ${suite.cases.length} casos validados`);
 })().catch((error) => {
