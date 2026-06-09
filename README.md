@@ -21,6 +21,7 @@ Estado implementado:
 - se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
 - se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
 - se agrego `AI - Lead Qualification Assistant` para NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
+- se dejo preparado soporte opcional de OpenClaw local mediante `scripts/ai/hormi-atencion-bridge.js`; el agente especializado de WhatsApp ya existe como `hormi-atencion` y queda pendiente validarlo
 - se conecto el asistente AI al orquestador como capa opcional bajo `AI_LEAD_ASSISTANT_ENABLED`
 - se definio la politica de AI controlada: AI recomienda, `n8n` y PostgreSQL deciden, y ClickUp solo recibe leads confirmados
 - `.env.example` mantiene `AI_LEAD_ASSISTANT_ENABLED=false`; la activacion real con secretos queda reservada al integrador
@@ -28,7 +29,8 @@ Estado implementado:
 Pendiente inmediato:
 
 - sincronizar workflows en la instancia viva y verificar que `WA - Inbound Entry` quede activo
-- ejecutar baseline deterministico y prueba real de NVIDIA MiniMax solo desde el workspace del integrador con clave rotada
+- validar el agente especializado `hormi-atencion` antes de activar `AI_PROVIDER=openclaw`
+- ejecutar baseline deterministico y prueba real de NVIDIA MiniMax u OpenClaw solo desde el workspace del integrador
 - validar matriz conversacional con AI apagada y AI encendida antes de considerar produccion
 
 ## Objetivo del proyecto
@@ -66,6 +68,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
 - [Runbook operativo](./docs/runbook-operacion.md)
+- [OpenClaw Configuracion](./docs/openclaw-configuracion.md)
 - [Guia de produccion](./docs/guia-produccion.md)
 
 ## Estado real actual
@@ -131,7 +134,7 @@ Orden operativo recomendado:
 4. correr backup y verify restore no destructivo
 5. validar `OPS - Error Handler` con fallo controlado
 6. ejecutar matriz conversacional con `AI_LEAD_ASSISTANT_ENABLED=false`
-7. activar AI solo en el entorno del integrador y probar NVIDIA MiniMax con servicios vivos
+7. activar AI solo en el entorno del integrador; para OpenClaw, hacerlo solo cuando el agente `hormi-atencion` este validado
 8. verificar que ningun lead se cree sin `servicio + ciudad + requerimiento + confirmacion`
 
 Scripts operativos relevantes:

@@ -273,9 +273,29 @@ AI_API_KEY=<redacted>
 docker compose --env-file .env up -d n8n
 ```
 
+Activar AI via OpenClaw local solo cuando el agente `hormi-atencion` ya este validado:
+
+```bash
+# terminal del host
+OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
+
+# editar .env
+AI_LEAD_ASSISTANT_ENABLED=true
+AI_PROVIDER=openclaw
+AI_API_KEY_REQUIRED=false
+OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090
+OPENCLAW_BRIDGE_TOKEN=<mismo valor redacted>
+OPENCLAW_AGENT=hormi-atencion
+docker compose --env-file .env up -d n8n
+```
+
 Checklist antes de activar:
 
 - API key vigente y no expuesta en Git.
+- El agente `hormi-atencion` existe en OpenClaw y fue validado con respuestas JSON compatibles.
+- Si se usa OpenClaw, `curl http://localhost:9090/health` responde `ok: true` y `auth_configured: true`.
+- `OPENCLAW_BRIDGE_TOKEN` debe existir tanto en el proceso del bridge como en `.env` para `n8n`.
+- Revisar [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md) antes de activar `AI_PROVIDER=openclaw`.
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
 - Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.
@@ -285,7 +305,7 @@ Reglas operativas:
 - AI recomienda; n8n y PostgreSQL deciden.
 - AI no crea leads, no escribe directo en PostgreSQL y no crea tareas ClickUp.
 - Un lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
-- Si NVIDIA falla o devuelve baja confianza, el flujo debe caer a logica deterministica.
+- Si NVIDIA/OpenClaw falla o devuelve baja confianza, el flujo debe caer a logica deterministica.
 
 ## Cierre de una ventana operativa
 

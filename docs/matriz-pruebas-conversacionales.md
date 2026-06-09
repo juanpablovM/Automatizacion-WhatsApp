@@ -48,6 +48,7 @@ Verificar:
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
 - para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true` y proveedor NVIDIA configurado
+- para pruebas con OpenClaw, primero debe estar validado el agente `hormi-atencion` y se debe seguir `docs/openclaw-configuracion.md`
 - para regresion deterministica, `AI_LEAD_ASSISTANT_ENABLED=false`
 
 ## Smoke test local sin servicios reales

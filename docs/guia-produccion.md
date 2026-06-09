@@ -259,6 +259,7 @@ Incluye:
 
 - activar AI solo en `staging` o workspace del integrador
 - validar respuestas reales de NVIDIA MiniMax
+- si se usa OpenClaw, validar primero el agente especializado de WhatsApp segun `docs/openclaw-configuracion.md`
 - confirmar fallback deterministico cuando AI falle
 - confirmar que AI no persiste ni asigna por su cuenta
 - comparar comportamiento con y sin AI sobre conversaciones reales de prueba
@@ -444,6 +445,7 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Ejecutar baseline con `AI_LEAD_ASSISTANT_ENABLED=false`
 - [ ] Activar AI solo en entorno controlado
 - [ ] Validar respuestas de NVIDIA MiniMax con trafico real
+- [ ] Para OpenClaw, confirmar que el agente `hormi-atencion` fue probado antes de activar `AI_PROVIDER=openclaw`
 - [ ] Confirmar fallback deterministico cuando AI falle
 - [ ] Confirmar que AI no cree leads por su cuenta
 - [ ] Confirmar que AI no escriba directo a PostgreSQL

@@ -31,6 +31,14 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - auditoria e incidente operativo si la notificacion falla
 - reintentos con backoff para errores de red y estados reintentables
 
+### OpenClaw local
+
+- integracion preparada como proveedor AI alternativo mediante bridge HTTP local
+- requiere `OPENCLAW_BRIDGE_TOKEN` para aceptar llamadas desde `n8n`
+- requiere un agente `hormi-atencion` validado antes de activar `AI_PROVIDER=openclaw`
+- estado actual: preparado en codigo y documentacion, pendiente de validacion real del agente
+- guia vigente: [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
+
 ## Placeholders definidos
 
 Los secretos reales no se guardan en el repositorio. Solo se dejan placeholders en `.env.example`.
@@ -43,7 +51,9 @@ Las integraciones principales ya quedaron conectadas y validadas en entorno loca
 - `n8n` procesa la conversacion, persiste estado y coordina sub-workflows
 - `PostgreSQL` conserva leads, conversaciones, mensajes, asignaciones y auditoria
 - ClickUp recibe leads confirmados, comentario conversacional completo y notificacion al vendedor
+- OpenClaw esta preparado como ruta opcional, pero no debe considerarse activo hasta validar el agente `hormi-atencion`
 
 ## Pendientes
 
 - decidir estrategia operativa para multiples instancias
+- validar agente `hormi-atencion` en OpenClaw

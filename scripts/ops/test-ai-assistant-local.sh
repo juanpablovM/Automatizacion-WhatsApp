@@ -89,6 +89,22 @@ node <<'NODE'
     const responsesRequest = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, { ...env, AI_API_MODE: 'responses' });
     assert(responsesRequest.ai_request?.text?.format?.schema, 'No se construyo JSON Schema para responses');
     expectEqual(responsesRequest.ai_request_path, '/responses', 'Endpoint responses');
+
+    const openClawRequest = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, {
+      AI_LEAD_ASSISTANT_ENABLED: 'true',
+      AI_PROVIDER: 'openclaw',
+      AI_API_KEY_REQUIRED: 'false',
+      OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
+      OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
+      OPENCLAW_AGENT: 'main',
+      OPENCLAW_TIMEOUT_SECONDS: '25',
+    });
+    expectEqual(openClawRequest.ai_api_mode, 'openclaw', 'Modo OpenClaw');
+    expectEqual(openClawRequest.ai_request_path, '/api/evaluate', 'Endpoint OpenClaw');
+    expectEqual(openClawRequest.ai_base_url, 'http://host.docker.internal:9090', 'Base URL OpenClaw');
+    expectEqual(openClawRequest.ai_request.agent, 'main', 'Agente OpenClaw');
+    assert(openClawRequest.ai_request.session_key.startsWith('agent:main:crm-whatsapp-'), 'Session key OpenClaw aislada');
+    assert(openClawRequest.ai_request.context.includes('JSON Schema'), 'OpenClaw recibe schema en contexto');
   };
 
   const runMockedScenario = async (scenario) => {
@@ -252,12 +268,58 @@ node <<'NODE'
     },
   });
 
+  const openClawEnv = {
+    AI_LEAD_ASSISTANT_ENABLED: 'true',
+    AI_PROVIDER: 'openclaw',
+    AI_API_KEY_REQUIRED: 'false',
+    OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
+    OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
+    OPENCLAW_AGENT: 'main',
+    EXTERNAL_HTTP_MAX_ATTEMPTS: '2',
+    EXTERNAL_HTTP_RETRY_BASE_MS: '1',
+    EXTERNAL_HTTP_RETRY_MAX_MS: '1',
+  };
+  const openClawRequest = await runCode('Build AI Request', readSample('ai_complete_without_confirmation.sample.json'), {}, openClawEnv);
+  let openClawCalls = 0;
+  const openClawCalled = await runCode('Call AI Provider', openClawRequest, {
+    httpRequest: async (options) => {
+      openClawCalls += 1;
+      expectEqual(options.url, 'http://host.docker.internal:9090/api/evaluate', 'OpenClaw URL');
+      expectEqual(Boolean(options.headers.Authorization), false, 'OpenClaw no requiere Authorization');
+      expectEqual(options.headers['X-OpenClaw-Bridge-Token'], 'test-bridge-token', 'OpenClaw bridge token');
+      return {
+        statusCode: 200,
+        body: {
+          ok: true,
+          reply: JSON.stringify({
+            ...baseResponse,
+            intent: 'quote_request',
+            lead_quality: 'high',
+            service: 'Baldosas',
+            city: 'Santiago',
+            requirement: 'Renovar un baño',
+            missing_fields: ['confirmation'],
+            confirmation_status: 'requested',
+            confidence: 0.92,
+            reply_text: 'Tengo los datos. ¿Esta correcto?',
+          }),
+        },
+        headers: {},
+      };
+    },
+  }, openClawEnv);
+  expectEqual(openClawCalls, 1, 'OpenClaw llamadas HTTP');
+  const openClawNormalized = await runCode('Normalize AI Result', openClawCalled, {}, openClawEnv);
+  expectEqual(openClawNormalized.service, 'Baldosas', 'OpenClaw normaliza service');
+  expectEqual(openClawNormalized.city, 'Santiago', 'OpenClaw normaliza city');
+  expectEqual(openClawNormalized.should_create_lead, false, 'OpenClaw respeta guardrail de confirmacion');
+
   const skippedRequest = await runCode('Build AI Request', readSample('ai_greeting.sample.json'), {}, { AI_LEAD_ASSISTANT_ENABLED: 'false', AI_MODEL: 'minimaxai/minimax-m2.5' });
   const skippedCall = await runCode('Call AI Provider', skippedRequest, {}, {});
   const skipped = await runCode('Normalize AI Result', skippedCall, {}, {});
   assert(skipped.ai_skipped && skipped.ai_skip_reason === 'disabled', 'Modo disabled no funciona');
   expectEqual(skipped.should_create_lead, false, 'disabled no crea lead');
 
-  console.log('AI assistant local contract OK: 7 escenarios mock sin llamar proveedor real');
+  console.log('AI assistant local contract OK: 8 escenarios mock sin llamar proveedor real');
 })();
 NODE

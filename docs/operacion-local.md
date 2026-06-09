@@ -219,7 +219,7 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor y modo AI desactivado. No usa `.env` real ni llama a NVIDIA.
+La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato OpenClaw. No usa `.env` real ni llama a NVIDIA/OpenClaw.
 
 Guardrails actuales del sub-workflow:
 
@@ -229,6 +229,8 @@ Guardrails actuales del sub-workflow:
 - si `choices[0].message.content` no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
 
 Para usar NVIDIA API Catalog, crea una API key en `build.nvidia.com`, configura `AI_API_KEY`, activa `AI_LEAD_ASSISTANT_ENABLED=true`, recrea `n8n` con `docker compose --env-file .env up -d n8n` y ejecuta una prueba controlada. MiniMax M2.5 queda configurado con `AI_API_MODE=chat_completions`.
+
+Para usar OpenClaw, primero debe estar validado el agente `hormi-atencion`. La guia vigente esta en [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md). Mientras la validacion de ese agente este pendiente, mantener `AI_PROVIDER=nvidia` o `AI_LEAD_ASSISTANT_ENABLED=false` segun el tipo de prueba.
 
 Rollback operativo:
 

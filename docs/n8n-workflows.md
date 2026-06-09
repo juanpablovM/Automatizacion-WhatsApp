@@ -194,18 +194,23 @@ Estado:
 
 - desactivado en la plantilla mediante `AI_LEAD_ASSISTANT_ENABLED=false`
 - preparado para NVIDIA API Catalog mediante `AI_BASE_URL=https://integrate.api.nvidia.com/v1`
+- tambien soporta OpenClaw local con `AI_PROVIDER=openclaw`, `AI_API_KEY_REQUIRED=false`, `OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090` y `OPENCLAW_BRIDGE_TOKEN`
+- estado OpenClaw: infraestructura preparada, agente especializado de WhatsApp creado como `hormi-atencion`, pendiente de validacion; no activar como proveedor real hasta completar `docs/openclaw-configuracion.md`
 - modo operativo actual: `AI_API_MODE=chat_completions`
 - modelo actual: `AI_MODEL=minimaxai/minimax-m2.5`
+- para OpenClaw, el bridge local `scripts/ai/hormi-atencion-bridge.js` ejecuta `openclaw agent --local --json` contra `OPENCLAW_AGENT=hormi-atencion` o una sesion configurada
 - no escribe en PostgreSQL
 - no crea tareas en ClickUp
 - no asigna vendedores
 - usa `chat_completions` con `response_format.type=json_schema`, `strict=true` y `minimaxai/minimax-m2.5` para NVIDIA
+- usa `POST /api/evaluate` con header `X-OpenClaw-Bridge-Token` y respuesta `{ reply: ... }` para OpenClaw
 - parsea respuestas desde `choices[0].message.content` y tambien soporta contenido por partes
+- parsea respuestas del bridge OpenClaw desde `reply`
 - fuerza `should_create_lead=false` si falta confirmacion explicita
 - descarta campos nuevos cuando `confidence < 0.75`; solo conserva campos existentes del contexto
 - ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
-- solo el integrador debe cargar `AI_API_KEY` real y ejecutar pruebas contra NVIDIA
+- solo el integrador debe cargar secretos reales y ejecutar pruebas contra NVIDIA/OpenClaw
 
 ### 4. `WA - Outbound Messages`
 
@@ -493,4 +498,5 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 - ejecutar baseline con AI apagada
 - rotar/cargar la clave NVIDIA real solo en `.env` del integrador
 - validar `AI - Lead Qualification Assistant` con NVIDIA MiniMax desde el workspace del integrador
-- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla NVIDIA
+- para OpenClaw, validar primero el agente `hormi-atencion` y seguir `docs/openclaw-configuracion.md`
+- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla del proveedor

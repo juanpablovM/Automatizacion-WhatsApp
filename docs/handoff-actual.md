@@ -21,6 +21,7 @@ El proyecto ya tiene implementadas las bases de:
 - ClickUp conectado y validado con prueba real
 - migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
 - sub-workflow `AI - Lead Qualification Assistant` definido para NVIDIA MiniMax via NVIDIA NIM, bajo feature flag
+- soporte OpenClaw local preparado en repo mediante bridge HTTP; agente especializado de WhatsApp creado como `hormi-atencion`, pendiente de validacion y no activado
 
 Estado real validado en la instancia local actual:
 
@@ -130,6 +131,7 @@ Variables clave ya contempladas:
 - `AI_API_MODE=chat_completions`
 - `AI_MODEL=minimaxai/minimax-m2.5`
 - `AI_API_KEY` real solo debe existir en el workspace del integrador y nunca en Git
+- OpenClaw queda documentado en `docs/openclaw-configuracion.md`; no activar `AI_PROVIDER=openclaw` hasta definir y validar el agente especializado de WhatsApp
 
 ## Documentacion clave
 
@@ -144,12 +146,14 @@ Leer al retomar:
 - [`docs/evolution-api.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/evolution-api.md)
 - [`docs/bitacora-validacion-ai.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/bitacora-validacion-ai.md)
 - [`docs/guia-produccion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/guia-produccion.md)
+- [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
 
 ## Decisiones funcionales ya cerradas
 
 - canal de entrada funcional: WhatsApp
 - proveedor actual elegido: `Evolution API`
 - proveedor AI actual elegido: NVIDIA MiniMax (`minimaxai/minimax-m2.5`) via NVIDIA NIM
+- proveedor AI alternativo preparado: OpenClaw local; pendiente validacion del agente `hormi-atencion`
 - flujo guiado con extraccion de contexto libre
 - preguntas base:
   - servicio
@@ -171,7 +175,7 @@ Leer al retomar:
   - la AI no escribe directamente en PostgreSQL
   - la AI no crea tareas en ClickUp
   - la AI no asigna vendedores
-  - si NVIDIA falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
+  - si NVIDIA/OpenClaw falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
 - politica de secretos:
   - `.env` real no se commitea ni se comparte entre agentes
   - agentes no integradores trabajan con `.env.example`, samples, mocks y tests locales
@@ -334,9 +338,9 @@ Estado de limpieza de datos de prueba:
    - healthcheck de `n8n`
 2. sincronizar workflows y verificar que `WA - Inbound Entry` quede activo
 3. ejecutar matriz conversacional con AI apagada
-4. rotar la clave NVIDIA expuesta fuera del repo, cargar la nueva en `.env` y activar `AI_LEAD_ASSISTANT_ENABLED=true`
-5. validar NVIDIA MiniMax desde el workspace del integrador
-6. ejecutar matriz conversacional con AI encendida, incluyendo falla NVIDIA, baja confianza y respuesta invalida
+4. para NVIDIA: rotar la clave expuesta fuera del repo, cargar la nueva en `.env` y activar `AI_LEAD_ASSISTANT_ENABLED=true`
+5. para OpenClaw: validar primero el agente `hormi-atencion` antes de activar `AI_PROVIDER=openclaw`
+6. ejecutar matriz conversacional con AI encendida, incluyendo falla del proveedor, baja confianza y respuesta invalida
 
 ## Siguiente fase planificada
 

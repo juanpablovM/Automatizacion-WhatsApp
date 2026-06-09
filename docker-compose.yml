@@ -93,8 +93,16 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_API_KEY_REQUIRED: ${AI_API_KEY_REQUIRED:-true}
       AI_MODEL: ${AI_MODEL:-minimaxai/minimax-m2.5}
+      OPENCLAW_BRIDGE_URL: ${OPENCLAW_BRIDGE_URL:-http://host.docker.internal:9090}
+      OPENCLAW_BRIDGE_TOKEN: ${OPENCLAW_BRIDGE_TOKEN:-}
+      OPENCLAW_AGENT: ${OPENCLAW_AGENT:-hormi-atencion}
+      OPENCLAW_SESSION_KEY: ${OPENCLAW_SESSION_KEY:-}
+      OPENCLAW_MODEL: ${OPENCLAW_MODEL:-}
+      OPENCLAW_TIMEOUT_SECONDS: ${OPENCLAW_TIMEOUT_SECONDS:-25}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "0.0.0.0:${N8N_PORT:-5678}:5678"
     volumes:
