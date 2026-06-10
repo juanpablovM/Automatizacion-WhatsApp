@@ -1,0 +1,13 @@
+-- Example WhatsApp number seed.
+-- Copy this file to an ignored private seed before adding real operational data.
+--
+-- INSERT INTO whatsapp_numbers (
+--   display_name,
+--   phone_number,
+--   phone_number_id,
+--   business_account_id,
+--   is_active
+-- )
+-- VALUES
+--   ('Main WhatsApp', '+56000000000', 'PHONE_NUMBER_ID', 'BUSINESS_ACCOUNT_ID', true)
+-- ON CONFLICT DO NOTHING;

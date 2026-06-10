@@ -1,0 +1,7 @@
+-- Example seller seed.
+-- Copy this file to an ignored private seed before adding real operational data.
+--
+-- INSERT INTO sellers (name, whatsapp_number, clickup_user_id, is_active, sort_order)
+-- VALUES
+--   ('Seller One', '+56000000000', NULL, true, 1)
+-- ON CONFLICT DO NOTHING;
