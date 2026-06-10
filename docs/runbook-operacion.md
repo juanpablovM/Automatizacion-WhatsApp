@@ -285,6 +285,9 @@ Checklist antes de activar:
 - El agente `hormi-atencion` existe en OpenClaw y responde con JSON compatible.
 - Si se usa OpenClaw, `curl http://localhost:9090/health` responde `ok: true` y `auth_configured: true`.
 - `OPENCLAW_BRIDGE_TOKEN` debe existir tanto en el proceso del bridge como en `.env` para `n8n`.
+- Si `POST /api/evaluate` devuelve `503`, falta `OPENCLAW_BRIDGE_TOKEN` en el proceso del bridge.
+- Si `POST /api/evaluate` devuelve `401`, el bridge tiene token pero `n8n` no esta enviando el mismo valor.
+- El bridge corre en el host cuando usa el CLI global de OpenClaw; `n8n` lo llama desde Docker por `host.docker.internal`.
 - Revisar [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.

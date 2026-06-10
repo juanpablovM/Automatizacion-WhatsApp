@@ -215,6 +215,13 @@ sh scripts/ops/test-ai-assistant-local.sh
 
 La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato OpenClaw. No usa `.env` real ni llama a OpenClaw.
 
+Diagnostico de autenticacion:
+
+- `curl http://localhost:9090/health` debe mostrar `auth_configured: true`; si muestra `false`, el bridge se levanto sin `OPENCLAW_BRIDGE_TOKEN`.
+- Un `503` en `POST /api/evaluate` significa que falta `OPENCLAW_BRIDGE_TOKEN` en el proceso del bridge.
+- Un `401` significa que el bridge tiene token, pero `n8n` no envio el mismo valor. Revisar `.env`, recrear `n8n` y confirmar el header `X-OpenClaw-Bridge-Token`.
+- El bridge debe correr en el host cuando usa el binario global de OpenClaw; `n8n` lo alcanza desde Docker por `http://host.docker.internal:9090`.
+
 Guardrails actuales del sub-workflow:
 
 - `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
