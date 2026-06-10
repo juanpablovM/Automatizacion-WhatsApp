@@ -164,7 +164,7 @@ Uso de AI:
 
 Responsabilidad:
 
-- llamar al bridge OpenClaw local mediante `POST /api/evaluate`
+- llamar al proveedor AI directo configurado, por defecto `POST /responses`
 - extraer intencion, calidad del lead, servicio, ciudad y requerimiento
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
@@ -195,19 +195,20 @@ Salida:
 Estado:
 
 - activado en la plantilla mediante `AI_LEAD_ASSISTANT_ENABLED=true`
-- proveedor versionado: `AI_PROVIDER=openclaw`
-- requiere `AI_API_KEY_REQUIRED=false`, `OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090`, `OPENCLAW_BRIDGE_TOKEN` y `OPENCLAW_AGENT=hormi-atencion`
-- el bridge local `scripts/ai/hormi-atencion-bridge.js` ejecuta OpenClaw contra `OPENCLAW_AGENT=hormi-atencion` o una sesion configurada
+- proveedor versionado: `AI_PROVIDER=direct_api`
+- requiere `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` para llamar al proveedor real
+- con placeholders pendientes, omite IA con `ai_skip_reason=missing_api_config` y mantiene fallback deterministico
+- OpenClaw queda solo como modo legacy si se fuerza `AI_PROVIDER=openclaw`
 - no escribe directo en PostgreSQL
 - no crea tareas ClickUp fuera del workflow
 - no asigna vendedores fuera del round robin
-- usa `POST /api/evaluate` con header `X-OpenClaw-Bridge-Token`
-- parsea respuestas del bridge OpenClaw desde `reply`, `payloads[].text` o texto final del agente
+- usa `Authorization: Bearer $AI_DIRECT_API_KEY` para API directa
+- parsea respuestas desde `output_text`, `choices[].message.content`, `reply`, `payloads[].text` o texto final compatible
 - fuerza `should_create_lead=false` si falta confirmacion explicita
 - descarta campos nuevos cuando `confidence < 0.75`; solo conserva campos existentes del contexto
 - ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
-- solo el integrador debe cargar secretos reales y ejecutar pruebas contra OpenClaw
+- solo el integrador debe cargar secretos reales y ejecutar pruebas contra el proveedor AI
 
 ### 4. `WA - Outbound Messages`
 
@@ -493,7 +494,7 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
 - sincronizar workflows versionados en la instancia viva y confirmar que `WA - Inbound Entry` queda activo
 - ejecutar baseline con AI apagada como comparacion
-- levantar el bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion`
-- validar `AI - Lead Qualification Assistant` con Hormi Atencion desde el workspace del integrador
-- seguir `docs/openclaw-configuracion.md`
-- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/falla del bridge
+- definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` solo en `.env`
+- validar `AI - Lead Qualification Assistant` con mocks y luego con proveedor real controlado
+- seguir `docs/ai-api-directa-configuracion.md`
+- ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/error del proveedor

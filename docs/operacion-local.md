@@ -227,21 +227,22 @@ Guardrails actuales del sub-workflow:
 - `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
 - si falta confirmacion, `missing_fields` incluye `confirmation` y el resumen ClickUp queda vacio.
 - si `confidence < 0.75`, no se aceptan campos nuevos sugeridos por AI; solo se conservan campos ya existentes en el contexto.
-- si la respuesta del bridge no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
+- si la respuesta del proveedor AI no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
 
 Variables esperadas en `.env`:
 
 ```bash
 AI_LEAD_ASSISTANT_ENABLED=true
-AI_PROVIDER=openclaw
-AI_API_KEY_REQUIRED=false
-OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090
-OPENCLAW_BRIDGE_TOKEN=<mismo valor redacted>
-OPENCLAW_AGENT=hormi-atencion
-OPENCLAW_TIMEOUT_SECONDS=25
+AI_PROVIDER=direct_api
+AI_API_KEY_REQUIRED=true
+AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
+AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_KEY=__PENDIENTE__
+AI_DIRECT_API_MODEL=__PENDIENTE__
+AI_DIRECT_API_TIMEOUT_MS=8000
 ```
 
-La guia vigente esta en [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md).
+La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
 
 Rollback operativo:
 

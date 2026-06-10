@@ -260,35 +260,28 @@ AI_LEAD_ASSISTANT_ENABLED=false
 docker compose --env-file .env up -d n8n
 ```
 
-AI queda activada por defecto con OpenClaw. Para operar, levantar primero el bridge local:
-
-```bash
-OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
-```
+AI queda activada por defecto en modo API directa. Si la API key o el modelo siguen pendientes, el workflow omite IA y usa fallback deterministico.
 
 Configuracion esperada para AI:
 
 ```bash
 # editar .env
 AI_LEAD_ASSISTANT_ENABLED=true
-AI_PROVIDER=openclaw
-AI_API_KEY_REQUIRED=false
-OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090
-OPENCLAW_BRIDGE_TOKEN=<mismo valor redacted>
-OPENCLAW_AGENT=hormi-atencion
+AI_PROVIDER=direct_api
+AI_API_KEY_REQUIRED=true
+AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
+AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_KEY=<redacted>
+AI_DIRECT_API_MODEL=<modelo elegido>
+AI_DIRECT_API_TIMEOUT_MS=8000
 docker compose --env-file .env up -d n8n
 ```
 
 Checklist antes de activar:
 
-- Token vigente y no expuesto en Git.
-- El agente `hormi-atencion` existe en OpenClaw y responde con JSON compatible.
-- Si se usa OpenClaw, `curl http://localhost:9090/health` responde `ok: true` y `auth_configured: true`.
-- `OPENCLAW_BRIDGE_TOKEN` debe existir tanto en el proceso del bridge como en `.env` para `n8n`.
-- Si `POST /api/evaluate` devuelve `503`, falta `OPENCLAW_BRIDGE_TOKEN` en el proceso del bridge.
-- Si `POST /api/evaluate` devuelve `401`, el bridge tiene token pero `n8n` no esta enviando el mismo valor.
-- El bridge corre en el host cuando usa el CLI global de OpenClaw; `n8n` lo llama desde Docker por `host.docker.internal`.
-- Revisar [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md).
+- API key vigente y no expuesta en Git.
+- Modelo definido en `AI_DIRECT_API_MODEL`.
+- Revisar [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
 - Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.
@@ -299,7 +292,7 @@ Reglas operativas:
 - n8n y PostgreSQL ejecutan persistencia, ClickUp y asignacion.
 - Hormi Atencion no escribe directo en PostgreSQL ni crea tareas ClickUp fuera del workflow.
 - Un lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
-- Si OpenClaw falla o devuelve baja confianza, el flujo debe caer a logica deterministica.
+- Si el proveedor AI falla, demora, responde invalido o devuelve baja confianza, el flujo debe caer a logica deterministica.
 
 ## Cierre de una ventana operativa
 

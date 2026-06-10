@@ -35,11 +35,13 @@ node <<'NODE'
 
   const env = {
     AI_LEAD_ASSISTANT_ENABLED: 'true',
-    AI_PROVIDER: 'openclaw',
-    AI_API_KEY_REQUIRED: 'false',
-    OPENCLAW_BRIDGE_URL: 'http://host.docker.internal:9090',
-    OPENCLAW_BRIDGE_TOKEN: 'test-bridge-token',
-    OPENCLAW_AGENT: 'hormi-atencion',
+    AI_PROVIDER: 'direct_api',
+    AI_API_KEY_REQUIRED: 'true',
+    AI_DIRECT_API_BASE_URL: 'https://api.openai.com/v1',
+    AI_DIRECT_API_PATH: '/responses',
+    AI_DIRECT_API_KEY: 'test-direct-api-key',
+    AI_DIRECT_API_MODEL: 'test-fast-model',
+    AI_DIRECT_API_TIMEOUT_MS: '8000',
     EXTERNAL_HTTP_MAX_ATTEMPTS: '2',
     EXTERNAL_HTTP_RETRY_BASE_MS: '1',
     EXTERNAL_HTTP_RETRY_MAX_MS: '1',
@@ -60,22 +62,22 @@ node <<'NODE'
     clickup_summary: '',
   };
 
-  const makeBridgeBody = (payload) => ({
-    ok: true,
-    reply: typeof payload === 'string' ? payload : JSON.stringify(payload),
+  const makeDirectApiBody = (payload) => ({
+    output_text: typeof payload === 'string' ? payload : JSON.stringify(payload),
   });
 
   const validateRequestContract = async () => {
     const request = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, env);
     const schema = request.response_schema;
     assert(schema, 'No se expone JSON Schema para Hormi Atencion');
-    expectEqual(request.ai_provider, 'openclaw', 'Proveedor OpenClaw');
-    expectEqual(request.ai_api_mode, 'openclaw', 'Modo OpenClaw');
-    expectEqual(request.ai_request_path, '/api/evaluate', 'Endpoint OpenClaw');
-    expectEqual(request.ai_base_url, 'http://host.docker.internal:9090', 'Base URL OpenClaw');
-    expectEqual(request.ai_request.agent, 'hormi-atencion', 'Agente Hormi Atencion');
-    assert(request.ai_request.session_key.startsWith('agent:hormi-atencion:crm-whatsapp-'), 'Session key aislada');
-    assert(request.ai_request.context.includes('Tienes autonomia conversacional'), 'Prompt no declara autonomia');
+    expectEqual(request.ai_provider, 'direct_api', 'Proveedor API directa');
+    expectEqual(request.ai_api_mode, 'openai_responses', 'Modo API directa');
+    expectEqual(request.ai_request_path, '/responses', 'Endpoint API directa');
+    expectEqual(request.ai_base_url, 'https://api.openai.com/v1', 'Base URL API directa');
+    expectEqual(request.ai_model, 'test-fast-model', 'Modelo API directa');
+    expectEqual(request.ai_request.model, 'test-fast-model', 'Modelo en request');
+    assert(request.ai_request.input[0].content.includes('Tienes autonomia conversacional'), 'Prompt no declara autonomia');
+    expectEqual(request.ai_request.text.format.strict, true, 'Salida estructurada estricta');
     expectIncludes(schema.required, 'confirmation_status', 'Contrato debe exigir confirmation_status');
     expectEqual(schema.additionalProperties, false, 'Contrato debe rechazar propiedades extra');
   };
@@ -87,9 +89,10 @@ node <<'NODE'
     const helpers = {
       httpRequest: async (options) => {
         calls += 1;
-        expectEqual(options.url, 'http://host.docker.internal:9090/api/evaluate', `${scenario.name} URL`);
-        expectEqual(Boolean(options.headers.Authorization), false, `${scenario.name} no usa Authorization`);
-        expectEqual(options.headers['X-OpenClaw-Bridge-Token'], 'test-bridge-token', `${scenario.name} bridge token`);
+        expectEqual(options.url, 'https://api.openai.com/v1/responses', `${scenario.name} URL`);
+        expectEqual(options.headers.Authorization, 'Bearer test-direct-api-key', `${scenario.name} Authorization`);
+        expectEqual(Boolean(options.headers['X-OpenClaw-Bridge-Token']), false, `${scenario.name} no usa bridge token`);
+        expectEqual(options.timeout, 8000, `${scenario.name} timeout`);
         return {
           statusCode: scenario.statusCode || 200,
           body: scenario.body,
@@ -109,7 +112,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'saludo',
     sample: 'ai_greeting.sample.json',
-    body: makeBridgeBody({
+    body: makeDirectApiBody({
       ...baseResponse,
       intent: 'greeting',
       lead_quality: 'none',
@@ -126,7 +129,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'completo sin confirmacion',
     sample: 'ai_complete_without_confirmation.sample.json',
-    body: makeBridgeBody({
+    body: makeDirectApiBody({
       ...baseResponse,
       intent: 'quote_request',
       lead_quality: 'high',
@@ -152,7 +155,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'completo con confirmacion',
     sample: 'ai_complete_with_confirmation.sample.json',
-    body: makeBridgeBody({
+    body: makeDirectApiBody({
       ...baseResponse,
       intent: 'confirmation_yes',
       lead_quality: 'high',
@@ -178,7 +181,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'correccion',
     sample: 'ai_correction.sample.json',
-    body: makeBridgeBody({
+    body: makeDirectApiBody({
       ...baseResponse,
       intent: 'correction',
       lead_quality: 'high',
@@ -202,7 +205,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'ambiguo baja confianza',
     sample: 'ai_ambiguous.sample.json',
-    body: makeBridgeBody({
+    body: makeDirectApiBody({
       ...baseResponse,
       intent: 'quote_request',
       lead_quality: 'low',
@@ -227,7 +230,7 @@ node <<'NODE'
   await runMockedScenario({
     name: 'respuesta invalida',
     sample: 'ai_complete_without_confirmation.sample.json',
-    body: makeBridgeBody('esto no es json'),
+    body: makeDirectApiBody('esto no es json'),
     expect: (result) => {
       expectEqual(result.ai_fallback_reason, 'invalid_json', 'invalido fallback seguro');
       expectEqual(Boolean(result.ai_parse_error), true, 'invalido registra parse error');
@@ -241,6 +244,17 @@ node <<'NODE'
   assert(skipped.ai_skipped && skipped.ai_skip_reason === 'disabled', 'Modo disabled no funciona');
   expectEqual(skipped.should_create_lead, false, 'disabled no crea lead');
 
-  console.log('AI assistant local contract OK: 7 escenarios OpenClaw mock sin llamar proveedor real');
+  const missingConfigRequest = await runCode('Build AI Request', readSample('ai_greeting.sample.json'), {}, {
+    AI_LEAD_ASSISTANT_ENABLED: 'true',
+    AI_PROVIDER: 'direct_api',
+    AI_DIRECT_API_KEY: '__PENDIENTE__',
+    AI_DIRECT_API_MODEL: '__PENDIENTE__',
+  });
+  const missingConfigCall = await runCode('Call AI Provider', missingConfigRequest, {}, {});
+  const missingConfig = await runCode('Normalize AI Result', missingConfigCall, {}, {});
+  assert(missingConfig.ai_skipped && missingConfig.ai_skip_reason === 'missing_api_config', 'Config pendiente debe omitir IA');
+  expectEqual(missingConfig.should_create_lead, false, 'config pendiente no crea lead');
+
+  console.log('AI assistant local contract OK: 8 escenarios API directa mock sin llamar proveedor real');
 })();
 NODE

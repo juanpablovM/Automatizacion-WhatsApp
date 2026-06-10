@@ -253,13 +253,13 @@ Criterio de salida:
 
 Objetivo:
 
-- validar Hormi Atencion/OpenClaw como capa conversacional oficial sin romper el flujo deterministico de respaldo
+- validar Hormi Atencion por API directa como capa conversacional oficial sin romper el flujo deterministico de respaldo
 
 Incluye:
 
-- activar AI en `staging` o workspace del integrador con `AI_PROVIDER=openclaw`
-- validar respuestas reales del agente `hormi-atencion`
-- validar el bridge y el token segun `docs/openclaw-configuracion.md`
+- activar AI en `staging` o workspace del integrador con `AI_PROVIDER=direct_api`
+- validar respuestas reales de Hormi Atencion via proveedor directo
+- validar API key/modelo segun `docs/ai-api-directa-configuracion.md`
 - confirmar fallback deterministico cuando AI falle
 - confirmar que Hormi Atencion no persiste ni asigna por fuera de los workflows
 - comparar comportamiento con y sin AI sobre conversaciones reales de prueba
@@ -443,9 +443,9 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 ### 10. AI
 
 - [ ] Ejecutar baseline con `AI_LEAD_ASSISTANT_ENABLED=false`
-- [ ] Activar AI en entorno controlado con `AI_PROVIDER=openclaw`
+- [ ] Activar AI en entorno controlado con `AI_PROVIDER=direct_api`
 - [ ] Validar respuestas de Hormi Atencion con trafico real
-- [ ] Confirmar que el agente `hormi-atencion` y el bridge fueron probados antes de produccion
+- [ ] Confirmar que API key/modelo y salida JSON estructurada fueron probados antes de produccion
 - [ ] Confirmar fallback deterministico cuando AI falle
 - [ ] Confirmar que Hormi Atencion solo habilite leads con confirmacion explicita
 - [ ] Confirmar que Hormi Atencion no escriba directo a PostgreSQL

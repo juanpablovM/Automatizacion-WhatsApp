@@ -31,13 +31,20 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - auditoria e incidente operativo si la notificacion falla
 - reintentos con backoff para errores de red y estados reintentables
 
-### OpenClaw local
+### AI API directa
 
-- integracion AI oficial mediante bridge HTTP local
-- requiere `OPENCLAW_BRIDGE_TOKEN` para aceptar llamadas desde `n8n`
-- usa el agente `hormi-atencion`
-- estado actual: preparado en codigo y documentacion como proveedor por defecto
-- guia vigente: [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
+- integracion AI oficial mediante llamada directa desde `n8n`
+- usa el rol conversacional `Hormi Atencion`
+- devuelve JSON estructurado con intencion, campos, respuesta sugerida y decision de lead
+- no requiere bridge local ni agente OpenClaw en la ruta por defecto
+- estado actual: preparado en codigo, con placeholders hasta cargar API key/modelo
+- guia vigente: [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md)
+
+### OpenClaw local legacy
+
+- queda disponible solo como rollback si se fuerza `AI_PROVIDER=openclaw`
+- requiere `OPENCLAW_BRIDGE_TOKEN` y bridge HTTP local
+- guia historica: [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
 
 ## Placeholders definidos
 
@@ -51,9 +58,9 @@ Las integraciones principales ya quedaron conectadas y validadas en entorno loca
 - `n8n` procesa la conversacion, persiste estado y coordina sub-workflows
 - `PostgreSQL` conserva leads, conversaciones, mensajes, asignaciones y auditoria
 - ClickUp recibe leads confirmados, comentario conversacional completo y notificacion al vendedor
-- OpenClaw/Hormi Atencion queda como ruta AI oficial del proyecto
+- Hormi Atencion por API directa queda como ruta AI oficial del proyecto
 
 ## Pendientes
 
 - decidir estrategia operativa para multiples instancias
-- validar agente `hormi-atencion` en OpenClaw con servicios vivos
+- definir proveedor/modelo de API directa y validar con servicios vivos

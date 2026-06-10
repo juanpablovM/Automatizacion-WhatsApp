@@ -58,8 +58,8 @@ flowchart LR
 - ClickUp ya fue integrado con creacion de tareas, comentario conversacional completo y notificacion inicial al vendedor
 - la capa AI oficial es Hormi Atencion en OpenClaw: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
 - `n8n` y PostgreSQL conservan la ejecucion del estado: la AI no escribe directo en PostgreSQL, no crea tareas ClickUp por fuera del workflow y no asigna vendedores por fuera del round robin
-- los secretos reales de OpenClaw, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
-- la configuracion operativa de OpenClaw vive en `docs/openclaw-configuracion.md`
+- los secretos reales de AI, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
+- la configuracion operativa de AI directa vive en `docs/ai-api-directa-configuracion.md`
 - la exposicion publica de webhooks no se implementa todavia; el entorno actual sigue pensado para operacion local controlada
 
 ## Autenticacion de n8n
@@ -70,6 +70,6 @@ En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo d
 
 - validar matriz conversacional completa con AI apagada y AI encendida
 - validar Hormi Atencion con servicios vivos desde el workspace del integrador
-- ejecutar pruebas controladas con `AI_PROVIDER=openclaw` y `OPENCLAW_AGENT=hormi-atencion`
+- ejecutar pruebas controladas con `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
 - validar restore completo en entorno aislado si se requiere recuperacion total
 - documentar estrategia operativa de multiples instancias en `Evolution API`

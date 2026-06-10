@@ -47,12 +47,12 @@ Verificar:
 - instancia `principal` en estado `open`
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
-- para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true`, `AI_PROVIDER=openclaw`, bridge activo y `OPENCLAW_AGENT=hormi-atencion`
+- para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true`, `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
 - para regresion deterministica, `AI_LEAD_ASSISTANT_ENABLED=false`
 
 ## Smoke test local sin servicios reales
 
-El agente QA puede ejecutar esta validacion sin `.env`, OpenClaw real, PostgreSQL, ClickUp ni Evolution:
+El agente QA puede ejecutar esta validacion sin `.env`, proveedor AI real, PostgreSQL, ClickUp ni Evolution:
 
 ```bash
 sh scripts/ops/test-conversation-regression-local.sh

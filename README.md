@@ -20,16 +20,17 @@ Estado implementado:
 - se corrigieron loops conversacionales detectados durante validacion real
 - se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
 - se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
-- se dejo `AI - Lead Qualification Assistant` alineado con OpenClaw y el agente oficial `hormi-atencion` (`Hormi Atencion`)
-- se conecto OpenClaw mediante `scripts/ai/hormi-atencion-bridge.js` y `POST /api/evaluate`
-- `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=openclaw` quedan como valores versionados por defecto
+- se dejo `AI - Lead Qualification Assistant` como capa autonoma controlada para Hormi Atencion
+- se preparo proveedor de API directa con salida JSON estructurada, sin depender de OpenClaw en la ruta por defecto
+- `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=direct_api` quedan como valores versionados por defecto
+- mientras no exista `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`, la IA se omite de forma segura y el flujo cae a logica deterministica
 - se definio la politica actual: Hormi Atencion tiene autonomia conversacional para extraer, responder y habilitar la creacion de lead cuando exista confirmacion; `n8n`/PostgreSQL ejecutan persistencia, ClickUp y asignacion
 - los secretos reales quedan fuera de Git; `.env.example` solo contiene placeholders seguros
 
 Pendiente inmediato:
 
 - sincronizar workflows en la instancia viva y verificar que `WA - Inbound Entry` quede activo
-- levantar el bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion` y el mismo `OPENCLAW_BRIDGE_TOKEN` configurado para `n8n`
+- definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` en `.env`
 - ejecutar baseline deterministico con AI apagada solo como regresion comparativa
 - validar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
 
@@ -68,6 +69,7 @@ scripts/             Utilidades de desarrollo y operacion
 - [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
 - [Operacion local](./docs/operacion-local.md)
 - [Runbook operativo](./docs/runbook-operacion.md)
+- [AI API Directa](./docs/ai-api-directa-configuracion.md)
 - [OpenClaw Configuracion](./docs/openclaw-configuracion.md)
 - [Guia de produccion](./docs/guia-produccion.md)
 
@@ -134,7 +136,7 @@ Orden operativo recomendado:
 4. correr backup y verify restore no destructivo
 5. validar `OPS - Error Handler` con fallo controlado
 6. ejecutar matriz conversacional con `AI_LEAD_ASSISTANT_ENABLED=false`
-7. levantar el bridge OpenClaw en el entorno del integrador con `OPENCLAW_AGENT=hormi-atencion`
+7. cargar `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` solo cuando exista proveedor elegido
 8. verificar que ningun lead se cree sin `servicio + ciudad + requerimiento + confirmacion`
 
 Scripts operativos relevantes:
