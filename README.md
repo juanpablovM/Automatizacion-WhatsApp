@@ -21,7 +21,7 @@ Estado implementado:
 - se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
 - se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
 - se dejo `AI - Lead Qualification Assistant` como capa autonoma controlada para Hormi Atencion
-- se preparo proveedor de API directa con salida JSON estructurada, sin depender de OpenClaw en la ruta por defecto
+- se preparo proveedor de API directa con salida JSON estructurada
 - `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=direct_api` quedan como valores versionados por defecto
 - mientras no exista `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`, la IA se omite de forma segura y el flujo cae a logica deterministica
 - se definio la politica actual: Hormi Atencion tiene autonomia conversacional para extraer, responder y habilitar la creacion de lead cuando exista confirmacion; `n8n`/PostgreSQL ejecutan persistencia, ClickUp y asignacion
@@ -70,7 +70,6 @@ scripts/             Utilidades de desarrollo y operacion
 - [Operacion local](./docs/operacion-local.md)
 - [Runbook operativo](./docs/runbook-operacion.md)
 - [AI API Directa](./docs/ai-api-directa-configuracion.md)
-- [OpenClaw Configuracion](./docs/openclaw-configuracion.md)
 - [Guia de produccion](./docs/guia-produccion.md)
 
 ## Estado real actual

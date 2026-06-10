@@ -369,7 +369,7 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Rotar `EVOLUTION_WEBHOOK_SECRET`
 - [ ] Rotar credenciales de PostgreSQL si fueron usadas en desarrollo
 - [ ] Rotar tokens de ClickUp si corresponde
-- [ ] Rotar `OPENCLAW_BRIDGE_TOKEN` si corresponde
+- [ ] Rotar `AI_DIRECT_API_KEY` si corresponde
 - [ ] Confirmar que `.env` real no se comparte ni se versiona
 - [ ] Confirmar que logs y evidencias no imprimen secretos
 - [ ] Definir responsable de custodiar secretos

@@ -164,7 +164,7 @@ Commit documental:
 
 ## Decision Vigente Sobre AI
 
-Se adopto OpenClaw como IA oficial del proyecto mediante el agente `hormi-atencion` (`Hormi Atencion`).
+Se adopto API directa como proveedor AI oficial del proyecto mediante el agente `Hormi Atencion` (`Hormi Atencion`).
 
 Regla principal:
 

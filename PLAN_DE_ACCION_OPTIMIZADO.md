@@ -1,6 +1,6 @@
 # Plan de Acción Optimizado: CRM WhatsApp Automatizado
-**Versión:** 1.3 (OpenClaw + Hormi Atencion)
-**Objetivo:** Llevar el sistema a producción con máxima confiabilidad, seguridad y el mínimo de complejidad innecesaria, usando OpenClaw como IA oficial para la conversación de WhatsApp.
+**Versión:** 1.3 (API directa + Hormi Atencion)
+**Objetivo:** Llevar el sistema a producción con máxima confiabilidad, seguridad y el mínimo de complejidad innecesaria, usando API directa como proveedor AI oficial para la conversación de WhatsApp.
 
 ---
 
@@ -54,8 +54,8 @@ Hormi Atencion gobierna la conversación asistida, pero no ejecuta directamente 
 
 ---
 
-## Sprint 2: Hormi Atencion en OpenClaw
-*Enfoque: Mejorar comprensión, extracción, respuesta y confirmación usando el agente oficial `hormi-atencion`.*
+## Sprint 2: Hormi Atencion en API directa
+*Enfoque: Mejorar comprensión, extracción, respuesta y confirmación usando el agente oficial `Hormi Atencion`.*
 
 ### 2.1 Sub-workflow `AI - Lead Qualification Assistant`
 - **Acción:** Diseñar e implementar un sub-workflow llamado `AI - Lead Qualification Assistant`.
@@ -96,7 +96,7 @@ Hormi Atencion gobierna la conversación asistida, pero no ejecuta directamente 
 - **Por qué:** Permite mas autonomia conversacional sin saltarse los controles operativos.
 
 ### 2.5 Uso Inicial Recomendado
-- **Acción:** Activar OpenClaw por defecto con `AI_PROVIDER=openclaw` y `OPENCLAW_AGENT=hormi-atencion`.
+- **Acción:** Activar API directa por defecto con `AI_PROVIDER=direct_api` y `AI_DIRECT_API_MODEL=<modelo elegido>`.
 - **Por qué:** El proyecto adopta Hormi Atencion como IA oficial, manteniendo rollback simple con `AI_LEAD_ASSISTANT_ENABLED=false`.
 
 ---

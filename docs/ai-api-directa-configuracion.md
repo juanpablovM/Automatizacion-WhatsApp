@@ -2,7 +2,7 @@
 
 ## Decision vigente
 
-La ruta AI oficial deja de depender de OpenClaw y usa API directa desde `AI - Lead Qualification Assistant`.
+La ruta AI oficial usa API directa desde `AI - Lead Qualification Assistant`.
 
 Hormi Atencion se mantiene como rol conversacional autonomo:
 
@@ -77,13 +77,3 @@ sh scripts/ops/test-ai-assistant-local.sh
 ```
 
 La prueba usa mocks y no llama ninguna API externa.
-
-## OpenClaw legacy
-
-OpenClaw queda como rollback historico si se fuerza:
-
-```bash
-AI_PROVIDER=openclaw
-```
-
-No es la ruta recomendada por latencia y complejidad operativa.

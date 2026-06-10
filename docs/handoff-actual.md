@@ -20,8 +20,8 @@ El proyecto ya tiene implementadas las bases de:
 - separacion entre base interna de `n8n` y base del CRM
 - ClickUp conectado y validado con prueba real
 - migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
-- sub-workflow `AI - Lead Qualification Assistant` alineado con OpenClaw y el agente oficial `hormi-atencion`
-- bridge HTTP local `scripts/ai/hormi-atencion-bridge.js` preparado para Hormi Atencion
+- sub-workflow `AI - Lead Qualification Assistant` alineado con API directa y el agente oficial `Hormi Atencion`
+- llamada HTTP directa `n8n/workflows/ai-lead-qualification-assistant.json` preparado para Hormi Atencion
 
 Estado real validado en la instancia local actual:
 
@@ -61,7 +61,7 @@ Lo que aun falta cerrar por el integrador:
 
 - integrar las ramas de la fase multiagente en el orden definido
 - ejecutar baseline con AI apagada
-- levantar bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion`
+- levantar proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
 - validar Hormi Atencion y matriz conversacional con servicios vivos
 - cerrar completamente el smoke de `OPS - Error Handler`
 - completar la checklist de salida a produccion
@@ -126,12 +126,12 @@ Variables clave ya contempladas:
 - `CLICKUP_TEAM_ID=9013271719`
 - `CLICKUP_CF_*` ya cargados en `.env`
 - `AI_LEAD_ASSISTANT_ENABLED=true` en `.env.example`
-- `AI_PROVIDER=openclaw`
+- `AI_PROVIDER=direct_api`
 - `AI_API_KEY_REQUIRED=false`
-- `OPENCLAW_BRIDGE_URL=http://host.docker.internal:9090`
-- `OPENCLAW_AGENT=hormi-atencion`
-- `OPENCLAW_BRIDGE_TOKEN` real solo debe existir en el workspace del integrador y nunca en Git
-- OpenClaw queda documentado en `docs/openclaw-configuracion.md`
+- `AI_DIRECT_API_BASE_URL=https://api.openai.com/v1`
+- `AI_DIRECT_API_MODEL=<modelo elegido>`
+- `AI_DIRECT_API_KEY` real solo debe existir en el workspace del integrador y nunca en Git
+- API directa queda documentado en `docs/ai-api-directa-configuracion.md`
 
 ## Documentacion clave
 
@@ -146,13 +146,13 @@ Leer al retomar:
 - [`docs/evolution-api.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/evolution-api.md)
 - [`docs/bitacora-validacion-ai.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/bitacora-validacion-ai.md)
 - [`docs/guia-produccion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/guia-produccion.md)
-- [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
+- [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md)
 
 ## Decisiones funcionales ya cerradas
 
 - canal de entrada funcional: WhatsApp
 - proveedor actual elegido: `Evolution API`
-- proveedor AI actual elegido: OpenClaw local con agente `hormi-atencion` (`Hormi Atencion`)
+- proveedor AI actual elegido: API directa con agente `Hormi Atencion` (`Hormi Atencion`)
 - flujo guiado con extraccion de contexto libre
 - preguntas base:
   - servicio
@@ -175,11 +175,11 @@ Leer al retomar:
   - la AI no escribe directamente en PostgreSQL
   - la AI no crea tareas en ClickUp fuera del workflow
   - la AI no asigna vendedores fuera del round robin
-  - si OpenClaw falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
+  - si API directa falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
 - politica de secretos:
   - `.env` real no se commitea ni se comparte entre agentes
   - agentes no integradores trabajan con `.env.example`, samples, mocks y tests locales
-  - el integrador es el unico rol autorizado para usar `OPENCLAW_BRIDGE_TOKEN`, `CLICKUP_API_TOKEN`, `EVOLUTION_API_KEY` y credenciales reales
+  - el integrador es el unico rol autorizado para usar `AI_DIRECT_API_KEY`, `CLICKUP_API_TOKEN`, `EVOLUTION_API_KEY` y credenciales reales
 
 ## Workflows existentes en n8n
 
@@ -236,7 +236,7 @@ Estado real de implementacion:
   - pendiente de cierre fino en smoke test controlado
 - `AI - Lead Qualification Assistant`
   - contrato JSON controlado para extraccion, redaccion y decision confirmada
-  - conectado a OpenClaw mediante `POST /api/evaluate`
+  - conectado a API directa mediante `POST /responses`
   - prueba local con mocks: `sh scripts/ops/test-ai-assistant-local.sh`
   - no usa secretos reales fuera del workspace del integrador
 
@@ -338,19 +338,19 @@ Estado de limpieza de datos de prueba:
    - healthcheck de `n8n`
 2. sincronizar workflows y verificar que `WA - Inbound Entry` quede activo
 3. ejecutar matriz conversacional con AI apagada
-4. levantar el bridge OpenClaw con `OPENCLAW_AGENT=hormi-atencion`
-5. confirmar que `.env` usa el mismo `OPENCLAW_BRIDGE_TOKEN` que el bridge
-6. ejecutar matriz conversacional con AI encendida, incluyendo falla del bridge, baja confianza y respuesta invalida
+4. levantar el proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
+5. confirmar que `.env` usa el mismo `AI_DIRECT_API_KEY` que el proveedor AI
+6. ejecutar matriz conversacional con AI encendida, incluyendo falla del proveedor AI, baja confianza y respuesta invalida
 
 ## Siguiente fase planificada
 
-Esta fase queda registrada para avanzar desde validacion funcional real hacia produccion, usando Hormi Atencion/OpenClaw como IA oficial y manteniendo fallback deterministico.
+Esta fase queda registrada para avanzar desde validacion funcional real hacia produccion, usando Hormi Atencion por API directa como proveedor AI oficial y manteniendo fallback deterministico.
 
 Decision sobre AI:
 
 - se usara Hormi Atencion como asistente de extraccion, clasificacion, redaccion y confirmacion
-- proveedor actual: OpenClaw local
-- agente actual: `hormi-atencion`
+- proveedor actual: API directa
+- agente actual: `Hormi Atencion`
 - la regla operativa es: Hormi Atencion decide la conversacion; `n8n` y PostgreSQL ejecutan
 - la AI no escribe directamente en PostgreSQL
 - la AI no crea tareas en ClickUp fuera del workflow
@@ -427,5 +427,5 @@ Quedan para mas adelante, solo si el uso real lo justifica:
 ## Prompt sugerido para un nuevo chat
 
 ```text
-Continúa este proyecto desde /Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion/OpenClaw decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
+Continúa este proyecto desde /Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
 ```

@@ -19,7 +19,7 @@ Los scripts operativos cargan `.env`. Solo el integrador o la persona a cargo de
 
 - No commitear `.env`, backups, logs ni salidas con secretos.
 - Usar `.env.example` para documentacion, muestras y pruebas mock.
-- Redactar `EVOLUTION_API_KEY`, `EVOLUTION_WEBHOOK_SECRET`, `OPENCLAW_BRIDGE_TOKEN` y tokens de ClickUp en cualquier evidencia.
+- Redactar `EVOLUTION_API_KEY`, `EVOLUTION_WEBHOOK_SECRET`, `AI_DIRECT_API_KEY` y tokens de ClickUp en cualquier evidencia.
 - Antes de exponer webhooks fuera del entorno local, verificar que `EVOLUTION_WEBHOOK_SECRET` exista y que el webhook persistido incluya `token` o `secret`.
 
 ## Healthcheck minimo

@@ -201,10 +201,12 @@ Variables:
 
 ## AI Lead Assistant
 
-La plantilla local mantiene Hormi Atencion/OpenClaw activado por defecto. Para operar localmente, el bridge debe estar corriendo en el host con el mismo token configurado para `n8n`:
+La plantilla local mantiene Hormi Atencion por API directa activado por defecto. Para operar con AI real, configurar API key y modelo en `.env`, y recrear `n8n`:
 
 ```bash
-OPENCLAW_BRIDGE_TOKEN=<redacted> OPENCLAW_AGENT=hormi-atencion node scripts/ai/hormi-atencion-bridge.js
+AI_DIRECT_API_KEY=<redacted>
+AI_DIRECT_API_MODEL=<modelo elegido>
+docker compose --env-file .env up -d n8n
 ```
 
 Para validar el contrato local sin llamar al proveedor real:
@@ -213,14 +215,14 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato OpenClaw. No usa `.env` real ni llama a OpenClaw.
+La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato API directa. No usa `.env` real ni llama al proveedor AI.
 
 Diagnostico de autenticacion:
 
-- `curl http://localhost:9090/health` debe mostrar `auth_configured: true`; si muestra `false`, el bridge se levanto sin `OPENCLAW_BRIDGE_TOKEN`.
-- Un `503` en `POST /api/evaluate` significa que falta `OPENCLAW_BRIDGE_TOKEN` en el proceso del bridge.
-- Un `401` significa que el bridge tiene token, pero `n8n` no envio el mismo valor. Revisar `.env`, recrear `n8n` y confirmar el header `X-OpenClaw-Bridge-Token`.
-- El bridge debe correr en el host cuando usa el binario global de OpenClaw; `n8n` lo alcanza desde Docker por `http://host.docker.internal:9090`.
+- Confirmar que `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` no siguen en `__PENDIENTE__`.
+- Confirmar que `AI_DIRECT_API_BASE_URL` y `AI_DIRECT_API_PATH` apuntan al proveedor elegido.
+- Confirmar que `n8n` fue recreado despues de cambiar `.env`.
+- Si el proveedor devuelve `401`, revisar la API key sin imprimirla en logs.
 
 Guardrails actuales del sub-workflow:
 

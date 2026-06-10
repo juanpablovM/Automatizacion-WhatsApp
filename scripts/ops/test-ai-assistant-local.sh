@@ -91,7 +91,6 @@ node <<'NODE'
         calls += 1;
         expectEqual(options.url, 'https://api.openai.com/v1/responses', `${scenario.name} URL`);
         expectEqual(options.headers.Authorization, 'Bearer test-direct-api-key', `${scenario.name} Authorization`);
-        expectEqual(Boolean(options.headers['X-OpenClaw-Bridge-Token']), false, `${scenario.name} no usa bridge token`);
         expectEqual(options.timeout, 8000, `${scenario.name} timeout`);
         return {
           statusCode: scenario.statusCode || 200,

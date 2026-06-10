@@ -64,7 +64,7 @@ Se usa primero una capa simple y explicable con `Code`:
 - normalizacion basica de ciudad
 - consolidacion de campos ya detectados
 
-### Capa 2: Hormi Atencion en OpenClaw
+### Capa 2: Hormi Atencion en API directa
 
 Queda implementada como sub-workflow independiente y apagable para regresiones:
 
@@ -73,7 +73,7 @@ Queda implementada como sub-workflow independiente y apagable para regresiones:
 - devolver estructura JSON controlada
 - responder de forma natural cuando el agente tiene confianza suficiente
 - habilitar la creacion de lead solo cuando el usuario confirma y existen los datos minimos
-- usar OpenClaw local con el agente `hormi-atencion`
+- usar API directa con el agente `Hormi Atencion`
 
 Regla:
 
@@ -198,7 +198,6 @@ Estado:
 - proveedor versionado: `AI_PROVIDER=direct_api`
 - requiere `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` para llamar al proveedor real
 - con placeholders pendientes, omite IA con `ai_skip_reason=missing_api_config` y mantiene fallback deterministico
-- OpenClaw queda solo como modo legacy si se fuerza `AI_PROVIDER=openclaw`
 - no escribe directo en PostgreSQL
 - no crea tareas ClickUp fuera del workflow
 - no asigna vendedores fuera del round robin

@@ -26,7 +26,7 @@ La arquitectura local ya fue implementada y validada funcionalmente con mensajes
 - `Redis` como dependencia operativa de `Evolution API`
 - ClickUp como CRM operativo de leads
 - ClickUp como canal interno inicial de notificacion al vendedor
-- OpenClaw local como proveedor AI oficial mediante bridge HTTP y agente `hormi-atencion` (`Hormi Atencion`)
+- API directa como proveedor AI oficial para el rol conversacional `Hormi Atencion`
 
 ## Topologia local actual
 
@@ -39,7 +39,7 @@ flowchart LR
     EVO --> REDIS["Contenedor Redis"]
     EVO --> PG
     N8N --> CU["ClickUp API"]
-    N8N -.->|AI oficial<br/>Hormi Atencion| OC["OpenClaw local<br/>Bridge HTTP"]
+    N8N -.->|AI oficial<br/>Hormi Atencion| OC["API directa<br/>Proveedor AI HTTP"]
     WA["WhatsApp real"] --> EVO
     EVO --> N8N
 ```
@@ -56,7 +56,7 @@ flowchart LR
 - `infra/postgres/init/` queda montado para scripts iniciales si luego se usan
 - el webhook actual funciona localmente desde `Evolution API` hacia `n8n` usando `host.docker.internal`
 - ClickUp ya fue integrado con creacion de tareas, comentario conversacional completo y notificacion inicial al vendedor
-- la capa AI oficial es Hormi Atencion en OpenClaw: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
+- la capa AI oficial es Hormi Atencion en API directa: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
 - `n8n` y PostgreSQL conservan la ejecucion del estado: la AI no escribe directo en PostgreSQL, no crea tareas ClickUp por fuera del workflow y no asigna vendedores por fuera del round robin
 - los secretos reales de AI, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
 - la configuracion operativa de AI directa vive en `docs/ai-api-directa-configuracion.md`

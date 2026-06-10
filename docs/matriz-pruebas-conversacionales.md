@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Validar que el flujo conversacional sigue funcionando con `AI - Lead Qualification Assistant` conectado a OpenClaw y al agente `hormi-atencion`. La matriz mantiene los casos base `CP-01` a `CP-12` y agrega regresiones especificas de AI sin cambiar la regla principal: el lead solo se crea cuando existen `servicio + ciudad + requerimiento + confirmacion`.
+Validar que el flujo conversacional sigue funcionando con `AI - Lead Qualification Assistant` conectado a API directa y al agente `Hormi Atencion`. La matriz mantiene los casos base `CP-01` a `CP-12` y agrega regresiones especificas de AI sin cambiar la regla principal: el lead solo se crea cuando existen `servicio + ciudad + requerimiento + confirmacion`.
 
 Hormi Atencion puede extraer campos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma. `n8n` y PostgreSQL siguen ejecutando el estado, la creacion del lead, ClickUp y la asignacion.
 
@@ -166,8 +166,8 @@ Un caso pasa si:
 
 | ID | Caso | Entrada | Resultado esperado | Guardrail |
 | --- | --- | --- | --- | --- |
-| AI-01 | AI apagada | CP-02 con `AI_LEAD_ASSISTANT_ENABLED=false` | Resultado equivalente al flujo deterministico: campos detectados y confirmacion solicitada, sin lead. | No debe existir dependencia del bridge OpenClaw. |
-| AI-02 | Hormi Atencion completa campos | CP-02 con OpenClaw devolviendo JSON valido, `confidence>=0.75`, campos claros y `should_create_lead=false` | El orquestador puede usar campos sugeridos y respuesta asistida; queda en confirmacion, sin crear lead. | No crea lead antes de confirmacion. |
+| AI-01 | AI apagada | CP-02 con `AI_LEAD_ASSISTANT_ENABLED=false` | Resultado equivalente al flujo deterministico: campos detectados y confirmacion solicitada, sin lead. | No debe existir dependencia del proveedor AI API directa. |
+| AI-02 | Hormi Atencion completa campos | CP-02 con API directa devolviendo JSON valido, `confidence>=0.75`, campos claros y `should_create_lead=false` | El orquestador puede usar campos sugeridos y respuesta asistida; queda en confirmacion, sin crear lead. | No crea lead antes de confirmacion. |
 | AI-03 | AI invalida o falla | CP-02 con timeout, HTTP error o JSON invalido | El orquestador ignora AI, deja auditoria de falla y usa logica deterministica. | No debe bloquear la conversacion ni crear lead. |
 | AI-04 | AI baja confianza | `Algo para la casa` con `confidence<0.75` | No acepta campos sugeridos por AI; pide aclaracion deterministica. | Campos no confirmados no se sobrescriben. |
 | AI-05 | Correccion del usuario | En confirmacion: `No, es en Valparaiso y para instalar porcelanato` | Actualiza solo los campos corregidos explicitamente, vuelve a confirmar y no crea lead hasta nuevo `Si`. | Datos confirmados no se sobrescriben salvo correccion explicita. |

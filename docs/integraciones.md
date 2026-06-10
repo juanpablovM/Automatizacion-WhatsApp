@@ -36,15 +36,9 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - integracion AI oficial mediante llamada directa desde `n8n`
 - usa el rol conversacional `Hormi Atencion`
 - devuelve JSON estructurado con intencion, campos, respuesta sugerida y decision de lead
-- no requiere bridge local ni agente OpenClaw en la ruta por defecto
+- no requiere procesos locales adicionales para la capa AI
 - estado actual: preparado en codigo, con placeholders hasta cargar API key/modelo
 - guia vigente: [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md)
-
-### OpenClaw local legacy
-
-- queda disponible solo como rollback si se fuerza `AI_PROVIDER=openclaw`
-- requiere `OPENCLAW_BRIDGE_TOKEN` y bridge HTTP local
-- guia historica: [`docs/openclaw-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/openclaw-configuracion.md)
 
 ## Placeholders definidos
 
