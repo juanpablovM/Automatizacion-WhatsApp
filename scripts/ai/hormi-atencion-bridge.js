@@ -16,6 +16,7 @@ const path = require('path');
 const PORT = Number(process.env.OPENCLAW_BRIDGE_PORT || 9090);
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN || '/home/agentesai/.npm-global/bin/openclaw';
 const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || 'hormi-atencion';
+const OPENCLAW_MODEL = safe(process.env.OPENCLAW_MODEL);
 const OPENCLAW_TIMEOUT_SECONDS = Number(process.env.OPENCLAW_TIMEOUT_SECONDS || 25);
 const AGENT_TIMEOUT = Number(process.env.OPENCLAW_PROCESS_TIMEOUT_MS || 30000);
 const BRIDGE_TOKEN = safe(process.env.OPENCLAW_BRIDGE_TOKEN);
@@ -77,7 +78,7 @@ function runOpenClawAgent(data) {
   return new Promise((resolve, reject) => {
     const message = safe(data.message);
     const context = safe(data.context);
-    const model = safe(data.model);
+    const model = safe(data.model) || OPENCLAW_MODEL;
     const timeoutSeconds = Number(data.timeout_seconds || OPENCLAW_TIMEOUT_SECONDS);
     const fullPrompt = context
       ? `[CONTEXT]\n${context}\n[/CONTEXT]\n\n[MESSAGE]\n${message}\n[/MESSAGE]`
