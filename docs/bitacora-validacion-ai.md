@@ -7,7 +7,7 @@ Documentar los cambios realizados durante la validacion real del CRM WhatsApp Au
 Este documento complementa:
 
 - [`docs/handoff-actual.md`](./handoff-actual.md)
-- [`PLAN_DE_ACCION_OPTIMIZADO.md`](../PLAN_DE_ACCION_OPTIMIZADO.md)
+- [`docs/archive/PLAN_DE_ACCION_OPTIMIZADO.md`](./archive/PLAN_DE_ACCION_OPTIMIZADO.md), como referencia historica
 - [`docs/n8n-workflows.md`](./n8n-workflows.md)
 
 ## Estado Antes de Esta Iteracion
@@ -19,7 +19,7 @@ El proyecto ya tenia:
 - base CRM separada de la base interna de `n8n`
 - workflows reales versionados
 - ClickUp configurado y validado con una prueba previa
-- plan optimizado documentado para avanzar hacia produccion
+- plan optimizado historico documentado para avanzar hacia produccion
 
 Lo que faltaba validar era el flujo real completo con WhatsApp conectado.
 

@@ -1,4 +1,8 @@
 # Plan de Acción Optimizado: CRM WhatsApp Automatizado
+
+> Documento historico. No usar como fuente operativa vigente.
+> La hoja de ruta actual vive en `docs/guia-produccion.md`, y el estado vigente en `README.md` y `docs/handoff-actual.md`.
+
 **Versión:** 1.3 (API directa + Hormi Atencion)
 **Objetivo:** Llevar el sistema a producción con máxima confiabilidad, seguridad y el mínimo de complejidad innecesaria, usando API directa como proveedor AI oficial para la conversación de WhatsApp.
 
