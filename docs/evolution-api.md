@@ -14,6 +14,8 @@ Documentar la adaptacion del proyecto para usar `Evolution API` como capa de Wha
 
 - `Evolution API`: `http://127.0.0.1:8080`
 
+El compose publica el puerto configurado en `EVOLUTION_API_PORT` sobre `0.0.0.0`. En local se usa `127.0.0.1`; antes de staging o produccion se debe restringir la exposicion con firewall/proxy.
+
 ## Estado actual
 
 La integracion con `Evolution API` ya fue validada con WhatsApp real.
@@ -22,9 +24,9 @@ Estado observado en la ultima validacion:
 
 - imagen configurada: `evoapicloud/evolution-api:v2.3.7`
 - runtime API: `2.3.7`
-- instancia default: `principal`
-- estado de `principal`: `open`
-- webhook persistido hacia `n8n`
+- instancia default versionada: `wahormiglass`
+- estado esperado de `wahormiglass`: `open`
+- webhook persistido hacia `WA - Inbound Entry`
 - evento operativo: `MESSAGES_UPSERT`
 
 El script `scripts/dev/evolution-doctor.sh` es la forma recomendada de confirmar este estado antes de una prueba.
@@ -75,18 +77,17 @@ Este script valida:
 
 `Evolution API` debe apuntar a:
 
-- `http://host.docker.internal:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
+- `http://n8n:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 
-Este valor funciona bien en Docker Desktop para macOS porque `Evolution API` puede alcanzar el puerto publicado de `n8n` a traves de `host.docker.internal`, sin exponer el webhook a internet.
-En Docker Compose local tambien puede usarse `http://n8n:5678/...`. El ID real se obtiene despues de sincronizar workflows; no reutilices IDs de instalaciones anteriores.
+Este valor usa la red interna de Docker Compose y evita depender del puerto publicado del host. Si se opera fuera de esa red, tambien puede usarse `http://host.docker.internal:5678/...` en Docker Desktop. El ID real se obtiene despues de sincronizar workflows; no reutilices IDs de instalaciones anteriores.
 
-La validacion del secreto queda inactiva si `EVOLUTION_WEBHOOK_SECRET` esta vacio. En el entorno local actual ya quedo configurado un valor real en `.env` y el webhook de `principal` fue repersistido con `?token=<redacted>`.
+La validacion del secreto queda inactiva si `EVOLUTION_WEBHOOK_SECRET` esta vacio. En `.env.example` ya queda definido `EVOLUTION_WEBHOOK_SECRET=__GENERAR_VALOR_SEGURO__`; el valor real debe vivir solo en `.env` y el webhook persistido debe incluir `?token=<redacted>` o header equivalente.
 
 ## Estrategia de instancias
 
 - una instancia representa un numero conectado
 - el proyecto deja una instancia por defecto:
-  - `principal`
+  - `wahormiglass`
 - a futuro pueden coexistir varias instancias sin cambiar la logica CRM
 
 ## Scripts incluidos
@@ -160,13 +161,13 @@ Por defecto:
 
 - `MESSAGES_UPSERT`
 
-Este evento alimenta el workflow [`WA - Inbound Entry`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows/wa-inbound-entry.json).
+Este evento alimenta el workflow [`WA - Inbound Entry`](../n8n/workflows/wa-inbound-entry.json).
 
 ## Workflows adaptados
 
-- [`WA - Inbound Entry`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows/wa-inbound-entry.json)
-- [`WA - Conversation Orchestrator`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows/wa-conversation-orchestrator.json)
-- [`WA - Outbound Messages`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows/wa-outbound-messages.json)
+- [`WA - Inbound Entry`](../n8n/workflows/wa-inbound-entry.json)
+- [`WA - Conversation Orchestrator`](../n8n/workflows/wa-conversation-orchestrator.json)
+- [`WA - Outbound Messages`](../n8n/workflows/wa-outbound-messages.json)
 
 ## Cambio de alcance
 

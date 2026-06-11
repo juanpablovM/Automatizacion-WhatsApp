@@ -6,7 +6,7 @@ Permitir retomar el proyecto en un chat nuevo sin depender del historial convers
 
 ## Ruta del proyecto
 
-- `/Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado`
+- `/home/agentesai/Automatizacion-WhatsApp`
 
 ## Estado actual del proyecto
 
@@ -59,7 +59,6 @@ Hoy el proyecto ya tiene:
 
 Lo que aun falta cerrar por el integrador:
 
-- integrar las ramas de la fase multiagente en el orden definido
 - ejecutar baseline con AI apagada
 - levantar proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
 - validar Hormi Atencion y matriz conversacional con servicios vivos
@@ -114,9 +113,7 @@ Variables clave ya contempladas:
 - `EVOLUTION_SERVER_URL=http://localhost:8080`
 - `EVOLUTION_API_BASE_URL=http://evolution-api:8080`
 - `EVOLUTION_API_KEY=...`
-- `EVOLUTION_DEFAULT_INSTANCE=principal`
-- estado real actual en el workspace local:
-  - `EVOLUTION_DEFAULT_INSTANCE=wahormiglass`
+- `EVOLUTION_DEFAULT_INSTANCE=wahormiglass`
 - `EVOLUTION_WEBHOOK_SECRET=...`
 - `EVOLUTION_WEBHOOK_URL=http://n8n:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
 - `EVOLUTION_REDIS_ENABLED=true`
@@ -127,8 +124,9 @@ Variables clave ya contempladas:
 - `CLICKUP_CF_*` ya cargados en `.env`
 - `AI_LEAD_ASSISTANT_ENABLED=true` en `.env.example`
 - `AI_PROVIDER=direct_api`
-- `AI_API_KEY_REQUIRED=false`
+- `AI_API_KEY_REQUIRED=true`
 - `AI_DIRECT_API_BASE_URL=https://api.openai.com/v1`
+- `AI_DIRECT_API_PATH=/chat/completions` en `.env.example`; el workflow tambien soporta `/responses`
 - `AI_DIRECT_API_MODEL=<modelo elegido>`
 - `AI_DIRECT_API_KEY` real solo debe existir en el workspace del integrador y nunca en Git
 - API directa queda documentado en `docs/ai-api-directa-configuracion.md`
@@ -137,16 +135,16 @@ Variables clave ya contempladas:
 
 Leer al retomar:
 
-- [`README.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/README.md)
-- [`docs/arquitectura.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/arquitectura.md)
-- [`docs/flujo-leads.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/flujo-leads.md)
-- [`docs/base-de-datos.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/base-de-datos.md)
-- [`docs/n8n-workflows.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/n8n-workflows.md)
-- [`docs/clickup-configuracion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/clickup-configuracion.md)
-- [`docs/evolution-api.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/evolution-api.md)
-- [`docs/bitacora-validacion-ai.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/bitacora-validacion-ai.md)
-- [`docs/guia-produccion.md`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/docs/guia-produccion.md)
-- [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md)
+- [`README.md`](../README.md)
+- [`docs/arquitectura.md`](./arquitectura.md)
+- [`docs/flujo-leads.md`](./flujo-leads.md)
+- [`docs/base-de-datos.md`](./base-de-datos.md)
+- [`docs/n8n-workflows.md`](./n8n-workflows.md)
+- [`docs/clickup-configuracion.md`](./clickup-configuracion.md)
+- [`docs/evolution-api.md`](./evolution-api.md)
+- [`docs/bitacora-validacion-ai.md`](./bitacora-validacion-ai.md)
+- [`docs/guia-produccion.md`](./guia-produccion.md)
+- [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md)
 
 ## Decisiones funcionales ya cerradas
 
@@ -196,7 +194,7 @@ Ya importados:
 
 JSON versionados en:
 
-- [`n8n/workflows/`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows)
+- [`n8n/workflows/`](../n8n/workflows)
 
 Sincronizacion recomendada:
 
@@ -236,7 +234,8 @@ Estado real de implementacion:
   - pendiente de cierre fino en smoke test controlado
 - `AI - Lead Qualification Assistant`
   - contrato JSON controlado para extraccion, redaccion y decision confirmada
-  - conectado a API directa mediante `POST /responses`
+  - conectado a API directa mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
+  - `.env.example` usa `/chat/completions`; el workflow tambien soporta `/responses`
   - prueba local con mocks: `sh scripts/ops/test-ai-assistant-local.sh`
   - no usa secretos reales fuera del workspace del integrador
 
@@ -263,7 +262,7 @@ Estado actual:
 
 Workflow auxiliar temporal:
 
-- [`n8n/workflows/test-clickup-sync-smoke.json`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/n8n/workflows/test-clickup-sync-smoke.json)
+- [`n8n/workflows/test-clickup-sync-smoke.json`](../n8n/workflows/test-clickup-sync-smoke.json)
 
 ## Evolution API
 
@@ -271,13 +270,13 @@ Estado actual:
 
 - `docker-compose.yml` ya incluye `redis` y `evolution-api`
 - `.env` y `.env.example` ya fueron adaptados
-- instancia `principal` ya creada con exito en `Evolution API`
-- instancia `principal` ya conectada y en estado `open`
-- webhook de `principal` ya persistido apuntando a `host.docker.internal`
+- instancia `wahormiglass` definida como default versionado
+- instancia `wahormiglass` conectada y validada en estado `open` durante la ultima validacion
+- webhook de `wahormiglass` persistido hacia `WA - Inbound Entry`
 - scripts listos:
-  - [`scripts/dev/evolution-create-instance.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-create-instance.sh)
-  - [`scripts/dev/evolution-connect-instance.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-connect-instance.sh)
-  - [`scripts/dev/evolution-set-webhook.sh`](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/scripts/dev/evolution-set-webhook.sh)
+  - [`scripts/dev/evolution-create-instance.sh`](../scripts/dev/evolution-create-instance.sh)
+  - [`scripts/dev/evolution-connect-instance.sh`](../scripts/dev/evolution-connect-instance.sh)
+  - [`scripts/dev/evolution-set-webhook.sh`](../scripts/dev/evolution-set-webhook.sh)
 
 Pendiente:
 
@@ -427,5 +426,5 @@ Quedan para mas adelante, solo si el uso real lo justifica:
 ## Prompt sugerido para un nuevo chat
 
 ```text
-Continúa este proyecto desde /Users/juanpablovonmarttens/Documents/Automatización /crm-whatsapp-automatizado. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
+Continua este proyecto desde /home/agentesai/Automatizacion-WhatsApp. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
 ```

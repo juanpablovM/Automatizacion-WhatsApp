@@ -44,7 +44,7 @@ Verificar:
 - `postgres` healthy
 - `redis` healthy
 - `evolution-api` corriendo
-- instancia `principal` en estado `open`
+- instancia `wahormiglass` en estado `open`, o la instancia definida en `EVOLUTION_DEFAULT_INSTANCE`
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
 - para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true`, `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
@@ -123,8 +123,8 @@ ORDER BY direction, delivery_status;
 ```
 
 ```sql
-SELECT entity_type, entity_id, event_type, status, created_at, details
-FROM operational_audits
+SELECT entity_type, entity_id, event_name, result, created_at, metadata
+FROM audit_logs
 ORDER BY id DESC
 LIMIT 30;
 ```
@@ -228,7 +228,7 @@ docker compose --env-file .env ps
 | 2026-04-26 16:24 -04 | CP-10 | N/A | 56900002029 | 12 | 24 | 86ah3pba6 | Valentina Rojas | OK con observacion | `continuar con la anterior` recupero datos del lead 24 y volvio a pedir confirmacion. No creo lead nuevo en ese paso. |
 | 2026-04-26 16:27 -04 | CP-11 | N/A | 56900002035 | 18 |  |  |  | OK | Imagen simulada con caption registro metadata y continuo flujo sin crear lead. |
 | 2026-04-26 16:25 -04 | CP-12 | N/A | 120363000000000000 |  |  |  |  | OK | Evento de grupo fue no procesable y no creo conversacion ni lead. |
-| Pendiente | AI-01 | Off |  |  |  |  |  | Pendiente | Ejecutar despues de integrar feature flag en orquestador. |
+| Pendiente | AI-01 | Off |  |  |  |  |  | Pendiente | Ejecutar como baseline deterministico con el feature flag apagado. |
 | Pendiente | AI-02 | On valida |  |  |  |  |  | Pendiente | Requiere mock local o ejecucion real controlada por integrador. |
 | Pendiente | AI-03 | On invalida/falla |  |  |  |  |  | Pendiente | Debe dejar auditoria y fallback deterministico. |
 | Pendiente | AI-04 | On baja confianza |  |  |  |  |  | Pendiente | Debe rechazar campos sugeridos por AI. |

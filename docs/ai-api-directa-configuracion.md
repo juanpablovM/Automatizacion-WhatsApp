@@ -36,6 +36,11 @@ AI_DIRECT_API_TEMPERATURE=0.2
 AI_DIRECT_API_MAX_TOKENS=700
 ```
 
+El workflow soporta dos formas de API directa:
+
+- `/chat/completions`, valor versionado en `.env.example`
+- `/responses`, usado por el test local de contrato con mocks y disponible si el proveedor elegido lo requiere
+
 Para activar con proveedor real:
 
 ```bash
@@ -61,7 +66,7 @@ La API debe devolver un objeto JSON compatible con:
 - `reply_text`
 - `clickup_summary`
 
-El workflow acepta respuestas desde `output_text`, `choices[].message.content`, `reply`, `payloads[].text` o texto final compatible.
+El workflow acepta respuestas desde `choices[].message.content`, `output_text`, `reply`, `payloads[].text` o texto final compatible.
 
 ## Guardrails
 

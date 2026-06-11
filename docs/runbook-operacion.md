@@ -207,7 +207,7 @@ Estado real actual:
 
 - Persisten lineas historicas en logs de `n8n` asociadas a webhooks viejos. No corresponden a la configuracion activa actual.
 - El flujo principal de WhatsApp ya fue validado nuevamente con una conversacion real completa.
-- La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/guia-produccion.md).
+- La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](./guia-produccion.md).
 
 ## Reconectar Evolution API por QR
 
@@ -239,7 +239,7 @@ sh scripts/dev/evolution-set-webhook.sh
 Checklist:
 
 - Instancia default existe y queda en estado `open`.
-- Webhook queda persistido hacia `host.docker.internal:5678`.
+- Webhook queda persistido hacia la URL definida en `EVOLUTION_WEBHOOK_URL`; la plantilla actual usa `http://n8n:5678/...` dentro de la red Docker, y `host.docker.internal:5678` queda como alternativa para llamar al puerto publicado del host.
 - La URL impresa por `evolution-set-webhook.sh` no muestra secretos reales.
 - Evento configurado: `MESSAGES_UPSERT`, salvo cambio deliberado.
 - No eliminar la instancia ni volumenes para reconectar, a menos que se haya decidido resetear la sesion.
@@ -270,18 +270,20 @@ AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=direct_api
 AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
-AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=<redacted>
 AI_DIRECT_API_MODEL=<modelo elegido>
 AI_DIRECT_API_TIMEOUT_MS=8000
 docker compose --env-file .env up -d n8n
 ```
 
+`AI - Lead Qualification Assistant` soporta tanto `/chat/completions` como `/responses`; mantener el valor de `.env` alineado con el proveedor elegido.
+
 Checklist antes de activar:
 
 - API key vigente y no expuesta en Git.
 - Modelo definido en `AI_DIRECT_API_MODEL`.
-- Revisar [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
+- Revisar [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
 - Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.

@@ -164,7 +164,9 @@ Uso de AI:
 
 Responsabilidad:
 
-- llamar al proveedor AI directo configurado, por defecto `POST /responses`
+- llamar al proveedor AI directo configurado mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
+- usar `/chat/completions` como valor versionado en `.env.example`
+- soportar tambien `/responses` cuando el proveedor elegido lo requiera
 - extraer intencion, calidad del lead, servicio, ciudad y requerimiento
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
@@ -295,7 +297,6 @@ Salida:
 
 Nodos principales:
 
-- `HTTP Request`
 - `Code`
 - `Postgres`
 - `Merge`
@@ -303,6 +304,7 @@ Nodos principales:
 Notas:
 
 - los custom fields se parametrizan por variables `CLICKUP_*`
+- las llamadas a ClickUp se realizan desde nodos `Code` con retry/backoff y no desde nodos `HTTP Request`
 - la salida final pasa por `Create Conversation Comment If Present`, que conserva el payload aunque el comentario se salte o falle
 - la creacion de tarea y el comentario conversacional completo tienen reintentos con backoff para estados reintentables
 - la creacion de tareas fue validada con ClickUp real
@@ -376,7 +378,6 @@ Estado:
 
 - `Webhook`
 - `Respond to Webhook`
-- `HTTP Request`
 - `Execute Workflow`
 - `Postgres`
 - `Merge`
@@ -412,6 +413,7 @@ Estado:
 - credencial PostgreSQL `Postgres CRM App Local`
 - variables de entorno para llamadas HTTP hacia `Evolution API`
 - variables de entorno para llamadas HTTP hacia ClickUp API
+- variables de entorno para llamadas HTTP hacia API directa AI
 
 ## Conexion PostgreSQL desde n8n
 
@@ -463,10 +465,10 @@ El script tambien configura `OPS - Error Handler` como `errorWorkflow` de todos 
 
 Las queries versionadas para los nodos `Postgres` viven en:
 
-- [db/queries/n8n/README.md](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/README.md)
-- [db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql)
-- [db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql)
-- [db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql](/Users/juanpablovonmarttens/Documents/Automatización%20/crm-whatsapp-automatizado/db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql)
+- [db/queries/n8n/README.md](../db/queries/n8n/README.md)
+- [db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql](../db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql)
+- [db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql](../db/queries/n8n/crm-lead-creation-and-assignment/04_assign_next_seller.sql)
+- [db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql](../db/queries/n8n/crm-clickup-sync-lead/01_load_clickup_task_context.sql)
 
 Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
@@ -491,7 +493,7 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 
 ## Lo que queda para la siguiente fase
 
-- sincronizar workflows versionados en la instancia viva y confirmar que `WA - Inbound Entry` queda activo
+- repetir preflight/sync despues de cambios y confirmar que `WA - Inbound Entry` queda activo
 - ejecutar baseline con AI apagada como comparacion
 - definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` solo en `.env`
 - validar `AI - Lead Qualification Assistant` con mocks y luego con proveedor real controlado

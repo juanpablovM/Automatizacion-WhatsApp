@@ -32,7 +32,7 @@ La arquitectura local ya fue implementada y validada funcionalmente con mensajes
 
 ```mermaid
 flowchart LR
-    User["Tu Mac"] --> Browser["Navegador<br/>127.0.0.1:5678"]
+    User["Operador"] --> Browser["Navegador<br/>127.0.0.1:5678"]
     Browser --> N8N["Contenedor n8n"]
     N8N --> PG["Contenedor PostgreSQL"]
     N8N --> EVO["Contenedor Evolution API"]
@@ -48,19 +48,19 @@ flowchart LR
 
 - `n8n` y `PostgreSQL` corren en contenedores Docker, sin instalacion nativa en macOS.
 - `Evolution API` y `Redis` se agregan como servicios locales del stack.
-- ambos servicios publican puertos solo en `127.0.0.1`
+- el `docker-compose.yml` actual publica puertos en `0.0.0.0` para operacion local simple; en staging/produccion debe restringirse con firewall, reverse proxy y redes privadas
 - la persistencia usa volumenes nombrados de Docker
 - `PostgreSQL` expone `5433` localmente para facilitar inspeccion futura
 - `n8n` usa `PostgreSQL` como base principal desde el inicio
 - `Evolution API` usa una base separada dentro del mismo servidor PostgreSQL
 - `infra/postgres/init/` queda montado para scripts iniciales si luego se usan
-- el webhook actual funciona localmente desde `Evolution API` hacia `n8n` usando `host.docker.internal`
+- el webhook versionado en `.env.example` usa la red interna de Docker con `http://n8n:5678/...`; `host.docker.internal` queda como alternativa cuando se necesite llamar al puerto publicado del host
 - ClickUp ya fue integrado con creacion de tareas, comentario conversacional completo y notificacion inicial al vendedor
 - la capa AI oficial es Hormi Atencion en API directa: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
 - `n8n` y PostgreSQL conservan la ejecucion del estado: la AI no escribe directo en PostgreSQL, no crea tareas ClickUp por fuera del workflow y no asigna vendedores por fuera del round robin
 - los secretos reales de AI, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
 - la configuracion operativa de AI directa vive en `docs/ai-api-directa-configuracion.md`
-- la exposicion publica de webhooks no se implementa todavia; el entorno actual sigue pensado para operacion local controlada
+- la exposicion publica de webhooks no se implementa todavia; antes de abrir trafico real deben quedar cerrados proxy, HTTPS, firewall y secreto del webhook
 
 ## Autenticacion de n8n
 

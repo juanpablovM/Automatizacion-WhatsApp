@@ -19,7 +19,7 @@ No necesitas instalar `n8n` ni `PostgreSQL` de forma nativa.
 - `PostgreSQL`: `127.0.0.1:5433`
 - `Evolution API`: `http://127.0.0.1:8080`
 
-Los puertos publicados quedan ligados a `127.0.0.1`, por lo que son accesibles desde tu Mac y no quedan expuestos publicamente por defecto.
+El `docker-compose.yml` publica estos puertos en `0.0.0.0` mediante variables de entorno. En una maquina local se consumen por `127.0.0.1`; antes de mover el stack a staging o produccion hay que restringirlos con firewall, redes privadas y reverse proxy.
 
 Nota:
 
@@ -42,7 +42,7 @@ Esta separacion mantiene desacopladas:
 1. Entra al proyecto:
 
 ```bash
-cd /Users/juanpablovonmarttens/Documents/Automatización\ /crm-whatsapp-automatizado
+cd /home/agentesai/Automatizacion-WhatsApp
 ```
 
 2. Crea tu archivo local de entorno:
@@ -187,7 +187,7 @@ Para validar que `OPS - Error Handler` recibe fallos reales desde n8n:
 sh scripts/ops/test-error-handler.sh
 ```
 
-El script envia un evento sintetico autorizado con timestamp invalido, espera la auditoria y muestra los ultimos errores registrados.
+El script envia un evento sintetico autorizado con la bandera interna `__force_error_handler_test`, espera la auditoria y muestra los ultimos errores registrados.
 
 ## Reintentos HTTP externos
 
@@ -238,13 +238,15 @@ AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=direct_api
 AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
-AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
 AI_DIRECT_API_MODEL=__PENDIENTE__
 AI_DIRECT_API_TIMEOUT_MS=8000
 ```
 
-La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
+El sub-workflow tambien soporta `/responses`; el valor versionado en `.env.example` es `/chat/completions`, mientras que el test local de contrato ejercita `/responses` con mocks.
+
+La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 
 Rollback operativo:
 

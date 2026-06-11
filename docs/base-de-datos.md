@@ -12,6 +12,7 @@ La arquitectura de persistencia queda separada asi:
 
 - `crm_whatsapp`: base interna de `n8n`
 - `crm_whatsapp_app`: base del CRM y la automatizacion de negocio
+- `evolution_api`: base tecnica usada por `Evolution API`
 
 ## Principios aplicados
 
@@ -55,6 +56,10 @@ La arquitectura de persistencia queda separada asi:
 
 - `001_lead_statuses.sql`
 - `002_conversation_statuses.sql`
+- `003_sellers.example.sql`
+- `004_whatsapp_numbers.example.sql`
+
+Los seeds `003` y `004` son ejemplos operativos; antes de produccion deben reemplazarse o revisarse con datos reales.
 
 ## Dominios cubiertos por la base actual
 
@@ -212,5 +217,5 @@ Estos comandos suponen que mantienes los valores por defecto de `.env` para:
 - cargar `clickup_user_id` real en cada vendedor activo que deba recibir leads
 - definir marca formal para excluir datos de validacion en metricas comerciales
 - cargar o documentar numeros reales de WhatsApp si se operaran multiples numeros
-- documentar consultas operativas iniciales
+- ampliar consultas operativas iniciales mas alla de readiness ClickUp/round robin
 - probar restore desde los backups generados por `scripts/ops/backup-local.sh`; existe verificacion no destructiva en `scripts/ops/verify-backup-local.sh`

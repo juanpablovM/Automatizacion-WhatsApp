@@ -211,6 +211,7 @@ Salida prevista en JSON estructurado:
 - `city`
 - `requirement`
 - `missing_fields`
+- `confirmation_status`
 - `should_create_lead`
 - `needs_confirmation`
 - `confidence`
@@ -219,11 +220,11 @@ Salida prevista en JSON estructurado:
 
 ## Estado Actual del Proyecto
 
-El flujo real ya funciona a nivel funcional inicial.
+El flujo real ya funciona a nivel funcional inicial y la documentacion operativa vigente vive en `README.md`, `docs/handoff-actual.md` y `docs/guia-produccion.md`.
 
 Completado:
 
-- WhatsApp conectado via `Evolution API`
+- WhatsApp conectado via `Evolution API`; la instancia default versionada actual es `wahormiglass`
 - workflows sincronizados y activos donde corresponde
 - conversacion real validada
 - creacion de leads validada
@@ -231,20 +232,20 @@ Completado:
 - asignacion de vendedores validada
 - datos de prueba identificados y marcados/gestionados
 - decision AI documentada
+- `AI - Lead Qualification Assistant` implementado como sub-workflow controlado
+- `.env.example` preparado con API directa y fallback seguro cuando faltan key/modelo
 
 Pendiente inmediato:
 
-1. ejecutar una matriz corta de pruebas conversacionales con casos variados
-2. implementar seguridad y recuperacion minima:
-   - proteccion del webhook
-   - backup de PostgreSQL
-   - backup del volumen de `n8n`
-   - prueba controlada de `OPS - Error Handler`
-3. iniciar `AI - Lead Qualification Assistant` como capa controlada
+1. ejecutar baseline deterministico con `AI_LEAD_ASSISTANT_ENABLED=false`
+2. cerrar completamente el smoke de `OPS - Error Handler`
+3. validar backup y verify restore no destructivo con evidencia reciente
+4. cargar proveedor/modelo/API key en `.env` solo por el integrador
+5. ejecutar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
 
 ## Matriz Corta de Pruebas Recomendada
 
-Casos a probar antes de pasar a AI:
+Casos a probar como regresion permanente:
 
 - saludo simple
 - mensaje completo desde el inicio

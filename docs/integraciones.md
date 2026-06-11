@@ -12,7 +12,7 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - envio de respuestas automaticas
 - gestion de instancias por numero
 - soporte futuro para multiples numeros
-- instancia `principal` creada, conectada y validada en estado `open`
+- instancia default versionada `wahormiglass`, reconectada y validada en estado `open`
 
 ### ClickUp API
 
@@ -38,7 +38,8 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - devuelve JSON estructurado con intencion, campos, respuesta sugerida y decision de lead
 - no requiere procesos locales adicionales para la capa AI
 - estado actual: preparado en codigo, con placeholders hasta cargar API key/modelo
-- guia vigente: [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md)
+- endpoint versionado actual: `AI_DIRECT_API_PATH=/chat/completions`; el workflow tambien soporta `/responses`
+- guia vigente: [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md)
 
 ## Placeholders definidos
 

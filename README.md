@@ -113,9 +113,11 @@ docker compose --env-file .env up -d
 
 Puertos locales del proyecto:
 
-- `n8n`: `127.0.0.1:5678`
+- `n8n`: `http://127.0.0.1:5678`
 - `PostgreSQL`: `127.0.0.1:5433`
-- `Evolution API`: `127.0.0.1:8080`
+- `Evolution API`: `http://127.0.0.1:8080`
+
+El `docker-compose.yml` actual publica puertos en `0.0.0.0` usando las variables `N8N_PORT`, `POSTGRES_PORT` y `EVOLUTION_API_PORT`. En desarrollo se accede por loopback; antes de staging o produccion se debe restringir exposicion con firewall, proxy y reglas de red.
 
 Bases de datos locales:
 

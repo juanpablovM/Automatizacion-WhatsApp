@@ -65,7 +65,7 @@ Confirmacion antes de derivar:
 - politica de duplicados: mismo telefono, con ventana de 24 horas para retomar conversacion y confirmacion antes de reutilizar datos previos
 - estrategia de notificacion: comentario/asignacion directa en ClickUp
 - asignacion: round robin secuencial simple
-- adjuntos: se registran como metadata y luego se agregan a la tarea en ClickUp
+- adjuntos: se registran como metadata; la carga del binario real a ClickUp queda pendiente
 
 ## Flujo paso a paso
 
@@ -150,7 +150,7 @@ Si el cliente envia imagen, PDF, audio u otro adjunto:
 - se conserva el enlace o identificador externo si viene en el payload
 - el bot continua el flujo normal
 - si el adjunto llega sin texto, igual se hace la siguiente pregunta pendiente
-- cuando se cree la tarea en ClickUp, el adjunto debe agregarse a la tarea
+- `CRM - ClickUp Sync Lead` ya puede leer metadata de adjuntos, pero la carga del binario real a la tarea queda para una fase posterior
 
 ## Creacion del lead
 
@@ -297,4 +297,5 @@ Estados operativos relevantes:
 - revisar los casos con mensajes salientes marcados como fallidos durante validacion
 - mantener activo `EVOLUTION_WEBHOOK_SECRET` antes de cualquier exposicion publica
 - validar reintentos con fallos externos reales o simulados
-- incorporar `AI - Lead Qualification Assistant` como capa controlada despues de seguridad y recuperacion minima
+- validar `AI - Lead Qualification Assistant` con proveedor real controlado y mantener fallback deterministico
+- implementar carga segura de adjuntos binarios en ClickUp cuando exista contrato operativo para medios
