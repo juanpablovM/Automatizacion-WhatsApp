@@ -25,3 +25,4 @@ db/seeds/private/
 # Python
 __pycache__/
 *.pyc
+docs/FLUJO-CONVERSACIONAL-COMPLETO.md
