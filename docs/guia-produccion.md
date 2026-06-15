@@ -22,6 +22,8 @@ Hoy el proyecto ya tiene:
 - sincronizacion de workflows con script oficial de `n8n`
 - correccion aplicada para que `scripts/dev/evolution-connect-instance.sh` use la instancia real configurada
 - endurecimiento parcial del manejo de timestamps entrantes
+- nuevo frente funcional documentado para evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones
+- migracion base del asesor comercial AI agregada para preparar fuentes comerciales y auditoria de decisiones
 
 Pendientes reales detectados:
 
@@ -29,6 +31,8 @@ Pendientes reales detectados:
 - limpiar ruido historico de logs viejos para diagnostico mas claro
 - formalizar despliegue productivo, secretos, backups y monitoreo
 - separar claramente `dev`, `staging` y `prod`
+- definir fuentes oficiales de catalogo, precios, agenda y condiciones antes de habilitar cierre comercial asistido por AI
+- aplicar la migracion comercial en el ambiente vivo antes de conectar el workflow AI a esas fuentes
 
 ## Plan de ejecucion por etapas
 
@@ -270,6 +274,36 @@ Criterio de salida:
 - el sistema sigue siendo operable aunque el proveedor AI falle
 - queda evidencia de que Hormi Atencion puede operar en produccion con rollback a `AI_LEAD_ASSISTANT_ENABLED=false`
 
+### Etapa 5B. Evolucionar a asesor comercial AI
+
+Objetivo:
+
+- ampliar Hormi Atencion desde calificacion de leads hacia asesoria comercial con contexto oficial del negocio.
+
+Esta etapa no debe mezclarse con el baseline minimo de produccion. Puede ejecutarse despues de tener `staging` estable o como frente paralelo controlado, pero no debe activar promesas comerciales sin fuentes validables.
+
+Incluye:
+
+- definir fuente oficial de catalogo
+- definir fuente oficial de precios y reglas de cotizacion
+- definir fuente oficial de agenda o disponibilidad
+- definir condiciones comerciales aprobadas
+- definir FAQ y manejo de objeciones
+- extender el contrato JSON de la AI con etapa comercial, intencion de compra, urgencia, contexto de precio, contexto de agenda y siguiente mejor accion
+- agregar validaciones en `n8n` para impedir precios, descuentos, agenda o condiciones inventadas
+- registrar en auditoria que productos, precios, condiciones o cupos fueron informados al cliente
+- actualizar ClickUp con resumen comercial completo para que ventas no repita preguntas
+- actualizar matriz de pruebas con casos de precio, agenda, objeciones y condiciones comerciales
+
+Criterio de salida:
+
+- la AI recomienda solo productos o servicios existentes en catalogo
+- la AI informa precios solo cuando existe fuente oficial o deja claro que son referenciales
+- la AI ofrece agenda solo si existe disponibilidad real o la deja como solicitud pendiente
+- la AI maneja objeciones con respuestas aprobadas
+- todo cierre comercial queda respaldado por confirmacion y auditoria
+- existe rollback a modo calificacion de lead
+
 ### Etapa 6. Preparar operacion diaria
 
 Objetivo:
@@ -320,12 +354,15 @@ Si hubiera que seguir desde el estado actual del repo, el orden mas sensato seri
 4. montar `staging` con proxy, HTTPS y secretos separados
 5. correr matriz funcional y casos de borde en `staging`
 6. activar AI en entorno controlado
-7. recien despues preparar el corte a `prod`
+7. definir fuentes oficiales para asesor comercial AI
+8. recien despues preparar el corte a `prod` o habilitar cierre comercial asistido en `staging`
 
 ## Dependencias entre frentes
 
 - No tiene sentido abrir `prod` si antes no esta resuelto backup y restore.
 - No conviene validar AI seriamente si el baseline sin AI aun cambia.
+- No conviene habilitar asesor comercial AI si catalogo, precios, agenda y condiciones no tienen fuente oficial.
+- No conviene permitir cierre comercial asistido si `n8n` aun no valida precio, agenda, confirmacion y auditoria.
 - No conviene discutir monitoreo final sin haber definido `staging` y `prod`.
 - El cierre de `OPS - Error Handler` mejora mucho la capacidad de diagnostico para todas las etapas siguientes.
 
@@ -336,6 +373,14 @@ El siguiente bloque de trabajo con mejor retorno hoy es:
 1. dejar completamente operativo `OPS - Error Handler`
 2. ejecutar una pasada formal de backup y restore con evidencia
 3. marcar el baseline sin AI como version candidata para `staging`
+
+En paralelo, levantar el inventario comercial minimo para el asesor AI:
+
+1. catalogo vigente
+2. reglas de precio o rangos referenciales
+3. condiciones comerciales aprobadas
+4. disponibilidad o proceso real de agenda
+5. objeciones y respuestas frecuentes
 
 Eso te deja una base mucho mas firme para pasar de “funciona en local” a “podemos empezar a prepararlo en serio para produccion”.
 
@@ -450,6 +495,12 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Confirmar que Hormi Atencion solo habilite leads con confirmacion explicita
 - [ ] Confirmar que Hormi Atencion no escriba directo a PostgreSQL
 - [ ] Confirmar que Hormi Atencion no cree tareas en ClickUp fuera del workflow
+- [ ] Definir catalogo oficial antes de recomendar productos o servicios especificos
+- [ ] Definir reglas de precio antes de informar montos
+- [ ] Definir fuente de agenda antes de ofrecer horarios
+- [ ] Definir condiciones comerciales aprobadas antes de responder dudas sensibles
+- [ ] Auditar precio, condicion, producto o agenda informada por la AI
+- [ ] Validar rollback a modo calificacion de leads
 
 ### 11. Observabilidad
 

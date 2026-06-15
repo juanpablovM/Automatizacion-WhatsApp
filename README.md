@@ -25,6 +25,9 @@ Estado implementado:
 - `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=direct_api` quedan como valores versionados por defecto
 - mientras no exista `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`, la IA se omite de forma segura y el flujo cae a logica deterministica
 - se definio la politica actual: Hormi Atencion tiene autonomia conversacional para extraer, responder y habilitar la creacion de lead cuando exista confirmacion; `n8n`/PostgreSQL ejecutan persistencia, ClickUp y asignacion
+- se definio como nuevo rumbo de producto evolucionar Hormi Atencion hacia un asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones como fuentes oficiales consultables
+- se agrego la migracion base del asesor comercial AI para catalogo, precios, condiciones, FAQ, objeciones, agenda, cotizaciones preliminares y auditoria de decisiones AI
+- se agrego una query versionada para cargar contexto comercial activo desde `n8n`
 - los secretos reales quedan fuera de Git; `.env.example` solo contiene placeholders seguros
 
 Pendiente inmediato:
@@ -33,6 +36,7 @@ Pendiente inmediato:
 - definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` en `.env`
 - ejecutar baseline deterministico con AI apagada solo como regresion comparativa
 - validar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
+- definir fuentes oficiales para catalogo, precios, agenda y condiciones comerciales antes de permitir cierre comercial asistido por AI
 
 ## Objetivo del proyecto
 
@@ -40,6 +44,7 @@ Construir una automatizacion mantenible para:
 
 - recibir mensajes entrantes desde WhatsApp via `Evolution API`
 - calificar leads con un flujo conversacional guiado
+- evolucionar hacia un asesor comercial AI capaz de recomendar, cotizar referencialmente, manejar objeciones y cerrar el siguiente paso comercial con informacion oficial del negocio
 - registrar leads en ClickUp
 - asignar leads con round robin
 - notificar al vendedor asignado
@@ -70,6 +75,8 @@ scripts/             Utilidades de desarrollo y operacion
 - [Operacion local](./docs/operacion-local.md)
 - [Runbook operativo](./docs/runbook-operacion.md)
 - [AI API Directa](./docs/ai-api-directa-configuracion.md)
+- [Asesor Comercial AI](./docs/asesor-comercial-ai.md)
+- [Fuentes Comerciales AI](./docs/fuentes-comerciales-ai.md)
 - [Guia de produccion](./docs/guia-produccion.md)
 
 ## Estado real actual
@@ -88,6 +95,7 @@ Pendientes conocidos que aun no deben confundirse con una caida del flujo princi
 - existen logs historicos de webhooks viejos que ya no son configuracion activa
 - el smoke de `OPS - Error Handler` todavia necesita cierre fino
 - sigue faltando el checklist formal de salida a produccion
+- el asesor comercial AI con catalogo, precios, agenda y condiciones esta definido como evolucion objetivo, pero aun no esta implementado de punta a punta
 
 ## Archivos clave
 
@@ -97,6 +105,7 @@ Pendientes conocidos que aun no deben confundirse con una caida del flujo princi
 - `n8n/workflow-links.json`: manifest de enlaces entre workflows por nombre
 - `n8n/samples/`: payloads de ejemplo para pruebas y diseno
 - `infra/postgres/migrations/`: migraciones versionadas
+- `db/queries/n8n/ai-sales-advisor/`: query base para cargar contexto comercial del asesor AI
 
 ## Primer arranque local
 
@@ -128,6 +137,8 @@ Bases de datos locales:
 ## Operacion y recuperacion
 
 La matriz conversacional corta ya quedo versionada en [`docs/matriz-pruebas-conversacionales.md`](./docs/matriz-pruebas-conversacionales.md). La operacion diaria y recuperacion minima quedan consolidadas en [`docs/runbook-operacion.md`](./docs/runbook-operacion.md).
+
+La evolucion hacia asesor comercial AI queda definida en [`docs/asesor-comercial-ai.md`](./docs/asesor-comercial-ai.md). Ese frente debe tratarse como una ampliacion controlada del alcance actual: la AI puede asesorar y cerrar el siguiente paso comercial solo cuando catalogo, precios, agenda y condiciones provengan de fuentes oficiales y validables.
 
 Orden operativo recomendado:
 

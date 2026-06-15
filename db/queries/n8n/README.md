@@ -27,7 +27,15 @@ Estos valores deben ser reemplazados o mapeados desde `n8n` en la fase de implem
 - `crm-lead-creation-and-assignment/`
 - `crm-clickup-sync-lead/`
 - `crm-seller-notification-dispatch/`
+- `ai-sales-advisor/`
 - `ops-error-handler/`
+
+## Asesor comercial AI
+
+- `ai-sales-advisor/01_load_commercial_context.sql`
+  - devuelve un JSON con catalogo activo, reglas de precio vigentes, condiciones comerciales, FAQ, objeciones y slots de agenda disponibles
+  - sirve como punto de entrada para enriquecer `AI - Lead Qualification Assistant` o su evolucion a `AI - Sales Advisor`
+  - no debe usarse para prometer precios, descuentos o agenda sin las validaciones del workflow padre
 
 ## Queries operativas fuera de n8n
 

@@ -22,6 +22,9 @@ El proyecto ya tiene implementadas las bases de:
 - migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
 - sub-workflow `AI - Lead Qualification Assistant` alineado con API directa y el agente oficial `Hormi Atencion`
 - llamada HTTP directa `n8n/workflows/ai-lead-qualification-assistant.json` preparado para Hormi Atencion
+- nuevo rumbo funcional documentado: evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones como fuentes oficiales consultables
+- migracion `004_create_commercial_advisor_tables.sql` creada para preparar las fuentes comerciales del asesor AI
+- query `db/queries/n8n/ai-sales-advisor/01_load_commercial_context.sql` creada para cargar contexto comercial activo en JSON
 
 Estado real validado en la instancia local actual:
 
@@ -53,6 +56,8 @@ Hoy el proyecto ya tiene:
 - `CRM - Seller Notification Dispatch` con despacho real de notificacion interna
 - `OPS - Error Handler` con logica real de auditoria y marcado de lead en error
 - `AI - Lead Qualification Assistant` como capa oficial de Hormi Atencion; decide la conversacion y puede habilitar leads confirmados, mientras n8n ejecuta persistencia e integraciones
+- evolucion objetivo documentada para convertir Hormi Atencion en asesor comercial AI capaz de recomendar, orientar precio, ofrecer agenda y cerrar el siguiente paso comercial cuando existan fuentes oficiales y validaciones operativas
+- esquema versionado preparado para catalogo, precios, condiciones, FAQ, objeciones, agenda, cotizaciones preliminares y auditoria de decisiones AI
 - ClickUp ya validado con tarea real:
   - `86agtc6z3`
   - `https://app.clickup.com/t/86agtc6z3`
@@ -64,6 +69,9 @@ Lo que aun falta cerrar por el integrador:
 - validar Hormi Atencion y matriz conversacional con servicios vivos
 - cerrar completamente el smoke de `OPS - Error Handler`
 - completar la checklist de salida a produccion
+- definir la fuente oficial de catalogo, precios, agenda y condiciones comerciales antes de implementar cierre comercial asistido por AI
+- aplicar la migracion `004_create_commercial_advisor_tables.sql` en la base viva cuando se empiece la fase comercial
+- cargar datos comerciales reales en seeds privados o fuente equivalente, nunca en el repositorio
 
 Nota de orden documental:
 
@@ -145,6 +153,8 @@ Leer al retomar:
 - [`docs/bitacora-validacion-ai.md`](./bitacora-validacion-ai.md)
 - [`docs/guia-produccion.md`](./guia-produccion.md)
 - [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md)
+- [`docs/asesor-comercial-ai.md`](./asesor-comercial-ai.md)
+- [`docs/fuentes-comerciales-ai.md`](./fuentes-comerciales-ai.md)
 
 ## Decisiones funcionales ya cerradas
 
@@ -174,6 +184,13 @@ Leer al retomar:
   - la AI no crea tareas en ClickUp fuera del workflow
   - la AI no asigna vendedores fuera del round robin
   - si API directa falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
+- evolucion AI comercial:
+  - el proyecto adopta como objetivo que Hormi Atencion pase de calificador de leads a asesor comercial AI
+  - el asesor debe poder usar catalogo, precios, agenda, condiciones comerciales, FAQ y objeciones como contexto oficial
+  - la AI puede recomendar, orientar, manejar objeciones y cerrar el siguiente paso comercial cuando existan fuentes validables
+  - la AI no debe inventar precios, stock, descuentos, plazos, cupos de agenda ni condiciones comerciales
+  - `n8n` debe validar precio, agenda, confirmacion y reglas comerciales antes de ejecutar acciones
+  - esta evolucion aun no esta implementada de punta a punta; queda como frente de trabajo documentado en `docs/asesor-comercial-ai.md`
 - politica de secretos:
   - `.env` real no se commitea ni se comparte entre agentes
   - agentes no integradores trabajan con `.env.example`, samples, mocks y tests locales

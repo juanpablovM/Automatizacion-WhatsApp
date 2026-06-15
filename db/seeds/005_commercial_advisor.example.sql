@@ -1,0 +1,121 @@
+-- Example commercial advisor seed.
+-- Copy this file to an ignored private seed before adding real commercial data.
+--
+-- The AI sales advisor must use official, reviewed data only. Do not commit
+-- real prices, unpublished discounts, private agenda slots or sensitive
+-- commercial conditions in this public repository.
+--
+-- Example structure:
+--
+-- INSERT INTO catalog_categories (code, name, description, sort_order)
+-- VALUES
+--   ('tiles', 'Baldosas', 'Productos y servicios asociados a baldosas.', 10)
+-- ON CONFLICT (code) DO UPDATE
+-- SET
+--   name = EXCLUDED.name,
+--   description = EXCLUDED.description,
+--   sort_order = EXCLUDED.sort_order,
+--   updated_at = NOW();
+--
+-- INSERT INTO catalog_items (
+--   category_id,
+--   sku,
+--   name,
+--   item_type,
+--   short_description,
+--   service_keywords,
+--   applicable_cities,
+--   restrictions
+-- )
+-- SELECT
+--   cc.id,
+--   'EXAMPLE-TILE-001',
+--   'Baldosa antideslizante ejemplo',
+--   'product',
+--   'Producto de ejemplo para areas humedas.',
+--   ARRAY['baldosa', 'bano', 'antideslizante'],
+--   ARRAY['Santiago'],
+--   '{"requires_measurements": true, "requires_stock_validation": true}'::JSONB
+-- FROM catalog_categories cc
+-- WHERE cc.code = 'tiles'
+-- ON CONFLICT (sku) DO UPDATE
+-- SET
+--   name = EXCLUDED.name,
+--   item_type = EXCLUDED.item_type,
+--   short_description = EXCLUDED.short_description,
+--   service_keywords = EXCLUDED.service_keywords,
+--   applicable_cities = EXCLUDED.applicable_cities,
+--   restrictions = EXCLUDED.restrictions,
+--   updated_at = NOW();
+--
+-- INSERT INTO commercial_conditions (code, title, condition_type, body)
+-- VALUES
+--   (
+--     'quote_requires_measurements',
+--     'Cotizacion sujeta a medidas',
+--     'quote',
+--     'Los valores informados por WhatsApp son referenciales hasta validar medidas, disponibilidad y condiciones de instalacion.'
+--   )
+-- ON CONFLICT (code) DO UPDATE
+-- SET
+--   title = EXCLUDED.title,
+--   condition_type = EXCLUDED.condition_type,
+--   body = EXCLUDED.body,
+--   updated_at = NOW();
+--
+-- INSERT INTO price_rules (
+--   catalog_item_id,
+--   code,
+--   price_type,
+--   currency,
+--   amount_min,
+--   amount_max,
+--   unit,
+--   conditions,
+--   is_reference
+-- )
+-- SELECT
+--   ci.id,
+--   'EXAMPLE-TILE-001-reference-range',
+--   'range',
+--   'CLP',
+--   10000,
+--   20000,
+--   'm2',
+--   '{"requires_measurements": true}'::JSONB,
+--   true
+-- FROM catalog_items ci
+-- WHERE ci.sku = 'EXAMPLE-TILE-001'
+-- ON CONFLICT (code) DO UPDATE
+-- SET
+--   amount_min = EXCLUDED.amount_min,
+--   amount_max = EXCLUDED.amount_max,
+--   unit = EXCLUDED.unit,
+--   conditions = EXCLUDED.conditions,
+--   is_reference = EXCLUDED.is_reference,
+--   updated_at = NOW();
+--
+-- INSERT INTO faq_entries (question, answer, tags, priority)
+-- VALUES
+--   (
+--     'Necesito medidas para cotizar?',
+--     'Si. Para una cotizacion mas precisa necesitamos medidas aproximadas o una foto del espacio.',
+--     ARRAY['cotizacion', 'medidas'],
+--     10
+--   );
+--
+-- INSERT INTO objection_playbooks (
+--   objection_type,
+--   customer_signal,
+--   recommended_response,
+--   escalation_rule,
+--   priority
+-- )
+-- VALUES
+--   (
+--     'price',
+--     'El cliente indica que esta caro o compara precios.',
+--     'Validar necesidad, explicar que el valor depende de medidas/calidad/instalacion y ofrecer una cotizacion mas precisa.',
+--     'Derivar a vendedor si solicita descuento o precio final.',
+--     10
+--   );
