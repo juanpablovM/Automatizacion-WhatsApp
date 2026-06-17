@@ -240,21 +240,21 @@ Si alguna validacion falla, el workflow debe:
 
 La migracion `infra/postgres/migrations/004_create_commercial_advisor_tables.sql` prepara estas tablas:
 
-- `catalog_items`
 - `catalog_categories`
+- `catalog_items`
 - `catalog_item_media`
 - `commercial_conditions`
 - `price_rules`
-- `price_rule_versions`
 - `faq_entries`
 - `objection_playbooks`
-- `advisor_sessions`
-- `advisor_decisions`
 - `appointment_slots`
 - `appointment_bookings`
 - `quote_drafts`
+- `advisor_decisions`
 
-Estas tablas son la base estructural. La AI todavia debe conectarse a ellas desde el workflow y los datos reales deben cargarse desde fuentes privadas o procesos controlados, no desde prompts manuales.
+Estas tablas son la base estructural. El catalogo publico Hormiglass y sus precios publicos ya tienen una primera carga versionada con 28 productos/servicios y 28 reglas de precio. `AI - Lead Qualification Assistant` ya carga ese contexto comercial antes de llamar al proveedor AI.
+
+Condiciones comerciales, FAQ, objeciones y agenda quedan diferidas hasta contar con informacion aprobada.
 
 ## Plan de implementacion por fases
 
@@ -267,16 +267,27 @@ Objetivo:
 Incluye:
 
 - definir catalogo inicial
-- definir condiciones comerciales
-- definir FAQ y objeciones
+- definir condiciones comerciales cuando exista informacion aprobada
+- definir FAQ y objeciones cuando exista informacion aprobada
 - extender prompt/contrato AI
-- mantener precios y agenda fuera del alcance operativo
+- mantener agenda fuera del alcance operativo hasta tener fuente real
 
 Criterio de salida:
 
 - la AI recomienda y responde mejor
 - no informa precios no definidos
 - no agenda ni promete cupos
+
+Estado actual:
+
+- catalogo publico inicial cargado
+- precios publicos cargados
+- condiciones comerciales, FAQ y objeciones pendientes
+- workflow AI conectado al contexto comercial versionado
+- PRD Hormiglass versionado en `docs/prd-agente-whatsapp-hormiglass.md`
+- contrato AI ampliado con D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
+- entorno local validado con mock AI PRD en `http://host.docker.internal:9999/chat/completions`
+- `advisor_decisions` registra decisiones aceptadas con campos PRD cuando el mock responde JSON valido
 
 ### Fase B. Precios referenciales
 
@@ -296,6 +307,12 @@ Criterio de salida:
 - la AI puede decir precios desde, rangos o referencias con fuente
 - el cliente entiende que puede requerir validacion
 - el vendedor recibe lo informado en ClickUp
+
+Estado actual:
+
+- 28 reglas de precio publicas cargadas
+- auditoria en `advisor_decisions` conectada y validada con mock PRD
+- proveedor real pendiente de ajuste porque la respuesta observada no fue JSON valido
 
 ### Fase C. Agenda asistida
 
@@ -373,7 +390,7 @@ Criterio de salida:
 No activar asesor comercial completo en produccion hasta cumplir:
 
 - catalogo oficial cargado y revisado
-- condiciones comerciales aprobadas
+- condiciones comerciales aprobadas, si se responderan dudas sensibles
 - reglas de precio probadas, si se informaran precios
 - fuente de agenda probada, si se ofrecera agenda
 - matriz de pruebas actualizada
@@ -385,12 +402,12 @@ No activar asesor comercial completo en produccion hasta cumplir:
 
 Definir las fuentes oficiales:
 
-1. donde vive el catalogo hoy
-2. donde viven los precios hoy
-3. quien aprueba condiciones comerciales
-4. que agenda se usara
-5. que compromisos puede confirmar la AI sin vendedor humano
+1. sincronizar el workflow AI actualizado en la instancia viva de `n8n`
+2. validar respuestas con catalogo/precios publicos usando proveedor real o mock controlado
+3. registrar decisiones del asesor en `advisor_decisions`
+4. definir quien aprobara condiciones comerciales cuando existan
+5. definir FAQ, objeciones y agenda cuando exista informacion comercial validada
 
-Sin esas respuestas, la implementacion tecnica puede avanzar solo hasta una asesoria comercial informativa, no hasta cierre comercial completo.
+Sin condiciones, FAQ, objeciones y agenda, la implementacion debe limitarse a asesoria con catalogo/precios publicos, captura de datos y derivacion comercial. No debe prometer condiciones, descuentos, stock ni agenda.
 
 La guia operativa para cargar estas fuentes vive en `docs/fuentes-comerciales-ai.md`.

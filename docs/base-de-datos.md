@@ -63,8 +63,10 @@ La arquitectura de persistencia queda separada asi:
 - `003_sellers.example.sql`
 - `004_whatsapp_numbers.example.sql`
 - `005_commercial_advisor.example.sql`
+- `006_catalogo_hormiglass.sql`
+- `007_catalogo_hormiglass_actualizacion.sql`
 
-Los seeds `003`, `004` y `005` son ejemplos operativos; antes de produccion deben reemplazarse o revisarse con datos reales privados fuera de Git.
+Los seeds `003`, `004` y `005` son ejemplos operativos. Los seeds `006` y `007` cargan catalogo publico Hormiglass y reglas de precio publicas. Condiciones comerciales, FAQ, objeciones, agenda y datos sensibles deben cargarse en seeds privados fuera de Git.
 
 ## Dominios cubiertos por la base actual
 
@@ -99,8 +101,18 @@ Tablas principales:
 Regla operativa:
 
 - la AI puede recomendar o responder usando estas tablas, pero `n8n` debe validar antes de informar precios, ofrecer agenda, crear cotizaciones o cerrar compromisos.
-- los precios reales, descuentos privados, agenda real y condiciones sensibles no deben versionarse en este repositorio.
+- los precios publicos pueden versionarse; precios privados, descuentos privados, agenda real y condiciones sensibles no deben versionarse en este repositorio.
 - si no hay fuente oficial, la AI debe preguntar, derivar o indicar que requiere validacion.
+
+Estado actual de fuentes comerciales:
+
+- `catalog_items`: 28 productos/servicios publicos Hormiglass cargados
+- `price_rules`: 28 reglas de precio publicas cargadas
+- `commercial_conditions`: pendiente
+- `faq_entries`: pendiente
+- `objection_playbooks`: pendiente
+- `appointment_slots`: pendiente
+- `advisor_decisions`: insercion conectada desde el orquestador conversacional cuando la AI esta habilitada
 
 ## Estado runtime observado
 
@@ -257,6 +269,7 @@ Estos comandos suponen que mantienes los valores por defecto de `.env` para:
 - definir marca formal para excluir datos de validacion en metricas comerciales
 - cargar o documentar numeros reales de WhatsApp si se operaran multiples numeros
 - ampliar consultas operativas iniciales mas alla de readiness ClickUp/round robin
-- definir fuente real para catalogo, precios, agenda y condiciones comerciales del asesor AI
-- conectar `db/queries/n8n/ai-sales-advisor/01_load_commercial_context.sql` al workflow AI cuando se implemente la fase de asesor comercial
+- sincronizar y validar el workflow AI que ya carga catalogo y precios publicos
+- definir condiciones comerciales, FAQ, objeciones y agenda cuando exista informacion aprobada
+- validar inserciones reales en `advisor_decisions` con proveedor AI o mock controlado
 - probar restore desde los backups generados por `scripts/ops/backup-local.sh`; existe verificacion no destructiva en `scripts/ops/verify-backup-local.sh`

@@ -164,10 +164,12 @@ Uso de AI:
 
 Responsabilidad:
 
+- cargar contexto comercial activo desde PostgreSQL mediante `Load Commercial Context`
 - llamar al proveedor AI directo configurado mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
 - usar `/chat/completions` como valor versionado en `.env.example`
 - soportar tambien `/responses` cuando el proveedor elegido lo requiera
 - extraer intencion, calidad del lead, servicio, ciudad y requerimiento
+- recomendar productos o usar precios solo cuando existan en el contexto comercial cargado
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
 
@@ -178,6 +180,10 @@ Entrada:
 - ultimos mensajes relevantes
 - campos ya detectados
 - lead previo si existe
+- contexto comercial activo:
+  - catalogo publico
+  - reglas de precio publicas
+  - condiciones, FAQ, objeciones o agenda solo si existen cargadas
 
 Salida:
 
@@ -193,6 +199,18 @@ Salida:
 - `confidence`
 - `reply_text`
 - `clickup_summary`
+- `catalog_matches`
+- `price_context`
+- `next_best_action`
+- `customer_type`
+- `lead_class`
+- `modality`
+- `diagnostic_datos`
+- `commercial_missing_fields`
+- `objection_detected`
+- `escalation_area`
+- `executive_summary`
+- `handoff_reason`
 
 Estado:
 
@@ -207,6 +225,9 @@ Estado:
 - parsea respuestas desde `output_text`, `choices[].message.content`, `reply`, `payloads[].text` o texto final compatible
 - fuerza `should_create_lead=false` si falta confirmacion explicita
 - descarta campos nuevos cuando `confidence < 0.75`; solo conserva campos existentes del contexto
+- filtra `catalog_matches` para aceptar solo items presentes en el catalogo cargado
+- acepta `price_context` solo cuando existen reglas de precio oficiales en el contexto comercial
+- no informa condiciones, descuentos, stock, agenda, garantia, despacho o instalacion si no existe fuente oficial cargada
 - ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
 - solo el integrador debe cargar secretos reales y ejecutar pruebas contra el proveedor AI
@@ -497,5 +518,7 @@ Cada workflow tiene un set de queries versionadas en `db/queries/n8n/` para:
 - ejecutar baseline con AI apagada como comparacion
 - definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` solo en `.env`
 - validar `AI - Lead Qualification Assistant` con mocks y luego con proveedor real controlado
+- validar respuestas comerciales usando catalogo/precios publicos cargados
+- validar auditoria de decisiones AI en `advisor_decisions` con proveedor real o mock controlado
 - seguir `docs/ai-api-directa-configuracion.md`
 - ejecutar matriz conversacional con AI encendida y fallbacks de baja confianza/error del proveedor

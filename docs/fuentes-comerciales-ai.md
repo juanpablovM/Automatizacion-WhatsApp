@@ -23,6 +23,17 @@ La query base para n8n es:
 
 - `db/queries/n8n/ai-sales-advisor/01_load_commercial_context.sql`
 
+Estado cargado actualmente:
+
+- catalogo publico Hormiglass: 28 productos/servicios activos
+- reglas de precio publicas: 28 reglas activas
+- condiciones comerciales: pendiente
+- FAQ: pendiente
+- objeciones: pendiente
+- agenda: pendiente
+- workflow AI: carga contexto comercial activo antes de llamar al proveedor
+- auditoria AI en `advisor_decisions`: conectada desde `WA - Conversation Orchestrator`
+
 ## Aplicar migracion
 
 Con el stack local levantado:
@@ -35,11 +46,16 @@ docker compose --env-file .env exec -T postgres \
 
 La migracion es idempotente: usa `CREATE TABLE IF NOT EXISTS`, recrea triggers con `DROP TRIGGER IF EXISTS` y crea indices con `CREATE INDEX IF NOT EXISTS`.
 
-## Cargar datos comerciales reales
+## Cargar datos comerciales
 
-No cargar datos reales en `db/seeds/005_commercial_advisor.example.sql`. Ese archivo es solo plantilla.
+No cargar datos operativos sensibles en `db/seeds/005_commercial_advisor.example.sql`. Ese archivo es solo plantilla.
 
-Usar una ruta ignorada por Git, por ejemplo:
+Los datos publicos, como catalogo publicado y precios publicos, pueden quedar en seeds versionados. El catalogo actual vive en:
+
+- `db/seeds/006_catalogo_hormiglass.sql`
+- `db/seeds/007_catalogo_hormiglass_actualizacion.sql`
+
+Los datos privados o aun no aprobados deben ir en una ruta ignorada por Git, por ejemplo:
 
 ```text
 .local/private-seeds/commercial_advisor.sql
@@ -65,6 +81,11 @@ Estos comandos leen el archivo desde el host y envian el SQL por stdin al conten
 6. `faq_entries`
 7. `objection_playbooks`
 8. `appointment_slots`, solo si se ofrecera agenda real
+
+Estado de avance:
+
+- pasos 1, 2 y 5 ya tienen una primera carga publica versionada
+- pasos 4, 6, 7 y 8 quedan diferidos hasta contar con informacion aprobada
 
 ## Reglas por fuente
 
@@ -151,19 +172,20 @@ LIMIT 20;
 
 ## Criterio de habilitacion
 
-Se puede conectar el workflow AI a estas fuentes cuando:
+El workflow AI ya puede consultar catalogo y precios. Para habilitarlo en una instancia viva:
 
 - catalogo activo revisado
-- condiciones aprobadas
-- FAQ y objeciones revisadas
 - reglas de precio probadas si se informaran montos
-- agenda probada si se ofreceran horarios
+- workflows sincronizados en `n8n`
+- proveedor AI real o mock controlado validado
 - `n8n` registra decisiones en `advisor_decisions`
 - existe fallback si no hay contexto comercial suficiente
 
+Para habilitar respuestas sobre condiciones comerciales, FAQ, objeciones o agenda, primero deben cargarse esas fuentes y revisarse por separado.
+
 ## Prohibido para produccion
 
-- precios reales en archivos versionados
+- precios privados o no publicados en archivos versionados
 - descuentos privados en Git
 - agenda real en Git
 - condiciones sensibles en Git

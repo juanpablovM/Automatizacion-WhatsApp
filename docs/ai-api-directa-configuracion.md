@@ -41,6 +41,22 @@ El workflow soporta dos formas de API directa:
 - `/chat/completions`, valor versionado en `.env.example`
 - `/responses`, usado por el test local de contrato con mocks y disponible si el proveedor elegido lo requiere
 
+Para validacion local sin proveedor externo se puede usar el mock PRD:
+
+```bash
+MOCK_AI_MODE=valid MOCK_AI_HOST=0.0.0.0 MOCK_AI_PORT=9999 \
+  sh scripts/ops/mock-ai-server.sh start
+```
+
+Y configurar temporalmente:
+
+```env
+AI_DIRECT_API_BASE_URL=http://host.docker.internal:9999
+AI_DIRECT_API_PATH=/chat/completions
+AI_DIRECT_API_KEY=mock-ai-key
+AI_DIRECT_API_MODEL=mock-hormi-prd
+```
+
 Para activar con proveedor real:
 
 ```bash

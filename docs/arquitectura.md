@@ -44,6 +44,14 @@ Capacidades objetivo:
 
 La AI no debe inventar precios, stock, descuentos, plazos, cupos de agenda ni condiciones. `n8n` debe validar la salida AI antes de ejecutar persistencia, ClickUp, agenda o notificaciones.
 
+Estado actual de fuentes comerciales:
+
+- catalogo publico Hormiglass cargado
+- 28 productos/servicios activos
+- 28 reglas de precio publicas activas
+- condiciones comerciales, FAQ, objeciones y agenda pendientes hasta contar con informacion aprobada
+- workflow AI conectado al contexto comercial versionado antes de llamar al proveedor
+
 ## Topologia local actual
 
 ```mermaid
@@ -77,7 +85,7 @@ flowchart LR
     N8N --> EVO
 ```
 
-Esta topologia es objetivo. Las fuentes oficiales de catalogo, precios, agenda y condiciones aun deben definirse e implementarse.
+Esta topologia es objetivo. Catalogo y precios publicos ya tienen primera carga versionada. Agenda, condiciones, FAQ y objeciones quedan pendientes hasta contar con informacion aprobada.
 
 ## Decisiones tecnicas implementadas en esta fase
 
@@ -108,7 +116,9 @@ En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo d
 - validar matriz conversacional completa con AI apagada y AI encendida
 - validar Hormi Atencion con servicios vivos desde el workspace del integrador
 - ejecutar pruebas controladas con `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
-- definir fuente oficial de catalogo, precios, agenda, condiciones comerciales, FAQ y objeciones
+- sincronizar el workflow AI actualizado en la instancia viva de `n8n`
+- validar respuestas comerciales con catalogo y precios publicos
+- definir fuente oficial de agenda, condiciones comerciales, FAQ y objeciones cuando exista informacion aprobada
 - extender contrato AI para `sales_stage`, `buying_intent`, `urgency`, `price_context`, `agenda_context`, `next_best_action` y `handoff_reason`
 - crear validaciones en `n8n` para que precios, agenda y condiciones provengan de fuentes oficiales antes de responder o cerrar
 - validar restore completo en entorno aislado si se requiere recuperacion total

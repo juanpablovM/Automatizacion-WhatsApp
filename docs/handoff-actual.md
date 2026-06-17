@@ -25,6 +25,14 @@ El proyecto ya tiene implementadas las bases de:
 - nuevo rumbo funcional documentado: evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones como fuentes oficiales consultables
 - migracion `004_create_commercial_advisor_tables.sql` creada para preparar las fuentes comerciales del asesor AI
 - query `db/queries/n8n/ai-sales-advisor/01_load_commercial_context.sql` creada para cargar contexto comercial activo en JSON
+- catalogo publico Hormiglass cargado con 28 productos/servicios y 28 reglas de precio publicas
+- `AI - Lead Qualification Assistant` actualizado para cargar contexto comercial activo antes de llamar al proveedor AI
+- `WA - Conversation Orchestrator` registra decisiones AI en `advisor_decisions` cuando la AI esta habilitada
+- PRD del agente WhatsApp Hormiglass agregado en `docs/prd-agente-whatsapp-hormiglass.md`
+- contrato AI ampliado para diagnostico D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
+- entorno local dejado en modo AI mock PRD: `AI_DIRECT_API_BASE_URL=http://host.docker.internal:9999`, `AI_DIRECT_API_MODEL=mock-hormi-prd`
+- mock local `scripts/ops/mock-ai-server.js` corriendo en `0.0.0.0:9999` para validar el contrato nuevo sin proveedor externo
+- workflows sincronizados localmente; `WA - Inbound Entry` quedo activo y `AI - Lead Qualification Assistant` contiene `Load Commercial Context`
 
 Estado real validado en la instancia local actual:
 
@@ -36,6 +44,11 @@ Estado real validado en la instancia local actual:
 - se confirmo derivacion comercial y `clickup_task_sync` en auditoria
 - se corrigio `scripts/dev/evolution-connect-instance.sh` para tomar la instancia real desde `.env`
 - se actualizo el smoke `scripts/ops/test-error-handler.sh` para usar una bandera de prueba explicita en vez de un timestamp basura
+- se sincronizo el workflow AI actualizado en n8n local; el subworkflow queda inactivo como workflow independiente, pero disponible para ejecucion desde el orquestador
+- se sincronizo `WA - Conversation Orchestrator` con auditoria AI en `advisor_decisions`
+- se valido el SQL real de persistencia con una transaccion `ROLLBACK`; genero `advisor_decision_id` sin dejar datos de prueba permanentes
+- se valido una conversacion inbound local con AI mock PRD; `advisor_decisions` quedo `accepted` con `lead_class=A`, `customer_type=b2c`, `modality=installation`, diagnostico D.A.T.O.S. y `escalation_area=sales`
+- el proveedor real configurado antes del mock devolvio `invalid_json`; queda pendiente ajustar proveedor/modelo/prompt real antes de usarlo en produccion
 
 ## Resumen ejecutivo rapido
 
@@ -58,6 +71,9 @@ Hoy el proyecto ya tiene:
 - `AI - Lead Qualification Assistant` como capa oficial de Hormi Atencion; decide la conversacion y puede habilitar leads confirmados, mientras n8n ejecuta persistencia e integraciones
 - evolucion objetivo documentada para convertir Hormi Atencion en asesor comercial AI capaz de recomendar, orientar precio, ofrecer agenda y cerrar el siguiente paso comercial cuando existan fuentes oficiales y validaciones operativas
 - esquema versionado preparado para catalogo, precios, condiciones, FAQ, objeciones, agenda, cotizaciones preliminares y auditoria de decisiones AI
+- catalogo y precios publicos Hormiglass cargados en `db/seeds/006_catalogo_hormiglass.sql` y `db/seeds/007_catalogo_hormiglass_actualizacion.sql`
+- workflow AI versionado con nodos `Load Commercial Context` y `Merge Commercial Context`
+- orquestador versionado con insercion transaccional en `advisor_decisions`
 - ClickUp ya validado con tarea real:
   - `86agtc6z3`
   - `https://app.clickup.com/t/86agtc6z3`
@@ -65,13 +81,13 @@ Hoy el proyecto ya tiene:
 Lo que aun falta cerrar por el integrador:
 
 - ejecutar baseline con AI apagada
-- levantar proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
+- reemplazar mock AI por proveedor real validado con `AI_DIRECT_API_MODEL=<modelo elegido>`
 - validar Hormi Atencion y matriz conversacional con servicios vivos
 - cerrar completamente el smoke de `OPS - Error Handler`
 - completar la checklist de salida a produccion
-- definir la fuente oficial de catalogo, precios, agenda y condiciones comerciales antes de implementar cierre comercial asistido por AI
-- aplicar la migracion `004_create_commercial_advisor_tables.sql` en la base viva cuando se empiece la fase comercial
-- cargar datos comerciales reales en seeds privados o fuente equivalente, nunca en el repositorio
+- validar que Hormi Atencion use catalogo y precios publicos sin inventar valores
+- validar proveedor real AI contra el mismo caso end-to-end que hoy pasa con mock PRD
+- dejar condiciones comerciales, FAQ, objeciones y agenda para una fase posterior, porque aun no existe informacion aprobada
 
 Nota de orden documental:
 
@@ -187,7 +203,11 @@ Leer al retomar:
 - evolucion AI comercial:
   - el proyecto adopta como objetivo que Hormi Atencion pase de calificador de leads a asesor comercial AI
   - el asesor debe poder usar catalogo, precios, agenda, condiciones comerciales, FAQ y objeciones como contexto oficial
-  - la AI puede recomendar, orientar, manejar objeciones y cerrar el siguiente paso comercial cuando existan fuentes validables
+  - el catalogo y los precios publicos de Hormiglass ya estan versionados como primera fuente comercial
+  - el workflow AI ya carga catalogo/precios activos y los pasa al prompt antes de llamar al proveedor
+  - condiciones comerciales, FAQ, objeciones y agenda aun no se cargan por falta de informacion aprobada
+  - la AI puede recomendar y orientar con catalogo/precios publicos cuando el workflow valide la fuente
+  - la AI podra manejar objeciones y cerrar pasos comerciales mas avanzados cuando existan condiciones/FAQ/objeciones/agenda oficiales
   - la AI no debe inventar precios, stock, descuentos, plazos, cupos de agenda ni condiciones comerciales
   - `n8n` debe validar precio, agenda, confirmacion y reglas comerciales antes de ejecutar acciones
   - esta evolucion aun no esta implementada de punta a punta; queda como frente de trabajo documentado en `docs/asesor-comercial-ai.md`

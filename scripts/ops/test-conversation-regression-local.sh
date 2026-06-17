@@ -116,6 +116,18 @@ if (!aiLinkNode || aiLinkNode.type !== 'n8n-nodes-base.executeWorkflow') {
   fail('Falta nodo Execute AI Lead Qualification como executeWorkflow');
 }
 
+const persistNode = orchestrator.nodes.find((node) => node.name === 'Persist Conversation State');
+if (!persistNode) fail('Falta nodo Persist Conversation State en orquestador');
+if (!persistNode.parameters.query.includes('advisor_decision_insert')) {
+  fail('Persist Conversation State debe registrar decisiones AI en advisor_decisions');
+}
+if (!persistNode.parameters.additionalFields.queryParams.includes('catalog_matches_json')) {
+  fail('Persist Conversation State debe recibir contexto comercial saneado');
+}
+if (!persistNode.parameters.additionalFields.queryParams.includes('diagnostic_datos_json')) {
+  fail('Persist Conversation State debe recibir diagnostico D.A.T.O.S.');
+}
+
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const runApplyAi = async (row, env = { AI_LEAD_ASSISTANT_ENABLED: 'true' }) => {
   const fn = new AsyncFunction('items', '$env', applyNode.parameters.jsCode);
@@ -178,11 +190,57 @@ const validAi = await runApplyAi(mergedAiShape(baseDeterministic, {
   confirmation_status: 'requested',
   confidence: 0.92,
   should_create_lead: true,
+  lead_quality: 'medium',
+  customer_type: 'b2c',
+  lead_class: 'A',
+  modality: 'installation',
+  sales_stage: 'qualification',
+  buying_intent: 'medium',
+  urgency: 'low',
+  diagnostic_datos: {
+    pain: 'Renovar baño',
+    scope: 'Baldosas con instalacion por revisar',
+    timing: 'No informado',
+    obstacle: 'Faltan medidas',
+    next_step: 'Pedir confirmacion y datos de instalacion',
+  },
+  commercial_missing_fields: ['measurements', 'photos'],
+  objection_detected: 'none',
+  escalation_area: 'sales',
+  catalog_matches: [{ id: 'item-1', sku: 'BAL-001', name: 'Baldosa', reason: 'producto mencionado' }],
+  price_context: { type: 'reference', currency: 'CLP', amount: 12990, unit: 'm2', requires_validation: true },
+  next_best_action: 'quote_reference',
+  executive_summary: 'Cliente B2C solicita baldosas en Santiago; faltan medidas y fotos.',
+  metadata_json: JSON.stringify({ commercial_context_counts: { catalog_items: 1, price_rules: 1 } }),
 }));
 if (validAi.ai_applied !== true) fail('AI valida debio asistir extraccion');
 if (validAi.service !== 'Baldosas' || validAi.requirement !== 'Renovar un baño') fail('AI valida no mezclo campos esperados');
 if (validAi.should_create_lead !== false) fail('Hormi Atencion no puede crear lead sin confirmacion');
 if (!String(validAi.current_step).startsWith('confirm|')) fail('AI valida con campos completos debe pedir confirmacion');
+if (validAi.sales_stage !== 'qualification' || validAi.buying_intent !== 'medium') {
+  fail('AI valida debe conservar etapa e intencion comercial saneadas');
+}
+if (validAi.customer_type !== 'b2c' || validAi.lead_class !== 'A' || validAi.modality !== 'installation') {
+  fail('AI valida debe conservar tipo de cliente, clasificacion y modalidad PRD');
+}
+if (!String(validAi.diagnostic_datos_json).includes('Renovar baño')) {
+  fail('AI valida debe exponer diagnostico D.A.T.O.S. para auditoria');
+}
+if (!String(validAi.commercial_missing_fields_json).includes('measurements')) {
+  fail('AI valida debe exponer datos comerciales faltantes');
+}
+if (validAi.escalation_area !== 'sales' || !String(validAi.executive_summary).includes('Cliente B2C')) {
+  fail('AI valida debe conservar escalamiento y resumen ejecutivo');
+}
+if (!String(validAi.catalog_matches_json).includes('BAL-001')) {
+  fail('AI valida debe exponer coincidencias de catalogo para auditoria');
+}
+if (!String(validAi.price_context_json).includes('12990')) {
+  fail('AI valida debe exponer contexto de precio para auditoria');
+}
+if (!String(validAi.commercial_context_counts_json).includes('price_rules')) {
+  fail('AI valida debe exponer conteos de contexto comercial para auditoria');
+}
 
 const confirmedAi = await runApplyAi(mergedAiShape({
   ...baseDeterministic,

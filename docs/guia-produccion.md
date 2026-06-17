@@ -24,6 +24,9 @@ Hoy el proyecto ya tiene:
 - endurecimiento parcial del manejo de timestamps entrantes
 - nuevo frente funcional documentado para evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones
 - migracion base del asesor comercial AI agregada para preparar fuentes comerciales y auditoria de decisiones
+- catalogo publico Hormiglass y 28 reglas de precio publicas cargadas como primera fuente comercial
+- workflow AI actualizado para cargar contexto comercial activo antes de llamar al proveedor
+- workflow AI sincronizado localmente en n8n; `WA - Inbound Entry` quedo activo
 
 Pendientes reales detectados:
 
@@ -31,8 +34,9 @@ Pendientes reales detectados:
 - limpiar ruido historico de logs viejos para diagnostico mas claro
 - formalizar despliegue productivo, secretos, backups y monitoreo
 - separar claramente `dev`, `staging` y `prod`
-- definir fuentes oficiales de catalogo, precios, agenda y condiciones antes de habilitar cierre comercial asistido por AI
-- aplicar la migracion comercial en el ambiente vivo antes de conectar el workflow AI a esas fuentes
+- validar el workflow AI actualizado con respuestas comerciales asistidas antes de abrirlo a trafico real
+- definir condiciones comerciales, FAQ, objeciones y agenda en una fase posterior, cuando exista informacion aprobada
+- aplicar la migracion comercial en cualquier ambiente nuevo antes de sincronizar el workflow AI actualizado
 
 ## Plan de ejecucion por etapas
 
@@ -284,11 +288,11 @@ Esta etapa no debe mezclarse con el baseline minimo de produccion. Puede ejecuta
 
 Incluye:
 
-- definir fuente oficial de catalogo
-- definir fuente oficial de precios y reglas de cotizacion
-- definir fuente oficial de agenda o disponibilidad
-- definir condiciones comerciales aprobadas
-- definir FAQ y manejo de objeciones
+- usar catalogo publico Hormiglass ya cargado
+- usar reglas de precio publicas ya cargadas
+- definir fuente oficial de agenda o disponibilidad cuando se quiera ofrecer agenda
+- definir condiciones comerciales aprobadas cuando exista informacion validada
+- definir FAQ y manejo de objeciones cuando exista informacion validada
 - extender el contrato JSON de la AI con etapa comercial, intencion de compra, urgencia, contexto de precio, contexto de agenda y siguiente mejor accion
 - agregar validaciones en `n8n` para impedir precios, descuentos, agenda o condiciones inventadas
 - registrar en auditoria que productos, precios, condiciones o cupos fueron informados al cliente
@@ -300,9 +304,16 @@ Criterio de salida:
 - la AI recomienda solo productos o servicios existentes en catalogo
 - la AI informa precios solo cuando existe fuente oficial o deja claro que son referenciales
 - la AI ofrece agenda solo si existe disponibilidad real o la deja como solicitud pendiente
-- la AI maneja objeciones con respuestas aprobadas
+- la AI maneja objeciones solo cuando existan respuestas aprobadas
 - todo cierre comercial queda respaldado por confirmacion y auditoria
 - existe rollback a modo calificacion de lead
+
+Estado actual:
+
+- catalogo y precios publicos cargados
+- workflow AI conectado al contexto comercial versionado
+- condiciones comerciales, FAQ, objeciones y agenda diferidas
+- auditoria en `advisor_decisions` conectada desde el orquestador
 
 ### Etapa 6. Preparar operacion diaria
 
@@ -354,14 +365,15 @@ Si hubiera que seguir desde el estado actual del repo, el orden mas sensato seri
 4. montar `staging` con proxy, HTTPS y secretos separados
 5. correr matriz funcional y casos de borde en `staging`
 6. activar AI en entorno controlado
-7. definir fuentes oficiales para asesor comercial AI
+7. validar AI con catalogo/precios publicos del asesor comercial
 8. recien despues preparar el corte a `prod` o habilitar cierre comercial asistido en `staging`
 
 ## Dependencias entre frentes
 
 - No tiene sentido abrir `prod` si antes no esta resuelto backup y restore.
 - No conviene validar AI seriamente si el baseline sin AI aun cambia.
-- No conviene habilitar asesor comercial AI si catalogo, precios, agenda y condiciones no tienen fuente oficial.
+- No conviene habilitar asesor comercial AI completo si agenda y condiciones no tienen fuente oficial.
+- Si solo se habilita catalogo/precios publicos, la AI debe derivar cualquier duda de condiciones, descuentos, stock o agenda.
 - No conviene permitir cierre comercial asistido si `n8n` aun no valida precio, agenda, confirmacion y auditoria.
 - No conviene discutir monitoreo final sin haber definido `staging` y `prod`.
 - El cierre de `OPS - Error Handler` mejora mucho la capacidad de diagnostico para todas las etapas siguientes.
@@ -376,11 +388,11 @@ El siguiente bloque de trabajo con mejor retorno hoy es:
 
 En paralelo, levantar el inventario comercial minimo para el asesor AI:
 
-1. catalogo vigente
-2. reglas de precio o rangos referenciales
-3. condiciones comerciales aprobadas
-4. disponibilidad o proceso real de agenda
-5. objeciones y respuestas frecuentes
+1. catalogo vigente: listo con primera carga publica
+2. reglas de precio o rangos referenciales: listo con primera carga publica
+3. condiciones comerciales aprobadas: diferido
+4. disponibilidad o proceso real de agenda: diferido
+5. objeciones y respuestas frecuentes: diferido
 
 Eso te deja una base mucho mas firme para pasar de “funciona en local” a “podemos empezar a prepararlo en serio para produccion”.
 
@@ -495,8 +507,8 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Confirmar que Hormi Atencion solo habilite leads con confirmacion explicita
 - [ ] Confirmar que Hormi Atencion no escriba directo a PostgreSQL
 - [ ] Confirmar que Hormi Atencion no cree tareas en ClickUp fuera del workflow
-- [ ] Definir catalogo oficial antes de recomendar productos o servicios especificos
-- [ ] Definir reglas de precio antes de informar montos
+- [x] Definir catalogo oficial antes de recomendar productos o servicios especificos
+- [x] Definir reglas de precio antes de informar montos
 - [ ] Definir fuente de agenda antes de ofrecer horarios
 - [ ] Definir condiciones comerciales aprobadas antes de responder dudas sensibles
 - [ ] Auditar precio, condicion, producto o agenda informada por la AI

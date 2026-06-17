@@ -50,15 +50,25 @@ node <<'NODE'
   const baseResponse = {
     intent: 'unknown',
     lead_quality: 'none',
+    customer_type: 'unknown',
+    lead_class: 'none',
+    modality: 'unknown',
     service: '',
     city: '',
     requirement: '',
     missing_fields: ['service', 'city', 'requirement', 'confirmation'],
+    commercial_missing_fields: [],
+    diagnostic_datos: { pain: '', scope: '', timing: '', obstacle: '', next_step: '' },
     confirmation_status: 'none',
     should_create_lead: false,
     needs_confirmation: true,
     confidence: 0.8,
     reply_text: '',
+    objection_detected: 'none',
+    escalation_area: 'none',
+    next_best_action: 'ask_data',
+    handoff_reason: '',
+    executive_summary: '',
     clickup_summary: '',
   };
 
@@ -79,7 +89,53 @@ node <<'NODE'
     assert(request.ai_request.input[0].content.includes('Tienes autonomia conversacional'), 'Prompt no declara autonomia');
     expectEqual(request.ai_request.text.format.strict, true, 'Salida estructurada estricta');
     expectIncludes(schema.required, 'confirmation_status', 'Contrato debe exigir confirmation_status');
+    expectIncludes(schema.required, 'lead_class', 'Contrato debe exigir clasificacion A/B/C/D');
+    expectIncludes(schema.required, 'diagnostic_datos', 'Contrato debe exigir diagnostico D.A.T.O.S.');
+    expectIncludes(schema.required, 'executive_summary', 'Contrato debe exigir resumen ejecutivo');
+    assert(
+      request.ai_request.input[0].content.includes('D.A.T.O.S.'),
+      'Prompt no incorpora metodo D.A.T.O.S.'
+    );
+    assert(
+      request.ai_request.input[0].content.includes('Clasifica el lead'),
+      'Prompt no incorpora clasificacion comercial'
+    );
     expectEqual(schema.additionalProperties, false, 'Contrato debe rechazar propiedades extra');
+
+    const commercialRequest = await runCode('Build AI Request', {
+      ...readSample('ai_complete_without_confirmation.sample.json'),
+      commercial_context: {
+        catalog_items: [
+          {
+            id: 3,
+            sku: 'adoquin',
+            name: 'Adoquin',
+            price_rules: [
+              {
+                code: 'adoquin-fixed',
+                price_type: 'fixed',
+                currency: 'CLP',
+                amount: 1300,
+                unit: 'm2',
+              },
+            ],
+          },
+        ],
+        conditions: [],
+        faqs: [],
+        objections: [],
+        available_slots: [],
+      },
+    }, {}, env);
+    expectEqual(commercialRequest.commercial_context_counts.catalog_items, 1, 'Contexto comercial cuenta catalogo');
+    assert(
+      commercialRequest.ai_request.input[1].content.includes('commercial_context_available'),
+      'Prompt no incluye disponibilidad de contexto comercial'
+    );
+    assert(
+      commercialRequest.ai_request.input[1].content.includes('adoquin-fixed'),
+      'Prompt no incluye reglas de precio publicas'
+    );
   };
 
   const runMockedScenario = async (scenario) => {
@@ -132,14 +188,29 @@ node <<'NODE'
       ...baseResponse,
       intent: 'quote_request',
       lead_quality: 'high',
+      customer_type: 'b2c',
+      lead_class: 'A',
+      modality: 'installation',
       service: 'Baldosas',
       city: 'Santiago',
       requirement: 'Renovar un baño',
       missing_fields: ['confirmation'],
+      commercial_missing_fields: ['measurements', 'photos', 'terrain', 'debris_removal'],
+      diagnostic_datos: {
+        pain: 'Renovar baño',
+        scope: 'Baldosas con instalacion por definir',
+        timing: 'No informado',
+        obstacle: 'Faltan medidas y fotos',
+        next_step: 'Pedir confirmacion y datos de instalacion',
+      },
       confirmation_status: 'requested',
       should_create_lead: true,
       confidence: 0.93,
       reply_text: 'Tengo los datos. ¿Esta correcto?',
+      objection_detected: 'none',
+      escalation_area: 'sales',
+      next_best_action: 'confirm',
+      executive_summary: 'Cliente B2C consulta instalacion de baldosas en Santiago; faltan medidas y fotos.',
       clickup_summary: 'No deberia pasar a ClickUp sin confirmacion.',
     }),
     expect: (result) => {
@@ -148,6 +219,11 @@ node <<'NODE'
       expectEqual(result.model_should_create_lead_raw, true, 'modelo pidio crear lead');
       expectEqual(result.should_create_lead, false, 'guardrail sin confirmacion');
       expectEqual(result.clickup_summary, '', 'sin confirmacion no expone resumen ClickUp');
+      expectEqual(result.lead_class, 'A', 'clasificacion A conservada');
+      expectEqual(result.modality, 'installation', 'modalidad conservada');
+      expectIncludes(result.commercial_missing_fields, 'measurements', 'faltantes comerciales');
+      expectEqual(result.diagnostic_datos.pain, 'Renovar baño', 'diagnostico D.A.T.O.S.');
+      expectEqual(result.escalation_area, 'sales', 'area de escalamiento');
     },
   });
 
@@ -158,15 +234,30 @@ node <<'NODE'
       ...baseResponse,
       intent: 'confirmation_yes',
       lead_quality: 'high',
+      customer_type: 'b2c',
+      lead_class: 'B',
+      modality: 'material',
       service: 'Baldosas',
       city: 'Santiago',
       requirement: 'Renovar un baño',
       missing_fields: [],
+      commercial_missing_fields: [],
+      diagnostic_datos: {
+        pain: 'Renovar baño',
+        scope: 'Baldosas para baño',
+        timing: 'No informado',
+        obstacle: '',
+        next_step: 'Derivar a ventas',
+      },
       confirmation_status: 'confirmed',
       should_create_lead: true,
       needs_confirmation: false,
       confidence: 0.96,
       reply_text: 'Perfecto, derivare tu solicitud.',
+      objection_detected: 'none',
+      escalation_area: 'sales',
+      next_best_action: 'handoff_sales',
+      executive_summary: 'Cliente confirmado solicita baldosas en Santiago para renovar un baño.',
       clickup_summary: 'Cliente confirmado solicita baldosas en Santiago para renovar un baño.',
     }),
     expect: (result) => {
