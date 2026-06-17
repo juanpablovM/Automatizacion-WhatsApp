@@ -1,169 +1,242 @@
 # CRM WhatsApp Automatizado
 
-Proyecto para automatizar la captura, calificacion, registro y asignacion de leads desde WhatsApp usando `n8n` self-hosted, `PostgreSQL`, `Evolution API`, `ClickUp` y `Docker Compose`.
+Automatizacion para capturar, calificar, registrar y asignar leads desde WhatsApp usando `n8n`, `PostgreSQL`, `Evolution API`, `ClickUp` y `Docker Compose`.
 
-## Estado actual
+## Que hace este proyecto
 
-El proyecto ya tiene una validacion funcional real de punta a punta con WhatsApp, `Evolution API`, `n8n`, `PostgreSQL`, round robin y ClickUp.
-
-Estado implementado:
-
-- se definio la estructura de carpetas del proyecto
-- se dejaron archivos base versionables
-- se dejo `Docker Compose` operativo para `n8n`, `PostgreSQL`, `Redis` y `Evolution API`
-- se implemento la base de datos inicial del CRM
-- se separo la base interna de `n8n` de la base del CRM
-- se implementaron workflows base con logica real del CRM
-- se sincronizaron workflows versionados en `n8n`
-- se conecto y valido WhatsApp real con `Evolution API`
-- se valido ClickUp con tareas reales de prueba
-- se corrigieron loops conversacionales detectados durante validacion real
-- se agrego y activo proteccion local del webhook con `EVOLUTION_WEBHOOK_SECRET`
-- se agrego backup local inicial de PostgreSQL y volumen `n8n_data`
-- se dejo `AI - Lead Qualification Assistant` como capa autonoma controlada para Hormi Atencion
-- se preparo proveedor de API directa con salida JSON estructurada
-- `AI_LEAD_ASSISTANT_ENABLED=true` y `AI_PROVIDER=direct_api` quedan como valores versionados por defecto
-- mientras no exista `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`, la IA se omite de forma segura y el flujo cae a logica deterministica
-- se definio la politica actual: Hormi Atencion tiene autonomia conversacional para extraer, responder y habilitar la creacion de lead cuando exista confirmacion; `n8n`/PostgreSQL ejecutan persistencia, ClickUp y asignacion
-- se definio como nuevo rumbo de producto evolucionar Hormi Atencion hacia un asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones como fuentes oficiales consultables
-- se agrego la migracion base del asesor comercial AI para catalogo, precios, condiciones, FAQ, objeciones, agenda, cotizaciones preliminares y auditoria de decisiones AI
-- se agrego una query versionada para cargar contexto comercial activo desde `n8n`
-- los secretos reales quedan fuera de Git; `.env.example` solo contiene placeholders seguros
-
-Pendiente inmediato:
-
-- sincronizar workflows en la instancia viva y verificar que `WA - Inbound Entry` quede activo
-- definir proveedor/modelo de API directa y cargar `AI_DIRECT_API_KEY` en `.env`
-- ejecutar baseline deterministico con AI apagada solo como regresion comparativa
-- validar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
-- definir fuentes oficiales para catalogo, precios, agenda y condiciones comerciales antes de permitir cierre comercial asistido por AI
-
-## Objetivo del proyecto
-
-Construir una automatizacion mantenible para:
+Este repo implementa una base operativa para:
 
 - recibir mensajes entrantes desde WhatsApp via `Evolution API`
-- calificar leads con un flujo conversacional guiado
-- evolucionar hacia un asesor comercial AI capaz de recomendar, cotizar referencialmente, manejar objeciones y cerrar el siguiente paso comercial con informacion oficial del negocio
-- registrar leads en ClickUp
+- guiar la conversacion para capturar servicio, ciudad y requerimiento
+- crear y trazar leads en `PostgreSQL`
 - asignar leads con round robin
+- sincronizar leads a `ClickUp`
 - notificar al vendedor asignado
-- dejar trazabilidad completa en PostgreSQL
+- dejar auditoria tecnica y funcional del flujo
 
-## Estructura principal
+Tambien prepara una evolucion controlada hacia un asesor comercial AI, manteniendo a `n8n` y `PostgreSQL` como capa de control del estado y de las integraciones.
+
+## Arquitectura
+
+Componentes principales:
+
+- `n8n`: orquestacion de workflows e integraciones
+- `PostgreSQL`: fuente de verdad del CRM, conversaciones, mensajes, auditoria y asignaciones
+- `Evolution API`: entrada y salida de WhatsApp self-hosted
+- `Redis`: soporte operativo de `Evolution API`
+- `ClickUp`: destino operativo de los leads
+- proveedor AI por API directa: capa opcional para comprension y respuesta conversacional
+
+Principio clave:
+
+- la AI puede interpretar, responder y sugerir decisiones conversacionales
+- `n8n` valida y ejecuta persistencia, asignacion, ClickUp y auditoria
+- la AI no escribe directamente en la base ni opera ClickUp por fuera del workflow
+
+## Estado del proyecto
+
+Estado actual de madurez:
+
+- base tecnica implementada y documentada
+- workflows principales versionados
+- integracion con WhatsApp, `PostgreSQL` y `ClickUp` ya incorporada al flujo
+- asistente AI preparado con fallback seguro a flujo deterministico
+- esquema de base ampliado para soportar catalogo, precios, condiciones y futura evolucion comercial AI
+
+Estado recomendado para comunicar publicamente:
+
+- `preproduccion / validacion controlada`
+
+Eso significa que el proyecto ya tiene implementacion real y documentacion amplia, pero todavia requiere endurecimiento operativo, validacion ampliada y cierre formal antes de considerarse listo para produccion.
+
+## Alcance actual
+
+Hoy el repo cubre:
+
+- orquestacion de entrada WhatsApp
+- gestion de conversaciones y mensajes
+- creacion y asignacion de leads
+- sincronizacion a `ClickUp`
+- notificacion al vendedor
+- auditoria de errores y eventos
+- contratos y pruebas locales del asistente AI
+- base de catalogo y precios publicos para evolucion comercial AI
+- auditoria de decisiones AI en `advisor_decisions` desde el orquestador conversacional
+- PRD funcional del agente Hormiglass con diagnostico D.A.T.O.S., clasificacion A/B/C/D y guardrails comerciales
+
+No cubre todavia de punta a punta:
+
+- salida productiva endurecida
+- staging separado
+- agenda real
+- condiciones comerciales aprobadas
+- FAQ y objeciones cargadas como fuente oficial
+- conversacion end-to-end con AI encendida y proveedor/mock registrando decisiones reales
+- observabilidad y monitoreo de nivel produccion
+
+La configuracion funcional vigente del asesor esta en `docs/prd-agente-whatsapp-hormiglass.md`.
+
+## Estructura del repositorio
 
 ```text
-docs/                Documentacion funcional y operativa en espanol
-infra/               Infraestructura base del proyecto
-n8n/                 Workflows versionados y samples de integracion
-db/                  Diseno, seeds y consultas de base de datos
-scripts/             Utilidades de desarrollo y operacion
+docs/                Documentacion funcional, tecnica y operativa
+infra/               Infraestructura base y migraciones de arranque
+n8n/                 Workflows versionados y samples
+db/                  Esquema, seeds y queries SQL
+scripts/             Utilidades de desarrollo, operacion y pruebas
+docker-compose.yml   Orquestacion local del stack
 ```
 
-## Documentacion
+## Inicio rapido local
 
-- [Arquitectura](./docs/arquitectura.md)
-- [Flujo de leads](./docs/flujo-leads.md)
-- [Arquitectura n8n](./docs/n8n-workflows.md)
-- [Base de datos](./docs/base-de-datos.md)
-- [Integraciones](./docs/integraciones.md)
-- [Evolution API](./docs/evolution-api.md)
-- [Configuracion ClickUp](./docs/clickup-configuracion.md)
-- [Matriz de pruebas conversacionales](./docs/matriz-pruebas-conversacionales.md)
-- [Handoff Actual](./docs/handoff-actual.md)
-- [Bitacora Validacion AI](./docs/bitacora-validacion-ai.md)
-- [Operacion local](./docs/operacion-local.md)
-- [Runbook operativo](./docs/runbook-operacion.md)
-- [AI API Directa](./docs/ai-api-directa-configuracion.md)
-- [Asesor Comercial AI](./docs/asesor-comercial-ai.md)
-- [Fuentes Comerciales AI](./docs/fuentes-comerciales-ai.md)
-- [Guia de produccion](./docs/guia-produccion.md)
+### Requisitos
 
-## Estado real actual
+- Docker y Docker Compose
+- puertos locales disponibles para `n8n`, `PostgreSQL` y `Evolution API`
 
-Estado confirmado sobre el entorno local actual:
+### 1. Crear configuracion local
 
-- sesion de WhatsApp `wahormiglass` reconectada y operativa
-- `WA - Inbound Entry` activo en `n8n`
-- webhook actual persistido hacia el workflow correcto
-- prueba real de conversacion completada de punta a punta
-- respuestas salientes confirmadas con estado `sent`
-- derivacion comercial y `clickup_task_sync` vistos en auditoria real
+```bash
+cp .env.example .env
+```
 
-Pendientes conocidos que aun no deben confundirse con una caida del flujo principal:
+### 2. Ajustar valores minimos en `.env`
 
-- existen logs historicos de webhooks viejos que ya no son configuracion activa
-- el smoke de `OPS - Error Handler` todavia necesita cierre fino
-- sigue faltando el checklist formal de salida a produccion
-- el asesor comercial AI con catalogo, precios, agenda y condiciones esta definido como evolucion objetivo, pero aun no esta implementado de punta a punta
+Antes de levantar el stack, reemplaza al menos:
 
-## Archivos clave
+- `POSTGRES_PASSWORD`
+- `N8N_ENCRYPTION_KEY`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_WEBHOOK_SECRET`
 
-- `docker-compose.yml`: punto de entrada de la orquestacion local
-- `.env.example`: plantilla de variables de entorno
-- `n8n/workflows/`: workflows exportados y versionados
-- `n8n/workflow-links.json`: manifest de enlaces entre workflows por nombre
-- `n8n/samples/`: payloads de ejemplo para pruebas y diseno
-- `infra/postgres/migrations/`: migraciones versionadas
-- `db/queries/n8n/ai-sales-advisor/`: query base para cargar contexto comercial del asesor AI
+Si vas a probar integraciones reales, tambien completa:
 
-## Primer arranque local
+- `CLICKUP_API_TOKEN`
+- `CLICKUP_LIST_ID`
+- `CLICKUP_CF_*`
+- `AI_DIRECT_API_KEY`
+- `AI_DIRECT_API_MODEL`
 
-1. Copia `.env.example` a `.env`.
-2. Genera un valor seguro para `N8N_ENCRYPTION_KEY`.
-3. Levanta el entorno con:
+### 3. Levantar el entorno
 
 ```bash
 docker compose --env-file .env up -d
 ```
 
-4. Abre `http://127.0.0.1:5678`.
-5. En el primer inicio, `n8n` te pedira crear el usuario propietario de la instancia.
+### 4. Abrir `n8n`
 
-Puertos locales del proyecto:
+```text
+http://127.0.0.1:5678
+```
+
+En el primer arranque, `n8n` pedira crear el usuario propietario de la instancia.
+
+### 5. Sincronizar workflows versionados
+
+```bash
+sh scripts/dev/sync-n8n-workflows.sh --preflight
+sh scripts/dev/sync-n8n-workflows.sh
+```
+
+## Servicios locales
 
 - `n8n`: `http://127.0.0.1:5678`
 - `PostgreSQL`: `127.0.0.1:5433`
 - `Evolution API`: `http://127.0.0.1:8080`
 
-El `docker-compose.yml` actual publica puertos en `0.0.0.0` usando las variables `N8N_PORT`, `POSTGRES_PORT` y `EVOLUTION_API_PORT`. En desarrollo se accede por loopback; antes de staging o produccion se debe restringir exposicion con firewall, proxy y reglas de red.
+Nota de seguridad:
 
-Bases de datos locales:
+el `docker-compose.yml` actual publica puertos para facilitar operacion local. Antes de staging o produccion, esa exposicion debe restringirse con red privada, firewall, proxy y HTTPS.
+
+## Workflows principales
+
+Workflows versionados en `n8n/workflows/`:
+
+- `WA - Inbound Entry`
+- `WA - Conversation Orchestrator`
+- `WA - Outbound Messages`
+- `CRM - Lead Creation And Assignment`
+- `CRM - ClickUp Sync Lead`
+- `CRM - Seller Notification Dispatch`
+- `AI - Lead Qualification Assistant`
+- `OPS - Error Handler`
+
+Los enlaces entre subworkflows se mantienen por nombre en `n8n/workflow-links.json`, y el script de sincronizacion resuelve los IDs reales en `n8n`.
+
+## Base de datos
+
+La persistencia queda separada en tres bases:
 
 - `crm_whatsapp`: base interna de `n8n`
 - `crm_whatsapp_app`: base del CRM y la logica de negocio
 - `evolution_api`: base tecnica de `Evolution API`
 
-## Operacion y recuperacion
+El esquema principal incluye:
 
-La matriz conversacional corta ya quedo versionada en [`docs/matriz-pruebas-conversacionales.md`](./docs/matriz-pruebas-conversacionales.md). La operacion diaria y recuperacion minima quedan consolidadas en [`docs/runbook-operacion.md`](./docs/runbook-operacion.md).
+- leads
+- conversaciones
+- mensajes
+- adjuntos
+- vendedores
+- asignaciones
+- auditoria
+- catalogos de estados
+- tablas base para asesor comercial AI
 
-La evolucion hacia asesor comercial AI queda definida en [`docs/asesor-comercial-ai.md`](./docs/asesor-comercial-ai.md). Ese frente debe tratarse como una ampliacion controlada del alcance actual: la AI puede asesorar y cerrar el siguiente paso comercial solo cuando catalogo, precios, agenda y condiciones provengan de fuentes oficiales y validables.
+## Asistente AI
 
-Orden operativo recomendado:
+El subworkflow `AI - Lead Qualification Assistant` funciona como capa opcional de asistencia conversacional.
 
-1. correr preflight de workflows y prueba local del asistente AI con mocks
-2. sincronizar workflows versionados
-3. validar healthcheck de `n8n`
-4. correr backup y verify restore no destructivo
-5. validar `OPS - Error Handler` con fallo controlado
-6. ejecutar matriz conversacional con `AI_LEAD_ASSISTANT_ENABLED=false`
-7. cargar `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` solo cuando exista proveedor elegido
-8. verificar que ningun lead se cree sin `servicio + ciudad + requerimiento + confirmacion`
+Comportamiento esperado:
 
-Scripts operativos relevantes:
+- si la AI esta bien configurada, puede interpretar intencion, extraer datos y redactar respuesta
+- si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo debe caer a una ruta deterministica segura
 
-```bash
-sh scripts/ops/backup-local.sh
-sh scripts/ops/verify-backup-local.sh
-sh scripts/ops/test-error-handler.sh
-sh scripts/ops/test-ai-assistant-local.sh
-sh scripts/dev/sync-n8n-workflows.sh --preflight
-sh scripts/dev/sync-n8n-workflows.sh
-```
+El proyecto ya incluye:
 
-El script usa el CLI oficial de `n8n` para importar workflows, resuelve los sub-workflows por nombre desde `n8n/workflow-links.json` y conecta `OPS - Error Handler` como workflow de errores.
+- contrato estructurado de salida JSON
+- pruebas locales con mocks
+- base de contexto comercial para catalogo y precios publicos
 
-La hoja de ruta de salida a produccion del proyecto quedo consolidada en [`docs/guia-produccion.md`](./docs/guia-produccion.md).
+## Documentacion recomendada
 
-La carpeta `.hermes` fue retirada del workspace porque contenia un plan multiagente historico y parcialmente desactualizado. La fuente vigente para estado, handoff y pendientes del proyecto queda en `README.md` y `docs/`.
+Para entender el proyecto desde lo general a lo especifico:
+
+- [Arquitectura](./docs/arquitectura.md)
+- [Flujo de leads](./docs/flujo-leads.md)
+- [Workflows n8n](./docs/n8n-workflows.md)
+- [Base de datos](./docs/base-de-datos.md)
+- [Integraciones](./docs/integraciones.md)
+- [Evolution API](./docs/evolution-api.md)
+- [Configuracion ClickUp](./docs/clickup-configuracion.md)
+- [AI API directa](./docs/ai-api-directa-configuracion.md)
+- [Asesor comercial AI](./docs/asesor-comercial-ai.md)
+- [Fuentes comerciales AI](./docs/fuentes-comerciales-ai.md)
+- [Guia de produccion](./docs/guia-produccion.md)
+
+La documentacion operativa de mantenimiento diario, runbooks y handoff conviene tratarla como material interno del equipo si el repositorio va a mantenerse publico.
+
+## Seguridad y datos sensibles
+
+Este repositorio no debe versionar:
+
+- secretos reales
+- numeros de WhatsApp reales
+- vendedores reales
+- tokens de integracion
+- seeds operativos privados
+- backups
+
+La plantilla `.env.example` contiene placeholders seguros. Toda configuracion real debe vivir fuera de Git.
+
+## Roadmap tecnico inmediato
+
+- cerrar baseline deterministico sin AI
+- ampliar validacion end-to-end
+- endurecer configuracion para staging y produccion
+- completar validaciones de salida operativa
+- conectar fuentes oficiales adicionales para la fase de asesor comercial AI
+
+## Licencia / uso
+
+Si este repo va a hacerse publico de forma abierta, conviene agregar una licencia explicita y revisar que no queden artefactos historicos ni documentacion operativa sensible antes de exponerlo.
