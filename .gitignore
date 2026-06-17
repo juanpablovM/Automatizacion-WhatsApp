@@ -26,3 +26,4 @@ db/seeds/private/
 __pycache__/
 *.pyc
 docs/FLUJO-CONVERSACIONAL-COMPLETO.md
+hormiglass_catalogo.csv
