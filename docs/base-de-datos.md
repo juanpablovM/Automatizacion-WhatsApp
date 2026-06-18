@@ -56,6 +56,10 @@ La arquitectura de persistencia queda separada asi:
   - crea fuentes comerciales para el asesor AI
   - crea catalogo, condiciones, reglas de precio, FAQ, objeciones, agenda, cotizaciones preliminares y decisiones AI auditables
 
+- `005_create_conversation_memory_indexes.sql`
+  - optimiza la lectura de historial por conversacion
+  - optimiza la busqueda del ultimo reinicio de solicitud
+
 ## Seeds implementados
 
 - `001_lead_statuses.sql`
@@ -245,6 +249,10 @@ docker compose --env-file .env exec -T postgres \
 docker compose --env-file .env exec -T postgres \
   psql -U postgres -d crm_whatsapp_app \
   < infra/postgres/migrations/004_create_commercial_advisor_tables.sql
+
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/005_create_conversation_memory_indexes.sql
 
 docker compose --env-file .env exec -T postgres \
   psql -U postgres -d crm_whatsapp_app \

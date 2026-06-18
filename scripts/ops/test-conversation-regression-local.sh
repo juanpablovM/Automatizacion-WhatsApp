@@ -11,9 +11,11 @@ const fs = require('fs');
 const samplePath = 'n8n/samples/conversation_regression_cases.sample.json';
 const matrixPath = 'docs/matriz-pruebas-conversacionales.md';
 const orchestratorPath = 'n8n/workflows/wa-conversation-orchestrator.json';
+const assistantPath = 'n8n/workflows/ai-lead-qualification-assistant.json';
 const suite = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const matrix = fs.readFileSync(matrixPath, 'utf8');
 const orchestrator = JSON.parse(fs.readFileSync(orchestratorPath, 'utf8'));
+const assistant = JSON.parse(fs.readFileSync(assistantPath, 'utf8'));
 
 const requiredEvidence = [
   'conversation_id',
@@ -117,6 +119,34 @@ if (!applyNode) fail('Falta nodo Apply AI Assistance en orquestador');
 const evaluateNode = orchestrator.nodes.find((node) => node.name === 'Evaluate Conversation Step');
 if (!evaluateNode) fail('Falta nodo Evaluate Conversation Step en orquestador');
 
+const loadStateNode = orchestrator.nodes.find((node) => node.name === 'Load Conversation State');
+if (!loadStateNode) fail('Falta nodo Load Conversation State en orquestador');
+const loadStateQuery = loadStateNode.parameters.query;
+if (!loadStateQuery.includes('AS recent_messages')) {
+  fail('Load Conversation State debe exponer recent_messages');
+}
+if (!loadStateQuery.includes("m.direction = 'outgoing' AND m.delivery_status = 'sent'")) {
+  fail('El historial solo debe incluir mensajes salientes enviados');
+}
+if (!loadStateQuery.includes("metadata->>'reset_conversation_lead'")) {
+  fail('El historial debe cortarse desde el ultimo reinicio de solicitud');
+}
+if (!loadStateQuery.includes('ll.previous_lead_created_at > lcr.reset_at')) {
+  fail('Un reinicio debe ocultar leads anteriores al nuevo contexto');
+}
+
+const buildAiNode = assistant.nodes.find((node) => node.name === 'Build AI Request');
+if (!buildAiNode) fail('Falta nodo Build AI Request en asistente AI');
+if (!buildAiNode.parameters.jsCode.includes('PRD Hormiglass v1.0')) {
+  fail('El prompt AI debe declarar el PRD Hormiglass como fuente normativa principal');
+}
+if (!buildAiNode.parameters.jsCode.includes('IA COMO VOZ PRINCIPAL')) {
+  fail('El prompt AI debe declarar a la IA como voz principal de la conversacion');
+}
+if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(buildAiNode.parameters.jsCode + applyNode.parameters.jsCode)) {
+  fail('Los nodos AI no deben contener caracteres de control corruptos');
+}
+
 const aiLinkNode = orchestrator.nodes.find((node) => node.name === 'Execute AI Lead Qualification');
 if (!aiLinkNode || aiLinkNode.type !== 'n8n-nodes-base.executeWorkflow') {
   fail('Falta nodo Execute AI Lead Qualification como executeWorkflow');
@@ -203,6 +233,78 @@ if (!String(communeAndProduct.current_step).startsWith('confirm|')) {
   fail('Mensaje completo con comuna y producto debe pasar a confirmacion');
 }
 
+const adoquinRequest = await runEvaluate({
+  phone_number: '+56911111115',
+  message_type: 'text',
+  text_body: 'Necesito suministro de adoquines',
+  raw_payload_json: '{}',
+  has_active_conversation: true,
+  conversation_status_code: 'waiting_user',
+  current_step: 'city',
+  state_current_step: 'city',
+});
+if (adoquinRequest.service !== 'Adoquines') {
+  fail('Producto explicito no debe confundirse con una respuesta de ciudad');
+}
+const adoquinCity = await runEvaluate({
+  phone_number: '+56911111115',
+  message_type: 'text',
+  text_body: 'Quilicura',
+  raw_payload_json: '{}',
+  has_active_conversation: true,
+  conversation_status_code: 'waiting_user',
+  current_step: adoquinRequest.current_step,
+  state_current_step: adoquinRequest.current_step,
+  state_service: adoquinRequest.service,
+  state_requirement: adoquinRequest.requirement,
+});
+if (adoquinCity.service !== 'Adoquines' || adoquinCity.city !== 'Quilicura') {
+  fail('El fallback debe conservar adoquines y agregar Quilicura en el turno siguiente');
+}
+
+const preservedHistory = await runEvaluate({
+  phone_number: '+56911111113',
+  message_type: 'text',
+  text_body: 'Santiago',
+  raw_payload_json: '{}',
+  has_active_conversation: true,
+  conversation_status_code: 'waiting_user',
+  current_step: 'city',
+  state_current_step: 'city',
+  recent_messages: [
+    { role: 'user', content: 'Quiero cotizar solerillas' },
+    { role: 'assistant', content: '¿En que comuna las necesitas?' },
+  ],
+});
+if (!Array.isArray(preservedHistory.recent_messages) || preservedHistory.recent_messages.length !== 2) {
+  fail('Evaluate Conversation Step debe propagar el historial vigente');
+}
+
+const resetHistory = await runEvaluate({
+  phone_number: '+56911111114',
+  message_type: 'text',
+  text_body: 'Iniciar una nueva',
+  raw_payload_json: '{}',
+  has_active_conversation: false,
+  conversation_status_code: null,
+  current_step: null,
+  state_current_step: null,
+  previous_lead_id: 99,
+  previous_service: 'Baldosas',
+  previous_city: 'Santiago',
+  previous_requirement: 'Patio',
+  recent_messages: [
+    { role: 'user', content: 'Quiero continuar lo anterior' },
+    { role: 'assistant', content: '¿Quieres continuar o iniciar una nueva?' },
+  ],
+});
+if (resetHistory.reset_conversation_lead !== true) {
+  fail('Iniciar una nueva solicitud debe marcar reset_conversation_lead');
+}
+if (!Array.isArray(resetHistory.recent_messages) || resetHistory.recent_messages.length !== 0) {
+  fail('El turno que reinicia la solicitud debe vaciar recent_messages');
+}
+
 const configError = await runApplyAi(
   mergedAiShape(baseDeterministic, {
     ai_skipped_1: false,
@@ -276,6 +378,77 @@ if (!String(validAi.price_context_json).includes('12990')) {
 }
 if (!String(validAi.commercial_context_counts_json).includes('price_rules')) {
   fail('AI valida debe exponer conteos de contexto comercial para auditoria');
+}
+
+const correctedRequest = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: 'Quiero un cierro de hormigón no una solerilla',
+  normalized_text: 'quiero un cierro de hormigon no una solerilla',
+  service: 'Solerilla',
+  requirement: 'Necesito precio del metro lineal de solerilla',
+  current_step: 'city',
+}, {
+  ai_skipped_1: false,
+  intent_1: 'new_request',
+  confidence: 0.85,
+  service: 'Cierro de hormigón',
+  requirement: 'Cotizar un cierro de hormigón',
+  explicitly_mentioned_fields: ['service', 'requirement'],
+  reply_text: 'Entiendo, necesitas un cierro de hormigón. ¿En qué comuna está el proyecto?',
+  objection_detected: 'none',
+  price_context: { type: 'none', requires_validation: true },
+}));
+if (correctedRequest.service !== 'Cierro de hormigón') {
+  fail('Una solicitud explicita debe reemplazar el servicio obsoleto');
+}
+if (correctedRequest.requirement !== 'Cotizar un cierro de hormigón') {
+  fail('Una solicitud explicita debe reemplazar el requerimiento obsoleto');
+}
+if (!correctedRequest.ai_accepted_fields.includes('service')) {
+  fail('La auditoria debe registrar el reemplazo explicito del servicio');
+}
+
+const aiVoice = await runApplyAi(mergedAiShape(baseDeterministic, {
+  ai_skipped_1: false,
+  intent_1: 'provide_info',
+  confidence: 0.9,
+  reply_text: 'Te ayudo a elegir bien. ¿El proyecto es para un patio, una entrada vehicular o una obra?',
+  enhancement_type: 'data_collection',
+  objection_detected: 'none',
+  price_context: { type: 'none', requires_validation: true },
+}));
+if (aiVoice.response_text !== 'Te ayudo a elegir bien. ¿El proyecto es para un patio, una entrada vehicular o una obra?') {
+  fail('Una respuesta AI sana debe ser la voz principal, aunque no agregue campos nuevos');
+}
+if (aiVoice.response_kind !== 'ai_data_collection') {
+  fail('La respuesta conversacional AI debe conservar su tipo de mejora');
+}
+
+const inventedStock = await runApplyAi(mergedAiShape(baseDeterministic, {
+  ai_skipped_1: false,
+  intent_1: 'stock_inquiry',
+  confidence: 0.9,
+  reply_text: 'Tenemos stock disponible de baldosas.',
+  objection_detected: 'stock',
+  price_context: { type: 'none', requires_validation: true },
+}));
+if (inventedStock.response_kind !== 'prd_validated_fallback') {
+  fail('Una confirmacion de stock inventada debe ser bloqueada por guardrails');
+}
+if (!inventedStock.response_text.includes('disponibilidad debe confirmarla el equipo')) {
+  fail('El bloqueo de stock debe responder con el texto seguro del PRD');
+}
+
+const inventedPrice = await runApplyAi(mergedAiShape(baseDeterministic, {
+  ai_skipped_1: false,
+  intent_1: 'price_inquiry',
+  confidence: 0.9,
+  reply_text: 'El valor es $19.990 por metro cuadrado.',
+  objection_detected: 'none',
+  price_context: { type: 'none', requires_validation: true },
+}));
+if (inventedPrice.response_kind !== 'prd_validated_fallback') {
+  fail('Un precio sin contexto oficial debe ser bloqueado por guardrails');
 }
 
 const confirmedAi = await runApplyAi(mergedAiShape({

@@ -98,6 +98,65 @@ node <<'NODE'
     assert(request.ai_request.input[0].content.includes('Clasifica el lead'), 'Prompt no incorpora clasificacion comercial');
     expectEqual(schema.additionalProperties, false, 'Contrato debe rechazar propiedades extra');
 
+    const serializedHistory = JSON.stringify([
+      { role: 'assistant', content: 'mensaje descartado por limite' },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `mensaje ${index + 1}`,
+      })),
+      { role: 'system', content: 'rol no permitido se normaliza a user' },
+      { role: 'assistant', content: '   ' },
+    ]);
+    const memoryRequest = await runCode('Build AI Request', {
+      ...readSample('ai_greeting.sample.json'),
+      recent_messages: serializedHistory,
+    }, {}, env);
+    const memoryContext = memoryRequest.ai_context.recent_messages;
+    expectEqual(memoryContext.length, 8, 'Historial AI debe limitarse a ocho mensajes validos');
+    expectEqual(memoryContext[0].content, 'mensaje 2', 'Historial AI debe conservar los ocho mensajes mas recientes');
+    expectEqual(memoryContext[7].role, 'user', 'Roles no permitidos deben normalizarse de forma segura');
+    assert(
+      !memoryRequest.ai_request.input[1].content.includes('mensaje descartado por limite'),
+      'Mensaje fuera de la ventana no debe entrar al prompt'
+    );
+    assert(
+      memoryRequest.ai_request.input[1].content.includes('rol no permitido se normaliza a user'),
+      'Historial normalizado debe incluirse en el prompt'
+    );
+
+    const mergedRequest = await runCode('Build AI Request', {
+      commercial_context: {
+        catalog_items: [],
+        conditions: [],
+        faqs: [],
+        objections: [],
+        available_slots: [],
+      },
+      text_body_1: 'Necesito precio del metro lineal de solerilla',
+      message_type_1: 'text',
+      conversation_status_code_1: 'waiting_user',
+      current_step_1: 'city',
+      service_1: 'Solerilla',
+      city_1: '',
+      requirement_1: 'Cotizar solerilla',
+      recent_messages_1: [
+        { role: 'user', content: 'Quiero cotizar solerillas' },
+        { role: 'assistant', content: '¿En que comuna las necesitas?' },
+      ],
+    }, {}, env);
+    expectEqual(
+      mergedRequest.ai_context.message_current,
+      'Necesito precio del metro lineal de solerilla',
+      'Build AI Request debe recuperar el mensaje sufijado por Merge'
+    );
+    expectEqual(mergedRequest.ai_context.existing_fields.service, 'Solerilla', 'Debe recuperar servicio sufijado');
+    expectEqual(mergedRequest.ai_context.current_step, 'city', 'Debe recuperar current_step sufijado');
+    expectEqual(mergedRequest.ai_context.recent_messages.length, 2, 'Debe recuperar historial sufijado');
+    assert(
+      mergedRequest.ai_request.input[1].content.includes('Necesito precio del metro lineal de solerilla'),
+      'El prompt debe contener el mensaje real despues del Merge'
+    );
+
     const commercialRequest = await runCode('Build AI Request', {
       ...readSample('ai_complete_without_confirmation.sample.json'),
       commercial_context: {
@@ -132,6 +191,48 @@ node <<'NODE'
       commercialRequest.ai_request.input[1].content.includes('adoquin-fixed'),
       'Prompt no incluye reglas de precio publicas'
     );
+
+    const chatRequest = await runCode('Build AI Request', {
+      ...readSample('ai_complete_without_confirmation.sample.json'),
+      recent_messages: Array.from({ length: 8 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `Mensaje de contexto ${index + 1}`,
+      })),
+      commercial_context: {
+        catalog_items: Array.from({ length: 8 }, (_, index) => ({
+          id: index + 1,
+          sku: `producto-${index + 1}`,
+          name: `Producto ${index + 1}`,
+          short_description: 'Descripcion comercial breve',
+          metadata: { internal_notes: 'no debe enviarse' },
+          price_rules: [{ code: `precio-${index + 1}`, price_type: 'reference', amount: 1000 + index }],
+        })),
+        conditions: Array.from({ length: 8 }, (_, index) => ({
+          code: `condicion-${index + 1}`,
+          title: `Condicion ${index + 1}`,
+          condition_type: 'delivery',
+          body: 'Condicion comercial oficial',
+        })),
+        faqs: [],
+        objections: [],
+        available_slots: [],
+      },
+    }, {}, {
+      ...env,
+      AI_PROVIDER: 'nvidia',
+      AI_DIRECT_API_BASE_URL: 'https://integrate.api.nvidia.com/v1',
+      AI_DIRECT_API_PATH: '/chat/completions',
+    });
+    assert(chatRequest.ai_request_chars < 35000, `Prompt chat debe quedar compacto, recibido ${chatRequest.ai_request_chars}`);
+    expectEqual(chatRequest.ai_context.commercial_context.catalog_items.length, 5, 'Contexto chat limita catalogo');
+    assert(
+      !chatRequest.ai_request.messages[1].content.includes('required_json_schema'),
+      'Chat Completions no debe duplicar el JSON Schema completo'
+    );
+    assert(
+      !chatRequest.ai_request.messages[1].content.includes('internal_notes'),
+      'Contexto chat no debe enviar metadata interna innecesaria'
+    );
   };
 
   const validateConfigFallback = async () => {
@@ -152,8 +253,43 @@ node <<'NODE'
     expectEqual(normalized.should_create_lead, false, 'Config pendiente no crea lead');
   };
 
+  const validateRateLimitHandling = async () => {
+    const request = await runCode('Build AI Request', readSample('ai_greeting.sample.json'), {}, {
+      ...env,
+      AI_PROVIDER: 'nvidia',
+      AI_DIRECT_API_BASE_URL: 'https://integrate.api.nvidia.com/v1',
+      AI_DIRECT_API_PATH: '/chat/completions',
+    });
+    let calls = 0;
+    const called = await runCode('Call AI Provider', request, {
+      httpRequest: async () => {
+        calls += 1;
+        return {
+          statusCode: 429,
+          body: { status: 429, title: 'Too Many Requests' },
+          headers: { 'retry-after': '0.001', 'x-ratelimit-remaining': '0' },
+        };
+      },
+    }, {
+      ...env,
+      AI_DIRECT_API_MAX_ATTEMPTS: '2',
+      AI_DIRECT_API_RETRY_BASE_MS: '1',
+      AI_DIRECT_API_RETRY_MAX_MS: '2',
+      AI_DIRECT_API_RATE_LIMIT_COOLDOWN_MS: '1000',
+    });
+    expectEqual(calls, 2, 'Rate limit debe usar el maximo AI especifico de intentos');
+    expectEqual(called.ai_status_code, 429, 'Rate limit debe conservar HTTP 429');
+    expectEqual(called.ai_retry_exhausted, true, 'Rate limit debe marcar reintentos agotados');
+    expectEqual(called.ai_circuit_open, true, 'Rate limit debe abrir el circuit breaker');
+    expectEqual(called.ai_response_headers.rate_limit_remaining, '0', 'Debe auditar headers de rate limit');
+
+    const normalized = await runCode('Normalize AI Result', called, {}, env);
+    expectEqual(normalized.ai_fallback_reason, 'rate_limited', 'Normalize debe distinguir rate limit');
+    expectEqual(normalized.ai_circuit_open, true, 'Normalize debe conservar estado del circuito');
+  };
+
   const runSimulatedScenario = async (scenario) => {
-    const input = readSample(scenario.sample);
+    const input = scenario.input || readSample(scenario.sample);
     const request = await runCode('Build AI Request', input, {}, env);
     let calls = 0;
     const helpers = {
@@ -178,6 +314,29 @@ node <<'NODE'
 
   await validateRequestContract();
   await validateConfigFallback();
+  await validateRateLimitHandling();
+
+  await runSimulatedScenario({
+    name: 'rechaza saludo incoherente ante consulta de precio',
+    input: {
+      ...readSample('ai_greeting.sample.json'),
+      message_current: 'Necesito precio del metro lineal de solerilla',
+      text_body: 'Necesito precio del metro lineal de solerilla',
+      service: 'Solerilla',
+    },
+    body: makeProviderBody({
+      ...baseResponse,
+      intent: 'greeting',
+      sales_stage: 'greeting',
+      confidence: 0.99,
+      reply_text: 'Hola, ¿en que puedo ayudarte?',
+    }),
+    expect: (result) => {
+      expectEqual(result.intent, 'price_inquiry', 'Guardrail debe inferir intencion comercial');
+      expectEqual(result.ai_fallback_reason, 'intent_mismatch', 'Guardrail debe marcar incoherencia de intencion');
+      expectEqual(result.reply_text, '', 'Respuesta incoherente no debe llegar al orquestador');
+    },
+  });
 
   await runSimulatedScenario({
     name: 'saludo',
