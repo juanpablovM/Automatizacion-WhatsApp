@@ -268,8 +268,8 @@
     },
     {
       "id": "AI-01",
-      "title": "AI apagada conserva comportamiento deterministico",
-      "ai_mode": "off",
+      "title": "Error de configuracion AI conserva fallback seguro",
+      "ai_mode": "config_error",
       "input": {
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
@@ -281,7 +281,6 @@
         "lead_created": false,
         "clickup_task_created": false,
         "confirmed_by_user": false,
-        "feature_flag_required": "AI_LEAD_ASSISTANT_ENABLED=false",
         "fallback_deterministic": true,
         "audit_required": true
       }
@@ -294,7 +293,7 @@
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.92,
           "should_create_lead": false
@@ -320,7 +319,7 @@
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": false,
           "http_failure": true
         },
@@ -344,7 +343,7 @@
         "messages": [
           "Algo para la casa"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.52,
           "suggested_fields": [
@@ -395,7 +394,7 @@
           "Si, correcto"
         ],
         "precondition": "current_step=confirm con servicio, ciudad y requerimiento completos",
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.95,
           "intent": "confirmation_yes",

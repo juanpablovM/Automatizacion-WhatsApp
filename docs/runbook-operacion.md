@@ -252,21 +252,12 @@ Validacion local del contrato sin proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-Desactivar AI:
-
-```bash
-# editar .env
-AI_LEAD_ASSISTANT_ENABLED=false
-docker compose --env-file .env up -d n8n
-```
-
-AI queda activada por defecto en modo API directa. Si la API key o el modelo siguen pendientes, el workflow omite IA y usa fallback deterministico.
+AI queda activada por defecto en modo API directa. Si la API key o el modelo siguen pendientes, el workflow registra `missing_api_config` y usa fallback deterministico.
 
 Configuracion esperada para AI:
 
 ```bash
 # editar .env
-AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=direct_api
 AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
@@ -286,7 +277,7 @@ Checklist antes de activar:
 - Revisar [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
-- Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.
+- Existe plan de contencion: corregir credenciales/modelo o revisar el proveedor si aparece `missing_api_config`, `provider_error` o `invalid_json`.
 
 Reglas operativas:
 

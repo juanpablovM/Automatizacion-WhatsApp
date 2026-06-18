@@ -286,8 +286,8 @@ Estado actual:
 - workflow AI conectado al contexto comercial versionado
 - PRD Hormiglass versionado en `docs/prd-agente-whatsapp-hormiglass.md`
 - contrato AI ampliado con D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
-- entorno local validado con mock AI PRD en `http://host.docker.internal:9999/chat/completions`
-- `advisor_decisions` registra decisiones aceptadas con campos PRD cuando el mock responde JSON valido
+- `advisor_decisions` ya registra decisiones aceptadas con campos PRD cuando el proveedor real responde JSON valido
+- el runtime conversacional debe operar siempre contra el proveedor AI definitivo configurado en `.env`
 
 ### Fase B. Precios referenciales
 
@@ -311,8 +311,8 @@ Criterio de salida:
 Estado actual:
 
 - 28 reglas de precio publicas cargadas
-- auditoria en `advisor_decisions` conectada y validada con mock PRD
-- proveedor real pendiente de ajuste porque la respuesta observada no fue JSON valido
+- auditoria en `advisor_decisions` conectada para validar respuestas del proveedor real
+- el siguiente cierre operativo es endurecer la validacion E2E con proveedor real y fuentes oficiales
 
 ### Fase C. Agenda asistida
 
@@ -403,7 +403,7 @@ No activar asesor comercial completo en produccion hasta cumplir:
 Definir las fuentes oficiales:
 
 1. sincronizar el workflow AI actualizado en la instancia viva de `n8n`
-2. validar respuestas con catalogo/precios publicos usando proveedor real o mock controlado
+2. validar respuestas con catalogo/precios publicos usando proveedor real y evidencia E2E
 3. registrar decisiones del asesor en `advisor_decisions`
 4. definir quien aprobara condiciones comerciales cuando existan
 5. definir FAQ, objeciones y agenda cuando exista informacion comercial validada

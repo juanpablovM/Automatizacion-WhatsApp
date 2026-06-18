@@ -13,12 +13,12 @@ Incluye:
 - entrada real o simulada desde WhatsApp via `Evolution API`
 - procesamiento en `WA - Inbound Entry`
 - orquestacion conversacional en `WA - Conversation Orchestrator`
-- llamada opcional a `AI - Lead Qualification Assistant` cuando `AI_LEAD_ASSISTANT_ENABLED=true`
+- llamada a `AI - Lead Qualification Assistant` como ruta oficial del proyecto
 - persistencia de conversacion, mensajes, auditorias y adjuntos en PostgreSQL
 - creacion de lead solo con confirmacion valida
 - creacion de tarea ClickUp solo para leads confirmados
 - asignacion round robin y notificacion al vendedor cuando corresponda
-- fallback deterministico cuando AI esta apagada, falla, responde invalido o devuelve baja confianza
+- fallback deterministico cuando hay error de configuracion, falla del proveedor, respuesta invalida o baja confianza
 
 No incluye:
 
@@ -47,8 +47,8 @@ Verificar:
 - instancia `wahormiglass` en estado `open`, o la instancia definida en `EVOLUTION_DEFAULT_INSTANCE`
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
-- para pruebas con AI encendida, `AI_LEAD_ASSISTANT_ENABLED=true`, `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
-- para regresion deterministica, `AI_LEAD_ASSISTANT_ENABLED=false`
+- `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` deben estar configurados para pruebas reales
+- si la configuracion AI es invalida, la evidencia debe mostrar `missing_api_config` y fallback seguro
 
 ## Smoke test local sin servicios reales
 
@@ -82,7 +82,7 @@ Para cada caso real, registrar:
 - `clickup_task_id`, si se crea
 - vendedor asignado, si aplica
 - auditorias relevantes, especialmente eventos de orquestador, AI, ClickUp, seller notification y error handler
-- estado de `AI_LEAD_ASSISTANT_ENABLED`
+- estado del proveedor AI y razon de fallback si aplica
 - resultado: `OK`, `Falla` o `Bloqueado`
 - observaciones
 
@@ -141,32 +141,32 @@ Un caso pasa si:
 - crea tarea ClickUp solo para leads confirmados
 - asigna vendedor notificable cuando el flujo espera notificacion
 - deja auditoria suficiente para diagnosticar el caso
-- con AI apagada, el comportamiento critico se mantiene igual que antes
 - con AI encendida, Hormi Atencion mejora extraccion/respuesta y puede habilitar lead confirmado
 - si AI falla, responde invalido o tiene baja confianza, el flujo cae a logica deterministica
+- con error de configuracion AI, el flujo no se rompe: deja auditoria y cae a logica deterministica
 
 ## Casos base CP-01 a CP-12
 
 | ID | Caso | Mensajes del cliente | Modo AI | Resultado esperado | Evidencia minima |
 | --- | --- | --- | --- | --- | --- |
-| CP-01 | Saludo simple | `Hola` | Apagada y encendida | Bot responde bienvenida y pide el primer dato faltante. No crea lead. | `conversation_id`, respuesta bot, sin `lead_id`, auditoria de decision |
-| CP-02 | Mensaje completo desde el inicio | `Hola, necesito comprar baldosas en Santiago para renovar un baño` | Apagada y encendida | Detecta servicio, ciudad y requerimiento; pide confirmacion. No crea lead hasta confirmar. | `conversation_id`, campos detectados, `current_step=confirm`, sin `lead_id` |
-| CP-03 | Confirmacion final | Despues de CP-02: `Si, correcto` | Apagada y encendida | Crea lead, asigna vendedor, crea tarea ClickUp y notifica si el vendedor es notificable. | `lead_id`, `clickup_task_id`, vendedor, auditorias |
-| CP-04 | Respuestas fuera de orden | `Necesito instalar en Valparaiso` | Apagada y encendida | Aprovecha ciudad y requerimiento parcial, pregunta solo lo faltante. No crea lead antes de confirmacion. | campos detectados, pregunta siguiente, sin `lead_id` |
-| CP-05 | Comprador con datos incompletos | `Quiero cotizar en Santiago` | Apagada y encendida | Detecta intencion y ciudad, pero pregunta producto/servicio especifico. No crea lead. | sin `lead_id`, pregunta por servicio |
-| CP-06 | Respuesta directa de servicio | Despues de una pregunta por servicio: `Baldosas` | Apagada y encendida | Acepta `Baldosas` como servicio y avanza al siguiente dato faltante. | `service=Baldosas`, pregunta siguiente, auditoria |
-| CP-07 | Requerimiento vago | `Algo para la casa` | Apagada y encendida | Pide aclaracion o dato mas concreto. No crea lead. AI de baja confianza no debe aceptar campos. | respuesta de aclaracion, sin `lead_id` |
-| CP-08 | Rechazo en confirmacion | En confirmacion: `No, quiero corregir` | Apagada y encendida | Solicita correccion o reinicia estado sin crear lead. | `current_step` de correccion o dato faltante, sin nuevo lead |
-| CP-09 | Nuevo lead desde numero repetido | Desde numero con lead previo: `nueva` o `quiero hacer otra solicitud` | Apagada y encendida | Inicia nueva solicitud sin guardar `nueva` como servicio. | nueva conversacion o estado reiniciado, servicio vacio |
-| CP-10 | Continuar solicitud anterior | Desde numero con lead previo: `continuar con la anterior` | Apagada y encendida | Reutiliza contexto previo y pide confirmacion o siguiente dato faltante. No crea lead en ese paso. | `previous_lead_id`, campos heredados, sin nuevo `lead_id` |
-| CP-11 | Mensaje con adjunto y texto | Imagen con caption `Necesito estas baldosas en Santiago` | Apagada y encendida | Registra metadata del adjunto y continua flujo. No crea lead sin confirmacion. | `message_attachments`, campos detectados, sin `lead_id` |
-| CP-12 | Evento no procesable | Mensaje desde grupo o mensaje propio | Apagada y encendida | Workflow ignora el evento y no crea conversacion ni lead. | sin nueva conversacion/lead, auditoria o respuesta tecnica aceptada |
+| CP-01 | Saludo simple | `Hola` | Real | Bot responde bienvenida y pide el primer dato faltante. No crea lead. | `conversation_id`, respuesta bot, sin `lead_id`, auditoria de decision |
+| CP-02 | Mensaje completo desde el inicio | `Hola, necesito comprar baldosas en Santiago para renovar un baño` | Real | Detecta servicio, ciudad y requerimiento; pide confirmacion. No crea lead hasta confirmar. | `conversation_id`, campos detectados, `current_step=confirm`, sin `lead_id` |
+| CP-03 | Confirmacion final | Despues de CP-02: `Si, correcto` | Real | Crea lead, asigna vendedor, crea tarea ClickUp y notifica si el vendedor es notificable. | `lead_id`, `clickup_task_id`, vendedor, auditorias |
+| CP-04 | Respuestas fuera de orden | `Necesito instalar en Valparaiso` | Real | Aprovecha ciudad y requerimiento parcial, pregunta solo lo faltante. No crea lead antes de confirmacion. | campos detectados, pregunta siguiente, sin `lead_id` |
+| CP-05 | Comprador con datos incompletos | `Quiero cotizar en Santiago` | Real | Detecta intencion y ciudad, pero pregunta producto/servicio especifico. No crea lead. | sin `lead_id`, pregunta por servicio |
+| CP-06 | Respuesta directa de servicio | Despues de una pregunta por servicio: `Baldosas` | Real | Acepta `Baldosas` como servicio y avanza al siguiente dato faltante. | `service=Baldosas`, pregunta siguiente, auditoria |
+| CP-07 | Requerimiento vago | `Algo para la casa` | Real | Pide aclaracion o dato mas concreto. No crea lead. AI de baja confianza no debe aceptar campos. | respuesta de aclaracion, sin `lead_id` |
+| CP-08 | Rechazo en confirmacion | En confirmacion: `No, quiero corregir` | Real | Solicita correccion o reinicia estado sin crear lead. | `current_step` de correccion o dato faltante, sin nuevo lead |
+| CP-09 | Nuevo lead desde numero repetido | Desde numero con lead previo: `nueva` o `quiero hacer otra solicitud` | Real | Inicia nueva solicitud sin guardar `nueva` como servicio. | nueva conversacion o estado reiniciado, servicio vacio |
+| CP-10 | Continuar solicitud anterior | Desde numero con lead previo: `continuar con la anterior` | Real | Reutiliza contexto previo y pide confirmacion o siguiente dato faltante. No crea lead en ese paso. | `previous_lead_id`, campos heredados, sin nuevo `lead_id` |
+| CP-11 | Mensaje con adjunto y texto | Imagen con caption `Necesito estas baldosas en Santiago` | Real | Registra metadata del adjunto y continua flujo. No crea lead sin confirmacion. | `message_attachments`, campos detectados, sin `lead_id` |
+| CP-12 | Evento no procesable | Mensaje desde grupo o mensaje propio | Real | Workflow ignora el evento y no crea conversacion ni lead. | sin nueva conversacion/lead, auditoria o respuesta tecnica aceptada |
 
 ## Casos AI post-integracion
 
 | ID | Caso | Entrada | Resultado esperado | Guardrail |
 | --- | --- | --- | --- | --- |
-| AI-01 | AI apagada | CP-02 con `AI_LEAD_ASSISTANT_ENABLED=false` | Resultado equivalente al flujo deterministico: campos detectados y confirmacion solicitada, sin lead. | No debe existir dependencia del proveedor AI API directa. |
+| AI-01 | Error de configuracion AI | CP-02 con `AI_DIRECT_API_KEY` o `AI_DIRECT_API_MODEL` pendiente | El orquestador deja auditoria `missing_api_config` y usa logica deterministica. | No debe bloquear la conversacion ni crear lead. |
 | AI-02 | Hormi Atencion completa campos | CP-02 con API directa devolviendo JSON valido, `confidence>=0.75`, campos claros y `should_create_lead=false` | El orquestador puede usar campos sugeridos y respuesta asistida; queda en confirmacion, sin crear lead. | No crea lead antes de confirmacion. |
 | AI-03 | AI invalida o falla | CP-02 con timeout, HTTP error o JSON invalido | El orquestador ignora AI, deja auditoria de falla y usa logica deterministica. | No debe bloquear la conversacion ni crear lead. |
 | AI-04 | AI baja confianza | `Algo para la casa` con `confidence<0.75` | No acepta campos sugeridos por AI; pide aclaracion deterministica. | Campos no confirmados no se sobrescriben. |
@@ -194,11 +194,9 @@ sh scripts/dev/evolution-doctor.sh
 docker compose --env-file .env ps
 ```
 
-4. Ejecutar `CP-01` a `CP-12` con `AI_LEAD_ASSISTANT_ENABLED=false`.
+4. Ejecutar `CP-01` a `CP-12` con proveedor AI real configurado.
 
-5. Activar AI para pruebas controladas y resincronizar si corresponde.
-
-6. Ejecutar `AI-01` a `AI-06` y repetir los casos criticos `CP-02`, `CP-03`, `CP-08`, `CP-11` con AI encendida.
+5. Ejecutar `AI-01` a `AI-06` y repetir los casos criticos `CP-02`, `CP-03`, `CP-08`, `CP-11`.
 
 7. Registrar evidencia en la tabla de ejecucion.
 
@@ -209,7 +207,7 @@ docker compose --env-file .env ps
 - filas relevantes de `conversations`, `messages`, `leads`, `message_attachments`
 - auditorias
 - execution id de n8n
-- estado de feature flag AI
+- estado del proveedor AI, modelo y razon de fallback si aplica
 
 ## Registro de ejecucion
 
@@ -228,8 +226,8 @@ docker compose --env-file .env ps
 | 2026-04-26 16:24 -04 | CP-10 | N/A | 56900002029 | 12 | 24 | 86ah3pba6 | Valentina Rojas | OK con observacion | `continuar con la anterior` recupero datos del lead 24 y volvio a pedir confirmacion. No creo lead nuevo en ese paso. |
 | 2026-04-26 16:27 -04 | CP-11 | N/A | 56900002035 | 18 |  |  |  | OK | Imagen simulada con caption registro metadata y continuo flujo sin crear lead. |
 | 2026-04-26 16:25 -04 | CP-12 | N/A | 120363000000000000 |  |  |  |  | OK | Evento de grupo fue no procesable y no creo conversacion ni lead. |
-| Pendiente | AI-01 | Off |  |  |  |  |  | Pendiente | Ejecutar como baseline deterministico con el feature flag apagado. |
-| Pendiente | AI-02 | On valida |  |  |  |  |  | Pendiente | Requiere mock local o ejecucion real controlada por integrador. |
+| Pendiente | AI-01 | Config error |  |  |  |  |  | Pendiente | Debe registrar `missing_api_config` y mantener fallback seguro. |
+| Pendiente | AI-02 | On valida |  |  |  |  |  | Pendiente | Requiere ejecucion real controlada por integrador. |
 | Pendiente | AI-03 | On invalida/falla |  |  |  |  |  | Pendiente | Debe dejar auditoria y fallback deterministico. |
 | Pendiente | AI-04 | On baja confianza |  |  |  |  |  | Pendiente | Debe rechazar campos sugeridos por AI. |
 | Pendiente | AI-05 | On correccion |  |  |  |  |  | Pendiente | Debe volver a confirmar antes de crear lead. |
@@ -252,6 +250,6 @@ docker compose --env-file .env ps
 La matriz queda lista para regresion post-AI:
 
 - `CP-01` a `CP-12` son la base deterministica obligatoria
-- `AI-01` a `AI-06` cubren feature flag, salida valida, falla/invalidez, baja confianza, correccion de usuario y creacion confirmada
+- `AI-01` a `AI-06` cubren error de configuracion, salida valida, falla/invalidez, baja confianza, correccion de usuario y creacion confirmada
 - la evidencia requerida queda normalizada con `conversation_id`, `lead_id`, `clickup_task_id`, vendedor y auditorias
 - existe un smoke test local versionado para proteger la matriz sin servicios reales

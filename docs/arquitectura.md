@@ -113,7 +113,7 @@ En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo d
 
 ## Pendientes
 
-- validar matriz conversacional completa con AI apagada y AI encendida
+- validar matriz conversacional completa con proveedor AI real y fallback seguro
 - validar Hormi Atencion con servicios vivos desde el workspace del integrador
 - ejecutar pruebas controladas con `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
 - sincronizar el workflow AI actualizado en la instancia viva de `n8n`

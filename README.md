@@ -25,7 +25,7 @@ Componentes principales:
 - `Evolution API`: entrada y salida de WhatsApp self-hosted
 - `Redis`: soporte operativo de `Evolution API`
 - `ClickUp`: destino operativo de los leads
-- proveedor AI por API directa: capa opcional para comprension y respuesta conversacional
+- proveedor AI por API directa: capa oficial para comprension y respuesta conversacional
 
 Principio clave:
 
@@ -40,7 +40,7 @@ Estado actual de madurez:
 - base tecnica implementada y documentada
 - workflows principales versionados
 - integracion con WhatsApp, `PostgreSQL` y `ClickUp` ya incorporada al flujo
-- asistente AI preparado con fallback seguro a flujo deterministico
+- asistente AI definitivo preparado con fallback seguro ante error real del proveedor o configuracion invalida
 - esquema de base ampliado para soportar catalogo, precios, condiciones y futura evolucion comercial AI
 
 Estado recomendado para comunicar publicamente:
@@ -71,7 +71,7 @@ No cubre todavia de punta a punta:
 - agenda real
 - condiciones comerciales aprobadas
 - FAQ y objeciones cargadas como fuente oficial
-- conversacion end-to-end con AI encendida y proveedor/mock registrando decisiones reales
+- conversacion end-to-end con AI real validada de forma ampliada en servicios vivos
 - observabilidad y monitoreo de nivel produccion
 
 La configuracion funcional vigente del asesor esta en `docs/prd-agente-whatsapp-hormiglass.md`.
@@ -185,17 +185,17 @@ El esquema principal incluye:
 
 ## Asistente AI
 
-El subworkflow `AI - Lead Qualification Assistant` funciona como capa opcional de asistencia conversacional.
+El subworkflow `AI - Lead Qualification Assistant` funciona como la capa oficial de asistencia conversacional.
 
 Comportamiento esperado:
 
-- si la AI esta bien configurada, puede interpretar intencion, extraer datos y redactar respuesta
-- si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo debe caer a una ruta deterministica segura
+- la AI interpreta intencion, extrae datos y redacta respuesta cuando el proveedor responde correctamente
+- si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo cae a una ruta deterministica segura sin apagar la AI del proyecto
 
 El proyecto ya incluye:
 
 - contrato estructurado de salida JSON
-- pruebas locales con mocks
+- pruebas locales de contrato y fallback con respuestas simuladas en memoria
 - base de contexto comercial para catalogo y precios publicos
 
 ## Documentacion recomendada
@@ -231,7 +231,7 @@ La plantilla `.env.example` contiene placeholders seguros. Toda configuracion re
 
 ## Roadmap tecnico inmediato
 
-- cerrar baseline deterministico sin AI
+- ampliar validacion E2E con proveedor AI real
 - ampliar validacion end-to-end
 - endurecer configuracion para staging y produccion
 - completar validaciones de salida operativa

@@ -54,7 +54,7 @@ Incluye:
 - limpiar ruido historico de logs que complique diagnostico
 - repetir preflight y sincronizacion de workflows
 - volver a validar backup y restore no destructivo
-- repetir una prueba end-to-end real con AI apagada
+- repetir una prueba end-to-end real con proveedor AI configurado
 
 Criterio de salida:
 
@@ -138,9 +138,9 @@ Evidencia esperada:
 - runbook actualizado o validado contra el estado actual
 - criterio compartido para distinguir ruido historico de falla real
 
-##### 0.6 Prueba end-to-end real con AI apagada
+##### 0.6 Prueba end-to-end real con proveedor AI
 
-- [ ] Confirmar `AI_LEAD_ASSISTANT_ENABLED=false`
+- [ ] Confirmar `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` reales en el entorno
 - [ ] Ejecutar una conversacion real de punta a punta
 - [ ] Confirmar respuesta saliente `sent`
 - [ ] Confirmar derivacion, lead y sync en ClickUp
@@ -172,7 +172,7 @@ La Etapa 0 debe considerarse cerrada solo si se cumplen simultaneamente estas co
 - los workflows sincronizan correctamente
 - `OPS - Error Handler` deja auditoria repetible
 - backup y restore no destructivo fueron validados
-- el flujo real de WhatsApp funciona con AI apagada
+- el flujo real de WhatsApp funciona con proveedor AI configurado
 - el equipo ya no esta diagnosticando contra ruido historico
 
 ### Etapa 1. Congelar baseline funcional
@@ -186,8 +186,8 @@ Incluye:
 - congelar imagenes y tags
 - consolidar nombres finales de instancia, workflows y variables
 - dejar documentado el procedimiento de sync y rollback de workflows
-- confirmar comportamiento conversacional completo con `AI_LEAD_ASSISTANT_ENABLED=false`
-- confirmar que lead, round robin, ClickUp y notificacion funcionan sin depender de AI
+- confirmar comportamiento conversacional completo con proveedor AI real
+- confirmar que lead, round robin, ClickUp y notificacion siguen protegidos por fallback si el proveedor AI falla
 
 Criterio de salida:
 
@@ -276,7 +276,7 @@ Criterio de salida:
 
 - AI agrega valor sin romper el baseline
 - el sistema sigue siendo operable aunque el proveedor AI falle
-- queda evidencia de que Hormi Atencion puede operar en produccion con rollback a `AI_LEAD_ASSISTANT_ENABLED=false`
+- queda evidencia de que Hormi Atencion puede operar en produccion con fallback seguro y observabilidad suficiente
 
 ### Etapa 5B. Evolucionar a asesor comercial AI
 
@@ -499,7 +499,6 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 
 ### 10. AI
 
-- [ ] Ejecutar baseline con `AI_LEAD_ASSISTANT_ENABLED=false`
 - [ ] Activar AI en entorno controlado con `AI_PROVIDER=direct_api`
 - [ ] Validar respuestas de Hormi Atencion con trafico real
 - [ ] Confirmar que API key/modelo y salida JSON estructurada fueron probados antes de produccion

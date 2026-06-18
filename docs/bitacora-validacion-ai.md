@@ -237,7 +237,7 @@ Completado:
 
 Pendiente inmediato:
 
-1. ejecutar baseline deterministico con `AI_LEAD_ASSISTANT_ENABLED=false`
+1. ejecutar validacion controlada con proveedor AI real y evidenciar fallback seguro ante error
 2. cerrar completamente el smoke de `OPS - Error Handler`
 3. validar backup y verify restore no destructivo con evidencia reciente
 4. cargar proveedor/modelo/API key en `.env` solo por el integrador

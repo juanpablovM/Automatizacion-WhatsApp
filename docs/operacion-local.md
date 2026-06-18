@@ -215,7 +215,7 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato API directa. No usa `.env` real ni llama al proveedor AI.
+La prueba local valida contrato y fallback con respuestas simuladas en memoria. Cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor y error de configuracion. No usa `.env` real ni llama al proveedor AI.
 
 Diagnostico de autenticacion:
 
@@ -234,26 +234,18 @@ Guardrails actuales del sub-workflow:
 Variables esperadas en `.env`:
 
 ```bash
-AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=direct_api
 AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
 AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
 AI_DIRECT_API_MODEL=__PENDIENTE__
-AI_DIRECT_API_TIMEOUT_MS=8000
+AI_DIRECT_API_TIMEOUT_MS=30000
 ```
 
-El sub-workflow tambien soporta `/responses`; el valor versionado en `.env.example` es `/chat/completions`, mientras que el test local de contrato ejercita `/responses` con mocks.
+El sub-workflow tambien soporta `/responses`; el valor versionado en `.env.example` es `/chat/completions`, y el test local de contrato puede ejercitar cualquiera de las dos formas sin salir a internet.
 
 La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
-
-Rollback operativo:
-
-```bash
-AI_LEAD_ASSISTANT_ENABLED=false
-docker compose --env-file .env up -d n8n
-```
 
 Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar lead confirmado; `n8n` y PostgreSQL ejecutan persistencia, ClickUp y asignacion. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
 

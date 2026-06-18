@@ -30,8 +30,7 @@ El proyecto ya tiene implementadas las bases de:
 - `WA - Conversation Orchestrator` registra decisiones AI en `advisor_decisions` cuando la AI esta habilitada
 - PRD del agente WhatsApp Hormiglass agregado en `docs/prd-agente-whatsapp-hormiglass.md`
 - contrato AI ampliado para diagnostico D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
-- entorno local dejado en modo AI mock PRD: `AI_DIRECT_API_BASE_URL=http://host.docker.internal:9999`, `AI_DIRECT_API_MODEL=mock-hormi-prd`
-- mock local `scripts/ops/mock-ai-server.js` corriendo en `0.0.0.0:9999` para validar el contrato nuevo sin proveedor externo
+- eliminada la ruta de mock local; el proyecto queda alineado al proveedor AI definitivo por API directa
 - workflows sincronizados localmente; `WA - Inbound Entry` quedo activo y `AI - Lead Qualification Assistant` contiene `Load Commercial Context`
 
 Estado real validado en la instancia local actual:
@@ -47,8 +46,8 @@ Estado real validado en la instancia local actual:
 - se sincronizo el workflow AI actualizado en n8n local; el subworkflow queda inactivo como workflow independiente, pero disponible para ejecucion desde el orquestador
 - se sincronizo `WA - Conversation Orchestrator` con auditoria AI en `advisor_decisions`
 - se valido el SQL real de persistencia con una transaccion `ROLLBACK`; genero `advisor_decision_id` sin dejar datos de prueba permanentes
-- se valido una conversacion inbound local con AI mock PRD; `advisor_decisions` quedo `accepted` con `lead_class=A`, `customer_type=b2c`, `modality=installation`, diagnostico D.A.T.O.S. y `escalation_area=sales`
-- el proveedor real configurado antes del mock devolvio `invalid_json`; queda pendiente ajustar proveedor/modelo/prompt real antes de usarlo en produccion
+- el trabajo vigente reemplaza por completo la ruta de mock y deja a Hormi Atencion operando solo con proveedor AI real mas fallback seguro
+- si el proveedor real devuelve `invalid_json`, timeout o error HTTP, el orquestador conserva guardrails y cae a fallback deterministico sin apagar la AI del proyecto
 
 ## Resumen ejecutivo rapido
 
@@ -80,13 +79,12 @@ Hoy el proyecto ya tiene:
 
 Lo que aun falta cerrar por el integrador:
 
-- ejecutar baseline con AI apagada
-- reemplazar mock AI por proveedor real validado con `AI_DIRECT_API_MODEL=<modelo elegido>`
+- validar E2E con proveedor real configurado en `.env`
 - validar Hormi Atencion y matriz conversacional con servicios vivos
 - cerrar completamente el smoke de `OPS - Error Handler`
 - completar la checklist de salida a produccion
 - validar que Hormi Atencion use catalogo y precios publicos sin inventar valores
-- validar proveedor real AI contra el mismo caso end-to-end que hoy pasa con mock PRD
+- validar proveedor real AI contra los mismos casos end-to-end versionados en la matriz conversacional
 - dejar condiciones comerciales, FAQ, objeciones y agenda para una fase posterior, porque aun no existe informacion aprobada
 
 Nota de orden documental:
@@ -146,7 +144,6 @@ Variables clave ya contempladas:
 - `CLICKUP_LIST_ID=901326797183`
 - `CLICKUP_TEAM_ID=9013271719`
 - `CLICKUP_CF_*` ya cargados en `.env`
-- `AI_LEAD_ASSISTANT_ENABLED=true` en `.env.example`
 - `AI_PROVIDER=direct_api`
 - `AI_API_KEY_REQUIRED=true`
 - `AI_DIRECT_API_BASE_URL=https://api.openai.com/v1`
@@ -213,7 +210,7 @@ Leer al retomar:
   - esta evolucion aun no esta implementada de punta a punta; queda como frente de trabajo documentado en `docs/asesor-comercial-ai.md`
 - politica de secretos:
   - `.env` real no se commitea ni se comparte entre agentes
-  - agentes no integradores trabajan con `.env.example`, samples, mocks y tests locales
+  - agentes no integradores trabajan con `.env.example`, samples y tests locales sin tocar secretos reales
   - el integrador es el unico rol autorizado para usar `AI_DIRECT_API_KEY`, `CLICKUP_API_TOKEN`, `EVOLUTION_API_KEY` y credenciales reales
 
 ## Workflows existentes en n8n
@@ -273,7 +270,7 @@ Estado real de implementacion:
   - contrato JSON controlado para extraccion, redaccion y decision confirmada
   - conectado a API directa mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
   - `.env.example` usa `/chat/completions`; el workflow tambien soporta `/responses`
-  - prueba local con mocks: `sh scripts/ops/test-ai-assistant-local.sh`
+  - prueba local de contrato/fallback: `sh scripts/ops/test-ai-assistant-local.sh`
   - no usa secretos reales fuera del workspace del integrador
 
 ## ClickUp
@@ -373,7 +370,7 @@ Estado de limpieza de datos de prueba:
    - `sh scripts/ops/test-conversation-regression-local.sh`
    - healthcheck de `n8n`
 2. sincronizar workflows y verificar que `WA - Inbound Entry` quede activo
-3. ejecutar matriz conversacional con AI apagada
+3. ejecutar matriz conversacional con proveedor AI real y verificar fallback seguro cuando corresponda
 4. levantar el proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
 5. confirmar que `.env` usa el mismo `AI_DIRECT_API_KEY` que el proveedor AI
 6. ejecutar matriz conversacional con AI encendida, incluyendo falla del proveedor AI, baja confianza y respuesta invalida
@@ -463,5 +460,5 @@ Quedan para mas adelante, solo si el uso real lo justifica:
 ## Prompt sugerido para un nuevo chat
 
 ```text
-Continua este proyecto desde /home/agentesai/Automatizacion-WhatsApp. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y mocks salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
+Continua este proyecto desde /home/agentesai/Automatizacion-WhatsApp. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y tests locales salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
 ```

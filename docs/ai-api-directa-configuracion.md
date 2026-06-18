@@ -21,17 +21,16 @@ La autonomia operativa sigue en `n8n`:
 
 ## Variables
 
-Mientras no exista API key/modelo real, estos placeholders hacen que el workflow omita IA y use fallback deterministico.
+La AI queda siempre habilitada en el proyecto. Si faltan credenciales o modelo real, el workflow registra `missing_api_config` y cae a fallback seguro, pero eso debe tratarse como una misconfiguracion bloqueante del entorno.
 
 ```bash
-AI_LEAD_ASSISTANT_ENABLED=true
 AI_PROVIDER=direct_api
 AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
 AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
 AI_DIRECT_API_MODEL=__PENDIENTE__
-AI_DIRECT_API_TIMEOUT_MS=15000
+AI_DIRECT_API_TIMEOUT_MS=30000
 AI_DIRECT_API_TEMPERATURE=0.05
 AI_DIRECT_API_MAX_TOKENS=700
 ```
@@ -39,23 +38,7 @@ AI_DIRECT_API_MAX_TOKENS=700
 El workflow soporta dos formas de API directa:
 
 - `/chat/completions`, valor versionado en `.env.example`
-- `/responses`, usado por el test local de contrato con mocks y disponible si el proveedor elegido lo requiere
-
-Para validacion local sin proveedor externo se puede usar el mock PRD:
-
-```bash
-MOCK_AI_MODE=valid MOCK_AI_HOST=0.0.0.0 MOCK_AI_PORT=9999 \
-  sh scripts/ops/mock-ai-server.sh start
-```
-
-Y configurar temporalmente:
-
-```env
-AI_DIRECT_API_BASE_URL=http://host.docker.internal:9999
-AI_DIRECT_API_PATH=/chat/completions
-AI_DIRECT_API_KEY=mock-ai-key
-AI_DIRECT_API_MODEL=mock-hormi-prd
-```
+- `/responses`, disponible si el proveedor elegido lo requiere
 
 Para activar con proveedor real:
 
@@ -98,4 +81,4 @@ El workflow acepta respuestas desde `choices[].message.content`, `output_text`, 
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba usa mocks y no llama ninguna API externa.
+La prueba valida el contrato y el fallback con respuestas simuladas en memoria. No levanta servidores mock ni llama ninguna API externa.
