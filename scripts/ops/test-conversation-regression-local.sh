@@ -86,6 +86,9 @@ for (const testCase of suite.cases) {
   if (testCase.id.startsWith('AI-') && expected.ai_creates_lead_directly === true && expected.confirmed_by_user !== true) {
     fail(`${testCase.id}: Hormi Atencion solo puede decidir crear lead con confirmacion`);
   }
+  if (testCase.id === 'AI-01' && expected.fallback_deterministic !== true) {
+    fail('AI-01 debe caer a fallback deterministico por error de configuracion');
+  }
   if (testCase.id === 'AI-03' && expected.fallback_deterministic !== true) {
     fail('AI-03 debe caer a fallback deterministico');
   }
@@ -111,6 +114,9 @@ for (const testCase of suite.cases) {
 const applyNode = orchestrator.nodes.find((node) => node.name === 'Apply AI Assistance');
 if (!applyNode) fail('Falta nodo Apply AI Assistance en orquestador');
 
+const evaluateNode = orchestrator.nodes.find((node) => node.name === 'Evaluate Conversation Step');
+if (!evaluateNode) fail('Falta nodo Evaluate Conversation Step en orquestador');
+
 const aiLinkNode = orchestrator.nodes.find((node) => node.name === 'Execute AI Lead Qualification');
 if (!aiLinkNode || aiLinkNode.type !== 'n8n-nodes-base.executeWorkflow') {
   fail('Falta nodo Execute AI Lead Qualification como executeWorkflow');
@@ -129,9 +135,14 @@ if (!persistNode.parameters.additionalFields.queryParams.includes('diagnostic_da
 }
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const runApplyAi = async (row, env = { AI_LEAD_ASSISTANT_ENABLED: 'true' }) => {
+const runApplyAi = async (row, env = {}) => {
   const fn = new AsyncFunction('items', '$env', applyNode.parameters.jsCode);
   const result = await fn([{ json: row }], env);
+  return result[0].json;
+};
+const runEvaluate = async (row) => {
+  const fn = new AsyncFunction('items', evaluateNode.parameters.jsCode);
+  const result = await fn([{ json: row }]);
   return result[0].json;
 };
 const mergedAiShape = (deterministicRow, aiRow) => ({
@@ -168,18 +179,43 @@ const baseDeterministic = {
   metadata_json: '{}',
 };
 
-const disabled = await runApplyAi(
+const communeAndProduct = await runEvaluate({
+  phone_number: '+56911111112',
+  message_type: 'text',
+  text_body: 'Quiero cotizar 25 metros de adoquines en Las Condes, solo material',
+  raw_payload_json: '{}',
+  has_active_conversation: false,
+  conversation_status_code: null,
+  current_step: null,
+  state_current_step: null,
+  service: null,
+  city: null,
+  requirement: null,
+  lead_id: null,
+});
+if (communeAndProduct.city !== 'Las Condes') {
+  fail('Extractor deterministico debe reconocer la comuna Las Condes');
+}
+if (communeAndProduct.service !== 'Adoquines') {
+  fail('Extractor deterministico debe aislar Adoquines como producto');
+}
+if (!String(communeAndProduct.current_step).startsWith('confirm|')) {
+  fail('Mensaje completo con comuna y producto debe pasar a confirmacion');
+}
+
+const configError = await runApplyAi(
   mergedAiShape(baseDeterministic, {
-    ai_skipped_1: true,
-    ai_skip_reason_1: 'disabled',
+    ai_skipped_1: false,
+    ai_request_error_1: 'missing_api_config',
+    ai_fallback_reason_1: 'missing_api_config',
     service: 'Baldosas',
     requirement: 'Renovar un baño',
     confidence: 0.92,
-  }),
-  { AI_LEAD_ASSISTANT_ENABLED: 'false' }
+  })
 );
-if (disabled.ai_applied !== false) fail('AI apagada no debe aplicar campos');
-if (disabled.service !== null || disabled.requirement !== null) fail('AI apagada cambio campos determinísticos');
+if (configError.ai_applied !== false) fail('Config AI invalida no debe aplicar campos');
+if (configError.service !== null || configError.requirement !== null) fail('Config AI invalida cambio campos determinísticos');
+if (configError.ai_fallback_reason !== 'missing_api_config') fail('Config AI invalida debe exponer fallback correcto');
 
 const validAi = await runApplyAi(mergedAiShape(baseDeterministic, {
   ai_skipped_1: false,
