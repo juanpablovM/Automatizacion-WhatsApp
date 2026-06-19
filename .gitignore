@@ -14,6 +14,7 @@ tmp/
 data/
 backups/
 .hermes/
+.herms/
 
 # Datos operativos privados
 db/seeds/*_real.sql
@@ -21,6 +22,8 @@ db/seeds/private/
 
 # n8n
 .n8n/
+n8n/workflows/backup/
+*.bak
 
 # Python
 __pycache__/
