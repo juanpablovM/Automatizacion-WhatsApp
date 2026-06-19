@@ -205,9 +205,12 @@ La plantilla local mantiene Hormi Atencion por API directa activado por defecto.
 
 ```bash
 AI_DIRECT_API_KEY=<redacted>
-AI_DIRECT_API_MODEL=<modelo elegido>
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
 docker compose --env-file .env up -d n8n
 ```
+
+Valor canónico actual: `gemini-3.1-flash-lite`.
+Si se necesita mas calidad, evaluar `gemini-3.5-flash` como prueba controlada; no dejar `preview` ni `latest` como default.
 
 Para validar el contrato local sin llamar al proveedor real:
 
@@ -226,28 +229,31 @@ Diagnostico de autenticacion:
 
 Guardrails actuales del sub-workflow:
 
-- `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
+- `should_create_lead` solo puede quedar `true` con datos criticos, confirmacion aplicable y `confidence >= 0.75`.
 - si falta confirmacion, `missing_fields` incluye `confirmation` y el resumen ClickUp queda vacio.
 - si `confidence < 0.75`, no se aceptan campos nuevos sugeridos por AI; solo se conservan campos ya existentes en el contexto.
 - si la respuesta del proveedor AI no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
+- `field_updates` se validan antes de persistirse.
+- `pending_question_key` controla la interpretacion de respuestas breves.
+- no se anuncia derivacion antes de contar con `lead_id`.
 
 Variables esperadas en `.env`:
 
 ```bash
-AI_PROVIDER=direct_api
+AI_PROVIDER=google
 AI_API_KEY_REQUIRED=true
-AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
+AI_DIRECT_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
-AI_DIRECT_API_MODEL=__PENDIENTE__
-AI_DIRECT_API_TIMEOUT_MS=30000
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
+AI_DIRECT_API_TIMEOUT_MS=120000
 ```
 
 El sub-workflow tambien soporta `/responses`; el valor versionado en `.env.example` es `/chat/completions`, y el test local de contrato puede ejercitar cualquiera de las dos formas sin salir a internet.
 
 La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 
-Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar lead confirmado; `n8n` y PostgreSQL ejecutan persistencia, ClickUp y asignacion. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
+Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar un lead confirmado; `n8n` y PostgreSQL validan memoria, guardrails, persistencia, ClickUp y asignacion.
 
 ## Alcance actual
 

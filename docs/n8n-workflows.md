@@ -10,9 +10,8 @@ Este documento conserva la intencion de diseno original, pero el estado actual y
 
 - `n8n` actua como orquestador de eventos, integraciones y manejo operativo de errores
 - `PostgreSQL` actua como fuente de verdad del estado conversacional y del dominio CRM
-- la extraccion de datos usa enfoque hibrido:
-  - primero logica deterministica
-  - luego enriquecimiento opcional con IA si hace falta
+- Gemini es la voz conversacional principal
+- la logica deterministica valida guardrails y actua como fallback
 - los workflows se separan por responsabilidad para que sean portables, mantenibles y reutilizables por cliente
 - las integraciones externas se encapsulan para poder cambiar canales sin romper la logica central
 
@@ -54,26 +53,29 @@ Se evita un workflow unico grande porque:
 
 ## Estrategia de extraccion de datos
 
-### Capa 1: extraccion deterministica
+### Capa 1: supervision deterministica
 
-Se usa primero una capa simple y explicable con `Code`:
+Se usa una capa simple y explicable con `Code` para:
 
 - limpieza de texto
 - deteccion de saludo vacio
-- deteccion de respuestas utiles
-- normalizacion basica de ciudad
-- consolidacion de campos ya detectados
+- interpretar reinicios explicitos
+- validar respuestas AI y actualizaciones de campos
+- mantener `qualification_context` y `pending_question_key`
+- bloquear promesas u operaciones no autorizadas
+- generar fallback seguro si el proveedor falla
 
 ### Capa 2: Hormi Atencion en API directa
 
-Queda implementada como sub-workflow independiente y apagable para regresiones:
+Queda implementada como sub-workflow independiente:
 
-- tomar un mensaje libre amplio del cliente
-- proponer `service`, `city` y `requirement`
+- responder como asesor comercial al mensaje del cliente
+- diagnosticar con D.A.T.O.S. y contexto acumulado
+- proponer actualizaciones estructuradas y la siguiente mejor accion
 - devolver estructura JSON controlada
-- responder de forma natural cuando el agente tiene confianza suficiente
+- responder de forma natural, breve y consultiva
 - habilitar la creacion de lead solo cuando el usuario confirma y existen los datos minimos
-- usar API directa con el agente `Hormi Atencion`
+- consultar fuentes comerciales oficiales
 
 Regla:
 
@@ -91,6 +93,7 @@ Responsabilidad:
 - enrutar eventos utiles al procesamiento conversacional
 - responder rapido `accepted` al webhook
 - encadenar orquestacion conversacional, respuesta saliente, creacion de lead, ClickUp y notificacion
+- preparar la confirmacion de handoff solo despues de crear y asignar el lead
 
 Entrada:
 
@@ -123,6 +126,7 @@ Responsabilidad:
 - registrar mensaje y payload
 - recuperar o crear conversacion
 - decidir el siguiente paso
+- validar y persistir `qualification_context` y `pending_question_key`
 - persistir cambios del dominio
 - decidir si continua preguntando o si pasa a creacion de lead
 
@@ -144,21 +148,22 @@ Nodos principales:
 
 Uso de `Code`:
 
-- consolidacion de contexto conversacional
-- deteccion de campos ya respondidos
-- seleccion de pregunta pendiente
-- conteo de intentos de comprension
-- separacion entre intencion detectada y datos suficientes
-- confirmacion de `servicio + ciudad + requerimiento concreto`
+- consolidacion del diagnostico comercial
+- aplicacion de `field_updates`
+- interpretacion contextual de respuestas `si/no`
+- seleccion de una sola pregunta principal
+- validacion de datos criticos por intencion
+- confirmacion explicita cuando corresponde
 
 Uso de AI:
 
-- subpaso oficial cuando el mensaje libre trae contexto suficiente o confirma datos
+- subpaso oficial de toda conversacion procesable
 - resultado siempre validado antes de persistir
 - se invoca como ruta oficial del proyecto
 - si hay error de configuracion o del proveedor, el flujo conserva el fallback deterministico base
 - puede habilitar creacion de lead solo con confirmacion explicita, campos completos y confianza suficiente
 - no puede sobrescribir datos confirmados salvo correccion explicita del usuario
+- no puede anunciar handoff antes de que exista `lead_id`
 
 ### 3. `AI - Lead Qualification Assistant`
 
@@ -168,7 +173,7 @@ Responsabilidad:
 - llamar al proveedor AI directo configurado mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
 - usar `/chat/completions` como valor versionado en `.env.example`
 - soportar tambien `/responses` cuando el proveedor elegido lo requiera
-- extraer intencion, calidad del lead, servicio, ciudad y requerimiento
+- extraer intencion, calidad, diagnostico, actualizaciones y siguiente accion
 - recomendar productos o usar precios solo cuando existan en el contexto comercial cargado
 - proponer texto de respuesta y resumen para ClickUp
 - aplicar guardrails basicos antes de devolver `should_create_lead`
@@ -177,13 +182,18 @@ Entrada:
 
 - mensaje actual
 - estado conversacional actual
+- `qualification_context`
+- `pending_question_key`
 - ultimos mensajes relevantes
 - campos ya detectados
 - lead previo si existe
 - contexto comercial activo:
   - catalogo publico
   - reglas de precio publicas
-  - condiciones, FAQ, objeciones o agenda solo si existen cargadas
+  - condiciones comerciales
+  - FAQ
+  - objeciones
+  - agenda solo si existen cupos reales
 
 Salida:
 
@@ -211,11 +221,15 @@ Salida:
 - `escalation_area`
 - `executive_summary`
 - `handoff_reason`
+- `field_updates`
+- `answered_question_key`
+- `next_question_key`
+- `advisor_reasoning_summary`
 
 Estado:
 
 - activado por defecto en la plantilla
-- proveedor versionado: `AI_PROVIDER=direct_api`
+- proveedor versionado: `AI_PROVIDER=google`
 - requiere `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` para llamar al proveedor real
 - con placeholders pendientes, registra `missing_api_config` y mantiene fallback deterministico
 - no escribe directo en PostgreSQL
@@ -228,6 +242,7 @@ Estado:
 - filtra `catalog_matches` para aceptar solo items presentes en el catalogo cargado
 - acepta `price_context` solo cuando existen reglas de precio oficiales en el contexto comercial
 - no informa condiciones, descuentos, stock, agenda, garantia, despacho o instalacion si no existe fuente oficial cargada
+- formula como maximo una pregunta principal y conserva continuidad con la pregunta pendiente
 - ante JSON invalido o error del proveedor, devuelve fallback seguro sin crear lead
 - prueba local de contrato: `sh scripts/ops/test-ai-assistant-local.sh`
 - solo el integrador debe cargar secretos reales y ejecutar pruebas contra el proveedor AI
@@ -269,6 +284,7 @@ Responsabilidad:
 
 - crear el lead en `crm_whatsapp_app`
 - recuperar o heredar datos previos si aplica
+- copiar `qualification_context` validado al lead
 - ejecutar round robin
 - persistir asignacion
 - dejar el lead listo para ClickUp
@@ -303,6 +319,7 @@ Responsabilidad:
 - asignar vendedor con `clickup_user_id`
 - devolver siempre `lead_id`, `clickup_task_id` y `clickup_task_url` al workflow padre
 - crear comentario con conversacion completa cuando hay historial disponible
+- incluir diagnostico, D.A.T.O.S., clasificacion y resumen ejecutivo
 - preparar carga de adjuntos
 - registrar exito o error
 

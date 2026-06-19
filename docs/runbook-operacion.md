@@ -244,7 +244,7 @@ Checklist:
 - Evento configurado: `MESSAGES_UPSERT`, salvo cambio deliberado.
 - No eliminar la instancia ni volumenes para reconectar, a menos que se haya decidido resetear la sesion.
 
-## Activar o desactivar AI
+## Operar AI
 
 Validacion local del contrato sin proveedor real:
 
@@ -258,22 +258,25 @@ Configuracion esperada para AI:
 
 ```bash
 # editar .env
-AI_PROVIDER=direct_api
+AI_PROVIDER=google
 AI_API_KEY_REQUIRED=true
-AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
+AI_DIRECT_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=<redacted>
-AI_DIRECT_API_MODEL=<modelo elegido>
-AI_DIRECT_API_TIMEOUT_MS=8000
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
+AI_DIRECT_API_TIMEOUT_MS=120000
 docker compose --env-file .env up -d n8n
 ```
 
 `AI - Lead Qualification Assistant` soporta tanto `/chat/completions` como `/responses`; mantener el valor de `.env` alineado con el proveedor elegido.
+Valor canónico del proyecto: `gemini-3.1-flash-lite`.
+`gemini-3.5-flash` solo debe usarse como prueba de escalamiento si aparecen respuestas vagas, `invalid_json` o demasiada caida a fallback.
+Evitar dejar modelos `preview` o aliases `latest` como configuracion versionada.
 
 Checklist antes de activar:
 
 - API key vigente y no expuesta en Git.
-- Modelo definido en `AI_DIRECT_API_MODEL`.
+- Modelo definido en `AI_DIRECT_API_MODEL` y alineado al valor estable acordado.
 - Revisar [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
@@ -284,8 +287,18 @@ Reglas operativas:
 - Hormi Atencion decide la conversacion y puede habilitar leads confirmados.
 - n8n y PostgreSQL ejecutan persistencia, ClickUp y asignacion.
 - Hormi Atencion no escribe directo en PostgreSQL ni crea tareas ClickUp fuera del workflow.
-- Un lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
+- La conversacion mantiene `qualification_context` y `pending_question_key`.
+- Un lead requiere necesidad real, datos criticos de la intencion y confirmacion cuando corresponde.
+- La derivacion al cliente solo se anuncia despues de crear y asignar el lead.
 - Si el proveedor AI falla, demora, responde invalido o devuelve baja confianza, el flujo debe caer a logica deterministica.
+
+Validacion completa del asesor:
+
+```bash
+sh scripts/ops/test-ai-assistant-local.sh
+sh scripts/ops/test-conversation-regression-local.sh
+sh scripts/ops/test-advisor-vitacura-e2e.sh
+```
 
 ## Cierre de una ventana operativa
 

@@ -248,6 +248,21 @@
         2340,
         560
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst leadId = row.lead_id || null;\nconst assigned = row.assignment_result === 'assigned' && Boolean(row.assigned_seller_id);\n\nif (!leadId || !row.conversation_id || !row.phone_number) {\n  return [];\n}\n\nconst responseText = assigned\n  ? 'Gracias, ya registré tu solicitud y quedó asignada al equipo comercial. Una ejecutiva revisará los antecedentes para preparar una cotización acorde a tu proyecto.'\n  : 'Gracias, ya registré tu solicitud. No pude asignarla automáticamente en este momento, pero el equipo comercial podrá revisar el caso sin que tengas que repetir la información.';\n\nreturn [{\n  json: {\n    conversation_id: row.conversation_id,\n    lead_id: leadId,\n    phone_number: row.phone_number,\n    instance_name: $env.EVOLUTION_DEFAULT_INSTANCE || null,\n    response_text: responseText,\n    response_kind: assigned ? 'handoff_confirmed' : 'handoff_registered_unassigned',\n  },\n}];"
+      },
+      "id": "15",
+      "name": "Prepare Verified Handoff Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        700
+      ]
     }
   ],
   "pinData": {},
@@ -352,6 +367,11 @@
             "node": "Execute ClickUp Sync",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Prepare Verified Handoff Response",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -372,6 +392,17 @@
         [
           {
             "node": "Execute Seller Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Verified Handoff Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Outbound Messages",
             "type": "main",
             "index": 0
           }

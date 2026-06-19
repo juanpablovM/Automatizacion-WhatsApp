@@ -367,7 +367,7 @@ if (!String(validAi.diagnostic_datos_json).includes('Renovar baño')) {
 if (!String(validAi.commercial_missing_fields_json).includes('measurements')) {
   fail('AI valida debe exponer datos comerciales faltantes');
 }
-if (validAi.escalation_area !== 'sales' || !String(validAi.executive_summary).includes('Cliente B2C')) {
+if (validAi.escalation_area !== 'sales' || !String(validAi.executive_summary).includes('Tipo de cliente: b2c')) {
   fail('AI valida debe conservar escalamiento y resumen ejecutivo');
 }
 if (!String(validAi.catalog_matches_json).includes('BAL-001')) {
@@ -472,7 +472,8 @@ const confirmedAi = await runApplyAi(mergedAiShape({
   reply_text: 'Perfecto, derivare tu solicitud.',
 }));
 if (confirmedAi.should_create_lead !== true) fail('Hormi Atencion debe poder decidir crear lead confirmado');
-if (confirmedAi.response_kind !== 'handoff_ready') fail('Lead confirmado por Hormi Atencion debe quedar listo para handoff');
+if (confirmedAi.response_kind !== 'handoff_pending') fail('Lead confirmado debe esperar la creacion real antes de anunciar handoff');
+if (confirmedAi.response_text !== '') fail('El orquestador no debe prometer derivacion antes de crear el lead');
 
 const lowConfidence = await runApplyAi(mergedAiShape(baseDeterministic, {
   ai_skipped_1: false,
@@ -499,6 +500,61 @@ const correction = await runApplyAi(mergedAiShape({
 }));
 if (correction.service !== 'Baldosas') fail('Correccion explicita debe permitir sobrescribir campo');
 if (correction.should_create_lead !== false) fail('Correccion AI no puede crear lead sin confirmacion');
+
+const contextualNo = await runEvaluate({
+  phone_number: '+56911111116',
+  message_type: 'text',
+  text_body: 'no',
+  raw_payload_json: '{}',
+  has_active_conversation: true,
+  conversation_status_code: 'waiting_user',
+  current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%20perimetral%22%7D',
+  state_current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%20perimetral%22%7D',
+  state_service: 'Placas',
+  state_city: 'Vitacura',
+  state_requirement: 'Cierre perimetral',
+  qualification_context: { measurements: '150 metros', terrain: 'plano', truck_access: true },
+  pending_question_key: 'debris_removal',
+});
+if (contextualNo.reset_conversation_lead === true) {
+  fail('Un no a retiro de escombros no debe reiniciar la solicitud');
+}
+if (contextualNo.service !== 'Placas' || contextualNo.city !== 'Vitacura') {
+  fail('Un no contextual debe conservar producto y comuna');
+}
+
+const contextualAi = await runApplyAi(mergedAiShape(contextualNo, {
+  ai_skipped_1: false,
+  intent: 'provide_info',
+  confidence: 0.96,
+  service: 'Placas',
+  city: 'Vitacura',
+  requirement: 'Cierre perimetral',
+  confirmation_status: 'none',
+  should_create_lead: false,
+  field_updates: { debris_removal: false },
+  answered_question_key: 'debris_removal',
+  next_question_key: 'final_confirmation',
+  reply_text: 'Perfecto, entonces consideramos la instalación sin retiro de escombros. ¿Confirmas que estos datos están correctos para derivar la cotización?',
+  diagnostic_datos: {
+    pain: 'Delimitar y dar seguridad al terreno',
+    scope: 'Cierre de placas de 150 metros en terreno plano',
+    timing: '',
+    obstacle: '',
+    next_step: 'Confirmar datos',
+  },
+  objection_detected: 'none',
+  price_context: { type: 'none', requires_validation: true },
+}));
+if (contextualAi.qualification_context.debris_removal !== false) {
+  fail('La respuesta no debe persistirse como debris_removal=false');
+}
+if (contextualAi.pending_question_key !== 'final_confirmation') {
+  fail('Luego del dato de escombros debe quedar una confirmacion final contextual');
+}
+if (contextualAi.service !== 'Placas' || contextualAi.city !== 'Vitacura') {
+  fail('La asistencia AI contextual no debe perder el nucleo de la oportunidad');
+}
 
 console.log(`Conversation regression local smoke OK: ${suite.cases.length} casos validados`);
 })().catch((error) => {

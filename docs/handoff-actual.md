@@ -1,464 +1,127 @@
 # Handoff Actual
 
-## Objetivo de este documento
+## Estado
 
-Permitir retomar el proyecto en un chat nuevo sin depender del historial conversacional anterior.
+`Hormi Atencion` opera como asesor comercial de WhatsApp sobre Evolution API, n8n, PostgreSQL, Gemini y ClickUp.
 
-## Ruta del proyecto
+La instancia local validada incluye:
 
-- `/home/agentesai/Automatizacion-WhatsApp`
+- entrada y salida real de WhatsApp
+- memoria estructurada por conversacion
+- asesor comercial Gemini con fuentes oficiales
+- diagnostico D.A.T.O.S. y clasificacion A/B/C/D
+- creacion y asignacion round robin
+- tarea y notificacion en ClickUp
+- fallback deterministico y auditoria
+- confirmacion al cliente posterior a la creacion real del lead
 
-## Estado actual del proyecto
+## Configuracion AI
 
-El proyecto ya tiene implementadas las bases de:
+- proveedor: Google
+- endpoint: OpenAI-compatible
+- modelo canonico: `gemini-3.1-flash-lite`
+- alternativa canary: `gemini-3.5-flash`
+- no usar modelos `preview` ni aliases `latest` como default
 
-- estructura versionable del repo
-- infraestructura local con `Docker Compose`
-- `n8n` self-hosted funcionando localmente
-- `PostgreSQL` funcionando localmente
-- base de datos del CRM inicial ya creada
-- separacion entre base interna de `n8n` y base del CRM
-- ClickUp conectado y validado con prueba real
-- migracion tecnica de WhatsApp a `Evolution API` ya aplicada en infraestructura y workflows
-- sub-workflow `AI - Lead Qualification Assistant` alineado con API directa y el agente oficial `Hormi Atencion`
-- llamada HTTP directa `n8n/workflows/ai-lead-qualification-assistant.json` preparado para Hormi Atencion
-- nuevo rumbo funcional documentado: evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones como fuentes oficiales consultables
-- migracion `004_create_commercial_advisor_tables.sql` creada para preparar las fuentes comerciales del asesor AI
-- query `db/queries/n8n/ai-sales-advisor/01_load_commercial_context.sql` creada para cargar contexto comercial activo en JSON
-- catalogo publico Hormiglass cargado con 28 productos/servicios y 28 reglas de precio publicas
-- `AI - Lead Qualification Assistant` actualizado para cargar contexto comercial activo antes de llamar al proveedor AI
-- `WA - Conversation Orchestrator` registra decisiones AI en `advisor_decisions` cuando la AI esta habilitada
-- PRD del agente WhatsApp Hormiglass agregado en `docs/prd-agente-whatsapp-hormiglass.md`
-- contrato AI ampliado para diagnostico D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
-- eliminada la ruta de mock local; el proyecto queda alineado al proveedor AI definitivo por API directa
-- workflows sincronizados localmente; `WA - Inbound Entry` quedo activo y `AI - Lead Qualification Assistant` contiene `Load Commercial Context`
+Los secretos existen solo en `.env`. La configuracion versionada vive en `.env.example` y `docker-compose.yml`.
 
-Estado real validado en la instancia local actual:
+## Memoria conversacional
 
-- la sesion de WhatsApp fue reabierta y enlazada nuevamente
-- la instancia activa real es `wahormiglass`
-- el webhook actual apunta al workflow activo `WA - Inbound Entry`
-- se confirmo una conversacion real procesada de punta a punta
-- se confirmo salida real por WhatsApp con estado `sent`
-- se confirmo derivacion comercial y `clickup_task_sync` en auditoria
-- se corrigio `scripts/dev/evolution-connect-instance.sh` para tomar la instancia real desde `.env`
-- se actualizo el smoke `scripts/ops/test-error-handler.sh` para usar una bandera de prueba explicita en vez de un timestamp basura
-- se sincronizo el workflow AI actualizado en n8n local; el subworkflow queda inactivo como workflow independiente, pero disponible para ejecucion desde el orquestador
-- se sincronizo `WA - Conversation Orchestrator` con auditoria AI en `advisor_decisions`
-- se valido el SQL real de persistencia con una transaccion `ROLLBACK`; genero `advisor_decision_id` sin dejar datos de prueba permanentes
-- el trabajo vigente reemplaza por completo la ruta de mock y deja a Hormi Atencion operando solo con proveedor AI real mas fallback seguro
-- si el proveedor real devuelve `invalid_json`, timeout o error HTTP, el orquestador conserva guardrails y cae a fallback deterministico sin apagar la AI del proyecto
+La migracion `006_add_conversation_qualification_context.sql` agrega:
 
-## Resumen ejecutivo rapido
+- `conversations.qualification_context`
+- `conversations.pending_question_key`
+- `leads.qualification_context`
 
-Hoy el proyecto ya tiene:
+El contexto conserva producto, modalidad, comuna, medidas, uso, terreno, acceso, escombros, urgencia, fotos, cliente, D.A.T.O.S., objeciones y clasificacion.
 
-- infraestructura local funcional
-- `n8n` accesible en navegador
-- `PostgreSQL` operativo
-- base CRM separada de la base interna de `n8n`
-- modelo de datos inicial creado y sembrado
-- workflows base importados en `n8n`
-- credencial PostgreSQL ya creada en `n8n`
-- `WA - Conversation Orchestrator` con logica conversacional real y salida util para encadenamiento
-- `WA - Inbound Entry` adaptado a `Evolution API`
-- `WA - Outbound Messages` adaptado a `Evolution API`
-- `CRM - Lead Creation And Assignment` con logica SQL real
-- `CRM - ClickUp Sync Lead` con payload real, comentario conversacional completo y retorno estable hacia el workflow padre
-- `CRM - Seller Notification Dispatch` con despacho real de notificacion interna
-- `OPS - Error Handler` con logica real de auditoria y marcado de lead en error
-- `AI - Lead Qualification Assistant` como capa oficial de Hormi Atencion; decide la conversacion y puede habilitar leads confirmados, mientras n8n ejecuta persistencia e integraciones
-- evolucion objetivo documentada para convertir Hormi Atencion en asesor comercial AI capaz de recomendar, orientar precio, ofrecer agenda y cerrar el siguiente paso comercial cuando existan fuentes oficiales y validaciones operativas
-- esquema versionado preparado para catalogo, precios, condiciones, FAQ, objeciones, agenda, cotizaciones preliminares y auditoria de decisiones AI
-- catalogo y precios publicos Hormiglass cargados en `db/seeds/006_catalogo_hormiglass.sql` y `db/seeds/007_catalogo_hormiglass_actualizacion.sql`
-- workflow AI versionado con nodos `Load Commercial Context` y `Merge Commercial Context`
-- orquestador versionado con insercion transaccional en `advisor_decisions`
-- ClickUp ya validado con tarea real:
-  - `86agtc6z3`
-  - `https://app.clickup.com/t/86agtc6z3`
+`pending_question_key` permite interpretar `si/no` segun la pregunta vigente. Solo una solicitud explicita inicia de nuevo.
 
-Lo que aun falta cerrar por el integrador:
+## Fuentes comerciales
 
-- validar E2E con proveedor real configurado en `.env`
-- validar Hormi Atencion y matriz conversacional con servicios vivos
-- cerrar completamente el smoke de `OPS - Error Handler`
-- completar la checklist de salida a produccion
-- validar que Hormi Atencion use catalogo y precios publicos sin inventar valores
-- validar proveedor real AI contra los mismos casos end-to-end versionados en la matriz conversacional
-- dejar condiciones comerciales, FAQ, objeciones y agenda para una fase posterior, porque aun no existe informacion aprobada
+En el entorno validado existen:
 
-Nota de orden documental:
+- 28 productos o servicios activos
+- 28 reglas de precio
+- 8 condiciones comerciales
+- 12 FAQ
+- 5 playbooks de objeciones
+- 0 cupos de agenda
 
-- la carpeta `.hermes` fue eliminada del workspace
-- no debe reintroducirse como fuente paralela de planificacion
-- el estado real y los pendientes vigentes viven en `README.md`, este handoff y `docs/guia-produccion.md`
+La AI solo recomienda o informa usando estas fuentes. Agenda, stock, descuentos, pagos y plazos no confirmados se derivan sin prometer.
 
-## Infraestructura local
+## Workflows
 
-### Servicios Docker
+- `WA - Inbound Entry`: webhook, encadenamiento y handoff verificado
+- `WA - Conversation Orchestrator`: memoria, AI, guardrails y persistencia
+- `WA - Outbound Messages`: envio y auditoria Evolution API
+- `AI - Lead Qualification Assistant`: asesor Gemini y contrato JSON
+- `CRM - Lead Creation And Assignment`: lead y round robin
+- `CRM - ClickUp Sync Lead`: tarea enriquecida y conversacion
+- `CRM - Seller Notification Dispatch`: aviso al responsable
+- `OPS - Error Handler`: auditoria y manejo de fallos
 
-- `n8n`
-  - URL: `http://localhost:5678`
-- `postgres`
-  - host local: `127.0.0.1`
-  - puerto local: `5433`
-- `evolution-api`
-  - URL esperada: `http://localhost:8080`
-- `redis`
-  - uso interno del stack
-  - cache habilitado por defecto para `Evolution API`
+Los enlaces se resuelven desde `n8n/workflow-links.json`.
 
-### Bases de datos
+## Validacion ejecutada
 
-- `crm_whatsapp`
-  - base interna de `n8n`
-- `crm_whatsapp_app`
-  - base del CRM
-- `evolution_api`
-  - base tecnica de `Evolution API`
+- preflight de workflows: OK
+- contrato local AI y fallback: OK
+- regresion conversacional: 18 casos OK
+- `OPS - Error Handler`: smoke OK con auditoria creada
+- E2E asesor Vitacura: OK
+- respuestas `no` aplicadas a acceso/escombros sin perder contexto
+- lead creado y asignado
+- ClickUp creado
+- `pending_question_key` limpio al finalizar
 
-## Variables importantes
-
-Archivo local:
-
-- `.env`
-
-Plantilla:
-
-- `.env.example`
-
-Variables clave ya contempladas:
-
-- `POSTGRES_DB=crm_whatsapp`
-- `APP_POSTGRES_DB=crm_whatsapp_app`
-- `EVOLUTION_POSTGRES_DB=evolution_api`
-- `EVOLUTION_SERVER_URL=http://localhost:8080`
-- `EVOLUTION_API_BASE_URL=http://evolution-api:8080`
-- `EVOLUTION_API_KEY=...`
-- `EVOLUTION_DEFAULT_INSTANCE=wahormiglass`
-- `EVOLUTION_WEBHOOK_SECRET=...`
-- `EVOLUTION_WEBHOOK_URL=http://n8n:5678/webhook/<WA_INBOUND_WORKFLOW_ID>/evolutionwebhook/wa-inbound-entry?token=<EVOLUTION_WEBHOOK_SECRET>`
-- `EVOLUTION_REDIS_ENABLED=true`
-- `EVOLUTION_SAVE_INSTANCES_IN_REDIS=true`
-- `CLICKUP_API_TOKEN=...`
-- `CLICKUP_LIST_ID=901326797183`
-- `CLICKUP_TEAM_ID=9013271719`
-- `CLICKUP_CF_*` ya cargados en `.env`
-- `AI_PROVIDER=direct_api`
-- `AI_API_KEY_REQUIRED=true`
-- `AI_DIRECT_API_BASE_URL=https://api.openai.com/v1`
-- `AI_DIRECT_API_PATH=/chat/completions` en `.env.example`; el workflow tambien soporta `/responses`
-- `AI_DIRECT_API_MODEL=<modelo elegido>`
-- `AI_DIRECT_API_KEY` real solo debe existir en el workspace del integrador y nunca en Git
-- API directa queda documentado en `docs/ai-api-directa-configuracion.md`
-
-## Documentacion clave
-
-Leer al retomar:
-
-- [`README.md`](../README.md)
-- [`docs/arquitectura.md`](./arquitectura.md)
-- [`docs/flujo-leads.md`](./flujo-leads.md)
-- [`docs/base-de-datos.md`](./base-de-datos.md)
-- [`docs/n8n-workflows.md`](./n8n-workflows.md)
-- [`docs/clickup-configuracion.md`](./clickup-configuracion.md)
-- [`docs/evolution-api.md`](./evolution-api.md)
-- [`docs/bitacora-validacion-ai.md`](./bitacora-validacion-ai.md)
-- [`docs/guia-produccion.md`](./guia-produccion.md)
-- [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md)
-- [`docs/asesor-comercial-ai.md`](./asesor-comercial-ai.md)
-- [`docs/fuentes-comerciales-ai.md`](./fuentes-comerciales-ai.md)
-
-## Decisiones funcionales ya cerradas
-
-- canal de entrada funcional: WhatsApp
-- proveedor actual elegido: `Evolution API`
-- proveedor AI actual elegido: API directa con agente `Hormi Atencion` (`Hormi Atencion`)
-- flujo guiado con extraccion de contexto libre
-- preguntas base:
-  - servicio
-  - ciudad
-  - requerimiento
-- criterio de creacion de lead:
-  - `servicio + ciudad + requerimiento concreto + confirmacion`
-- si hay solo intencion inicial:
-  - se pregunta por el dato faltante antes de crear lead
-  - no se deriva como parcial
-- duplicados:
-  - mismo telefono
-  - retoma conversacion dentro de 24 horas
-  - despues de 24 horas puede crear nuevo lead enlazado al anterior
-- asignacion:
-  - round robin secuencial simple
-- politica AI:
-  - Hormi Atencion decide la conversacion asistida y puede habilitar leads confirmados
-  - `n8n` y PostgreSQL ejecutan persistencia, ClickUp y asignacion
-  - la AI no escribe directamente en PostgreSQL
-  - la AI no crea tareas en ClickUp fuera del workflow
-  - la AI no asigna vendedores fuera del round robin
-  - si API directa falla, baja confianza o devuelve JSON invalido, el flujo debe caer a logica deterministica/fallback seguro
-- evolucion AI comercial:
-  - el proyecto adopta como objetivo que Hormi Atencion pase de calificador de leads a asesor comercial AI
-  - el asesor debe poder usar catalogo, precios, agenda, condiciones comerciales, FAQ y objeciones como contexto oficial
-  - el catalogo y los precios publicos de Hormiglass ya estan versionados como primera fuente comercial
-  - el workflow AI ya carga catalogo/precios activos y los pasa al prompt antes de llamar al proveedor
-  - condiciones comerciales, FAQ, objeciones y agenda aun no se cargan por falta de informacion aprobada
-  - la AI puede recomendar y orientar con catalogo/precios publicos cuando el workflow valide la fuente
-  - la AI podra manejar objeciones y cerrar pasos comerciales mas avanzados cuando existan condiciones/FAQ/objeciones/agenda oficiales
-  - la AI no debe inventar precios, stock, descuentos, plazos, cupos de agenda ni condiciones comerciales
-  - `n8n` debe validar precio, agenda, confirmacion y reglas comerciales antes de ejecutar acciones
-  - esta evolucion aun no esta implementada de punta a punta; queda como frente de trabajo documentado en `docs/asesor-comercial-ai.md`
-- politica de secretos:
-  - `.env` real no se commitea ni se comparte entre agentes
-  - agentes no integradores trabajan con `.env.example`, samples y tests locales sin tocar secretos reales
-  - el integrador es el unico rol autorizado para usar `AI_DIRECT_API_KEY`, `CLICKUP_API_TOKEN`, `EVOLUTION_API_KEY` y credenciales reales
-
-## Workflows existentes en n8n
-
-Ya importados:
-
-- `WA - Inbound Entry`
-- `WA - Conversation Orchestrator`
-- `WA - Outbound Messages`
-- `CRM - Lead Creation And Assignment`
-- `CRM - ClickUp Sync Lead`
-- `CRM - Seller Notification Dispatch`
-- `AI - Lead Qualification Assistant`
-- `OPS - Error Handler`
-
-JSON versionados en:
-
-- [`n8n/workflows/`](../n8n/workflows)
-
-Sincronizacion recomendada:
+Comandos:
 
 ```bash
 sh scripts/dev/sync-n8n-workflows.sh --preflight
+sh scripts/ops/test-ai-assistant-local.sh
+sh scripts/ops/test-conversation-regression-local.sh
+sh scripts/ops/test-advisor-vitacura-e2e.sh
+```
+
+## Pendientes reales
+
+- preparar ambientes separados de staging y produccion
+- completar backup y prueba de restauracion
+- agregar monitoreo y alertas productivas
+- integrar agenda real si se desea ofrecer horarios
+- integrar una fuente verificable de stock o disponibilidad
+- ampliar la matriz E2E para pagos, garantias, reclamos y B2B
+- implementar carga del binario de adjuntos a ClickUp
+
+## Puesta en marcha local
+
+```bash
+docker compose --env-file .env up -d
+sh scripts/dev/bootstrap-db.sh
 sh scripts/dev/sync-n8n-workflows.sh
 ```
 
-Los enlaces entre sub-workflows se mantienen por nombre en `n8n/workflow-links.json`; el script resuelve IDs reales y conecta `OPS - Error Handler` como workflow de errores.
+Para un ambiente existente, aplicar tambien:
 
-Estado real de implementacion:
-
-- `WA - Inbound Entry`
-  - adaptado a payload entrante de `Evolution API`
-  - responde `accepted`
-  - encadena conversacion, salida, lead, ClickUp y notificacion
-  - el webhook activo actual es `6TgrfXCUUixpJOWh/evolutionwebhook/wa-inbound-entry`
-- `WA - Conversation Orchestrator`
-  - lectura de contexto, evaluacion conversacional, confirmacion, persistencia y salida combinada
-  - flujo real validado con conversacion completa y derivacion
-- `WA - Outbound Messages`
-  - encola mensaje saliente
-  - usa endpoint `sendText` de `Evolution API`
-  - persiste resultado de entrega y auditoria
-  - salida real validada nuevamente despues de reabrir la sesion de WhatsApp
-- `CRM - Lead Creation And Assignment`
-  - creacion de lead solo con datos confirmados y round robin real
-- `CRM - ClickUp Sync Lead`
-  - payload real de ClickUp
-  - tarea real en ClickUp
-  - comentario `Conversación Completa Cliente`
-  - retorno estable con `lead_id`, `clickup_task_id` y `clickup_task_url`
-- `CRM - Seller Notification Dispatch`
-  - notificacion interna por comentario asignado en ClickUp
-- `OPS - Error Handler`
-  - auditoria y marcado de lead en error
-  - pendiente de cierre fino en smoke test controlado
-- `AI - Lead Qualification Assistant`
-  - contrato JSON controlado para extraccion, redaccion y decision confirmada
-  - conectado a API directa mediante `POST ${AI_DIRECT_API_BASE_URL}${AI_DIRECT_API_PATH}`
-  - `.env.example` usa `/chat/completions`; el workflow tambien soporta `/responses`
-  - prueba local de contrato/fallback: `sh scripts/ops/test-ai-assistant-local.sh`
-  - no usa secretos reales fuera del workspace del integrador
-
-## ClickUp
-
-Estado actual:
-
-- lista real conectada: `Leads Entrantes`
-- custom fields reales creados y mapeados en `.env`
-- smoke test real ejecutado con exito
-- tarea de prueba creada:
-  - `86agtc6z3`
-  - `https://app.clickup.com/t/86agtc6z3`
-- prueba end-to-end validada con lead 22:
-  - tarea `86ah3ntj1`
-  - notificacion `seller_notification_dispatch` exitosa
-- prueba end-to-end con comentario completo validada con lead 24:
-  - tarea `86ah3pba6`
-  - comentario completo creado con id `90130257660080`
-  - notificacion `seller_notification_dispatch` exitosa
-- lead real 20 recuperado con notificacion interna exitosa:
-  - tarea `86ah3nq8a`
-  - audit id `194`
-
-Workflow auxiliar temporal:
-
-- [`n8n/workflows/test-clickup-sync-smoke.json`](../n8n/workflows/test-clickup-sync-smoke.json)
-
-## Evolution API
-
-Estado actual:
-
-- `docker-compose.yml` ya incluye `redis` y `evolution-api`
-- `.env` y `.env.example` ya fueron adaptados
-- instancia `wahormiglass` definida como default versionado
-- instancia `wahormiglass` conectada y validada en estado `open` durante la ultima validacion
-- webhook de `wahormiglass` persistido hacia `WA - Inbound Entry`
-- scripts listos:
-  - [`scripts/dev/evolution-create-instance.sh`](../scripts/dev/evolution-create-instance.sh)
-  - [`scripts/dev/evolution-connect-instance.sh`](../scripts/dev/evolution-connect-instance.sh)
-  - [`scripts/dev/evolution-set-webhook.sh`](../scripts/dev/evolution-set-webhook.sh)
-
-Pendiente:
-
-- mantener el QR/reconexion como procedimiento operativo, no como bloqueo actual
-
-## Validacion Real End-to-End
-
-Estado: completada a nivel funcional inicial.
-
-Se valido con mensajes reales por WhatsApp que el sistema:
-
-- recibe mensajes desde `Evolution API`
-- ejecuta `WA - Inbound Entry`
-- mantiene estado conversacional en PostgreSQL
-- responde por WhatsApp
-- crea lead en PostgreSQL
-- asigna vendedor por round robin
-- crea tarea en ClickUp
-
-Evidencia de tareas ClickUp creadas durante pruebas reales:
-
-- lead `14`
-  - tarea ClickUp: `86ah3h2ew`
-  - URL: `https://app.clickup.com/t/86ah3h2ew`
-  - vendedor: `Valentina Rojas`
-- lead `15`
-  - tarea ClickUp: `86ah3h2m6`
-  - URL: `https://app.clickup.com/t/86ah3h2m6`
-  - vendedor: `Martina Perez`
-- lead `16`
-  - tarea ClickUp: `86ah3h2q6`
-  - URL: `https://app.clickup.com/t/86ah3h2q6`
-  - vendedor: `Camila Soto`
-
-Notas de prueba:
-
-- estos leads/tareas son datos de validacion y ya fueron revisados/marcados como prueba en ClickUp
-- no deben considerarse oportunidades comerciales reales ni usarse para metricas de negocio
-- durante la validacion se corrigieron loops conversacionales y problemas de interpretacion deterministica
-- commits relevantes:
-  - `65e1124 fix: handle initial whatsapp greetings`
-  - `86eea4c fix: accept direct service answers`
-  - `374df38 fix: prevent conversational loops`
-  - `7103479 fix: reset previous context without reusing command`
-
-Estado de limpieza de datos de prueba:
-
-- leads `14`, `15` y `16` identificados como pruebas de validacion
-- tareas ClickUp `86ah3h2ew`, `86ah3h2m6` y `86ah3h2q6` revisadas y marcadas/gestionadas como prueba
-- queda pendiente no mezclar estos registros con reportes reales de operacion
-
-## Siguiente paso recomendado
-
-1. correr baseline local:
-   - `sh scripts/dev/sync-n8n-workflows.sh --preflight`
-   - `sh scripts/ops/test-ai-assistant-local.sh`
-   - `sh scripts/ops/test-conversation-regression-local.sh`
-   - healthcheck de `n8n`
-2. sincronizar workflows y verificar que `WA - Inbound Entry` quede activo
-3. ejecutar matriz conversacional con proveedor AI real y verificar fallback seguro cuando corresponda
-4. levantar el proveedor AI API directa con `AI_DIRECT_API_MODEL=<modelo elegido>`
-5. confirmar que `.env` usa el mismo `AI_DIRECT_API_KEY` que el proveedor AI
-6. ejecutar matriz conversacional con AI encendida, incluyendo falla del proveedor AI, baja confianza y respuesta invalida
-
-## Siguiente fase planificada
-
-Esta fase queda registrada para avanzar desde validacion funcional real hacia produccion, usando Hormi Atencion por API directa como proveedor AI oficial y manteniendo fallback deterministico.
-
-Decision sobre AI:
-
-- se usara Hormi Atencion como asistente de extraccion, clasificacion, redaccion y confirmacion
-- proveedor actual: API directa
-- agente actual: `Hormi Atencion`
-- la regla operativa es: Hormi Atencion decide la conversacion; `n8n` y PostgreSQL ejecutan
-- la AI no escribe directamente en PostgreSQL
-- la AI no crea tareas en ClickUp fuera del workflow
-- la AI no asigna vendedores fuera del round robin
-- la creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`
-
-Prioridades recomendadas:
-
-1. Agregar seguridad y estabilidad base:
-   - validar que solo `Evolution API` pueda llamar al webhook
-   - usar HMAC si queda soportado de forma simple, o un secreto/token compartido si resulta mas robusto para `n8n`
-   - revisar secretos y credenciales
-   - backup de PostgreSQL
-   - backup del volumen de `n8n`
-   - prueba de restauracion
-   - validar `OPS - Error Handler` con un fallo controlado
-2. Cargar o revisar datos reales minimos:
-   - vendedores reales en PostgreSQL
-   - numeros reales de WhatsApp
-   - `clickup_user_id` de cada vendedor activo que deba recibir leads por ClickUp
-3. Incorporar AI controlada para calificacion conversacional:
-   - validar sub-workflow `AI - Lead Qualification Assistant`
-   - enviar mensaje actual, estado conversacional, ultimos mensajes relevantes, datos ya detectados y lead previo si existe
-   - exigir salida JSON estructurada
-   - usar AI para entender intencion, detectar datos faltantes, sugerir respuesta y generar resumen para ClickUp
-   - validar `confidence`, campos faltantes y reglas del flujo antes de crear lead
-   - si falta informacion o hay baja confianza, preguntar o pedir aclaracion
-   - no aceptar campos sugeridos con `confidence < 0.75`
-   - mantener `should_create_lead=false` si falta confirmacion
-4. Validar reintentos en APIs externas:
-   - ClickUp
-   - `Evolution API` saliente
-   - notificacion al vendedor
-   - registro del fallo final si los reintentos no resuelven el problema
-5. Crear o ampliar smoke test end-to-end:
-   - entrada simulada
-   - conversacion
-   - lead
-   - ClickUp
-   - ejecucion antes de cambios importantes
-6. Agregar observabilidad simple:
-   - mensajes procesados hoy
-   - leads creados hoy
-   - errores de las ultimas 24 horas
-   - leads por vendedor
-   - partir con consultas SQL o vista simple antes de Grafana
-7. Agregar logging y correlation ID:
-   - identificador trazable entre workflows, mensajes, lead y ClickUp
-   - apoyo para diagnosticar fallos sin revisar manualmente cada ejecucion
-8. Documentar operacion y limpieza:
-    - runbook para reiniciar servicios
-    - revisar logs
-    - reconectar QR
-    - correr backups
-    - revisar errores
-    - definir retencion de auditoria/logs mas adelante
-
-Principio de orden:
-
-- primero hacerlo funcionar con WhatsApp real
-- despues protegerlo y asegurar recuperacion
-- despues incorporar AI como capa controlada
-- despues hacerlo resistente y observable
-- finalmente escalarlo
-
-Quedan para mas adelante, solo si el uso real lo justifica:
-
-- agente autonomo completo
-- Redis como buffer de negocio
-- `n8n` en modo queue con workers
-- Grafana completo
-- optimizaciones avanzadas de base de datos
-
-## Prompt sugerido para un nuevo chat
-
-```text
-Continua este proyecto desde /home/agentesai/Automatizacion-WhatsApp. Lee primero README.md y docs/handoff-actual.md. Despues revisa docs/evolution-api.md, docs/n8n-workflows.md, docs/flujo-leads.md, docs/matriz-pruebas-conversacionales.md y n8n/workflows/. No leas ni imprimas .env. Usa .env.example, samples y tests locales salvo que seas el integrador. Retoma desde el siguiente paso recomendado, manteniendo la regla: Hormi Atencion por API directa decide la conversacion; n8n/PostgreSQL ejecutan persistencia, ClickUp y asignacion solo para leads confirmados.
+```bash
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/006_add_conversation_qualification_context.sql
 ```
+
+## Documentos canónicos
+
+- `README.md`
+- `docs/arquitectura.md`
+- `docs/FLUJO-CONVERSACIONAL-COMPLETO.md`
+- `docs/flujo-leads.md`
+- `docs/asesor-comercial-ai.md`
+- `docs/fuentes-comerciales-ai.md`
+- `docs/base-de-datos.md`
+- `docs/n8n-workflows.md`
+- `docs/guia-produccion.md`
+- `docs/runbook-operacion.md`
+- `docs/matriz-pruebas-conversacionales.md`
+
+Los documentos de `docs/archive/` son historicos y no describen el runtime vigente.

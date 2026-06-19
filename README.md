@@ -4,17 +4,18 @@ Automatizacion para capturar, calificar, registrar y asignar leads desde WhatsAp
 
 ## Que hace este proyecto
 
-Este repo implementa una base operativa para:
+Este repo implementa un asesor comercial operativo para:
 
 - recibir mensajes entrantes desde WhatsApp via `Evolution API`
-- guiar la conversacion para capturar servicio, ciudad y requerimiento
+- conversar como asesor comercial segun el PRD Hormiglass
+- diagnosticar mediante D.A.T.O.S. y capturar contexto tecnico/comercial
+- interpretar respuestas breves segun la pregunta pendiente
 - crear y trazar leads en `PostgreSQL`
 - asignar leads con round robin
 - sincronizar leads a `ClickUp`
 - notificar al vendedor asignado
-- dejar auditoria tecnica y funcional del flujo
-
-Tambien prepara una evolucion controlada hacia un asesor comercial AI, manteniendo a `n8n` y `PostgreSQL` como capa de control del estado y de las integraciones.
+- dejar auditoria tecnica, funcional y de decisiones AI
+- confirmar la derivacion solo despues de crear y asignar el lead
 
 ## Arquitectura
 
@@ -41,7 +42,10 @@ Estado actual de madurez:
 - workflows principales versionados
 - integracion con WhatsApp, `PostgreSQL` y `ClickUp` ya incorporada al flujo
 - asistente AI definitivo preparado con fallback seguro ante error real del proveedor o configuracion invalida
-- esquema de base ampliado para soportar catalogo, precios, condiciones y futura evolucion comercial AI
+- asesor comercial AI desplegado con memoria persistente, guardrails PRD y handoff verificado
+- esquema de base ampliado con `qualification_context` y `pending_question_key`
+- catalogo, precios, condiciones, FAQ y objeciones cargados como contexto oficial
+- prueba E2E Vitacura validada con Gemini, lead, asignacion, ClickUp y respuesta final
 
 Estado recomendado para comunicar publicamente:
 
@@ -61,17 +65,20 @@ Hoy el repo cubre:
 - auditoria de errores y eventos
 - contratos y pruebas locales del asistente AI
 - base de catalogo y precios publicos para evolucion comercial AI
+- memoria comercial estructurada en conversaciones y leads
+- preguntas consultivas de un dato principal por turno
+- interpretacion contextual de `si/no`
+- resumen ejecutivo enriquecido para ClickUp
 - auditoria de decisiones AI en `advisor_decisions` desde el orquestador conversacional
 - PRD funcional del agente Hormiglass con diagnostico D.A.T.O.S., clasificacion A/B/C/D y guardrails comerciales
 
-No cubre todavia de punta a punta:
+Pendientes fuera del alcance actual:
 
 - salida productiva endurecida
 - staging separado
-- agenda real
-- condiciones comerciales aprobadas
-- FAQ y objeciones cargadas como fuente oficial
-- conversacion end-to-end con AI real validada de forma ampliada en servicios vivos
+- agenda real con cupos reservables
+- integracion de inventario para confirmar stock
+- validacion financiera automatica de pagos
 - observabilidad y monitoreo de nivel produccion
 
 La configuracion funcional vigente del asesor esta en `docs/prd-agente-whatsapp-hormiglass.md`.
@@ -182,6 +189,7 @@ El esquema principal incluye:
 - auditoria
 - catalogos de estados
 - tablas base para asesor comercial AI
+- contexto de calificacion persistente y pregunta pendiente contextual
 
 ## Asistente AI
 
@@ -189,14 +197,19 @@ El subworkflow `AI - Lead Qualification Assistant` funciona como la capa oficial
 
 Comportamiento esperado:
 
-- la AI interpreta intencion, extrae datos y redacta respuesta cuando el proveedor responde correctamente
+- Gemini es la voz principal: interpreta, orienta, maneja objeciones y redacta la respuesta
+- `n8n` valida actualizaciones de campos, guardrails y siguiente accion
+- cada turno hace una sola pregunta principal cuando se requieren datos
+- respuestas `si/no` se interpretan segun `pending_question_key`
+- el handoff se anuncia solo despues de crear y asignar el lead
 - si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo cae a una ruta deterministica segura sin apagar la AI del proyecto
 
 El proyecto ya incluye:
 
 - contrato estructurado de salida JSON
 - pruebas locales de contrato y fallback con respuestas simuladas en memoria
-- base de contexto comercial para catalogo y precios publicos
+- base de contexto comercial para catalogo, precios, condiciones, FAQ y objeciones
+- prueba real reproducible `scripts/ops/test-advisor-vitacura-e2e.sh`
 
 ## Documentacion recomendada
 
@@ -231,11 +244,11 @@ La plantilla `.env.example` contiene placeholders seguros. Toda configuracion re
 
 ## Roadmap tecnico inmediato
 
-- ampliar validacion E2E con proveedor AI real
-- ampliar validacion end-to-end
 - endurecer configuracion para staging y produccion
-- completar validaciones de salida operativa
-- conectar fuentes oficiales adicionales para la fase de asesor comercial AI
+- agregar monitoreo, alertas y correlacion operativa
+- definir agenda real antes de ofrecer cupos
+- integrar inventario y Finanzas solo cuando existan fuentes confiables
+- ampliar la matriz E2E con B2B, reclamos, garantia y pagos
 
 ## Licencia / uso
 

@@ -4,7 +4,7 @@
 
 Definir como cargar y mantener las fuentes comerciales que usara `Hormi Atencion` como asesor comercial AI.
 
-Estas fuentes son obligatorias antes de permitir que la AI recomiende productos especificos, informe precios, responda condiciones sensibles o proponga agenda.
+Estas fuentes son la unica base autorizada para recomendar productos, informar precios, responder condiciones sensibles o proponer agenda.
 
 ## Estado actual
 
@@ -27,9 +27,9 @@ Estado cargado actualmente:
 
 - catalogo publico Hormiglass: 28 productos/servicios activos
 - reglas de precio publicas: 28 reglas activas
-- condiciones comerciales: pendiente
-- FAQ: pendiente
-- objeciones: pendiente
+- condiciones comerciales: 8 activas
+- FAQ: 12 activas
+- objeciones: 5 activas
 - agenda: pendiente
 - workflow AI: carga contexto comercial activo antes de llamar al proveedor
 - auditoria AI en `advisor_decisions`: conectada desde `WA - Conversation Orchestrator`
@@ -84,8 +84,8 @@ Estos comandos leen el archivo desde el host y envian el SQL por stdin al conten
 
 Estado de avance:
 
-- pasos 1, 2 y 5 ya tienen una primera carga publica versionada
-- pasos 4, 6, 7 y 8 quedan diferidos hasta contar con informacion aprobada
+- pasos 1, 2, 4, 5, 6 y 7 tienen una primera carga versionada
+- el paso 8 queda diferido hasta contar con agenda real y confirmable
 
 ## Reglas por fuente
 
@@ -181,7 +181,7 @@ El workflow AI ya puede consultar catalogo y precios. Para habilitarlo en una in
 - `n8n` registra decisiones en `advisor_decisions`
 - existe fallback si no hay contexto comercial suficiente
 
-Para habilitar respuestas sobre condiciones comerciales, FAQ, objeciones o agenda, primero deben cargarse esas fuentes y revisarse por separado.
+Las respuestas sobre condiciones comerciales, FAQ y objeciones estan habilitadas contra sus fuentes activas. La agenda permanece bloqueada hasta cargar cupos reales y validar su reserva.
 
 ## Prohibido para produccion
 

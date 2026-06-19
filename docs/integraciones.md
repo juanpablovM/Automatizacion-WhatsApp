@@ -35,9 +35,11 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 
 - integracion AI oficial mediante llamada directa desde `n8n`
 - usa el rol conversacional `Hormi Atencion`
-- devuelve JSON estructurado con intencion, campos, respuesta sugerida y decision de lead
+- usa Google Gemini mediante endpoint OpenAI-compatible
+- modelo canonico: `gemini-3.1-flash-lite`
+- devuelve JSON estructurado con memoria, actualizaciones, respuesta, siguiente accion y decision de lead
 - no requiere procesos locales adicionales para la capa AI
-- estado actual: preparado en codigo, con placeholders hasta cargar API key/modelo
+- estado actual: conectado y validado con proveedor real
 - endpoint versionado actual: `AI_DIRECT_API_PATH=/chat/completions`; el workflow tambien soporta `/responses`
 - guia vigente: [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md)
 
@@ -53,9 +55,9 @@ Las integraciones principales ya quedaron conectadas y validadas en entorno loca
 - `n8n` procesa la conversacion, persiste estado y coordina sub-workflows
 - `PostgreSQL` conserva leads, conversaciones, mensajes, asignaciones y auditoria
 - ClickUp recibe leads confirmados, comentario conversacional completo y notificacion al vendedor
-- Hormi Atencion por API directa queda como ruta AI oficial del proyecto
+- Hormi Atencion por Gemini es la ruta AI oficial del proyecto
 
 ## Pendientes
 
 - decidir estrategia operativa para multiples instancias
-- definir proveedor/modelo de API directa y validar con servicios vivos
+- incorporar agenda y stock solo cuando exista una fuente verificable

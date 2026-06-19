@@ -12,6 +12,10 @@ Agente de inteligencia artificial para atencion, calificacion, diagnostico, segu
 
 PRD v1.0
 
+## Estado de implementacion
+
+Este PRD sigue siendo la fuente normativa del comportamiento comercial. Al 18 de junio de 2026, el asesor conversacional, la memoria estructurada, D.A.T.O.S., la clasificacion, los guardrails y el handoff verificado estan implementados. El estado tecnico vigente se documenta en `docs/asesor-comercial-ai.md` y `docs/handoff-actual.md`.
+
 ## Objetivo general
 
 Disenar, configurar e implementar un agente de IA para WhatsApp que ayude a Hormiglass a responder de forma rapida, clara y comercialmente inteligente a los clientes que ingresan por este canal, levantando informacion util, clasificando oportunidades, orientando al cliente, preparando el traspaso comercial y evitando que las vendedoras partan desde cero en cada conversacion.

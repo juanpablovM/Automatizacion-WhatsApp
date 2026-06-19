@@ -60,6 +60,12 @@ La arquitectura de persistencia queda separada asi:
   - optimiza la lectura de historial por conversacion
   - optimiza la busqueda del ultimo reinicio de solicitud
 
+- `006_add_conversation_qualification_context.sql`
+  - agrega `conversations.qualification_context`
+  - agrega `conversations.pending_question_key`
+  - agrega `leads.qualification_context`
+  - crea indices para memoria y preguntas pendientes
+
 ## Seeds implementados
 
 - `001_lead_statuses.sql`
@@ -70,7 +76,7 @@ La arquitectura de persistencia queda separada asi:
 - `006_catalogo_hormiglass.sql`
 - `007_catalogo_hormiglass_actualizacion.sql`
 
-Los seeds `003`, `004` y `005` son ejemplos operativos. Los seeds `006` y `007` cargan catalogo publico Hormiglass y reglas de precio publicas. Condiciones comerciales, FAQ, objeciones, agenda y datos sensibles deben cargarse en seeds privados fuera de Git.
+Los seeds `003`, `004` y `005` son ejemplos operativos. Los seeds `006` y `007` cargan catalogo publico Hormiglass y reglas de precio publicas. Las condiciones, FAQ y objeciones activas del entorno deben revisarse como contenido aprobado; agenda y datos sensibles deben mantenerse fuera de Git cuando correspondan.
 
 ## Dominios cubiertos por la base actual
 
@@ -86,7 +92,7 @@ Los seeds `003`, `004` y `005` son ejemplos operativos. Los seeds `006` y `007` 
 
 ## Fuentes comerciales del asesor AI
 
-La migracion `004_create_commercial_advisor_tables.sql` prepara la base para evolucionar `Hormi Atencion` desde calificador de leads hacia asesor comercial AI.
+La migracion `004_create_commercial_advisor_tables.sql` contiene las fuentes estructuradas que usa `Hormi Atencion` como asesor comercial AI.
 
 Tablas principales:
 
@@ -112,11 +118,25 @@ Estado actual de fuentes comerciales:
 
 - `catalog_items`: 28 productos/servicios publicos Hormiglass cargados
 - `price_rules`: 28 reglas de precio publicas cargadas
-- `commercial_conditions`: pendiente
-- `faq_entries`: pendiente
-- `objection_playbooks`: pendiente
+- `commercial_conditions`: 8 activas en el entorno validado
+- `faq_entries`: 12 activas
+- `objection_playbooks`: 5 activos
 - `appointment_slots`: pendiente
 - `advisor_decisions`: insercion conectada desde el orquestador conversacional cuando la AI esta habilitada
+
+## Memoria comercial
+
+`conversations.qualification_context` conserva el diagnostico acumulado sin depender del texto generado por la AI. Incluye, cuando aplica:
+
+- modalidad, medidas, cantidad y uso
+- terreno, acceso de camion y retiro de escombros
+- urgencia, fotos y fecha deseada
+- tipo de cliente y datos B2B
+- D.A.T.O.S., clasificacion, objecion y resumen ejecutivo
+
+`pending_question_key` indica la pregunta principal vigente. De esta forma, una respuesta `si/no` se aplica al dato correcto y no se interpreta automaticamente como confirmacion o rechazo global.
+
+Al crear el lead, `qualification_context` se copia a `leads` y queda disponible para ClickUp y ventas.
 
 ## Estado runtime observado
 

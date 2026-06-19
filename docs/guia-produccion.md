@@ -22,20 +22,23 @@ Hoy el proyecto ya tiene:
 - sincronizacion de workflows con script oficial de `n8n`
 - correccion aplicada para que `scripts/dev/evolution-connect-instance.sh` use la instancia real configurada
 - endurecimiento parcial del manejo de timestamps entrantes
-- nuevo frente funcional documentado para evolucionar Hormi Atencion hacia asesor comercial AI con catalogo, precios, agenda, condiciones comerciales, FAQ y manejo de objeciones
+- Hormi Atencion implementado como asesor comercial AI con memoria, catalogo, precios, condiciones, FAQ y manejo de objeciones
 - migracion base del asesor comercial AI agregada para preparar fuentes comerciales y auditoria de decisiones
 - catalogo publico Hormiglass y 28 reglas de precio publicas cargadas como primera fuente comercial
+- 8 condiciones comerciales, 12 FAQ y 5 playbooks de objeciones activos
+- memoria `qualification_context` y `pending_question_key` aplicada mediante migracion 006
 - workflow AI actualizado para cargar contexto comercial activo antes de llamar al proveedor
 - workflow AI sincronizado localmente en n8n; `WA - Inbound Entry` quedo activo
+- regresion local y E2E de instalacion en Vitacura validados con Gemini real
+- smoke de `OPS - Error Handler` validado con incremento de auditoria
 
 Pendientes reales detectados:
 
-- terminar de cerrar el smoke de `OPS - Error Handler`
 - limpiar ruido historico de logs viejos para diagnostico mas claro
 - formalizar despliegue productivo, secretos, backups y monitoreo
 - separar claramente `dev`, `staging` y `prod`
-- validar el workflow AI actualizado con respuestas comerciales asistidas antes de abrirlo a trafico real
-- definir condiciones comerciales, FAQ, objeciones y agenda en una fase posterior, cuando exista informacion aprobada
+- ampliar la matriz E2E en staging antes de abrir trafico productivo
+- definir una fuente de agenda real antes de ofrecer horarios
 - aplicar la migracion comercial en cualquier ambiente nuevo antes de sincronizar el workflow AI actualizado
 
 ## Plan de ejecucion por etapas
@@ -50,7 +53,7 @@ Objetivo:
 
 Incluye:
 
-- cerrar el smoke de `OPS - Error Handler`
+- repetir el smoke de `OPS - Error Handler` ante cambios de manejo de errores
 - limpiar ruido historico de logs que complique diagnostico
 - repetir preflight y sincronizacion de workflows
 - volver a validar backup y restore no destructivo
@@ -93,10 +96,10 @@ Evidencia esperada:
 
 ##### 0.3 Cierre del smoke de `OPS - Error Handler`
 
-- [ ] Ejecutar `sh scripts/ops/test-error-handler.sh`
-- [ ] Confirmar incremento real de auditoria
-- [ ] Confirmar workflow y ultimo nodo en el registro creado
-- [ ] Documentar brevemente el resultado del smoke
+- [x] Ejecutar `sh scripts/ops/test-error-handler.sh`
+- [x] Confirmar incremento real de auditoria
+- [x] Confirmar workflow y ultimo nodo en el registro creado
+- [x] Documentar brevemente el resultado del smoke
 
 Evidencia esperada:
 
@@ -265,12 +268,12 @@ Objetivo:
 
 Incluye:
 
-- activar AI en `staging` o workspace del integrador con `AI_PROVIDER=direct_api`
+- desplegar AI en `staging` con `AI_PROVIDER=google`, el endpoint OpenAI-compatible y `gemini-3.1-flash-lite`
 - validar respuestas reales de Hormi Atencion via proveedor directo
 - validar API key/modelo segun `docs/ai-api-directa-configuracion.md`
 - confirmar fallback deterministico cuando AI falle
 - confirmar que Hormi Atencion no persiste ni asigna por fuera de los workflows
-- comparar comportamiento con y sin AI sobre conversaciones reales de prueba
+- comparar respuestas Gemini con el fallback sobre conversaciones reales de prueba
 
 Criterio de salida:
 
@@ -278,23 +281,22 @@ Criterio de salida:
 - el sistema sigue siendo operable aunque el proveedor AI falle
 - queda evidencia de que Hormi Atencion puede operar en produccion con fallback seguro y observabilidad suficiente
 
-### Etapa 5B. Evolucionar a asesor comercial AI
+### Etapa 5B. Asesor comercial AI
 
 Objetivo:
 
-- ampliar Hormi Atencion desde calificacion de leads hacia asesoria comercial con contexto oficial del negocio.
+- validar y endurecer en staging la asesoria comercial ya implementada.
 
-Esta etapa no debe mezclarse con el baseline minimo de produccion. Puede ejecutarse despues de tener `staging` estable o como frente paralelo controlado, pero no debe activar promesas comerciales sin fuentes validables.
+La capacidad existe en el entorno local validado. Antes de produccion debe repetirse en staging sin habilitar promesas que no tengan fuente verificable.
 
 Incluye:
 
 - usar catalogo publico Hormiglass ya cargado
 - usar reglas de precio publicas ya cargadas
 - definir fuente oficial de agenda o disponibilidad cuando se quiera ofrecer agenda
-- definir condiciones comerciales aprobadas cuando exista informacion validada
-- definir FAQ y manejo de objeciones cuando exista informacion validada
-- extender el contrato JSON de la AI con etapa comercial, intencion de compra, urgencia, contexto de precio, contexto de agenda y siguiente mejor accion
-- agregar validaciones en `n8n` para impedir precios, descuentos, agenda o condiciones inventadas
+- revisar las condiciones comerciales, FAQ y objeciones ya cargadas
+- validar el contrato JSON ampliado, memoria y siguiente mejor accion
+- probar las validaciones de `n8n` para impedir precios, descuentos, agenda o condiciones inventadas
 - registrar en auditoria que productos, precios, condiciones o cupos fueron informados al cliente
 - actualizar ClickUp con resumen comercial completo para que ventas no repita preguntas
 - actualizar matriz de pruebas con casos de precio, agenda, objeciones y condiciones comerciales
@@ -311,9 +313,12 @@ Criterio de salida:
 Estado actual:
 
 - catalogo y precios publicos cargados
+- condiciones comerciales, FAQ y objeciones cargadas
 - workflow AI conectado al contexto comercial versionado
-- condiciones comerciales, FAQ, objeciones y agenda diferidas
+- agenda diferida
 - auditoria en `advisor_decisions` conectada desde el orquestador
+- memoria conversacional persistente implementada
+- flujo E2E de instalacion validado
 
 ### Etapa 6. Preparar operacion diaria
 
@@ -359,40 +364,32 @@ Criterio de salida:
 
 Si hubiera que seguir desde el estado actual del repo, el orden mas sensato seria:
 
-1. cerrar `OPS - Error Handler`
-2. volver a correr backup y verify restore
-3. congelar baseline sin AI
-4. montar `staging` con proxy, HTTPS y secretos separados
-5. correr matriz funcional y casos de borde en `staging`
-6. activar AI en entorno controlado
-7. validar AI con catalogo/precios publicos del asesor comercial
-8. recien despues preparar el corte a `prod` o habilitar cierre comercial asistido en `staging`
+1. volver a correr backup y verify restore
+2. congelar baseline funcional con AI y fallback
+3. montar `staging` con proxy, HTTPS y secretos separados
+4. correr matriz funcional y casos de borde en `staging`
+5. desplegar AI en staging con secretos separados
+6. repetir la matriz comercial y los guardrails
+7. recien despues preparar el corte a `prod`
 
 ## Dependencias entre frentes
 
 - No tiene sentido abrir `prod` si antes no esta resuelto backup y restore.
-- No conviene validar AI seriamente si el baseline sin AI aun cambia.
-- No conviene habilitar asesor comercial AI completo si agenda y condiciones no tienen fuente oficial.
-- Si solo se habilita catalogo/precios publicos, la AI debe derivar cualquier duda de condiciones, descuentos, stock o agenda.
-- No conviene permitir cierre comercial asistido si `n8n` aun no valida precio, agenda, confirmacion y auditoria.
+- No conviene promover cambios de AI si el baseline y el fallback aun cambian.
+- La ausencia de agenda bloquea ofrecer horarios, no la asesoria comercial general.
+- Descuentos, stock, pagos y agenda deben derivarse mientras no exista una fuente verificable.
+- El cierre comercial solo puede promoverse si `n8n` valida precio, confirmacion, handoff y auditoria.
 - No conviene discutir monitoreo final sin haber definido `staging` y `prod`.
-- El cierre de `OPS - Error Handler` mejora mucho la capacidad de diagnostico para todas las etapas siguientes.
+- Repetir `OPS - Error Handler` cuando cambien los workflows protege la capacidad de diagnostico.
 
 ## Proximo foco recomendado
 
 El siguiente bloque de trabajo con mejor retorno hoy es:
 
-1. dejar completamente operativo `OPS - Error Handler`
-2. ejecutar una pasada formal de backup y restore con evidencia
-3. marcar el baseline sin AI como version candidata para `staging`
-
-En paralelo, levantar el inventario comercial minimo para el asesor AI:
-
-1. catalogo vigente: listo con primera carga publica
-2. reglas de precio o rangos referenciales: listo con primera carga publica
-3. condiciones comerciales aprobadas: diferido
-4. disponibilidad o proceso real de agenda: diferido
-5. objeciones y respuestas frecuentes: diferido
+1. ejecutar una pasada formal de backup y restore con evidencia
+2. marcar el baseline con AI y fallback como candidato para `staging`
+3. repetir E2E de material, instalacion, B2B, reclamo, garantia y objeciones
+4. mantener agenda deshabilitada hasta integrar disponibilidad real
 
 Eso te deja una base mucho mas firme para pasar de “funciona en local” a “podemos empezar a prepararlo en serio para produccion”.
 
@@ -499,7 +496,7 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 
 ### 10. AI
 
-- [ ] Activar AI en entorno controlado con `AI_PROVIDER=direct_api`
+- [ ] Activar AI en entorno controlado con el `AI_PROVIDER` y endpoint/modelo reales del proveedor elegido
 - [ ] Validar respuestas de Hormi Atencion con trafico real
 - [ ] Confirmar que API key/modelo y salida JSON estructurada fueron probados antes de produccion
 - [ ] Confirmar fallback deterministico cuando AI falle

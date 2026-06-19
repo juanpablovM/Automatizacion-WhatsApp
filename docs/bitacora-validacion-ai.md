@@ -2,7 +2,20 @@
 
 ## Objetivo
 
-Documentar los cambios realizados durante la validacion real del CRM WhatsApp Automatizado y dejar registrada la decision tecnica sobre la futura incorporacion de AI.
+Documentar los cambios realizados durante las validaciones reales del CRM WhatsApp Automatizado.
+
+## Actualizacion 2026-06-18
+
+La decision AI descrita originalmente en esta bitacora ya fue implementada:
+
+- Gemini `gemini-3.1-flash-lite` es la voz conversacional principal
+- `qualification_context` y `pending_question_key` mantienen memoria estructurada
+- el contrato incluye actualizaciones de campos, pregunta respondida, siguiente pregunta y siguiente mejor accion
+- condiciones comerciales, FAQ y objeciones tienen una carga inicial activa
+- el handoff solo se confirma despues de crear y asignar el lead
+- la regresion local y el E2E de instalacion en Vitacura fueron validados
+
+Las secciones siguientes conservan evidencia historica de iteraciones anteriores y no reemplazan el estado canónico de `docs/handoff-actual.md`.
 
 Este documento complementa:
 

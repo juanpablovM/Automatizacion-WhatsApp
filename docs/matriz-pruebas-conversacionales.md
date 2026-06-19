@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Validar que el flujo conversacional sigue funcionando con `AI - Lead Qualification Assistant` conectado a API directa y al agente `Hormi Atencion`. La matriz mantiene los casos base `CP-01` a `CP-12` y agrega regresiones especificas de AI sin cambiar la regla principal: el lead solo se crea cuando existen `servicio + ciudad + requerimiento + confirmacion`.
+Validar que `Hormi Atencion` funciona como asesor comercial sobre Gemini, mantiene continuidad y solo crea leads cuando existen una necesidad real, los datos criticos de la intencion y la confirmacion aplicable.
 
 Hormi Atencion puede extraer campos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma. `n8n` y PostgreSQL siguen ejecutando el estado, la creacion del lead, ClickUp y la asignacion.
 
@@ -47,7 +47,7 @@ Verificar:
 - instancia `wahormiglass` en estado `open`, o la instancia definida en `EVOLUTION_DEFAULT_INSTANCE`
 - `WA - Inbound Entry` activo en `n8n`
 - vendedores reales notificables tienen `clickup_user_id`
-- `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` deben estar configurados para pruebas reales
+- `AI_PROVIDER`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` deben estar configurados segun el proveedor real para pruebas reales
 - si la configuracion AI es invalida, la evidencia debe mostrar `missing_api_config` y fallback seguro
 
 ## Smoke test local sin servicios reales
@@ -135,13 +135,13 @@ Un caso pasa si:
 
 - el bot no entra en loop
 - no repite una pregunta ya resuelta
-- no crea lead sin `servicio + ciudad + requerimiento + confirmacion`
+- no crea lead sin necesidad real, datos criticos y confirmacion aplicable
 - persiste conversacion y mensajes correctamente
 - crea lead solo cuando corresponde
 - crea tarea ClickUp solo para leads confirmados
 - asigna vendedor notificable cuando el flujo espera notificacion
 - deja auditoria suficiente para diagnosticar el caso
-- con AI encendida, Hormi Atencion mejora extraccion/respuesta y puede habilitar lead confirmado
+- Hormi Atencion responde como voz principal y puede habilitar un lead confirmado
 - si AI falla, responde invalido o tiene baja confianza, el flujo cae a logica deterministica
 - con error de configuracion AI, el flujo no se rompe: deja auditoria y cae a logica deterministica
 
@@ -156,7 +156,7 @@ Un caso pasa si:
 | CP-05 | Comprador con datos incompletos | `Quiero cotizar en Santiago` | Real | Detecta intencion y ciudad, pero pregunta producto/servicio especifico. No crea lead. | sin `lead_id`, pregunta por servicio |
 | CP-06 | Respuesta directa de servicio | Despues de una pregunta por servicio: `Baldosas` | Real | Acepta `Baldosas` como servicio y avanza al siguiente dato faltante. | `service=Baldosas`, pregunta siguiente, auditoria |
 | CP-07 | Requerimiento vago | `Algo para la casa` | Real | Pide aclaracion o dato mas concreto. No crea lead. AI de baja confianza no debe aceptar campos. | respuesta de aclaracion, sin `lead_id` |
-| CP-08 | Rechazo en confirmacion | En confirmacion: `No, quiero corregir` | Real | Solicita correccion o reinicia estado sin crear lead. | `current_step` de correccion o dato faltante, sin nuevo lead |
+| CP-08 | Rechazo en confirmacion | En confirmacion: `No, quiero corregir` | Real | Conserva el contexto, solicita el dato que desea corregir y no crea lead. Solo reinicia ante una solicitud explicita de nueva conversacion. | `qualification_context` conservado, pregunta de correccion, sin nuevo lead |
 | CP-09 | Nuevo lead desde numero repetido | Desde numero con lead previo: `nueva` o `quiero hacer otra solicitud` | Real | Inicia nueva solicitud sin guardar `nueva` como servicio. | nueva conversacion o estado reiniciado, servicio vacio |
 | CP-10 | Continuar solicitud anterior | Desde numero con lead previo: `continuar con la anterior` | Real | Reutiliza contexto previo y pide confirmacion o siguiente dato faltante. No crea lead en ese paso. | `previous_lead_id`, campos heredados, sin nuevo `lead_id` |
 | CP-11 | Mensaje con adjunto y texto | Imagen con caption `Necesito estas baldosas en Santiago` | Real | Registra metadata del adjunto y continua flujo. No crea lead sin confirmacion. | `message_attachments`, campos detectados, sin `lead_id` |
@@ -221,7 +221,7 @@ docker compose --env-file .env ps
 | 2026-04-26 16:22 -04 | CP-05 | N/A | 56900002031 | 14 |  |  |  | OK | Detecto `city=Santiago`, no creo lead y pregunto servicio. |
 | 2026-04-26 14:18 -04 | CP-06 | N/A | 56959743973 | 8 |  |  |  | OK | `Baldosas` fue aceptado como servicio; quedo esperando requerimiento. |
 | 2026-04-26 16:23 -04 | CP-07 | N/A | 56900002033 | 16 |  |  |  | OK | `Algo para la casa` no se guardo como servicio ni requerimiento; pidio ciudad. |
-| 2026-04-26 16:24 -04 | CP-08 | N/A | 56900002030 | 13 |  |  |  | OK | `No, quiero corregir` reinicio conversacion a `current_step=city`, limpio estado y no creo lead. |
+| 2026-04-26 16:24 -04 | CP-08 | N/A | 56900002030 | 13 |  |  |  | Historico | La version anterior reiniciaba el estado; el comportamiento vigente conserva contexto y pregunta que dato se debe corregir. |
 | 2026-04-26 14:34 -04 | CP-09 | N/A | 56959743973 | 8 |  |  |  | OK | `nueva` reinicio estado, limpio `conversations.lead_id` y no creo lead. |
 | 2026-04-26 16:24 -04 | CP-10 | N/A | 56900002029 | 12 | 24 | 86ah3pba6 | Valentina Rojas | OK con observacion | `continuar con la anterior` recupero datos del lead 24 y volvio a pedir confirmacion. No creo lead nuevo en ese paso. |
 | 2026-04-26 16:27 -04 | CP-11 | N/A | 56900002035 | 18 |  |  |  | OK | Imagen simulada con caption registro metadata y continuo flujo sin crear lead. |
@@ -241,6 +241,7 @@ docker compose --env-file .env ps
 | 2026-04-26 | `handed_to_sales_at` conservaba una fecha antigua cuando se reutilizaba la conversacion para una solicitud nueva. | `Persist Conversation State` ahora actualiza `handed_to_sales_at` con `NOW()` cuando el estado pasa a `handed_to_sales`, y lo limpia cuando se reinicia una solicitud. | Aplicado y sincronizado en n8n |
 | 2026-04-26 | El requerimiento `Comprar para remodelar el baño` se redujo a `Comprar baldosas`, perdiendo detalle util. | La evaluacion conversacional ahora prioriza el texto real del cliente cuando responde en el paso `requirement` con una frase concreta. | Aplicado y sincronizado en n8n |
 | 2026-04-26 | Desde una conversacion ya derivada, enviar `nueva` directamente no reiniciaba de inmediato; primero pedia elegir entre continuar o iniciar nueva. | `WA - Conversation Orchestrator` ahora reconoce `nueva` y `continuar` directamente cuando hay handoff previo o lead previo. | Aplicado y sincronizado en n8n |
+| 2026-06-18 | Respuestas breves como `no` podian interpretarse como rechazo global y borrar contexto. | Se agregaron `qualification_context` y `pending_question_key`; `si/no` se aplica ahora a la pregunta vigente y solo una solicitud explicita reinicia. | Aplicado, sincronizado y validado E2E |
 | 2026-04-26 | `CRM - ClickUp Sync Lead` podia dejar salida final vacia cuando no habia comentario conversacional, bloqueando seller notification. | Se agrego `Return ClickUp Sync Result` y se conecto el retorno a un flujo lineal que conserva `lead_id`, `clickup_task_id` y `clickup_task_url`. | Aplicado, sincronizado y validado |
 | 2026-04-26 | El round robin podia asignar vendedores activos sin `clickup_user_id`, haciendo fallar la notificacion ClickUp. | `CRM - Lead Creation And Assignment` y las queries SQL de rotacion ahora solo consideran vendedores activos con `clickup_user_id`; si no existe ninguno, la asignacion falla con `no_notifiable_seller`. | Aplicado, sincronizado y validado |
 | 2026-04-26 | Los captions de imagen/documento eran extraidos por `WA - Inbound Entry`, pero `WA - Conversation Orchestrator` ignoraba texto si `message_type` no era `text`. | `Evaluate Conversation Step` ahora procesa `text_body` util aunque venga desde caption de adjunto. | Aplicado, sincronizado y validado con CP-11 |
@@ -253,3 +254,28 @@ La matriz queda lista para regresion post-AI:
 - `AI-01` a `AI-06` cubren error de configuracion, salida valida, falla/invalidez, baja confianza, correccion de usuario y creacion confirmada
 - la evidencia requerida queda normalizada con `conversation_id`, `lead_id`, `clickup_task_id`, vendedor y auditorias
 - existe un smoke test local versionado para proteger la matriz sin servicios reales
+
+## Criterios de calidad del asesor comercial
+
+Cada respuesta generada por AI debe cumplir:
+
+- reconoce la informacion nueva del cliente antes de avanzar
+- aporta orientacion comercial o explica brevemente por que solicita el siguiente dato
+- contiene como maximo una pregunta principal
+- usa lenguaje profesional, cercano, chileno y consultivo
+- evita entusiasmo generico, respuestas de catalogo y listas de preguntas
+- no repite datos presentes en `qualification_context`
+- interpreta `si/no` segun `pending_question_key`
+- conserva el contexto salvo que el cliente pida explicitamente iniciar una solicitud nueva
+- no anuncia derivacion antes de que exista `lead_id`
+- deja un siguiente paso claro y coherente con D.A.T.O.S.
+
+Casos adicionales obligatorios:
+
+| ID | Caso | Resultado esperado |
+| --- | --- | --- |
+| QA-01 | `no` ante retiro de escombros | Guarda `debris_removal=false`, conserva producto/comuna/medidas y avanza. |
+| QA-02 | `no` ante `anything_else` | Cierra cordialmente sin borrar ni reabrir la solicitud. |
+| QA-03 | rechazo de confirmacion final | Conserva contexto y pregunta que dato desea corregir. |
+| QA-04 | instalacion en Vitacura | Orienta sobre el resultado buscado y pregunta un dato por turno. |
+| QA-05 | handoff confirmado | El mensaje de derivacion solo se envia despues de crear y asignar el lead. |

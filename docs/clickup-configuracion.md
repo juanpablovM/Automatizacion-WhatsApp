@@ -16,8 +16,9 @@ Estado validado:
 - asignacion inicial a vendedores activos con `clickup_user_id`
 - comentario `Conversación Completa Cliente` creado desde el historial conversacional
 - notificacion interna al vendedor mediante comentario asignado
+- diagnostico comercial enriquecido desde `qualification_context`
 
-Las tareas creadas durante la validacion real estan documentadas como datos de prueba en [`docs/handoff-actual.md`](./handoff-actual.md).
+Los identificadores de pruebas no se consideran configuracion permanente. El estado funcional vigente se resume en [`docs/handoff-actual.md`](./handoff-actual.md).
 
 ## Readiness de vendedores
 
@@ -72,10 +73,12 @@ Ejemplo:
 
 La descripcion debe contener:
 
-- resumen breve del lead
+- resumen ejecutivo del lead
 - telefono
 - canal
 - requerimiento resumido
+- modalidad, medidas y condiciones relevantes
+- clasificacion y objeciones detectadas
 - referencia de WhatsApp si aplica
 
 ### Comentario adicional

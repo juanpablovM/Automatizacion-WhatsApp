@@ -2,9 +2,19 @@
 
 ## Objetivo
 
-Evolucionar `Hormi Atencion` desde un asistente de calificacion de leads hacia un asesor comercial de WhatsApp capaz de guiar, recomendar, resolver dudas, manejar objeciones y cerrar el siguiente paso comercial con contexto real del negocio.
+Describir la implementacion vigente de `Hormi Atencion` como asesor comercial de WhatsApp capaz de guiar, recomendar, resolver dudas, manejar objeciones y cerrar el siguiente paso comercial con contexto real del negocio.
 
-Este documento define el rumbo funcional y tecnico. No declara que la capacidad ya este implementada de punta a punta. La implementacion debe hacerse por etapas, manteniendo los controles actuales de `n8n`, PostgreSQL y ClickUp.
+Gemini es la voz conversacional principal. `n8n` valida sus decisiones, mantiene memoria estructurada y ejecuta las operaciones en PostgreSQL, ClickUp y WhatsApp.
+
+## Estado implementado
+
+- modelo principal: `gemini-3.1-flash-lite`
+- proveedor: Google mediante endpoint OpenAI-compatible
+- memoria: `qualification_context` y `pending_question_key`
+- contrato AI: actualizaciones de campos, pregunta respondida, siguiente pregunta, resumen de razonamiento, accion recomendada y texto de respuesta
+- fuentes activas: 28 items de catalogo, 28 reglas de precio, 8 condiciones comerciales, 12 FAQ y 5 playbooks de objeciones
+- handoff: solo se anuncia al cliente despues de crear y asignar el lead
+- validacion E2E: flujo de instalacion en Vitacura, respuestas `no` contextuales, lead, asignacion y ClickUp
 
 ## Principio rector
 
@@ -18,7 +28,7 @@ La AI puede vender y asesorar, pero las reglas comerciales deben venir del siste
 
 La AI no debe inventar precios, stock, descuentos, plazos, cupos de agenda ni condiciones comerciales.
 
-## Alcance objetivo
+## Alcance vigente
 
 El asesor comercial debe poder:
 
@@ -141,7 +151,7 @@ Debe contener:
 - cuando derivar a vendedor
 - cuando pedir evidencia adicional, como medidas, fotos o direccion
 
-## Arquitectura objetivo
+## Arquitectura vigente
 
 ```mermaid
 flowchart LR
@@ -161,11 +171,11 @@ flowchart LR
     CRM --> NOTIF["Seller Notification Dispatch"]
 ```
 
-El nombre actual del workflow AI puede mantenerse como `AI - Lead Qualification Assistant` durante la transicion, pero funcionalmente debe evolucionar hacia `AI - Sales Advisor` o una responsabilidad equivalente.
+El workflow conserva el nombre tecnico `AI - Lead Qualification Assistant`, pero su responsabilidad funcional es la de `AI - Sales Advisor`.
 
-## Contrato JSON objetivo
+## Contrato JSON vigente
 
-La salida de la AI debe seguir siendo estructurada y validable. Propuesta de campos nuevos:
+La salida de la AI es estructurada y validable. Los campos conversacionales centrales son:
 
 ```json
 {
@@ -199,6 +209,12 @@ La salida de la AI debe seguir siendo estructurada y validable. Propuesta de cam
     "requires_confirmation": true
   },
   "objection_type": "none",
+  "field_updates": {
+    "measurements": "12 m2"
+  },
+  "answered_question_key": "measurements",
+  "next_question_key": "terrain_type",
+  "advisor_reasoning_summary": "El cliente entrego medidas; falta validar condiciones de instalacion.",
   "next_best_action": "ask_measurements",
   "should_create_lead": false,
   "should_schedule": false,
@@ -254,7 +270,7 @@ La migracion `infra/postgres/migrations/004_create_commercial_advisor_tables.sql
 
 Estas tablas son la base estructural. El catalogo publico Hormiglass y sus precios publicos ya tienen una primera carga versionada con 28 productos/servicios y 28 reglas de precio. `AI - Lead Qualification Assistant` ya carga ese contexto comercial antes de llamar al proveedor AI.
 
-Condiciones comerciales, FAQ, objeciones y agenda quedan diferidas hasta contar con informacion aprobada.
+Condiciones comerciales, FAQ y objeciones ya tienen una carga inicial aprobada. La agenda permanece deshabilitada hasta contar con disponibilidad real y un mecanismo de reserva confiable.
 
 ## Plan de implementacion por fases
 
@@ -282,12 +298,14 @@ Estado actual:
 
 - catalogo publico inicial cargado
 - precios publicos cargados
-- condiciones comerciales, FAQ y objeciones pendientes
+- 8 condiciones comerciales activas
+- 12 FAQ activas
+- 5 playbooks de objeciones activos
 - workflow AI conectado al contexto comercial versionado
 - PRD Hormiglass versionado en `docs/prd-agente-whatsapp-hormiglass.md`
-- contrato AI ampliado con D.A.T.O.S., clasificacion A/B/C/D, modalidad, escalamiento y resumen ejecutivo
+- contrato AI ampliado con D.A.T.O.S., clasificacion A/B/C/D, modalidad, memoria, escalamiento y resumen ejecutivo
 - `advisor_decisions` ya registra decisiones aceptadas con campos PRD cuando el proveedor real responde JSON valido
-- el runtime conversacional debe operar siempre contra el proveedor AI definitivo configurado en `.env`
+- el runtime conversacional opera contra el proveedor AI configurado en `.env`
 
 ### Fase B. Precios referenciales
 
@@ -311,8 +329,8 @@ Criterio de salida:
 Estado actual:
 
 - 28 reglas de precio publicas cargadas
-- auditoria en `advisor_decisions` conectada para validar respuestas del proveedor real
-- el siguiente cierre operativo es endurecer la validacion E2E con proveedor real y fuentes oficiales
+- auditoria en `advisor_decisions` conectada
+- validacion local y E2E ejecutada con proveedor real y fuentes oficiales
 
 ### Fase C. Agenda asistida
 

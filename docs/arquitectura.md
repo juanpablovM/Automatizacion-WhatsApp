@@ -28,16 +28,16 @@ La arquitectura local ya fue implementada y validada funcionalmente con mensajes
 - ClickUp como canal interno inicial de notificacion al vendedor
 - API directa como proveedor AI oficial para el rol conversacional `Hormi Atencion`
 
-## Evolucion objetivo: asesor comercial AI
+## Asesor comercial AI implementado
 
-El nuevo rumbo funcional del proyecto es convertir `Hormi Atencion` en un asesor comercial AI para WhatsApp. Esta evolucion no reemplaza los controles actuales: los amplia con fuentes oficiales de negocio.
+`Hormi Atencion` opera como asesor comercial AI para WhatsApp. Gemini conduce la conversacion; `n8n` valida estado, guardrails y acciones; PostgreSQL conserva memoria y auditoria.
 
-Capacidades objetivo:
+Capacidades actuales:
 
 - recomendar productos o servicios desde un catalogo oficial
 - responder preguntas frecuentes con condiciones comerciales aprobadas
 - orientar precios cuando existan reglas oficiales
-- ofrecer o solicitar agenda cuando exista disponibilidad real
+- capturar solicitudes de agenda sin prometer cupos inexistentes
 - manejar objeciones simples de precio, plazo, confianza o comparacion
 - cerrar el siguiente paso comercial con confirmacion explicita
 - derivar a vendedor con resumen, contexto, objeciones y condiciones ya informadas
@@ -49,8 +49,13 @@ Estado actual de fuentes comerciales:
 - catalogo publico Hormiglass cargado
 - 28 productos/servicios activos
 - 28 reglas de precio publicas activas
-- condiciones comerciales, FAQ, objeciones y agenda pendientes hasta contar con informacion aprobada
+- 8 condiciones comerciales activas
+- 12 FAQ activas
+- 5 playbooks de objeciones activos
+- agenda sin cupos activos; no se ofrecen horarios
 - workflow AI conectado al contexto comercial versionado antes de llamar al proveedor
+- memoria persistente mediante `qualification_context JSONB`
+- pregunta contextual persistente mediante `pending_question_key`
 
 ## Topologia local actual
 
@@ -68,7 +73,7 @@ flowchart LR
     EVO --> N8N
 ```
 
-## Topologia objetivo del asesor comercial
+## Topologia actual del asesor comercial
 
 ```mermaid
 flowchart LR
@@ -77,7 +82,7 @@ flowchart LR
     N8N --> AI["Hormi Atencion<br/>Asesor comercial AI"]
     AI --> CAT["Catalogo oficial"]
     AI --> PRE["Reglas de precios"]
-    AI --> AGE["Agenda / disponibilidad"]
+    AI --> AGE["Agenda / disponibilidad<br/>solo si existen cupos"]
     AI --> COND["Condiciones comerciales"]
     AI --> FAQ["FAQ y objeciones"]
     N8N --> PG["PostgreSQL<br/>estado y auditoria"]
@@ -85,7 +90,7 @@ flowchart LR
     N8N --> EVO
 ```
 
-Esta topologia es objetivo. Catalogo y precios publicos ya tienen primera carga versionada. Agenda, condiciones, FAQ y objeciones quedan pendientes hasta contar con informacion aprobada.
+Esta topologia esta implementada. La agenda permanece deshabilitada funcionalmente mientras no existan cupos reales.
 
 ## Decisiones tecnicas implementadas en esta fase
 
@@ -99,7 +104,10 @@ Esta topologia es objetivo. Catalogo y precios publicos ya tienen primera carga 
 - `infra/postgres/init/` queda montado para scripts iniciales si luego se usan
 - el webhook versionado en `.env.example` usa la red interna de Docker con `http://n8n:5678/...`; `host.docker.internal` queda como alternativa cuando se necesite llamar al puerto publicado del host
 - ClickUp ya fue integrado con creacion de tareas, comentario conversacional completo y notificacion inicial al vendedor
-- la capa AI oficial es Hormi Atencion en API directa: puede extraer datos, responder, pedir confirmacion y habilitar la creacion de lead cuando el usuario confirma
+- la capa AI oficial es Hormi Atencion con Gemini por API directa: conversa, orienta, extrae datos, decide la siguiente pregunta y solicita confirmacion
+- `qualification_context` conserva medidas, modalidad, terreno, acceso, escombros, urgencia, cliente, D.A.T.O.S. y resumen ejecutivo
+- `pending_question_key` contextualiza respuestas breves y evita reinicios accidentales
+- el mensaje de derivacion nace del resultado exitoso del CRM, no de una promesa anticipada de la AI
 - `n8n` y PostgreSQL conservan la ejecucion del estado: la AI no escribe directo en PostgreSQL, no crea tareas ClickUp por fuera del workflow y no asigna vendedores por fuera del round robin
 - la evolucion hacia asesor comercial AI debe mantener la misma separacion: la AI recomienda y conversa; `n8n` valida y ejecuta; PostgreSQL registra trazabilidad; ClickUp recibe el resultado comercial
 - los secretos reales de AI, ClickUp y Evolution quedan fuera de Git; solo el integrador debe usarlos para pruebas reales
@@ -111,15 +119,11 @@ Esta topologia es objetivo. Catalogo y precios publicos ya tienen primera carga 
 
 En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo de creacion del usuario propietario en el primer arranque. En esta base local no se implementa autenticacion basica antigua.
 
-## Pendientes
+## Pendientes reales
 
-- validar matriz conversacional completa con proveedor AI real y fallback seguro
-- validar Hormi Atencion con servicios vivos desde el workspace del integrador
-- ejecutar pruebas controladas con `AI_PROVIDER=direct_api`, `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL`
-- sincronizar el workflow AI actualizado en la instancia viva de `n8n`
-- validar respuestas comerciales con catalogo y precios publicos
-- definir fuente oficial de agenda, condiciones comerciales, FAQ y objeciones cuando exista informacion aprobada
-- extender contrato AI para `sales_stage`, `buying_intent`, `urgency`, `price_context`, `agenda_context`, `next_best_action` y `handoff_reason`
-- crear validaciones en `n8n` para que precios, agenda y condiciones provengan de fuentes oficiales antes de responder o cerrar
+- ampliar la matriz real a B2B, reclamos, garantia, pagos y consultas de stock
+- definir fuente oficial de agenda antes de habilitar horarios
+- integrar inventario antes de confirmar disponibilidad
+- integrar Finanzas antes de confirmar pagos
 - validar restore completo en entorno aislado si se requiere recuperacion total
 - documentar estrategia operativa de multiples instancias en `Evolution API`
