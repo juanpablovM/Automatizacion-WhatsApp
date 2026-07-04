@@ -4,6 +4,26 @@
 
 Documentar como levantar y operar el proyecto localmente en macOS con vistas a futura migracion a servidor.
 
+## Estado observado al 2026-06-30
+
+En la revision operativa de esa fecha se observo:
+
+- stack local arriba y healthy
+- `wahormiglass` en estado `open`
+- `sync-n8n-workflows.sh --preflight` en `OK`
+- `test-ai-assistant-local.sh` en `OK`
+- `test-conversation-regression-local.sh` en `OK`
+- `verify-backup-local.sh` en `OK` sobre el backup post-sync autorizado
+
+Tambien se detectaron riesgos abiertos:
+
+- errores historicos en `audit_logs`
+- mensajes salientes historicos con `delivery_status='failed'`
+- un vendedor de pruebas aun activo en round robin
+- casos de continuidad donde se contaminaron campos comerciales
+
+Para el detalle, revisar [`docs/estado-actual-2026-06-30.md`](./estado-actual-2026-06-30.md).
+
 ## Requisitos previos
 
 - Docker Desktop instalado y funcionando
@@ -117,6 +137,10 @@ Estado validado:
 - los sub-workflows se ejecutan desde `WA - Inbound Entry`
 - `OPS - Error Handler` queda configurado como workflow de errores
 
+Nota:
+
+- que un workflow aparezca `inactive` en `workflow_entity` no implica que este fuera de uso si es sub-workflow invocado mediante `Execute Workflow`
+
 El procedimiento operativo completo esta en [`runbook-operacion.md`](./runbook-operacion.md).
 
 ## Persistir webhook de Evolution API
@@ -170,6 +194,9 @@ Para verificar el ultimo backup sin tocar las bases reales:
 ```bash
 sh scripts/ops/verify-backup-local.sh
 ```
+
+En el cierre P0 del `2026-06-30`, esta verificacion paso correctamente sobre el backup post-sync `backups/20260630-145829/`.
+Ese directorio queda como punto de restauracion autorizado para el baseline local actual.
 
 Esta verificacion crea bases temporales `*_restore_check_<timestamp>`, restaura los dumps ahi, valida conteos basicos y elimina esas bases al terminar. No es un restore destructivo sobre las bases reales.
 

@@ -53,6 +53,17 @@ Estado recomendado para comunicar publicamente:
 
 Eso significa que el proyecto ya tiene implementacion real y documentacion amplia, pero todavia requiere endurecimiento operativo, validacion ampliada y cierre formal antes de considerarse listo para produccion.
 
+Hallazgos observados en la revision del `2026-06-30`:
+
+- stack local arriba y healthy
+- preflight de workflows, contrato AI local y regresion conversacional local en `OK`
+- ejecuciones recientes reales con lead, ClickUp, notificacion y mensaje saliente exitosos
+- errores historicos todavia presentes en auditoria y mensajeria saliente
+- se detectaron casos de continuidad conversacional con campos contaminados como `service='holaa'` o `city='Si'`
+- el round robin actual todavia incluye un vendedor de pruebas
+
+El detalle de este corte operativo vive en [`docs/estado-actual-2026-06-30.md`](./docs/estado-actual-2026-06-30.md).
+
 ## Alcance actual
 
 Hoy el repo cubre:
@@ -226,6 +237,7 @@ Para entender el proyecto desde lo general a lo especifico:
 - [Asesor comercial AI](./docs/asesor-comercial-ai.md)
 - [Fuentes comerciales AI](./docs/fuentes-comerciales-ai.md)
 - [Guia de produccion](./docs/guia-produccion.md)
+- [Estado actual 2026-06-30](./docs/estado-actual-2026-06-30.md)
 
 La documentacion operativa de mantenimiento diario, runbooks y handoff conviene tratarla como material interno del equipo si el repositorio va a mantenerse publico.
 

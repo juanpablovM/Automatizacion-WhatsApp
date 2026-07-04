@@ -200,13 +200,16 @@ Esta prueba genera auditoria operativa. No ejecutarla durante una prueba comerci
 Estado real actual:
 
 - el smoke fue actualizado para usar una bandera explicita de prueba
-- al momento del ultimo handoff, la prueba aun requiere ajuste adicional para registrar consistentemente la auditoria nueva
+- en la revision del `2026-06-30` no se re-ejecuto este smoke; el estado observado del sistema se apoyo en healthchecks, consultas de auditoria, pruebas locales y restore check
 - no usar su resultado como unico indicador de salud del flujo principal de WhatsApp
 
 ## Pendientes operativos conocidos
 
 - Persisten lineas historicas en logs de `n8n` asociadas a webhooks viejos. No corresponden a la configuracion activa actual.
 - El flujo principal de WhatsApp ya fue validado nuevamente con una conversacion real completa.
+- El backup post-sync autorizado del baseline local actual es `backups/20260630-145829/`; generar uno nuevo despues de cambios relevantes.
+- El round robin actual aun incluye un vendedor de pruebas como notificable.
+- Existen casos historicos de continuidad conversacional con campos contaminados; revisar antes de produccion.
 - La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](./guia-produccion.md).
 
 ## Reconectar Evolution API por QR

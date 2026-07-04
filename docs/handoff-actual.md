@@ -4,6 +4,19 @@
 
 `Hormi Atencion` opera como asesor comercial de WhatsApp sobre Evolution API, n8n, PostgreSQL, Gemini y ClickUp.
 
+Estado observado en la revision del `2026-06-30`:
+
+- stack local arriba y healthy
+- `WA - Inbound Entry` activo en `n8n`
+- `wahormiglass` en `Evolution API` con estado `open`
+- contrato local AI y regresion conversacional local en `OK`
+- restore check del ultimo backup estructurado en `OK`
+- existen ejecuciones reales recientes con lead, ClickUp, notificacion y mensaje saliente exitosos
+- persisten errores historicos en auditoria y algunos casos de calidad conversacional todavia no resueltos
+- el round robin aun incluye un vendedor de pruebas como notificable
+
+El corte detallado de estado vive en [`docs/estado-actual-2026-06-30.md`](./estado-actual-2026-06-30.md).
+
 La instancia local validada incluye:
 
 - entrada y salida real de WhatsApp
@@ -87,20 +100,24 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 ## Pendientes reales
 
 - preparar ambientes separados de staging y produccion
-- completar backup y prueba de restauracion
+- automatizar backups y definir retencion; el backup post-sync autorizado actual es `backups/20260630-145829/`
 - agregar monitoreo y alertas productivas
 - integrar agenda real si se desea ofrecer horarios
 - integrar una fuente verificable de stock o disponibilidad
 - ampliar la matriz E2E para pagos, garantias, reclamos y B2B
 - implementar carga del binario de adjuntos a ClickUp
+- corregir casos de continuidad conversacional donde se guardan campos contaminados como `service='holaa'` o `city='Si'`
+- sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
 ## Puesta en marcha local
 
 ```bash
 docker compose --env-file .env up -d
-sh scripts/dev/bootstrap-db.sh
 sh scripts/dev/sync-n8n-workflows.sh
 ```
+
+Si el ambiente es nuevo, las bases secundarias se crean con `infra/postgres/init/001_create_default_databases.sql` en el primer arranque del volumen.
+Las migraciones de negocio y cambios de esquema posteriores se aplican manualmente segun el procedimiento operativo.
 
 Para un ambiente existente, aplicar tambien:
 
