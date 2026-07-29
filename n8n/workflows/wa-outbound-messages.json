@@ -15,7 +15,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nconst phoneNumber = String(row.phone_number || '').trim();\nconst instanceName = String(row.instance_name || $env.EVOLUTION_DEFAULT_INSTANCE || '').trim();\nconst messageText = String(row.response_text || row.text_body || '').trim();\nconst conversationId = row.conversation_id ?? null;\nconst leadId = row.lead_id ?? null;\nconst responseKind = row.response_kind || 'system_message';\nconst apiBaseUrl = String($env.EVOLUTION_API_BASE_URL || '').replace(/\\/$/, '');\nconst apiKey = String($env.EVOLUTION_API_KEY || '').trim();\n\nif (!conversationId) {\n  throw new Error('WA - Outbound Messages requiere conversation_id');\n}\n\nif (!phoneNumber) {\n  throw new Error('WA - Outbound Messages requiere phone_number');\n}\n\nif (!messageText) {\n  throw new Error('WA - Outbound Messages requiere response_text o text_body');\n}\n\nif (!instanceName) {\n  throw new Error('WA - Outbound Messages requiere instance_name o EVOLUTION_DEFAULT_INSTANCE');\n}\n\nif (!apiBaseUrl || !apiKey) {\n  throw new Error('Evolution API no esta configurada en variables de entorno');\n}\n\nconst outboundBody = {\n  number: phoneNumber,\n  text: messageText,\n  delay: 0,\n  linkPreview: false,\n};\n\nreturn [\n  {\n    json: {\n      conversation_id: conversationId,\n      lead_id: leadId,\n      phone_number: phoneNumber,\n      instance_name: instanceName,\n      message_type: 'text',\n      text_body: messageText,\n      response_kind: responseKind,\n      outbound_url: `${apiBaseUrl}/message/sendText/${encodeURIComponent(instanceName)}`,\n      outbound_body: outboundBody,\n      raw_payload_json: JSON.stringify(outboundBody),\n    },\n  },\n];"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst phoneNumber = String(row.phone_number || '').trim();\nconst instanceName = String(row.instance_name || $env.EVOLUTION_DEFAULT_INSTANCE || '').trim();\nconst messageText = String(row.response_text || row.text_body || '').trim();\nconst conversationId = row.conversation_id ?? null;\nconst leadId = row.lead_id ?? null;\nconst responseKind = row.response_kind || 'system_message';\nconst apiBaseUrl = String($env.EVOLUTION_API_BASE_URL || '').replace(/\\/$/, '');\nconst apiKey = String($env.EVOLUTION_API_KEY || '').trim();\n\nif (!conversationId) {\n  throw new Error('WA - Outbound Messages requiere conversation_id');\n}\n\nif (!phoneNumber) {\n  throw new Error('WA - Outbound Messages requiere phone_number');\n}\n\nif (!messageText) {\n  throw new Error('WA - Outbound Messages requiere response_text o text_body');\n}\n\nif (!instanceName) {\n  throw new Error('WA - Outbound Messages requiere instance_name o EVOLUTION_DEFAULT_INSTANCE');\n}\n\nif (!apiBaseUrl || !apiKey) {\n  throw new Error('Evolution API no esta configurada en variables de entorno');\n}\n\nconst stableHash = (value) => {\n  let hash = 2166136261;\n  for (const char of String(value || '')) {\n    hash ^= char.charCodeAt(0);\n    hash = Math.imul(hash, 16777619);\n  }\n  return (hash >>> 0).toString(16);\n};\nconst triggerKey = row.message_id || row.external_message_id || `text:${stableHash(messageText)}`;\nconst idempotencyKey = `evolution:${instanceName}:${conversationId}:${triggerKey}:${responseKind}`;\n\nconst outboundBody = {\n  number: phoneNumber,\n  text: messageText,\n  delay: 0,\n  linkPreview: false,\n};\n\nreturn [\n  {\n    json: {\n      conversation_id: conversationId,\n      lead_id: leadId,\n      phone_number: phoneNumber,\n      instance_name: instanceName,\n      message_type: 'text',\n      text_body: messageText,\n      response_kind: responseKind,\n      outbound_url: `${apiBaseUrl}/message/sendText/${encodeURIComponent(instanceName)}`,\n      outbound_body: outboundBody,\n      raw_payload_json: JSON.stringify(outboundBody),\n      outbound_claim_stale_seconds: Math.max(30, Number($env.OUTBOUND_CLAIM_STALE_SECONDS || 300)),\n      idempotency_key: idempotencyKey,\n    },\n  },\n];"
       },
       "id": "2",
       "name": "Build Outbound Payload",
@@ -29,10 +29,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH input_payload AS (\n  SELECT\n    NULLIF($1::text, '')::bigint AS conversation_id,\n    NULLIF($2::text, '')::bigint AS lead_id,\n    COALESCE(NULLIF($3::text, ''), 'text') AS message_type,\n    NULLIF($4::text, '') AS text_body,\n    COALESCE(NULLIF($5::text, '')::jsonb, '{}'::jsonb) AS raw_payload,\n    NULLIF($6::text, '') AS response_kind\n)\nINSERT INTO messages (\n  conversation_id,\n  lead_id,\n  direction,\n  message_type,\n  delivery_status,\n  text_body,\n  raw_payload\n)\nSELECT\n  ip.conversation_id,\n  ip.lead_id,\n  'outgoing',\n  ip.message_type,\n  'queued',\n  ip.text_body,\n  ip.raw_payload\nFROM input_payload ip\nRETURNING\n  id,\n  conversation_id,\n  lead_id,\n  message_type,\n  delivery_status,\n  text_body,\n  raw_payload,\n  (SELECT response_kind FROM input_payload) AS response_kind;",
+        "query": "SELECT * FROM claim_outbound_message(\n  NULLIF($1::text, '')::bigint, NULLIF($2::text, '')::bigint,\n  COALESCE(NULLIF($3::text, ''), 'text'), NULLIF($4::text, ''),\n  COALESCE(NULLIF($5::text, '')::jsonb, '{}'::jsonb), NULLIF($6::text, ''),\n  NULLIF($7::text, ''), NULLIF($8::text, ''),\n  COALESCE(NULLIF($9::text, '')::integer, 300)\n);",
         "additionalFields": {
           "mode": "multiple",
-          "queryParams": "conversation_id,lead_id,message_type,text_body,raw_payload_json,response_kind"
+          "queryParams": "conversation_id,lead_id,message_type,text_body,raw_payload_json,response_kind,instance_name,idempotency_key,outbound_claim_stale_seconds"
         }
       },
       "id": "3",
@@ -54,60 +54,38 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "const retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\nconst maxAttempts = Number($env.EXTERNAL_HTTP_MAX_ATTEMPTS || 4);\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => {\n  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));\n  const jitter = Math.floor(Math.random() * 250);\n  return exponential + jitter;\n};\n\nconst normalizeBody = (value) => {\n  if (typeof value === 'string') {\n    try {\n      return JSON.parse(value);\n    } catch (_error) {\n      return { raw: value };\n    }\n  }\n  return value || {};\n};\n\nconst row = items[0]?.json ?? {};\nconst url = String(row.outbound_url || '').trim();\nconst body = row.outbound_body;\n\nif (!url) throw new Error('Send Evolution Message requiere outbound_url');\nif (!body) throw new Error('Send Evolution Message requiere outbound_body');\n\nlet lastError = null;\n\nfor (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n  try {\n    const response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers: {\n        apikey: $env.EVOLUTION_API_KEY,\n        'Content-Type': 'application/json',\n      },\n      body,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const statusCode = Number(response.statusCode || 0);\n    const shouldRetry = retryableStatusCodes.has(statusCode) && attempt < maxAttempts;\n    if (!shouldRetry) {\n      return [\n        {\n          json: {\n            statusCode,\n            body: normalizeBody(response.body),\n            headers: response.headers || {},\n            retry_attempts: attempt,\n            retry_exhausted: retryableStatusCodes.has(statusCode) && attempt >= maxAttempts,\n            retry_last_error: null,\n          },\n        },\n      ];\n    }\n  } catch (error) {\n    lastError = error;\n    if (attempt >= maxAttempts) {\n      return [\n        {\n          json: {\n            statusCode: 0,\n            body: { message: error.message },\n            headers: {},\n            retry_attempts: attempt,\n            retry_exhausted: true,\n            retry_last_error: error.message,\n          },\n        },\n      ];\n    }\n  }\n\n  await sleep(retryDelay(attempt));\n}\n\nreturn [{ json: { statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];"
+        "jsCode": "const retryableStatusCodes = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\n// Evolution does not expose a request idempotency key. Retrying a POST after an\n// ambiguous timeout can duplicate a WhatsApp message, so each claimed operation\n// is sent at most once and ambiguous results are reconciled operationally.\nconst maxAttempts = 1;\nconst baseDelayMs = Number($env.EXTERNAL_HTTP_RETRY_BASE_MS || 1000);\nconst maxDelayMs = Number($env.EXTERNAL_HTTP_RETRY_MAX_MS || 10000);\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\nconst retryDelay = (attempt) => {\n  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));\n  const jitter = Math.floor(Math.random() * 250);\n  return exponential + jitter;\n};\n\nconst normalizeBody = (value) => {\n  if (typeof value === 'string') {\n    try {\n      return JSON.parse(value);\n    } catch (_error) {\n      return { raw: value };\n    }\n  }\n  return value || {};\n};\n\nconst row = items[0]?.json ?? {};\nconst instanceName = String(row.instance_name || $env.EVOLUTION_DEFAULT_INSTANCE || '').trim();\nconst apiBaseUrl = String($env.EVOLUTION_API_BASE_URL || '').replace(/\\/$/, '');\nconst url = String(row.outbound_url || (apiBaseUrl && instanceName ? `${apiBaseUrl}/message/sendText/${encodeURIComponent(instanceName)}` : '')).trim();\nconst body = row.outbound_body || row.raw_payload;\n\nif (row.already_sent === true || row.should_send === false) {\n  return [];\n}\n\nif (!url) throw new Error('Send Evolution Message requiere outbound_url');\nif (!body) throw new Error('Send Evolution Message requiere outbound_body');\n\nlet lastError = null;\n\nfor (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n  try {\n    const response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers: {\n        apikey: $env.EVOLUTION_API_KEY,\n        'Content-Type': 'application/json',\n      },\n      body,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const statusCode = Number(response.statusCode || 0);\n    const shouldRetry = retryableStatusCodes.has(statusCode) && attempt < maxAttempts;\n    if (!shouldRetry) {\n      return [\n        {\n          json: {\n            ...row,\n            statusCode,\n            body: normalizeBody(response.body),\n            headers: response.headers || {},\n            retry_attempts: attempt,\n            retry_exhausted: retryableStatusCodes.has(statusCode) && attempt >= maxAttempts,\n            retry_last_error: null,\n          },\n        },\n      ];\n    }\n  } catch (error) {\n    lastError = error;\n    if (attempt >= maxAttempts) {\n      return [\n        {\n          json: {\n            ...row,\n            statusCode: 0,\n            body: { message: error.message },\n            headers: {},\n            retry_attempts: attempt,\n            retry_exhausted: true,\n            retry_last_error: error.message,\n          },\n        },\n      ];\n    }\n  }\n\n  await sleep(retryDelay(attempt));\n}\n\nreturn [{ json: { ...row, statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];"
       },
       "id": "4",
       "name": "Send Evolution Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        700,
+        1200,
         460
       ]
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combineBy": "combineByPosition",
-        "numberInputs": 2,
-        "options": {
-          "clashHandling": {
-            "values": {
-              "resolveClash": "addSuffix"
-            }
-          }
-        }
-      },
-      "id": "5",
-      "name": "Merge Delivery Context",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        960,
-        320
-      ]
-    },
-    {
-      "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst retryAttempts = Number(row.retry_attempts_2 || row.retry_attempts || 1);\nconst retryExhausted = Boolean(row.retry_exhausted_2 || row.retry_exhausted || false);\nconst retryLastError = row.retry_last_error_2 || row.retry_last_error || null;\nconst messageId = row.id_1 || row.id || null;\nconst conversationId = row.conversation_id_1 || row.conversation_id || null;\nconst leadId = row.lead_id_1 || row.lead_id || null;\nconst responseKind = row.response_kind_1 || row.response_kind || 'system_message';\nconst externalMessageId = responseBody?.key?.id || responseBody?.data?.key?.id || null;\nconst deliveryStatus = statusCode >= 200 && statusCode < 300 ? 'sent' : 'failed';\n\nreturn [\n  {\n    json: {\n      message_id: messageId,\n      conversation_id: conversationId,\n      lead_id: leadId,\n      delivery_status: deliveryStatus,\n      external_message_id: externalMessageId,\n      event_name: 'evolution_outbound_delivery',\n      result: deliveryStatus,\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n        retry_last_error: retryLastError,\n      }),\n      metadata_json: JSON.stringify({\n        response_kind: responseKind,\n        provider: 'evolution_api',\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n      }),\n    },\n  },\n];"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst statusCode = Number(row.statusCode_2 || row.statusCode || 0);\nconst responseBody = row.body_2 || row.body || {};\nconst retryAttempts = Number(row.retry_attempts_2 || row.retry_attempts || 1);\nconst retryExhausted = Boolean(row.retry_exhausted_2 || row.retry_exhausted || false);\nconst retryLastError = row.retry_last_error_2 || row.retry_last_error || null;\nconst messageId = row.id_1 || row.id || null;\nconst conversationId = row.conversation_id_1 || row.conversation_id || null;\nconst leadId = row.lead_id_1 || row.lead_id || null;\nconst responseKind = row.response_kind_1 || row.response_kind || 'system_message';\nconst externalMessageId = responseBody?.key?.id || responseBody?.data?.key?.id || null;\nconst deliveryStatus = statusCode >= 200 && statusCode < 300\n  ? 'sent'\n  : (statusCode === 0 || statusCode >= 500 ? 'unknown' : 'failed');\nconst dispatchPhase = deliveryStatus;\nconst reconciliationRequired = deliveryStatus === 'unknown';\nconst reconciliationReason = reconciliationRequired\n  ? (retryLastError || `ambiguous_provider_outcome_status_${statusCode}`)\n  : null;\n\nreturn [\n  {\n    json: {\n      message_id: messageId,\n      conversation_id: conversationId,\n      lead_id: leadId,\n      delivery_status: deliveryStatus,\n      dispatch_phase: dispatchPhase,\n      reconciliation_required: reconciliationRequired,\n      reconciliation_reason: reconciliationReason,\n      external_message_id: externalMessageId,\n      event_name: 'evolution_outbound_delivery',\n      result: deliveryStatus,\n      after_payload_json: JSON.stringify({\n        status_code: statusCode,\n        response_body: responseBody,\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n        retry_last_error: retryLastError,\n      }),\n      metadata_json: JSON.stringify({\n        response_kind: responseKind,\n        provider: 'evolution_api',\n        retry_attempts: retryAttempts,\n        retry_exhausted: retryExhausted,\n      }),\n    },\n  },\n];"
       },
       "id": "6",
       "name": "Normalize Delivery Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1200,
+        1700,
         320
       ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH updated_message AS (\n  UPDATE messages\n  SET\n    delivery_status = $2::text,\n    external_message_id = COALESCE(NULLIF($3::text, ''), external_message_id),\n    updated_at = NOW()\n  WHERE id = $1::bigint\n  RETURNING *\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $4::text,\n    'message',\n    um.id,\n    'system',\n    'n8n',\n    $5::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($6::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_message um\n  RETURNING id\n)\nSELECT\n  um.id AS message_id,\n  um.delivery_status,\n  ai.id AS audit_id\nFROM updated_message um\nLEFT JOIN audit_insert ai ON TRUE;",
+        "query": "WITH updated_message AS (\n  UPDATE messages\n  SET\n    delivery_status = $2::text,\n    external_message_id = COALESCE(NULLIF($3::text, ''), external_message_id),\n    dispatch_phase = $8::text,\n    reconciliation_required = $9::boolean,\n    reconciliation_reason = NULLIF($10::text, ''),\n    dispatch_token = NULL,\n    updated_at = NOW()\n  WHERE id = $1::bigint\n  RETURNING *\n),\naudit_insert AS (\n  INSERT INTO audit_logs (\n    event_name,\n    entity_type,\n    entity_id,\n    actor_type,\n    actor_id,\n    result,\n    before_payload,\n    after_payload,\n    metadata\n  )\n  SELECT\n    $4::text,\n    'message',\n    um.id,\n    'system',\n    'n8n',\n    $5::text,\n    '{}'::jsonb,\n    COALESCE(NULLIF($6::text, '')::jsonb, '{}'::jsonb),\n    COALESCE(NULLIF($7::text, '')::jsonb, '{}'::jsonb)\n  FROM updated_message um\n  RETURNING id\n)\nSELECT\n  um.id AS message_id,\n  um.delivery_status,\n  ai.id AS audit_id\nFROM updated_message um\nLEFT JOIN audit_insert ai ON TRUE;",
         "additionalFields": {
           "mode": "transaction",
-          "queryParams": "message_id,delivery_status,external_message_id,event_name,result,after_payload_json,metadata_json"
+          "queryParams": "message_id,delivery_status,external_message_id,event_name,result,after_payload_json,metadata_json,dispatch_phase,reconciliation_required,reconciliation_reason"
         }
       },
       "id": "7",
@@ -121,8 +99,94 @@
         }
       },
       "position": [
-        1440,
+        1940,
         320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE messages\nSET dispatch_phase = 'sending', delivery_status = 'sending',\n    attempt_started_at = NOW(), updated_at = NOW()\nWHERE id = $1::bigint\n  AND dispatch_phase = 'claimed'\n  AND dispatch_token = $2::text\nRETURNING id, conversation_id, lead_id, message_type, delivery_status, text_body,\n  raw_payload, provider_instance_name AS instance_name, idempotency_key,\n  raw_payload->>'number' AS phone_number, raw_payload AS outbound_body,\n  FALSE AS already_sent, TRUE AS should_send, external_message_id,\n  $3::text AS response_kind, dispatch_token, dispatch_phase;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.id, $json.dispatch_token, $json.response_kind] }}"
+        }
+      },
+      "id": "30000000-0000-0000-0000-000000000001",
+      "name": "Mark Outbound Sending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        940,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => ({ json: { ...item.json, outbound_dispatch_status: item.json.already_sent === true ? 'already_sent' : 'not_dispatched' } }));"
+      },
+      "id": "30000000-0000-0000-0000-000000000002",
+      "name": "Return Already Sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "should-dispatch-outbound",
+              "leftValue": "={{ Boolean($json.should_send) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "40000000-0000-0000-0000-000000000011",
+      "name": "Should Dispatch Outbound",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => ({ json: { ...item.json, outbound_terminal_result: true } }));"
+      },
+      "id": "40000000-0000-0000-0000-000000000012",
+      "name": "Return Outbound Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        260
       ]
     }
   ],
@@ -146,11 +210,6 @@
             "node": "Queue Outbound Message",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "Send Evolution Message",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -159,7 +218,7 @@
       "main": [
         [
           {
-            "node": "Merge Delivery Context",
+            "node": "Should Dispatch Outbound",
             "type": "main",
             "index": 0
           }
@@ -167,17 +226,6 @@
       ]
     },
     "Send Evolution Message": {
-      "main": [
-        [
-          {
-            "node": "Merge Delivery Context",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Merge Delivery Context": {
       "main": [
         [
           {
@@ -193,6 +241,57 @@
         [
           {
             "node": "Persist Delivery Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Outbound Sending": {
+      "main": [
+        [
+          {
+            "node": "Send Evolution Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Dispatch Outbound": {
+      "main": [
+        [
+          {
+            "node": "Mark Outbound Sending",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Already Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Delivery Result": {
+      "main": [
+        [
+          {
+            "node": "Return Outbound Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Already Sent": {
+      "main": [
+        [
+          {
+            "node": "Return Outbound Result",
             "type": "main",
             "index": 0
           }

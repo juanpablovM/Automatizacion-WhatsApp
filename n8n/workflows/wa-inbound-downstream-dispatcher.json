@@ -1,0 +1,722 @@
+{
+  "name": "WA - Inbound Downstream Dispatcher",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "50000000-0000-0000-0000-000000000010",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        180,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => {\n  const source = item.json || {};\n  const payload = source.downstream_payload && typeof source.downstream_payload === 'object'\n    ? source.downstream_payload\n    : source;\n  return { json: {\n    ...payload,\n    inbound_event_id: source.inbound_event_id || payload.inbound_event_id || null,\n    processing_token: source.processing_token || payload.processing_token || null,\n  } };\n});"
+      },
+      "id": "50000000-0000-0000-0000-000000000011",
+      "name": "Normalize Durable Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-Boolean(String($json-response_text || '')-trim())",
+              "leftValue": "={{ Boolean(String($json.response_text || '').trim()) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000012",
+      "name": "Should Send Response",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000013",
+      "name": "Execute Outbound Response",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        920,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { outbound_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000014",
+      "name": "Outbound Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { outbound_lane_complete: true, outbound_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000015",
+      "name": "Outbound Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-Boolean($json-should_create_lead)",
+              "leftValue": "={{ Boolean($json.should_create_lead) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000016",
+      "name": "Should Create Lead",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - Lead Creation And Assignment"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000017",
+      "name": "Execute Lead Creation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        920,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - ClickUp Sync Lead"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000018",
+      "name": "Execute ClickUp Sync",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1180,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "clickup-task-ready",
+              "leftValue": "={{ Boolean(String($json.clickup_task_id || '').trim()) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000019",
+      "name": "Filter ClickUp Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1420,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - Seller Notification Dispatch"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000020",
+      "name": "Execute Seller Notification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { seller_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000021",
+      "name": "Seller Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "preferInput1"
+            }
+          }
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000022",
+      "name": "Merge Lead Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1180,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\nconst leadId = row.lead_id || null;\nconst assigned = row.assignment_result === 'assigned' && Boolean(row.assigned_seller_id);\nif (!leadId || !row.conversation_id || !row.phone_number) return [];\nreturn [{ json: { ...row, lead_id: leadId,\n  response_text: assigned\n    ? 'Gracias, ya registré tu solicitud y quedó asignada al equipo comercial. Una ejecutiva revisará los antecedentes para preparar una cotización acorde a tu proyecto.'\n    : 'Gracias, ya registré tu solicitud. No pude asignarla automáticamente en este momento, pero el equipo comercial podrá revisar el caso sin que tengas que repetir la información.',\n  response_kind: assigned ? 'handoff_confirmed' : 'handoff_registered_unassigned',\n} }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000023",
+      "name": "Prepare Verified Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000024",
+      "name": "Execute Handoff Outbound",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { handoff_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000025",
+      "name": "Handoff Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000026",
+      "name": "Merge Lead Effects",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2140,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { lead_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000027",
+      "name": "Lead Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { lead_lane_complete: true, lead_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000028",
+      "name": "Lead Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 3,
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000029",
+      "name": "Merge Dispatch Completion",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2640,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbound_events\nSET processing_status='processed', processing_phase='completed', processed_at=NOW(),\n    processing_token=NULL, failure_reason=NULL, updated_at=NOW()\nWHERE id=NULLIF($1::text,'')::bigint\n  AND processing_status='processing' AND processing_token=NULLIF($2::text,'')\n  AND downstream_payload <> '{}'::jsonb\nRETURNING id AS completed_inbound_event_id, TRUE AS downstream_completed;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.inbound_event_id, $json.processing_token] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000030",
+      "name": "Mark Inbox Processed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2900,
+        360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Inbound Recovery"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000031",
+      "name": "Dispatch Next Inbox Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3160,
+        360
+      ]
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize Durable Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Durable Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Should Send Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Create Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Lead Context",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Outbound Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outbound Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Outbound Response": {
+      "main": [
+        [
+          {
+            "node": "Outbound Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outbound Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Outbound Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Should Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Execute Lead Creation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lead Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Lead Creation": {
+      "main": [
+        [
+          {
+            "node": "Execute ClickUp Sync",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Lead Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Execute ClickUp Sync": {
+      "main": [
+        [
+          {
+            "node": "Filter ClickUp Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter ClickUp Ready": {
+      "main": [
+        [
+          {
+            "node": "Execute Seller Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Seller Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Seller Notification": {
+      "main": [
+        [
+          {
+            "node": "Seller Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seller Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Lead Context": {
+      "main": [
+        [
+          {
+            "node": "Prepare Verified Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Verified Handoff": {
+      "main": [
+        [
+          {
+            "node": "Execute Handoff Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Handoff Outbound": {
+      "main": [
+        [
+          {
+            "node": "Handoff Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Lead Effects": {
+      "main": [
+        [
+          {
+            "node": "Lead Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Lead Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Dispatch Completion": {
+      "main": [
+        [
+          {
+            "node": "Mark Inbox Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Inbox Processed": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Next Inbox Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": [],
+  "versionId": "50000000-0000-0000-0000-000000000032",
+  "id": null
+}

@@ -32,3 +32,4 @@ docs/FLUJO-CONVERSACIONAL-COMPLETO.md
 hormiglass_catalogo.csv
 # Local Pi runtime state
 .atl/
+.codegraph/

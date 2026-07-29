@@ -19,6 +19,7 @@ Sincroniza workflows versionados usando el CLI oficial de n8n.
 
 Opciones:
   --preflight   Valida JSON, nombres y manifest local sin tocar Docker/n8n.
+  --mapping-only  Valida/aplica solamente el mapping seguro de la instancia.
 EOF
 }
 
@@ -277,16 +278,40 @@ verify_remote() {
   echo "Verificacion remota OK"
 }
 
-activate_inbound_workflow() {
-  inbound_id=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
-    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1;\"")
-  if [ -z "$inbound_id" ]; then
-    echo "ERROR: no existe workflow 'WA - Inbound Entry' en n8n" >&2
+activate_runtime_workflows() {
+  for workflow_name in 'WA - Inbound Entry' 'WA - Inbound Recovery'; do
+    workflow_id=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
+      "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT id FROM workflow_entity WHERE name = '$workflow_name' LIMIT 1;\"")
+    if [ -z "$workflow_id" ]; then
+      echo "ERROR: no existe workflow '$workflow_name' en n8n" >&2
+      exit 1
+    fi
+    compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$workflow_id" --active=true >/dev/null
+    echo "Workflow runtime activado: $workflow_name"
+  done
+  compose_cmd restart "$N8N_SERVICE" >/dev/null
+}
+
+ensure_default_instance_mapping() {
+  mapping_sql="$PROJECT_ROOT/db/queries/ops/ensure-default-instance-mapping.sql"
+  if [ ! -f "$mapping_sql" ]; then
+    echo "ERROR: no existe $mapping_sql" >&2
     exit 1
   fi
-  compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$inbound_id" --active=true >/dev/null
-  compose_cmd restart "$N8N_SERVICE" >/dev/null
-  echo "Workflow de entrada activado: WA - Inbound Entry"
+
+  default_instance=$(compose_cmd exec -T "$N8N_SERVICE" sh -lc 'printf %s "$EVOLUTION_DEFAULT_INSTANCE"')
+  if [ -z "$default_instance" ]; then
+    echo "ERROR: EVOLUTION_DEFAULT_INSTANCE esta vacio en n8n" >&2
+    exit 1
+  fi
+
+  app_db=$(awk -F= '$1 == "APP_POSTGRES_DB" { print substr($0, index($0, "=") + 1); exit }' "$PROJECT_ROOT/.env")
+  app_db=${app_db:-crm_whatsapp_app}
+
+  compose_cmd exec -T -e DEFAULT_INSTANCE="$default_instance" "$POSTGRES_SERVICE" sh -lc \
+    "psql -U \"\$POSTGRES_USER\" -d '$app_db' -v ON_ERROR_STOP=1 -v instance_name=\"\$DEFAULT_INSTANCE\"" \
+    < "$mapping_sql"
+  echo "Mapeo de instancia validado para la linea activa"
 }
 
 sync_workflows() {
@@ -320,7 +345,8 @@ sync_workflows() {
   prepare_import_dir "$after_ids_json" "$resolved_dir" "yes"
   copy_and_import "$resolved_dir" "links resueltos"
   verify_remote "$after_ids_json" "$remote_json"
-  activate_inbound_workflow
+  ensure_default_instance_mapping
+  activate_runtime_workflows
 
   compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$CONTAINER_TMP'" >/dev/null 2>&1 || true
   echo "Workflows sincronizados con CLI oficial de n8n"
@@ -332,6 +358,14 @@ case "${1:-}" in
     ;;
   --preflight)
     validate_local
+    ;;
+  --mapping-only)
+    require_command docker
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+      echo "ERROR: no existe .env en $PROJECT_ROOT" >&2
+      exit 1
+    fi
+    ensure_default_instance_mapping
     ;;
   -h|--help)
     usage
