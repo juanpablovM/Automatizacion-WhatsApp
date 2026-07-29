@@ -431,12 +431,14 @@
       },
       "expected": {
         "conversation_created": true,
-        "lead_created": true,
+        "lead_created": false,
         "escalation_triggered": true,
         "escalation_reason": "frustration_detected",
         "conversation_status_code": "escalation_required",
         "placeholder_lead_created": true,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -453,13 +455,15 @@
       },
       "expected": {
         "conversation_created": true,
-        "lead_created": true,
+        "lead_created": false,
         "consecutive_failures": 3,
         "escalation_triggered": true,
         "escalation_reason": "loop_detected",
         "conversation_status_code": "escalation_required",
         "placeholder_lead_created": true,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -482,12 +486,14 @@
       },
       "expected": {
         "conversation_created": true,
-        "lead_created": true,
+        "lead_created": false,
         "escalation_triggered": true,
         "escalation_reason": "customer_requested_human_contact",
         "conversation_status_code": "escalation_required",
         "placeholder_lead_created": true,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -512,9 +518,14 @@
       "expected": {
         "conversation_created": true,
         "lead_created": false,
-        "auto_advanced_fields": ["service", "city"],
+        "auto_advanced_fields": [
+          "service",
+          "city"
+        ],
         "confirmation_asked": false,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -539,9 +550,13 @@
       "expected": {
         "conversation_created": true,
         "lead_created": false,
-        "auto_advanced_fields": ["city"],
+        "auto_advanced_fields": [
+          "city"
+        ],
         "confirmation_asked_for": "service",
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -560,9 +575,15 @@
         "conversation_created": true,
         "lead_created": false,
         "previous_lead_reused": true,
-        "fields_prefilled": ["service", "city", "requirement"],
+        "fields_prefilled": [
+          "service",
+          "city",
+          "requirement"
+        ],
         "confirmation_asked": true,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -588,7 +609,9 @@
         "quotation_data_present": true,
         "quotation_contains_service": true,
         "quotation_contains_city": true,
-        "audit_required": true
+        "audit_required": true,
+        "confirmed_by_user": true,
+        "clickup_task_created": false
       }
     },
     {
@@ -606,7 +629,9 @@
         "conversation_created": true,
         "lead_created": false,
         "quotation_data_is_null": true,
-        "audit_required": true
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
       }
     },
     {
@@ -639,7 +664,103 @@
         "escalation_triggered": true,
         "quotation_data_present": true,
         "quotation_contains_existing_fields": true,
-        "audit_required": true
+        "audit_required": true,
+        "confirmed_by_user": true,
+        "clickup_task_created": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-10",
+      "title": "[Guardrail] Saludo mal clasificado por AI no confirma ni crea lead",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Hola"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "conversation_status_code": "waiting_user",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-11",
+      "title": "[Guardrail] Nueva cotizacion no confirma datos anteriores",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Quiero una nueva cotización"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "conversation_status_code": "waiting_user",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-12",
+      "title": "[Guardrail] Lead confirmado prioriza handoff sobre escalation_area sales",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Sí"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true,
+          "escalation_area": "sales"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "conversation_status_code": "handed_to_sales",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": true
       }
     }
   ]

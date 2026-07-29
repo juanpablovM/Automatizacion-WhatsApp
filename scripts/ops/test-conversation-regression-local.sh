@@ -12,10 +12,12 @@ const samplePath = 'n8n/samples/conversation_regression_cases.sample.json';
 const matrixPath = 'docs/matriz-pruebas-conversacionales.md';
 const orchestratorPath = 'n8n/workflows/wa-conversation-orchestrator.json';
 const assistantPath = 'n8n/workflows/ai-lead-qualification-assistant.json';
+const conversationStatusesSeedPath = 'db/seeds/002_conversation_statuses.sql';
 const suite = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const matrix = fs.readFileSync(matrixPath, 'utf8');
 const orchestrator = JSON.parse(fs.readFileSync(orchestratorPath, 'utf8'));
 const assistant = JSON.parse(fs.readFileSync(assistantPath, 'utf8'));
+const conversationStatusesSeed = fs.readFileSync(conversationStatusesSeedPath, 'utf8');
 
 const requiredEvidence = [
   'conversation_id',
@@ -134,6 +136,12 @@ if (!loadStateQuery.includes("metadata->>'reset_conversation_lead'")) {
 if (!loadStateQuery.includes('ll.previous_lead_created_at > lcr.reset_at')) {
   fail('Un reinicio debe ocultar leads anteriores al nuevo contexto');
 }
+if (!loadStateQuery.includes("lc.last_message_at >= NOW() - INTERVAL '24 hours'")) {
+  fail('El estado activo y el historial deben respetar el timeout de 24 horas');
+}
+if (!loadStateQuery.includes("conversation_status_code NOT IN ('handed_to_sales', 'escalation_required', 'closed', 'inactive_timeout')")) {
+  fail('Los estados terminales no deben cargarse como contexto conversacional activo');
+}
 
 const buildAiNode = assistant.nodes.find((node) => node.name === 'Build AI Request');
 if (!buildAiNode) fail('Falta nodo Build AI Request en asistente AI');
@@ -163,8 +171,41 @@ if (!persistNode.parameters.additionalFields.queryParams.includes('catalog_match
 if (!persistNode.parameters.additionalFields.queryParams.includes('diagnostic_datos_json')) {
   fail('Persist Conversation State debe recibir diagnostico D.A.T.O.S.');
 }
+if (!persistNode.parameters.query.includes('resolved_conversation_candidates')) {
+  fail('Persist Conversation State debe validar la cardinalidad de la conversacion resuelta');
+}
+if (!persistNode.parameters.query.includes('CASE WHEN COUNT(*) = 1 THEN MAX(id) ELSE 1 / (COUNT(*) - COUNT(*)) END')) {
+  fail('Persist Conversation State debe fallar si no resuelve exactamente una conversacion');
+}
+if (!conversationStatusesSeed.includes("'escalation_required'")) {
+  fail('El seed de estados debe soportar escalaciones genuinas');
+}
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+const buildAiFn = new AsyncFunction('items', '$env', buildAiNode.parameters.jsCode);
+const builtAi = (await buildAiFn([{ json: {
+  text_body: 'Hola', message_type: 'text', current_step: 'city',
+  service: '', city: '', requirement: '', recent_messages: [], qualification_context: {},
+} }], {
+  AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
+}))[0].json;
+const assertStrictSchema = (schema, path = 'root') => {
+  if (!schema || typeof schema !== 'object') return;
+  if (schema.type === 'object' && schema.properties) {
+    const propertyKeys = Object.keys(schema.properties).sort();
+    const requiredKeys = Array.isArray(schema.required) ? [...schema.required].sort() : [];
+    if (JSON.stringify(propertyKeys) !== JSON.stringify(requiredKeys)) {
+      fail(`Schema AI required/properties desalineado en ${path}`);
+    }
+    for (const [key, property] of Object.entries(schema.properties)) assertStrictSchema(property, `${path}.${key}`);
+  }
+  if (schema.items) assertStrictSchema(schema.items, `${path}[]`);
+};
+assertStrictSchema(builtAi.response_schema);
+if (!builtAi.response_schema.properties.field_updates || !builtAi.response_schema.properties.per_field_confidence) {
+  fail('Schema AI debe exponer field_updates y per_field_confidence como objetos de primer nivel');
+}
 const runApplyAi = async (row, env = {}) => {
   const fn = new AsyncFunction('items', '$env', applyNode.parameters.jsCode);
   const result = await fn([{ json: row }], env);
@@ -293,6 +334,11 @@ const resetHistory = await runEvaluate({
   previous_service: 'Baldosas',
   previous_city: 'Santiago',
   previous_requirement: 'Patio',
+  qualification_context: {
+    measurements: '40 m2',
+    modality: 'installation',
+    company: 'Empresa antigua',
+  },
   recent_messages: [
     { role: 'user', content: 'Quiero continuar lo anterior' },
     { role: 'assistant', content: '¿Quieres continuar o iniciar una nueva?' },
@@ -303,6 +349,35 @@ if (resetHistory.reset_conversation_lead !== true) {
 }
 if (!Array.isArray(resetHistory.recent_messages) || resetHistory.recent_messages.length !== 0) {
   fail('El turno que reinicia la solicitud debe vaciar recent_messages');
+}
+const resetWithoutSilentReuse = await runApplyAi(mergedAiShape(resetHistory, {
+  ai_skipped_1: false,
+  intent_1: 'new_request',
+  confidence: 0.95,
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Patio',
+  explicitly_mentioned_fields: [],
+  field_updates: {
+    measurements: '40 m2',
+    modality: 'installation',
+    company: 'Empresa antigua',
+  },
+  diagnostic_datos: {
+    scope: 'Contexto antiguo',
+  },
+  customer_type: 'b2b',
+  lead_class: 'D',
+  reply_text: 'Perfecto, iniciemos una nueva solicitud. ¿En qué ciudad necesitas cotizar?',
+}));
+if (resetWithoutSilentReuse.service || resetWithoutSilentReuse.city || resetWithoutSilentReuse.requirement) {
+  fail('Una nueva solicitud no debe reutilizar silenciosamente campos sugeridos por AI');
+}
+if (
+  Object.keys(resetWithoutSilentReuse.qualification_context).length !== 0
+  || resetWithoutSilentReuse.qualification_context_json !== '{}'
+) {
+  fail('Una nueva solicitud debe limpiar measurements, modality, company y todo qualification_context anterior');
 }
 
 const configError = await runApplyAi(
@@ -453,6 +528,8 @@ if (inventedPrice.response_kind !== 'prd_validated_fallback') {
 
 const confirmedAi = await runApplyAi(mergedAiShape({
   ...baseDeterministic,
+  text_body: 'Sí',
+  normalized_text: 'si',
   service: 'Baldosas',
   city: 'Santiago',
   requirement: 'Renovar un baño',
@@ -474,6 +551,281 @@ const confirmedAi = await runApplyAi(mergedAiShape({
 if (confirmedAi.should_create_lead !== true) fail('Hormi Atencion debe poder decidir crear lead confirmado');
 if (confirmedAi.response_kind !== 'handoff_pending') fail('Lead confirmado debe esperar la creacion real antes de anunciar handoff');
 if (confirmedAi.response_text !== '') fail('El orquestador no debe prometer derivacion antes de crear el lead');
+
+const aiConfirmationAttempt = async ({
+  textBody,
+  normalizedText,
+  currentStep = 'confirm',
+  pendingQuestionKey = null,
+  escalationArea = 'none',
+}) => runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: textBody,
+  normalized_text: normalizedText,
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  current_step: currentStep,
+  pending_question_key: pendingQuestionKey,
+  response_kind: 'confirmation_question',
+  response_text: '¿Está correcto?',
+  completed_fields_count: 3,
+}, {
+  ai_skipped_1: false,
+  intent_1: 'confirmation_yes',
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  confirmation_status: 'confirmed',
+  confidence: 0.95,
+  should_create_lead: true,
+  escalation_area: escalationArea,
+  reply_text: 'Perfecto, derivare tu solicitud.',
+}));
+
+const greetingMisclassifiedAsConfirmation = await aiConfirmationAttempt({
+  textBody: 'Hola',
+  normalizedText: 'hola',
+});
+if (greetingMisclassifiedAsConfirmation.should_create_lead !== false) {
+  fail('Hola nunca debe crear un lead aunque AI lo clasifique como confirmation_yes');
+}
+
+const newQuoteMisclassifiedAsConfirmation = await aiConfirmationAttempt({
+  textBody: 'Quiero una nueva cotización',
+  normalizedText: 'quiero una nueva cotizacion',
+});
+if (newQuoteMisclassifiedAsConfirmation.should_create_lead !== false) {
+  fail('Una nueva cotizacion nunca debe crear lead por una confirmation_yes incorrecta de AI');
+}
+
+const affirmativeNewQuote = await aiConfirmationAttempt({
+  textBody: 'Sí, quiero una nueva cotización',
+  normalizedText: 'si quiero una nueva cotizacion',
+});
+if (affirmativeNewQuote.should_create_lead !== false) {
+  fail('Una frase afirmativa de nueva solicitud no debe atravesar la whitelist anclada');
+}
+
+const confirmationOutsideConfirmStep = await aiConfirmationAttempt({
+  textBody: 'Sí',
+  normalizedText: 'si',
+  currentStep: 'requirement',
+});
+if (confirmationOutsideConfirmStep.should_create_lead !== false) {
+  fail('Una afirmacion explicita fuera del paso confirm no debe crear lead');
+}
+
+const confirmationForNonFinalQuestion = await aiConfirmationAttempt({
+  textBody: 'Sí',
+  normalizedText: 'si',
+  pendingQuestionKey: 'installation_required',
+});
+if (confirmationForNonFinalQuestion.should_create_lead !== false) {
+  fail('Una afirmacion a una pregunta no final no debe crear lead');
+}
+
+for (const [textBody, normalizedText] of [
+  ['Sí, por favor', 'si por favor'],
+  ['Sí, correcto', 'si correcto'],
+  ['De acuerdo', 'de acuerdo'],
+]) {
+  const commonConfirmation = await aiConfirmationAttempt({ textBody, normalizedText });
+  if (commonConfirmation.should_create_lead !== true) {
+    fail(`${textBody} debe aceptarse como confirmacion final explicita`);
+  }
+}
+
+const salesHandoffWinsOverAiEscalation = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: 'Sí',
+  normalized_text: 'si',
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  current_step: 'confirm',
+  response_kind: 'confirmation_question',
+  completed_fields_count: 3,
+}, {
+  ai_skipped_1: false,
+  intent_1: 'confirmation_yes',
+  service: 'Baldosas',
+  city: 'Santiago',
+  requirement: 'Renovar un baño',
+  confirmation_status: 'confirmed',
+  confidence: 0.95,
+  should_create_lead: true,
+  escalation_area: 'sales',
+}));
+if (salesHandoffWinsOverAiEscalation.conversation_status_code !== 'handed_to_sales') {
+  fail('Un lead confirmado debe quedar handed_to_sales aunque AI entregue escalation_area=sales');
+}
+if (salesHandoffWinsOverAiEscalation.should_escalate !== false) {
+  fail('escalation_area=sales no debe activar should_escalate en un handoff comercial');
+}
+if (salesHandoffWinsOverAiEscalation.escalation_reason !== null) {
+  fail('escalation_area=sales no debe producir escalation_reason operativa');
+}
+const salesHandoffMetadata = JSON.parse(salesHandoffWinsOverAiEscalation.metadata_json);
+if (salesHandoffMetadata.ai_escalation_requested !== false) {
+  fail('escalation_area=sales no debe marcar ai_escalation_requested');
+}
+
+const genuineEscalation = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  should_escalate: true,
+  escalation_reason: 'frustration_detected',
+}, {
+  ai_skipped_1: false,
+  confidence: 0.9,
+  should_create_lead: false,
+  escalation_area: 'sales',
+}));
+if (genuineEscalation.conversation_status_code !== 'escalation_required') {
+  fail('Una escalacion genuina debe persistir escalation_required');
+}
+if (genuineEscalation.should_escalate !== true || genuineEscalation.escalation_reason !== 'frustration_detected') {
+  fail('La escalacion deterministica genuina debe conservar flag y razon aunque AI indique sales');
+}
+if (JSON.parse(genuineEscalation.metadata_json).ai_escalation_requested !== true) {
+  fail('Una escalacion deterministica genuina debe quedar auditada');
+}
+
+const rejectedConfirmationAi = {
+  ai_skipped_1: false,
+  intent_1: 'confirmation_no',
+  confirmation_status: 'rejected',
+  confidence: 0.95,
+  should_create_lead: false,
+  reply_text: 'Tengo registrado Placas en Vitacura para Cierre perimetral. ¿Confirmas que estos datos están correctos?',
+  escalation_area: 'none',
+};
+const rejectionStateInput = (previous, textBody = 'no') => ({
+  phone_number: '+56911111117',
+  message_type: 'text',
+  text_body: textBody,
+  raw_payload_json: '{}',
+  has_active_conversation: true,
+  conversation_status_code: previous.conversation_status_code || 'waiting_user',
+  current_step: previous.current_step,
+  state_current_step: previous.current_step,
+  state_service: previous.service,
+  state_city: previous.city,
+  state_requirement: previous.requirement,
+  qualification_context: previous.qualification_context || {},
+  pending_question_key: previous.pending_question_key,
+});
+const runRejectedConfirmationTurn = async (previous) => {
+  const evaluated = await runEvaluate(rejectionStateInput(previous));
+  return runApplyAi(mergedAiShape(evaluated, rejectedConfirmationAi));
+};
+const finalSummaryState = {
+  service: 'Placas',
+  city: 'Vitacura',
+  requirement: 'Cierre perimetral',
+  current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%20perimetral%22%7D',
+  conversation_status_code: 'waiting_user',
+  pending_question_key: 'final_confirmation',
+};
+
+const legacyDriftedSummaryState = {
+  ...finalSummaryState,
+  current_step: 'previous_context|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%20perimetral%22%7D',
+};
+const repairedLegacyRejection = await runRejectedConfirmationTurn(legacyDriftedSummaryState);
+if (
+  repairedLegacyRejection.response_text !== 'Entiendo. ¿Qué dato de la solicitud quieres corregir?'
+  || !String(repairedLegacyRejection.current_step).startsWith('confirm_retry_1|')
+  || repairedLegacyRejection.pending_question_key !== 'confirmation_correction'
+) {
+  fail('pending final_confirmation debe reparar previous_context legado al recibir no');
+}
+
+const firstRejectedConfirmation = await runRejectedConfirmationTurn(finalSummaryState);
+if (firstRejectedConfirmation.response_text !== 'Entiendo. ¿Qué dato de la solicitud quieres corregir?') {
+  fail('Resumen -> no debe preguntar que dato corregir sin repetir la confirmacion final');
+}
+if (
+  !String(firstRejectedConfirmation.current_step).startsWith('confirm_retry_1|')
+  || firstRejectedConfirmation.pending_question_key !== 'confirmation_correction'
+) {
+  fail('Pregunta visible, current_step y pending_question_key deben quedar sincronizados tras rechazo');
+}
+if (firstRejectedConfirmation.should_create_lead !== false) {
+  fail('Un rechazo de confirmacion final nunca debe crear lead');
+}
+
+const explicitCorrectionEvaluation = await runEvaluate(rejectionStateInput(
+  firstRejectedConfirmation,
+  'Corrijo, la ciudad es Valparaíso'
+));
+const explicitCorrectionApplied = await runApplyAi(mergedAiShape(explicitCorrectionEvaluation, {
+  ai_skipped_1: false,
+  intent_1: 'correction',
+  confirmation_status: 'none',
+  confidence: 0.95,
+  should_create_lead: false,
+  service: 'Placas',
+  city: 'Valparaíso',
+  requirement: 'Cierre perimetral',
+  explicitly_mentioned_fields: ['city'],
+  reply_text: 'Perfecto, actualicé la ciudad a Valparaíso. ¿Confirmas que los datos están correctos?',
+  escalation_area: 'none',
+}));
+if (explicitCorrectionApplied.city !== 'Valparaíso') {
+  fail('La correccion explicita posterior al rechazo debe actualizar el campo');
+}
+if (
+  !String(explicitCorrectionApplied.current_step).startsWith('confirm|')
+  || explicitCorrectionApplied.pending_question_key !== 'final_confirmation'
+) {
+  fail('Despues de corregir debe volver a confirmacion final sincronizada');
+}
+if (explicitCorrectionApplied.should_create_lead !== false) {
+  fail('Corregir un campo no crea lead hasta una nueva confirmacion final');
+}
+
+const secondRejectedConfirmation = await runRejectedConfirmationTurn(firstRejectedConfirmation);
+if (!String(secondRejectedConfirmation.current_step).startsWith('confirm_retry_2|')) {
+  fail('El segundo rechazo sin resolver debe incrementar el contador');
+}
+const thirdRejectedConfirmation = await runRejectedConfirmationTurn(secondRejectedConfirmation);
+if (thirdRejectedConfirmation.conversation_status_code !== 'escalation_required') {
+  fail('Tres rechazos sin resolver deben escalar a humano');
+}
+if (
+  thirdRejectedConfirmation.should_escalate !== true
+  || thirdRejectedConfirmation.escalation_reason !== 'confirmation_rejection_loop'
+  || thirdRejectedConfirmation.pending_question_key !== null
+) {
+  fail('La escalacion por rechazos debe persistir flag, razon y limpiar la pregunta pendiente');
+}
+if (
+  thirdRejectedConfirmation.response_kind !== 'escalation_routing'
+  || !thirdRejectedConfirmation.response_text.includes('persona del equipo')
+) {
+  fail('El tercer rechazo debe informar derivacion humana, no repetir la pregunta');
+}
+const postEscalationInput = rejectionStateInput(
+  thirdRejectedConfirmation,
+  'Hola, sigo esperando'
+);
+const postEscalationEvaluation = await runEvaluate(postEscalationInput);
+const postEscalationApplied = await runApplyAi(mergedAiShape(postEscalationEvaluation, {
+  ai_skipped_1: false,
+  intent_1: 'provide_info',
+  confidence: 0.95,
+  should_create_lead: false,
+  reply_text: '¿Qué producto necesitas cotizar?',
+  escalation_area: 'none',
+}));
+if (
+  postEscalationApplied.conversation_status_code !== 'escalation_required'
+  || postEscalationApplied.response_kind !== 'escalation_already_required'
+  || !postEscalationApplied.response_text.includes('persona del equipo')
+) {
+  fail('Una conversacion ya escalada debe informar su derivacion sin reactivar preguntas automaticas');
+}
 
 const lowConfidence = await runApplyAi(mergedAiShape(baseDeterministic, {
   ai_skipped_1: false,
@@ -500,6 +852,114 @@ const correction = await runApplyAi(mergedAiShape({
 }));
 if (correction.service !== 'Baldosas') fail('Correccion explicita debe permitir sobrescribir campo');
 if (correction.should_create_lead !== false) fail('Correccion AI no puede crear lead sin confirmacion');
+
+
+// P0: provider/config errors must preserve the deterministic visible reply end-to-end.
+const deterministicGreeting = await runEvaluate({
+  phone_number: '+56911111120', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  has_active_conversation: false, conversation_status_code: null,
+});
+const integratedFallback = await runApplyAi(mergedAiShape(deterministicGreeting, {
+  ai_skipped_1: false,
+  ai_request_error_1: 'provider_error',
+  ai_fallback_reason_1: 'provider_error',
+  confidence: 0,
+}));
+if (!integratedFallback.response_text || integratedFallback.response_text !== deterministicGreeting.deterministic_reply) {
+  fail('Evaluate -> Apply debe conservar deterministic_reply cuando la IA falla');
+}
+
+// P0: a terminal handoff starts a clean request in a new conversation row.
+const postHandoffFresh = await runEvaluate({
+  phone_number: '+56911111121', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  has_active_conversation: true, conversation_status_code: 'handed_to_sales', conversation_id: 84, lead_id: 30,
+  current_step: 'complete|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
+  state_current_step: 'complete|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
+  state_service: 'Placas', state_city: 'Vitacura', state_requirement: 'Cierre', previous_lead_id: 30,
+  previous_service: 'Placas', previous_city: 'Vitacura', previous_requirement: 'Cierre',
+});
+if (postHandoffFresh.conversation_id !== null || postHandoffFresh.lead_id !== null || postHandoffFresh.reset_conversation_lead !== true) {
+  fail('Recontacto post-handoff debe crear otra conversacion y desvincular el lead anterior');
+}
+if (/^previous_context|^confirm/.test(postHandoffFresh.current_step) || postHandoffFresh.service || postHandoffFresh.city || postHandoffFresh.requirement) {
+  fail('Recontacto post-handoff no debe regenerar previous_context/final_confirmation ni campos antiguos');
+}
+
+// P0: after 24h Load marks the turn inactive; Evaluate must cut every implicit context source.
+const timedOutFresh = await runEvaluate({
+  phone_number: '+56911111124', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  has_active_conversation: false, conversation_status_code: 'waiting_user', conversation_id: 92, lead_id: 32,
+  current_step: 'confirm', state_current_step: 'confirm', state_service: 'Bloques', state_city: 'Colina',
+  state_requirement: 'Muro', previous_lead_id: 32, previous_service: 'Bloques', previous_city: 'Colina',
+  previous_requirement: 'Muro', qualification_context: { measurements: '40 m2' },
+  recent_messages: [{ role: 'assistant', content: 'Resumen antiguo' }],
+});
+if (timedOutFresh.conversation_id !== null || !timedOutFresh.reset_conversation_lead) {
+  fail('Timeout de 24h debe iniciar una conversacion nueva');
+}
+if (timedOutFresh.service || timedOutFresh.city || timedOutFresh.requirement || timedOutFresh.recent_messages.length) {
+  fail('Timeout de 24h debe cortar campos e historial implicitos');
+}
+const timedOutApplied = await runApplyAi(mergedAiShape(timedOutFresh, {
+  ai_skipped_1: false, intent_1: 'greeting', confidence: 0.95,
+  service: 'Bloques', city: 'Colina', requirement: 'Muro', field_updates: { measurements: '40 m2' },
+  reply_text: 'Hola, ¿en que ciudad necesitas cotizar?',
+}));
+if (timedOutApplied.service || timedOutApplied.city || timedOutApplied.requirement || Object.keys(timedOutApplied.qualification_context).length) {
+  fail('Timeout de 24h no debe reinyectar campos, lead ni qualification_context mediante AI');
+}
+
+// P0: an escalated conversation can explicitly start a clean request instead of becoming a blackhole.
+const reopenedEscalation = await runEvaluate({
+  phone_number: '+56911111122', message_type: 'text', text_body: 'Nueva cotización', raw_payload_json: '{}',
+  has_active_conversation: false, conversation_status_code: 'escalation_required', conversation_id: 90, lead_id: 31,
+  current_step: 'escalation', state_current_step: 'escalation', previous_lead_id: 31,
+  previous_service: 'Bloques', previous_city: 'Colina', previous_requirement: 'Muro',
+});
+if (reopenedEscalation.conversation_id !== null || reopenedEscalation.conversation_status_code !== 'waiting_user' || reopenedEscalation.should_escalate) {
+  fail('Nueva cotizacion debe salir de escalation_required en una conversacion nueva');
+}
+if (!reopenedEscalation.deterministic_reply || reopenedEscalation.pending_question_key !== null) {
+  fail('Reapertura de escalacion debe responder y mantener pregunta/estado coherentes');
+}
+
+// P0: explicit human request wins over confirmation and never creates a lead.
+const humanAtConfirmation = await runEvaluate({
+  phone_number: '+56911111123', message_type: 'text', text_body: 'Quiero hablar con una ejecutiva', raw_payload_json: '{}',
+  has_active_conversation: true, conversation_status_code: 'waiting_user', conversation_id: 91,
+  current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
+  state_current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
+  state_service: 'Placas', state_city: 'Vitacura', state_requirement: 'Cierre', pending_question_key: 'final_confirmation',
+});
+if (!humanAtConfirmation.should_escalate || humanAtConfirmation.should_create_lead || humanAtConfirmation.pending_question_key !== null) {
+  fail('Pedido humano debe escalar sin crear lead ni conservar confirmacion pendiente');
+}
+const humanApplied = await runApplyAi(mergedAiShape(humanAtConfirmation, {
+  ai_skipped_1: false, intent_1: 'confirmation_yes', confirmation_status: 'confirmed', confidence: 0.99,
+  should_create_lead: true, escalation_area: 'sales', reply_text: 'Confirma los datos.',
+}));
+if (!humanApplied.should_escalate || humanApplied.should_create_lead || /confirm/i.test(humanApplied.response_text)) {
+  fail('Apply debe mantener lead/escalacion/pregunta mutuamente excluyentes');
+}
+
+// P0: stale secondary updates require the pending question or direct textual evidence.
+const staleSecondary = await runApplyAi(mergedAiShape(baseDeterministic, {
+  ai_skipped_1: false, intent_1: 'provide_info', confidence: 0.95,
+  field_updates: { measurements: '40 m2', company: 'Empresa antigua' },
+  reply_text: '¿Que necesitas?',
+}));
+if (staleSecondary.qualification_context.measurements || staleSecondary.qualification_context.company) {
+  fail('field_updates secundarios sin evidencia actual no deben contaminar la solicitud');
+}
+const pendingMeasurement = await runApplyAi(mergedAiShape({
+  ...baseDeterministic, text_body: '40 m2', normalized_text: '40 m2', pending_question_key: 'measurements',
+}, {
+  ai_skipped_1: false, intent_1: 'provide_info', confidence: 0.95,
+  field_updates: { measurements: '40 m2' }, reply_text: 'Gracias.',
+}));
+if (pendingMeasurement.qualification_context.measurements !== '40 m2') {
+  fail('field_updates debe aceptar la respuesta a la pregunta pendiente');
+}
 
 const contextualNo = await runEvaluate({
   phone_number: '+56911111116',
