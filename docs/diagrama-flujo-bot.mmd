@@ -13,8 +13,8 @@ flowchart TD
     end
     
     subgraph ORQUESTADOR["WA - CONVERSATION ORCHESTRATOR"]
-        E --> G[Load Conversation State (PostgreSQL)]
-        G --> H[Evaluate Conversation Step -- LÓGICA DETERMINÍSTICA]
+        E --> G["Load Conversation State (PostgreSQL)"]
+        G --> H["Evaluate Conversation Step -- LÓGICA DETERMINÍSTICA"]
         
         H --> I{Análisis mensaje}
         I -->|Saludo puro| J[welcome_and_question / recontact_greeting]
@@ -23,16 +23,16 @@ flowchart TD
         L -->|Sí| M[Reset → city]
         L -->|No| N[escalation_already_required]
         I -->|En confirmación final| O{Usuario confirma?}
-        O -->|Sí (sí/ok/dale)| P[shouldCreateLead=true → handoff_ready]
-        O -->|No (no/incorrecto)| Q[confirmation_correction_requested]
+        O -->|"Sí (sí/ok/dale)"| P[shouldCreateLead=true → handoff_ready]
+        O -->|"No (no/incorrecto)"| Q[confirmation_correction_requested]
         I -->|En corrección| R[confirm_retry_N]
         I -->|Detecta B2B keywords| S[b2b_redirect Plantilla 8 campos]
         I -->|Frustración / bucle 3+| T[escalation_routing frustration_detected / loop_detected]
         I -->|Intención + datos| U[Extrae city/service/requirement]
         
-        U --> V[Execute AI Lead Qualification -- LLAMA GEMINI]
+        U --> V["Execute AI Lead Qualification -- LLAMA GEMINI"]
         V --> W[Merge AI Assistance]
-        W --> X[Apply AI Assistance -- SELECCIÓN RESPUESTA]
+        W --> X["Apply AI Assistance -- SELECCIÓN RESPUESTA"]
     end
     
     subgraph SELECCION_RESPUESTA["APPLY AI ASSISTANCE — Prioridades"]
@@ -61,15 +61,15 @@ flowchart TD
         AC -->|No| AI{acceptedAiFields.length > 0?}
         AI -->|Sí| AJ[PRIORIDAD 4: AI-assisted Question]
         AJ --> AJa{missing=confirm?}
-        AJa -->|Sí| AJb[confirmationText()]
-        AJa -->|No| AJc[nextQuestion(missing)]
+        AJa -->|Sí| AJb["confirmationText()"]
+        AJa -->|No| AJc["nextQuestion(missing)"]
         
         AI -->|No| AK[PRIORIDAD 5: Fallback Determinístico]
         AK --> AKa[deterministic.deterministic_reply]
     end
     
     subgraph PERSISTENCIA["PERSISTENCIA + OUTBOUND"]
-        Z1b --> AL[Persist Conversation State (PostgreSQL TX)]
+        Z1b --> AL["Persist Conversation State (PostgreSQL TX)"]
         ADb --> AL
         ADh --> AL
         AJb --> AL
@@ -295,11 +295,11 @@ stateDiagram-v2
 flowchart LR
     subgraph PRD_VALIDATORS["PRD VALIDATORS (Guardrails duros)"]
         V1[NO_INVENT_PRICE $ + número SIN price_context]
-        V2[NO_CONFIRM_STOCK "tenemos stock" + producto]
-        V3[NO_CONFIRM_PAYMENT "pago confirmado" / "ya puedes retirar"]
-        V4[NO_DISCOUNT "te puedo hacer X%"]
-        V5[NO_PROMISE_DELIVERY "llega el martes" SIN condicional]
-        V6[NO_PROMISE_INSTALLATION "instalamos" SIN condicional]
+        V2[NO_CONFIRM_STOCK 'tenemos stock' + producto]
+        V3[NO_CONFIRM_PAYMENT 'pago confirmado' / 'ya puedes retirar']
+        V4[NO_DISCOUNT 'te puedo hacer X%']
+        V5[NO_PROMISE_DELIVERY 'llega el martes' SIN condicional]
+        V6[NO_PROMISE_INSTALLATION 'instalamos' SIN condicional]
     end
     
     V1 --> F1["Fallback: Para darte un valor correcto\nnecesito revisar producto, cantidad,\ncomuna y modalidad..."]
@@ -361,13 +361,13 @@ flowchart TD
     CS --> ST4["complete|{...}"]
     CS --> ST5["escalation|{...}"]
     
-    RM --> R1[{role:user, content:"..."}]
-    RM --> R2[{role:assistant, content:"..."}]
+    RM --> R1["{role:user, content: '...'}"]
+    RM --> R2["{role:assistant, content: '...'}"]
     
     subgraph INTERPRETACION_SI_NO["INTERPRETACIÓN CONTEXTUAL SÍ/NO"]
         BN[pending_question_key ∈ booleanByQuestion?]
-        BN -->|Sí| SN[/^(si|sí|s|no|nop)$/.test(normalizedText)]
-        SN -->|Sí| UP[qualificationContext[campo] = true/false]
+        BN -->|Sí| SN["/^(si|sí|s|no|nop)$/.test(normalizedText)"]
+        SN -->|Sí| UP["qualificationContext[campo] = true/false"]
         BN -->|No| IG[NO interpreta como confirmación global]
     end
     
@@ -391,7 +391,7 @@ classDiagram
     }
     
     class EvaluateConversationStep {
-        +baseQuestions: {city, service, requirement}
+        +baseQuestions: city, service, requirement
         +knownProducts: string[]
         +knownServices: string[]
         +knownCities: string[]
@@ -441,11 +441,13 @@ classDiagram
         +fallback: string
     }
     
+    class GeminiModel["Gemini 3.1 Flash Lite"]
+    
     ConversationOrchestrator --> EvaluateConversationStep
     ConversationOrchestrator --> ApplyAIAssistance
     ConversationOrchestrator --> AILeadQualification
     ApplyAIAssistance --> PRDValidator
-    AILeadQualification --> "Gemini 3.1 Flash Lite"
+    AILeadQualification --> GeminiModel
 ```
 
 ```mermaid
