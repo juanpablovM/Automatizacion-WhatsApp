@@ -529,7 +529,7 @@ erDiagram
 
 ---
 
-**Archivo guardado en**: `docs/diagrama-flujo-bot.mmd`
+**Archivo guardado en**: `docs/diagrama-flujo-bot.md`
 
 Para visualizar:
 - **VS Code**: Extensión "Markdown Preview Mermaid Support" → `Ctrl+Shift+V`
