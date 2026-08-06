@@ -435,6 +435,54 @@
         3160,
         360
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { handoff_lane_complete: true, handoff_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000033",
+      "name": "Handoff Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-items-length-gt-0",
+              "leftValue": "={{ $json.items && $json.items.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000034",
+      "name": "Handoff Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1500,
+        400
+      ]
     }
   ],
   "connections": {
@@ -622,17 +670,6 @@
         ]
       ]
     },
-    "Prepare Verified Handoff": {
-      "main": [
-        [
-          {
-            "node": "Execute Handoff Outbound",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Execute Handoff Outbound": {
       "main": [
         [
@@ -704,6 +741,46 @@
         [
           {
             "node": "Dispatch Next Inbox Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Verified Handoff": {
+      "main": [
+        [
+          {
+            "node": "Handoff Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Items?": {
+      "main": [
+        [
+          {
+            "node": "Execute Handoff Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handoff Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
             "type": "main",
             "index": 0
           }
