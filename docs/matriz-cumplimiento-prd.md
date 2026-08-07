@@ -422,6 +422,8 @@ Verificación previa: `docker compose --env-file .env ps`, `sh scripts/dev/evolu
   (B03), B2B (B04) y métricas/dashboard (B09) — corresponden a fases 2-4 del PRD aún
   incompletas.
 
+**Automatizaciones (PRD `#27`)**: A-001 oportunidad temprana (U2, `01_upsert_early_opportunity.sql`, test-opportunity-cycle-local.sh); A-002/A-003/A-004 campos de producto/comuna/instalación (U1, gate comercial); A-005/A-006 clasificación B2B/Lead A (textos en fixtures, handoff/prioridad); A-007 derivación urgente (U3); A-008 comprobante → Finanzas (U3 routing `HANDOFF_ROUTING.payment_proof`); A-009 fotos (U5: `media_attachments`, adjunto ClickUp diferido por decisión de usuario); **A-010 seguimiento 0/1/3/7/14 (U6):** tabla `follow_ups`, scheduler `OPS - Follow-Up Scheduler` con claim `FOR UPDATE SKIP LOCKED`, cancelación por respuesta/derivación/pérdida, `opt_out` definitivo, ventana horaria 09-20 y textos por step/motivo en fixture — validado con `test-followup-cadence-local.sh` (17+32 asserts deterministas).
+
 **Evidencia certificable de la Unidad 0**: ninguna exigencia del PRD queda sin un **ID
 estable**. Las 28 entidades (20 `CR` + 8 `CS`) cubren literalmente las secciones de
 verificación `#33` y `#31`. Para cada una queda registrada la implementación `repo:nodo`,
