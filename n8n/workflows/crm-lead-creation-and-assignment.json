@@ -97,6 +97,30 @@
         1300,
         300
       ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input_payload AS (\n  SELECT $1::bigint AS lead_id\n),\nlinked AS (\n  UPDATE opportunities o\n  SET promoted_lead_id = ip.lead_id,\n      status_code = 'promoted',\n      promoted_at = NOW(),\n      updated_at = NOW()\n  FROM input_payload ip\n  JOIN leads l ON l.id = ip.lead_id\n  WHERE o.conversation_id = l.source_conversation_id\n    AND o.phone_number = l.phone_number\n    AND o.deleted_at IS NULL\n    AND o.promoted_lead_id IS NULL\n  RETURNING o.id AS opportunity_id, o.status_code\n)\nSELECT\n  ip.lead_id,\n  lk.opportunity_id,\n  lk.status_code AS opportunity_status\nFROM input_payload ip\nLEFT JOIN linked lk ON TRUE;",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryParams": "lead_id"
+        }
+      },
+      "id": "6",
+      "name": "Link Opportunity Promotion",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        1170,
+        300
+      ]
     }
   ],
   "pinData": {},
@@ -135,6 +159,17 @@
       ]
     },
     "Persist Lead And Rotation": {
+      "main": [
+        [
+          {
+            "node": "Link Opportunity Promotion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Opportunity Promotion": {
       "main": [
         [
           {
