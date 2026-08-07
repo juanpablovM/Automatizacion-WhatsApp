@@ -46,6 +46,11 @@ const NODES = [
     node: 'Prepare Lead Assignment',
     fixture: 'crm-lead-creation-and-assignment/prepare-lead-assignment.js',
   },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Ensure Early Opportunity',
+    fixture: 'wa-inbound-downstream-dispatcher/ensure-early-opportunity.js',
+  },
 ];
 
 const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--backup-only') ? 'backup' : 'patch';

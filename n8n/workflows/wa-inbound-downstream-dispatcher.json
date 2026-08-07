@@ -493,6 +493,44 @@
         1500,
         400
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst OPERATIONAL_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n]);\n\nconst conversationId = Number(row.conversation_id);\nconst hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\nconst phoneNumber = String(row.phone_number || '').trim();\n\nconst intent = String(row.intent || '').trim();\nconst isOperational = OPERATIONAL_INTENTS.has(intent);\n\nconst shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational;\n\nconst commercialBlocked = Array.isArray(row.commercial_missing_fields)\n  && row.commercial_missing_fields.length > 0;\n\nconst qualified = Boolean(row.should_create_lead)\n  && !commercialBlocked\n  && row.confirmation_status === 'confirmed';\n\nconst requestedStatus = qualified ? 'qualified' : 'new';\n\nreturn [\n  {\n    json: {\n      ...row,\n      opportunity_scope: {\n        conversation_id: conversationId,\n        phone_number: phoneNumber,\n        source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n        external_contact_id: row.external_contact_id || null,\n        whatsapp_name: row.whatsapp_name || null,\n        service: row.service || null,\n        city: row.city || null,\n        requirement: row.requirement || null,\n        intent_code: intent || null,\n        inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n      },\n      opportunity_write: shouldWrite,\n      opportunity_status: requestedStatus,\n      opportunity_skipped: !shouldWrite,\n    },\n  },\n];\n"
+      },
+      "id": "50000000-0000-0000-0000-000000000035",
+      "name": "Ensure Early Opportunity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input_payload AS (\n  SELECT\n    $1::text AS phone_number,\n    NULLIF($2::text, '')::bigint AS source_number_id,\n    $3::bigint AS conversation_id,\n    NULLIF($4::text, '') AS external_contact_id,\n    NULLIF($5::text, '') AS whatsapp_name,\n    NULLIF($6::text, '') AS service,\n    NULLIF($7::text, '') AS city,\n    NULLIF($8::text, '') AS requirement,\n    NULLIF($9::text, '') AS intent_code,\n    NULLIF($10::text, '')::bigint AS inbound_event_id,\n    $11::boolean AS should_write,\n    $12::text AS requested_status\n),\nexisting AS MATERIALIZED (\n  SELECT o.id, o.status_code, o.updated_at\n  FROM input_payload ip\n  JOIN opportunities o ON o.conversation_id = ip.conversation_id\n  WHERE o.deleted_at IS NULL\n),\nwritten AS (\n  INSERT INTO opportunities (\n    phone_number, source_number_id, conversation_id, external_contact_id,\n    whatsapp_name, service, city, requirement, intent_code, status_code,\n    inbound_event_id\n  )\n  SELECT\n    ip.phone_number, ip.source_number_id, ip.conversation_id, ip.external_contact_id,\n    ip.whatsapp_name, ip.service, ip.city, ip.requirement, ip.intent_code,\n    ip.requested_status, ip.inbound_event_id\n  FROM input_payload ip\n  WHERE ip.should_write\n  ON CONFLICT (conversation_id) WHERE deleted_at IS NULL\n  DO UPDATE SET\n    service = COALESCE(EXCLUDED.service, opportunities.service),\n    city = COALESCE(EXCLUDED.city, opportunities.city),\n    requirement = COALESCE(EXCLUDED.requirement, opportunities.requirement),\n    intent_code = COALESCE(EXCLUDED.intent_code, opportunities.intent_code),\n    inbound_event_id = COALESCE(EXCLUDED.inbound_event_id, opportunities.inbound_event_id),\n    status_code = CASE\n      WHEN opportunities.status_code = 'new' AND EXCLUDED.status_code = 'qualified'\n        THEN 'qualified'\n      ELSE opportunities.status_code\n    END,\n    updated_at = NOW()\n  RETURNING id, status_code\n),\nwrite_outcome AS (\n  SELECT\n    ip.conversation_id,\n    COALESCE(w.id, e.id) AS opportunity_id,\n    COALESCE(w.status_code, e.status_code) AS opportunity_status,\n    CASE\n      WHEN NOT ip.should_write THEN 'skipped'\n      WHEN e.id IS NULL THEN 'created'\n      WHEN w.status_code = 'qualified' AND e.status_code = 'new' THEN 'promoted_qualified'\n      WHEN w.status_code = e.status_code THEN 'duplicate_skipped'\n      ELSE 'updated'\n    END AS outcome\n  FROM input_payload ip\n  LEFT JOIN existing e ON TRUE\n  LEFT JOIN written w ON TRUE\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'opportunity_sync',\n    'opportunity',\n    wo.opportunity_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    wo.outcome,\n    CASE WHEN e.id IS NULL THEN '{}'::jsonb\n         ELSE jsonb_build_object('status_code', e.status_code) END,\n    jsonb_build_object('id', wo.opportunity_id, 'status_code', wo.opportunity_status),\n    jsonb_build_object('conversation_id', wo.conversation_id, 'inbound_event_id', ip.inbound_event_id)\n  FROM input_payload ip\n  JOIN write_outcome wo ON TRUE\n  LEFT JOIN existing e ON TRUE\n  WHERE ip.should_write\n  RETURNING 1\n)\nSELECT\n  wo.opportunity_id,\n  wo.opportunity_status,\n  wo.outcome\nFROM write_outcome wo;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.opportunity_scope.phone_number, $json.opportunity_scope.source_number_id, $json.opportunity_scope.conversation_id, $json.opportunity_scope.external_contact_id, $json.opportunity_scope.whatsapp_name, $json.opportunity_scope.service, $json.opportunity_scope.city, $json.opportunity_scope.requirement, $json.opportunity_scope.intent_code, $json.opportunity_scope.inbound_event_id, $json.opportunity_write, $json.opportunity_status] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000036",
+      "name": "Upsert Early Opportunity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        800
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
     }
   ],
   "connections": {
@@ -527,6 +565,11 @@
           },
           {
             "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Early Opportunity",
             "type": "main",
             "index": 0
           }
@@ -791,6 +834,17 @@
         [
           {
             "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Early Opportunity": {
+      "main": [
+        [
+          {
+            "node": "Upsert Early Opportunity",
             "type": "main",
             "index": 0
           }
