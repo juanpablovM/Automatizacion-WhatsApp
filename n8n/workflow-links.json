@@ -62,6 +62,11 @@
       "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
       "node": "Dispatch Next Inbox Event",
       "targetWorkflow": "WA - Inbound Recovery"
+    },
+    {
+      "sourceWorkflow": "OPS - Follow-Up Scheduler",
+      "node": "Send Via Outbound Rail",
+      "targetWorkflow": "WA - Outbound Messages"
     }
   ]
 }

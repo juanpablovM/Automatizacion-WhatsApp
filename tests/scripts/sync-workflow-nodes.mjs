@@ -81,6 +81,16 @@ const NODES = [
     node: 'Dispatch Media Download',
     fixture: 'wa-inbound-downstream-dispatcher/dispatch-media-download.js',
   },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Ensure Follow-Up Cancellation',
+    fixture: 'wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js',
+  },
+  {
+    workflow: 'n8n/workflows/ops-followup-scheduler.json',
+    node: 'Prepare Follow-Up Message',
+    fixture: 'ops-followup-scheduler/prepare-follow-up-message.js',
+  },
 ];
 
 const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--backup-only') ? 'backup' : 'patch';
