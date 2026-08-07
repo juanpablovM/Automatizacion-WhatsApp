@@ -531,6 +531,110 @@
           "name": "Postgres CRM App Local"
         }
       }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Ensure Escalation Handoff — Unidad 3: escalamiento humano durable (P0).\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". SOURCE OF TRUTH\n// del routing motivo->area->prioridad->responsable (PRD #22/#23/#9.5/#11) y\n// del gate de no-cierre de intenciones operativas (PRD #22.16/#31.7).\n//\n// El mismo archivo es, en pruebas (harness), un modulo Node: expone\n// HANDOFF_ROUTING, routeEscalation, evaluateClosureGate y buildIdempotencyKey\n// para los tests de contrato. En n8n (Code node) solo se ejecuta la seccion\n// final que lee `items`. Single source of truth: el fixture se reinyecta al\n// workflow con tests/scripts/sync-workflow-nodes.mjs.\n//\n// Idempotency key: `{conversation_id}:{motivo}:{trigger}` — el trigger es el\n// motivo textual normalizado (o 'intent:<codigo>'), de modo que un replay del\n// mismo evento no duplica y un motivo distinto abre un handoff propio.\n// =============================================================================\n\nconst HANDOFF_ROUTING = {\n  talk_human: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  frustration: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  high_urgency: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  large_project: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  complex_installation: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  stock_confirm: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  photos_eval: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  loop: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  purchase_order: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  payment_proof: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  invoice: { area: 'finance', area_label: 'Finanzas', prioridad: 'media', responsable: 'Finanzas / Administración' },\n  warranty: { area: 'post_sale', area_label: 'Postventa', prioridad: 'alta', responsable: 'Administración / Postventa' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n  complaint: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  scheduling_change: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  committed_issue: { area: 'scheduling', area_label: 'Programación', prioridad: 'alta', responsable: 'Programación (despacho/instalación)' },\n  discount: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n  special_payment_condition: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n};\n\n// Fallback determinista por area declarada por la AI (contrato del advisor).\nconst AREA_FALLBACK = {\n  sales: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  finance: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n  claims: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  scheduling: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  management: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n};\n\nconst DEFAULT_ROUTING = { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' };\n\nconst INTENT_TO_MOTIVE = {\n  talk_to_human: 'talk_human',\n  complaint: 'complaint',\n  warranty_inquiry: 'warranty',\n  payment_proof: 'payment_proof',\n  invoice_request: 'invoice',\n  b2b_request: 'b2b',\n  purchase_order: 'purchase_order',\n  discount_request: 'discount',\n  reschedule_delivery: 'scheduling_change',\n  reschedule_installation: 'scheduling_change',\n  post_sale: 'post_sale',\n  stock_inquiry: 'stock_confirm',\n  returning_customer: 'loop',\n  review: 'loop',\n};\n\n// Motivo por señales de texto del reason de escalamiento (PRD #22 triggers).\nconst REASON_TO_MOTIVE = [\n  ['complaint', /reclamo|queja|molest|frustr|mala atencion|falla|roto|quebr|problema/i],\n  ['warranty', /garant/i],\n  ['payment_proof', /comprobante|transferencia|abono|pago|pago enviado/i],\n  ['invoice', /factur/i],\n  ['b2b', /b2b|empresa|constructora|inmobiliaria|licitacion|orden de compra|proveedor|volumen/i],\n  ['discount', /descuento|igualar|bajo el precio|rebaja/i],\n  ['special_payment_condition', /condicion (especial|servicio de pago|pago a 30)/i],\n  ['large_project', /2\\.000\\.000|dos millones|millon/i],\n  ['high_urgency', /urgent/i],\n  ['scheduling_change', /reagend|cambio de fecha|fecha/i],\n  ['committed_issue', /despacho|programada|programado|pedido comprometido/i],\n  ['complex_installation', /instalacion|coordinacion logistica|acceso/i],\n  ['stock_confirm', /stock|disponibilidad/i],\n  ['photos_eval', /foto|fotos|imagen/i],\n];\n\nconst normalizeReason = (value) => String(value ?? '').trim().replace(/\\s+/g, ' ').toLowerCase();\n\nconst motiveFromReason = (reason) => {\n  const text = normalizeReason(reason);\n  if (!text) return null;\n  for (const [motive, pattern] of REASON_TO_MOTIVE) {\n    if (pattern.test(text)) return motive;\n  }\n  return null;\n};\n\nconst routeEscalation = (row) => {\n  const conversationId = Number(row.conversation_id);\n  const hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\n  const phoneNumber = String(row.phone_number || '').trim();\n  const shouldEscalate = Boolean(row.should_escalate) || Boolean(row.escalation_required);\n  const area = String(row.escalation_area || '').trim();\n  const aiRequestsOperational = Boolean(area && area !== 'none' && area !== 'sales');\n  const escalated = shouldEscalate || aiRequestsOperational;\n\n  if (!escalated || !hasConversation || !phoneNumber) {\nreturn {\n    escalated: false,\n    write: false,\n    motivo: null,\n    routing: null,\n    idempotency_key: null,\n    trigger: null,\n  };\n  }\n\n  const intent = String(row.intent || '').trim();\n  const rawReason = String(row.escalation_reason || '').trim();\n  const motivo = motiveFromReason(rawReason)\n    || INTENT_TO_MOTIVE[intent]\n    || (area && area !== 'none' ? area : null);\n  const routing = HANDOFF_ROUTING[motivo] || AREA_FALLBACK[area] || DEFAULT_ROUTING;\n  const trigger = rawReason || (intent ? `intent:${intent}` : routing.area);\n\n  return {\n    escalated: true,\n    write: true,\n    motivo: motivo || routing.area,\n    routing,\n    trigger,\n    idempotency_key: buildIdempotencyKey(conversationId, motivo || routing.area, trigger),\n  };\n};\n\nconst buildIdempotencyKey = (conversationId, motivo, trigger) =>\n  [conversationId, motivo, trigger].join(':');\n\n// =============================================================================\n// Gate de no-cierre (PRD #33.16, #33.8): ninguna intencion operativa\n// (reclamo, garantia, comprobante, factura) ni B2B se cierra mientras el\n// escalamiento no exista y este al menos 'notified'.\n// =============================================================================\nconst OPERATIONAL_CLOSURE_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n  'b2b_request',\n  'purchase_order',\n]);\n\nconst NOTIFIED_OR_BETTER = new Set(['notified', 'acknowledged', 'resolved']);\n\nconst evaluateClosureGate = (input) => {\n  const intent = String(input.intent || '').trim();\n  const shouldEscalate = Boolean(input.should_escalate || input.escalation_required);\n  const customerType = String(input.customer_type || '').trim();\n  const leadClass = String(input.lead_class || '').trim();\n  const operational = OPERATIONAL_CLOSURE_INTENTS.has(intent)\n    || customerType === 'b2b'\n    || leadClass === 'D';\n\n  if (!operational || !shouldEscalate) {\n    return {\n      operational,\n      requires_handoff: false,\n      closure_allowed: true,\n      required_status: null,\n      reason: 'no_handoff_required',\n      handoff_exists: false,\n    };\n  }\n\n  const handoffExists = Boolean(input.handoff_exists);\n  const handoffStatus = String(input.handoff_status || '').trim();\n  if (!handoffExists) {\n    return {\n      operational,\n      requires_handoff: true,\n      closure_allowed: false,\n      required_status: 'notified',\n      reason: 'handoff_missing',\n      handoff_exists: false,\n    };\n  }\n\n  const ready = NOTIFIED_OR_BETTER.has(handoffStatus);\n  return {\n    operational,\n    requires_handoff: true,\n    closure_allowed: ready,\n    required_status: 'notified',\n    reason: ready ? 'handoff_notified' : 'handoff_pending',\n    handoff_exists: true,\n    handoff_status: handoffStatus,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    HANDOFF_ROUTING,\n    AREA_FALLBACK,\n    DEFAULT_ROUTING,\n    motiveFromReason,\n    routeEscalation,\n    buildIdempotencyKey,\n    evaluateClosureGate,\n    OPERATIONAL_CLOSURE_INTENTS,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const resolution = routeEscalation(row);\n  const gate = evaluateClosureGate({\n    intent: row.intent,\n    should_escalate: resolution.escalated,\n    customer_type: row.customer_type,\n    lead_class: row.lead_class,\n    handoff_exists: row.declared_handoff_exists === true && resolution.escalated,\n    handoff_status: row.declared_handoff_status || row.handoff_status || 'pending',\n  });\n\n  return [\n    {\n      json: {\n        ...row,\n        handoff_write: resolution.write,\n        handoff_skipped: !resolution.write,\n        handoff_scope: {\n          conversation_id: Number(row.conversation_id) > 0 ? Number(row.conversation_id) : null,\n          phone_number: String(row.phone_number || '').trim() || null,\n          source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n          inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n          motivo: resolution.motivo,\n          area: resolution.routing?.area ?? null,\n          area_label: resolution.routing?.area_label ?? null,\n          prioridad: resolution.routing?.prioridad ?? null,\n          responsable: resolution.routing?.responsable ?? null,\n          idempotency_key: resolution.idempotency_key,\n          trigger: resolution.trigger,\n          escalation_reason: String(row.escalation_reason || '').trim() || null,\n          escalation_area: String(row.escalation_area || '').trim() || null,\n          intent: String(row.intent || '').trim() || null,\n          estado: 'pending',\n        },\n        handoff_gate: gate,\n      },\n    },\n  ];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000040",
+      "name": "Ensure Escalation Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 01_upsert_handoff.sql — Registro durable del escalamiento (Unidad 3).\n-- Nodo n8n: \"Upsert Escalation Handoff\" (WA - Inbound Downstream Dispatcher).\n-- -----------------------------------------------------------------------------\n-- Idempotente por idempotency_key `{conversation_id}:{motivo}:{trigger}`:\n-- el indice unico parcial uq_handoffs_idempotency garantiza una sola fila\n-- activa por evento. Un replay del dispatch (recovery) o un reintento con el\n-- mismo motivo NO duplica y deja traza en audit_logs como 'duplicate_skipped'.\n-- El estado del handoff (pending/notified/acknowledged/resolved) nunca se\n-- degrada en un upsert posterior.\n--\n-- Params:\n--   :should_write         false -> sin escalamiento, no escribe (ni audita)\n--   :conversation_id, :phone_number   identidad de la conversacion\n--   :source_number_id, :inbound_event_id   contexto del evento (opcionales)\n--   :motivo, :area, :area_label, :prioridad, :responsable  routing PRD #22/#23\n--   :idempotency_key       `{conversation_id}:{motivo}:{trigger}`\n--   :trigger, :escalation_reason, :escalation_area, :intent  contexto\n-- =============================================================================\nWITH input_payload AS (\n  SELECT\n    :should_write::boolean AS should_write,\n    :conversation_id::bigint AS conversation_id,\n    :phone_number::text AS phone_number,\n    NULLIF(:source_number_id::text, '')::bigint AS source_number_id,\n    NULLIF(:inbound_event_id::text, '')::bigint AS inbound_event_id,\n    :motivo::text AS motivo,\n    :area::text AS area,\n    :area_label::text AS area_label,\n    :prioridad::text AS prioridad,\n    :responsable::text AS responsable,\n    :idempotency_key::text AS idempotency_key,\n    NULLIF(:trigger::text, '') AS trigger,\n    NULLIF(:escalation_reason::text, '') AS escalation_reason,\n    NULLIF(:escalation_area::text, '') AS escalation_area,\n    NULLIF(:intent::text, '') AS intent\n),\nexisting AS MATERIALIZED (\n  SELECT h.id, h.estado, h.notification_attempt_count\n  FROM input_payload ip\n  JOIN handoffs h ON h.idempotency_key = ip.idempotency_key\n  WHERE h.deleted_at IS NULL\n),\nwritten AS (\n  INSERT INTO handoffs (\n    idempotency_key, conversation_id, phone_number, source_number_id,\n    inbound_event_id, motivo, area, area_label, prioridad, responsable,\n    trigger, escalation_reason, escalation_area, intent, estado\n  )\n  SELECT\n    ip.idempotency_key, ip.conversation_id, ip.phone_number, ip.source_number_id,\n    ip.inbound_event_id, ip.motivo, ip.area, ip.area_label, ip.prioridad,\n    ip.responsable, ip.trigger, ip.escalation_reason, ip.escalation_area,\n    ip.intent, 'pending'\n  FROM input_payload ip\n  WHERE ip.should_write\n  ON CONFLICT (idempotency_key) WHERE deleted_at IS NULL\n  DO UPDATE SET\n    motivo = EXCLUDED.motivo,\n    area = EXCLUDED.area,\n    area_label = EXCLUDED.area_label,\n    prioridad = EXCLUDED.prioridad,\n    responsable = EXCLUDED.responsable,\n    trigger = COALESCE(EXCLUDED.trigger, handoffs.trigger),\n    escalation_reason = COALESCE(EXCLUDED.escalation_reason, handoffs.escalation_reason),\n    escalation_area = COALESCE(EXCLUDED.escalation_area, handoffs.escalation_area),\n    intent = COALESCE(EXCLUDED.intent, handoffs.intent),\n    updated_at = NOW()\n  RETURNING id, estado\n),\nwrite_outcome AS (\n  SELECT\n    ip.conversation_id,\n    COALESCE(w.id, e.id) AS handoff_id,\n    COALESCE(w.estado, e.estado) AS handoff_estado,\n    CASE\n      WHEN NOT ip.should_write THEN 'skipped'\n      WHEN e.id IS NULL THEN 'created'\n      WHEN w.id IS NOT NULL AND w.estado = 'pending' THEN 'duplicate_skipped'\n      ELSE 'updated'\n    END AS outcome\n  FROM input_payload ip\n  LEFT JOIN existing e ON TRUE\n  LEFT JOIN written w ON TRUE\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'handoff_sync',\n    'handoff',\n    wo.handoff_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    wo.outcome,\n    CASE WHEN e.id IS NULL THEN '{}'::jsonb\n         ELSE jsonb_build_object('estado', e.estado,\n                                 'notification_attempt_count', e.notification_attempt_count) END,\n    jsonb_build_object('id', wo.handoff_id, 'estado', wo.handoff_estado,\n                       'motivo', ip.motivo, 'area', ip.area,\n                       'prioridad', ip.prioridad, 'responsable', ip.responsable),\n    jsonb_build_object('conversation_id', wo.conversation_id,\n                       'idempotency_key', ip.idempotency_key,\n                       'inbound_event_id', ip.inbound_event_id)\n  FROM input_payload ip\n  JOIN write_outcome wo ON TRUE\n  LEFT JOIN existing e ON TRUE\n  WHERE ip.should_write\n  RETURNING 1\n)\nSELECT\n  wo.handoff_id,\n  wo.handoff_estado,\n  wo.outcome\nFROM write_outcome wo;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.handoff_write, $json.handoff_scope.conversation_id, $json.handoff_scope.phone_number, $json.handoff_scope.source_number_id, $json.handoff_scope.inbound_event_id, $json.handoff_scope.motivo, $json.handoff_scope.area, $json.handoff_scope.area_label, $json.handoff_scope.prioridad, $json.handoff_scope.responsable, $json.handoff_scope.idempotency_key, $json.handoff_scope.trigger, $json.handoff_scope.escalation_reason, $json.handoff_scope.escalation_area, $json.handoff_scope.intent] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000041",
+      "name": "Upsert Escalation Handoff",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Prepare Handoff Notification — Unidad 3: notificacion durable al area.\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". Decide si el\n// handoff debe notificarse en este turno y construye el payload del area.\n//\n// Reglas deterministas:\n//   - Se notifica solo cuando el handoff existe y esta 'pending' con intentos\n//     disponibles (notification_attempt_count < max_attempts).\n//   - Un handoff ya 'notified'/'acknowledged'/'resolved' nunca se re-notifica\n//     (verificable exactamente una vez: notified_at + audit).\n//   - El reenvio por fallo lo disparan los reintentos del dispatch/recovery;\n//     la idempotencia la garantiza el contador de intentos en la BD.\n// =============================================================================\n\nconst NOTIFIED_OR_BETTER = new Set(['notified', 'acknowledged', 'resolved']);\n\nconst prepareHandoffNotification = (row) => {\n  const handoffId = Number(row.handoff_id || row.declared_handoff_id || 0);\n  const estado = String(row.handoff_estado || row.declared_handoff_status || 'pending').trim();\n  const attempts = Number(row.handoff_attempts ?? row.notification_attempt_count ?? 0);\n  const maxAttempts = Number(row.handoff_max_attempts ?? 3);\n  const scope = row.handoff_scope || row.declared_handoff_scope || {};\n\n  const exists = handoffId > 0 || Boolean(row.declared_handoff_exists);\n  const alreadyNotified = NOTIFIED_OR_BETTER.has(estado);\n  const attemptsLeft = attempts < maxAttempts;\n  const shouldNotify = exists && !alreadyNotified && attemptsLeft && estado === 'pending';\n\n  return {\n    handoff_id: handoffId > 0 ? handoffId : null,\n    handoff_estado: estado,\n    notification_attempts: attempts,\n    notification_max_attempts: maxAttempts,\n    should_notify: shouldNotify,\n    notification_skipped: !shouldNotify,\n    notification_channel: 'internal',\n    notification_payload: shouldNotify\n      ? {\n          channel: 'internal',\n          idempotency_key: scope.idempotency_key || row.declared_handoff_key || null,\n          motivo: scope.motivo || row.declared_handoff_motivo || null,\n          area: scope.area || row.declared_handoff_area || null,\n          area_label: scope.area_label || row.declared_handoff_area_label || null,\n          prioridad: scope.prioridad || row.declared_handoff_prioridad || null,\n          responsable: scope.responsable || row.declared_handoff_responsable || null,\n          phone_number: scope.phone_number || row.phone_number || null,\n          conversation_id: scope.conversation_id || row.conversation_id || null,\n          escalation_reason: scope.escalation_reason || null,\n        }\n      : null,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node). En Node (harness) `items` no existe.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { prepareHandoffNotification };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  return [{ json: { ...row, ...prepareHandoffNotification(row) } }];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000042",
+      "name": "Prepare Handoff Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Dispatch Handoff Notification — Unidad 3: stub determinista de notificacion.\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". Sustituye al\n// canal real (ClickUp/WhatsApp interno) por un stub 100% determinista:\n//   - por defecto emite outcome 'succeeded' (caso de produccion: el area\n//     queda notificada una sola vez y el estado pasa a 'notified');\n//   - los tests fuerzan fallos con row.notification_stub_mode='failed' para\n//     validar reintentos (max 3) y auditoria sin tocar servicios externos.\n//\n// Nunca envia mensajes reales: el payload es un objeto interno que persiste\n// `mark_handoff_attempt` con la idempotencia del handoff.\n// =============================================================================\n\nconst dispatchHandoffNotification = (row) => {\n  const shouldDispatch = Boolean(row.should_notify) && row.handoff_write !== false;\n  const mode = String(row.notification_stub_mode || 'succeeded').trim();\n  const outcome = mode === 'failed' ? 'failed' : 'succeeded';\n  const statusCode = outcome === 'succeeded' ? 200 : 503;\n  const error = outcome === 'failed'\n    ? String(row.notification_stub_error || 'Stub notification failure (simulated)')\n    : null;\n\n  return {\n    should_dispatch: shouldDispatch,\n    dispatch_skipped: !shouldDispatch,\n    notification_outcome: shouldDispatch ? outcome : 'skipped',\n    notification_status_code: shouldDispatch ? statusCode : null,\n    notification_error: shouldDispatch ? error : null,\n    notification_stub: true,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node). En Node (harness) `items` no existe.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { dispatchHandoffNotification };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  return [{ json: { ...row, ...dispatchHandoffNotification(row) } }];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000043",
+      "name": "Dispatch Handoff Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 02_apply_notification_attempt.sql — Aplica un intento de notificacion.\n-- -----------------------------------------------------------------------------\n-- La notificacion al area es verificable exactamente una vez:\n--   - success -> 'notified' + notified_at (sin reenvios posteriores);\n--   - fail    -> incrementa notification_attempt_count mientras queden\n--     intentos (max_attempts=3); al agotar queda 'notification_exhausted'\n--     con error en last_notification_error y auditoria en audit_logs.\n-- -----------------------------------------------------------------------------\n\nWITH target AS (\n  SELECT h.id, h.estado, h.notification_attempt_count AS attempts, h.max_attempts\n  FROM handoffs h\n  WHERE h.id = :handoff_id::bigint AND h.deleted_at IS NULL\n),\noutcome_resolution AS (\n  SELECT\n    t.id,\n    t.estado,\n    t.attempts,\n    t.max_attempts,\n    CASE\n      WHEN t.id IS NULL THEN 'handoff_missing'\n      WHEN t.estado <> 'pending' THEN 'already_notified'\n      WHEN t.attempts >= t.max_attempts THEN 'attempt_limit_exceeded'\n      WHEN :outcome::text = 'succeeded' THEN 'succeeded'\n      WHEN (t.attempts + 1) >= t.max_attempts THEN 'notification_exhausted'\n      ELSE 'retry'\n    END AS result\n  FROM target t\n),\napply AS (\n  UPDATE handoffs h\n  SET\n    estado = CASE WHEN o.result = 'succeeded' THEN 'notified' ELSE h.estado END,\n    notification_attempt_count = CASE\n      WHEN o.result IN ('succeeded', 'retry', 'notification_exhausted')\n        THEN h.notification_attempt_count + 1\n      ELSE h.notification_attempt_count\n    END,\n    notified_at = CASE\n      WHEN o.result = 'succeeded' AND h.notified_at IS NULL THEN NOW()\n      ELSE h.notified_at\n    END,\n    last_notification_error = CASE\n      WHEN o.result IN ('retry', 'notification_exhausted') THEN NULLIF(:error::text, '')\n      ELSE h.last_notification_error\n    END,\n    updated_at = NOW()\n  FROM outcome_resolution o\n  WHERE h.id = o.id\n    AND o.result IN ('succeeded', 'retry', 'notification_exhausted')\n  RETURNING h.id, h.estado, h.notification_attempt_count\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'handoff_transition',\n    'handoff',\n    o.id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    o.result,\n    jsonb_build_object('estado', o.estado, 'notification_attempt_count', o.attempts),\n    jsonb_build_object(\n      'estado', COALESCE(a.estado, o.estado),\n      'notification_attempt_count', COALESCE(a.notification_attempt_count, o.attempts),\n      'error', NULLIF(:error::text, '')\n    ),\n    jsonb_build_object('outcome', :outcome::text, 'channel', 'internal')\n  FROM outcome_resolution o\n  LEFT JOIN apply a ON a.id = o.id\n  WHERE o.id IS NOT NULL\n  RETURNING 1\n)\nSELECT\n  COALESCE(a.id, o.id) AS handoff_id,\n  COALESCE(a.estado, o.estado) AS handoff_estado,\n  COALESCE(a.notification_attempt_count, o.attempts) AS notification_attempt_count,\n  o.result\nFROM outcome_resolution o\nLEFT JOIN apply a ON a.id = o.id;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.handoff_id, $json.notification_outcome, $json.notification_error] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000044",
+      "name": "Mark Handoff Attempt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1380,
+        1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { escalation_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000045",
+      "name": "Escalation Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        1040
+      ]
     }
   ],
   "connections": {
@@ -570,6 +674,11 @@
           },
           {
             "node": "Ensure Early Opportunity",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Escalation Handoff",
             "type": "main",
             "index": 0
           }
@@ -845,6 +954,61 @@
         [
           {
             "node": "Upsert Early Opportunity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Escalation Handoff": {
+      "main": [
+        [
+          {
+            "node": "Upsert Escalation Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Escalation Handoff": {
+      "main": [
+        [
+          {
+            "node": "Prepare Handoff Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Handoff Notification": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Handoff Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Handoff Notification": {
+      "main": [
+        [
+          {
+            "node": "Mark Handoff Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Handoff Attempt": {
+      "main": [
+        [
+          {
+            "node": "Escalation Lane Complete",
             "type": "main",
             "index": 0
           }
