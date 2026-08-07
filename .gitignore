@@ -16,6 +16,8 @@ backups/
 .hermes/
 .herms/
 
+-l
+
 # Datos operativos privados
 db/seeds/*_real.sql
 db/seeds/private/
