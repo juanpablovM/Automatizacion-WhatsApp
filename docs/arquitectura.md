@@ -92,6 +92,26 @@ flowchart LR
 
 Esta topologia esta implementada. La agenda permanece deshabilitada funcionalmente mientras no existan cupos reales.
 
+## Integridad del dispatcher y despliegue
+
+El dispatcher usa un contrato terminal de un item: `should_send_handoff`,
+`message` y `lead_id`. La salida persistida de CRM prevalece al combinar contexto;
+por eso el texto de handoff confirma asignacion solo cuando existe una asignacion
+persistida, y ambas ramas alcanzan la finalizacion del inbox.
+
+Los IDs runtime no se versionan. `n8n/workflow-links.json` declara enlaces por
+nombre y `scripts/dev/sync-n8n-workflows.sh` aplica este gate:
+
+1. preflight y resolucion unica de identidades;
+2. snapshot y pausa de Entry/Recovery;
+3. importacion con enlaces resueltos;
+4. exportacion y comparacion logica completa contra el candidato;
+5. aislamiento de Evolution y E2E/replay sobre activacion temporal controlada;
+6. activacion definitiva, reverificacion remota y readiness del webhook.
+
+Ante un fallo, el snapshot completo se restaura y verifica con el trafico pausado.
+La reanudacion requiere redeploy verificado y acceptance E2E exitoso.
+
 ## Decisiones tecnicas implementadas en esta fase
 
 - `n8n` y `PostgreSQL` corren en contenedores Docker, sin instalacion nativa en macOS.

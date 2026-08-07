@@ -153,8 +153,24 @@ En el primer arranque, `n8n` pedira crear el usuario propietario de la instancia
 
 ```bash
 sh scripts/dev/sync-n8n-workflows.sh --preflight
-sh scripts/dev/sync-n8n-workflows.sh
+E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/dev/sync-n8n-workflows.sh --deploy TELEFONO_CONTROLADO
 ```
+
+La sincronizacion es un release gate: captura un snapshot, pausa Entry/Recovery,
+resuelve todos los enlaces por nombre, importa, exporta y verifica el runtime, y
+solo entonces reactiva el trafico. Comandos operativos:
+
+```bash
+sh scripts/dev/sync-n8n-workflows.sh --verify-remote
+sh scripts/dev/sync-n8n-workflows.sh --snapshot /ruta/snapshot
+sh scripts/dev/sync-n8n-workflows.sh --rollback /ruta/snapshot
+sh scripts/ops/test-dispatcher-runtime-integrity-local.sh all
+E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/ops/test-e2e-lead-creation.sh TELEFONO_CONTROLADO
+```
+
+`--rollback` pausa antes de importar, restaura y verifica el snapshot completo.
+`--deploy` aísla Evolution durante la aceptación, exige teléfono controlado y
+opt-in, y activa definitivamente solo después del E2E y replay idempotente.
 
 ## Servicios locales
 

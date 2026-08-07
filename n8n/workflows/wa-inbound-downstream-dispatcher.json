@@ -266,7 +266,7 @@
         "options": {
           "clashHandling": {
             "values": {
-              "resolveClash": "preferInput1"
+              "resolveClash": "preferInput2"
             }
           }
         }
@@ -283,7 +283,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\nconst leadId = row.lead_id || null;\nconst assigned = row.assignment_result === 'assigned' && Boolean(row.assigned_seller_id);\nif (!leadId || !row.conversation_id || !row.phone_number) return [];\nreturn [{ json: { ...row, lead_id: leadId,\n  response_text: assigned\n    ? 'Gracias, ya registré tu solicitud y quedó asignada al equipo comercial. Una ejecutiva revisará los antecedentes para preparar una cotización acorde a tu proyecto.'\n    : 'Gracias, ya registré tu solicitud. No pude asignarla automáticamente en este momento, pero el equipo comercial podrá revisar el caso sin que tengas que repetir la información.',\n  response_kind: assigned ? 'handoff_confirmed' : 'handoff_registered_unassigned',\n} }];"
+        "jsCode": "const row = items[0]?.json ?? {};\nconst parsedLeadId = Number(row.lead_id);\nconst leadId = Number.isSafeInteger(parsedLeadId) && parsedLeadId > 0 ? parsedLeadId : null;\nconst assigned = row.assignment_result === 'assigned' && Boolean(row.assigned_seller_id);\nif (!leadId || !row.conversation_id || !row.phone_number) {\n  return [{ json: { ...row, should_send_handoff: false, message: null, response_text: null, lead_id: null } }];\n}\nconst message = assigned\n  ? 'Gracias, ya registré tu solicitud y quedó asignada al equipo comercial. Una ejecutiva revisará los antecedentes para preparar una cotización acorde a tu proyecto.'\n  : 'Gracias, ya registré tu solicitud. El equipo comercial podrá revisar el caso sin que tengas que repetir la información.';\nreturn [{ json: {\n  ...row,\n  should_send_handoff: true,\n  message,\n  response_text: message,\n  response_kind: assigned ? 'handoff_confirmed' : 'handoff_registered_unassigned',\n  lead_id: leadId,\n} }];"
       },
       "id": "50000000-0000-0000-0000-000000000023",
       "name": "Prepare Verified Handoff",
@@ -461,8 +461,8 @@
           },
           "conditions": [
             {
-              "id": "condition-items-length-gt-0",
-              "leftValue": "={{ $json.items && $json.items.length > 0 }}",
+              "id": "condition-should-send-handoff",
+              "leftValue": "={{ $json.should_send_handoff === true }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",

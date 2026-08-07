@@ -9,16 +9,25 @@ LINK_MANIFEST="$PROJECT_ROOT/n8n/workflow-links.json"
 N8N_SERVICE="${N8N_SERVICE:-n8n}"
 POSTGRES_SERVICE="${POSTGRES_SERVICE:-postgres}"
 CONTAINER_TMP="/tmp/crm-n8n-workflows-sync"
+WORKFLOW_LOGIC_JQ='{name,id,description:(.description // null),settings:(.settings // {}),pinData:(.pinData // {}),meta:(.meta // {}),nodes:(.nodes // []),connections:(.connections // {})}'
+EVOLUTION_WEBHOOK_STATE=""
 
 usage() {
   cat <<'EOF'
 Uso:
-  scripts/dev/sync-n8n-workflows.sh [--preflight]
+  E2E_ALLOW_EXTERNAL_EFFECTS=yes scripts/dev/sync-n8n-workflows.sh --deploy TELEFONO_CONTROLADO
+  scripts/dev/sync-n8n-workflows.sh --preflight
+  scripts/dev/sync-n8n-workflows.sh --verify-remote [export.json]
+  scripts/dev/sync-n8n-workflows.sh --snapshot DIR | --rollback DIR
 
 Sincroniza workflows versionados usando el CLI oficial de n8n.
 
 Opciones:
   --preflight   Valida JSON, nombres y manifest local sin tocar Docker/n8n.
+  --deploy      Despliega pausado, ejecuta acceptance controlada y activa al final.
+  --verify-remote  Exporta y verifica el runtime, o verifica un export sin mutarlo.
+  --snapshot DIR   Exporta un snapshot completo para rollback.
+  --rollback DIR   Restaura y verifica un snapshot; deja Entry/Recovery pausados.
   --mapping-only  Valida/aplica solamente el mapping seguro de la instancia.
 EOF
 }
@@ -166,6 +175,11 @@ write_ids_json() {
   ' "$ids_file" > "$json_file"
 }
 
+ensure_unique_runtime_names() {
+  duplicate_names=$(cut -d'|' -f1 "$1" | sort | uniq -d)
+  [ -z "$duplicate_names" ] || { echo "ERROR: nombres runtime duplicados antes del deploy: $duplicate_names" >&2; exit 1; }
+}
+
 prepare_import_dir() {
   ids_json="$1"
   out_dir="$2"
@@ -233,25 +247,40 @@ copy_and_import() {
   compose_cmd exec -T -u node "$N8N_SERVICE" n8n import:workflow --separate --input="$CONTAINER_TMP"
 }
 
-verify_remote() {
-  ids_json="$1"
-  remote_json="$2"
+export_remote_definitions() {
+  remote_json="$1"
+  compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' > "$remote_json" <<'SQL'
+SELECT COALESCE(json_agg(json_build_object(
+  'name',name,'id',id,'active',active,'description',description,
+  'settings',settings,'staticData',"staticData",'pinData',"pinData",
+  'meta',meta,'nodes',nodes,'connections',connections
+) ORDER BY name), '[]'::json) FROM workflow_entity;
+SQL
+}
 
-  duplicate_names=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
-    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT name FROM workflow_entity GROUP BY name HAVING COUNT(*) > 1;\"")
-  if [ -n "$duplicate_names" ]; then
-    echo "ERROR: hay workflows duplicados por nombre en n8n:" >&2
-    echo "$duplicate_names" >&2
-    exit 1
-  fi
+verify_remote_export() {
+  remote_json="$1"
+  require_paused="${2:-no}"
+  candidate_dir="${3:-}"
+  jq -e 'type == "array"' "$remote_json" >/dev/null
 
-  compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
-    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT COALESCE(json_agg(json_build_object('name', name, 'id', id, 'settings', settings, 'nodes', nodes) ORDER BY name), '[]'::json) FROM workflow_entity;\"" \
-    > "$remote_json"
+  ids_json=$(mktemp)
+  trap 'rm -f "$ids_json"' EXIT
+  workflow_files | while IFS= read -r file; do
+    name=$(workflow_name_from_file "$file")
+    count=$(jq -r --arg name "$name" '[.[] | select(.name == $name)] | length' "$remote_json")
+    [ "$count" -eq 1 ] || { echo "ERROR: '$name' debe resolver a un workflow remoto; encontrados: $count" >&2; exit 1; }
+    id=$(jq -r --arg name "$name" '[.[] | select(.name == $name) | .id][0] // ""' "$remote_json")
+    [ -n "$id" ] || { echo "ERROR: workflow remoto '$name' tiene ID vacio" >&2; exit 1; }
+    printf '%s|%s\n' "$name" "$id"
+  done > "$ids_json"
+
+  duplicate_ids=$(cut -d'|' -f2- "$ids_json" | sort | uniq -d)
+  [ -z "$duplicate_ids" ] || { echo "ERROR: IDs remotos ambiguos: $duplicate_ids" >&2; exit 1; }
 
   jq -r '.links[] | [.sourceWorkflow, .node, .targetWorkflow] | @tsv' "$LINK_MANIFEST" |
     while IFS='	' read -r source_workflow node_name target_workflow; do
-      expected_id=$(jq -r --arg name "$target_workflow" '.[$name] // empty' "$ids_json")
+      expected_id=$(awk -F'|' -v name="$target_workflow" '$1 == name { print $2; exit }' "$ids_json")
       actual_id=$(jq -r --arg source "$source_workflow" --arg node "$node_name" '
         [.[] | select(.name == $source) | .nodes[] | select(.name == $node) | .parameters.workflowId.value][0] // ""
       ' "$remote_json")
@@ -262,7 +291,7 @@ verify_remote() {
     done
 
   error_workflow=$(jq -r '.errorWorkflow.name' "$LINK_MANIFEST")
-  error_id=$(jq -r --arg name "$error_workflow" '.[$name] // empty' "$ids_json")
+  error_id=$(awk -F'|' -v name="$error_workflow" '$1 == name { print $2; exit }' "$ids_json")
   workflow_files | while IFS= read -r file; do
     name=$(workflow_name_from_file "$file")
     [ "$name" = "$error_workflow" ] && continue
@@ -275,21 +304,123 @@ verify_remote() {
     fi
   done
 
+  if [ "$require_paused" = yes ]; then
+    for caller in 'WA - Inbound Entry' 'WA - Inbound Recovery'; do
+      active=$(jq -r --arg name "$caller" '[.[] | select(.name == $name) | .active][0] // false' "$remote_json")
+      [ "$active" = "false" ] || { echo "ERROR: '$caller' sigue activo antes de completar la verificacion" >&2; exit 1; }
+    done
+  fi
+
+  if [ -n "$candidate_dir" ]; then
+    workflow_files | while IFS= read -r file; do
+      name=$(workflow_name_from_file "$file")
+      candidate=$(find "$candidate_dir" -type f -name '*.json' -exec jq -r --arg name "$name" 'select(.name == $name) | input_filename' {} + | head -n 1)
+      [ -n "$candidate" ] || { echo "ERROR: candidato sin '$name'" >&2; exit 1; }
+      expected=$(jq -cS "$WORKFLOW_LOGIC_JQ" "$candidate")
+      actual=$(jq -cS --arg name "$name" "[.[] | select(.name == \$name)][0] | $WORKFLOW_LOGIC_JQ" "$remote_json")
+      [ "$actual" = "$expected" ] || { echo "ERROR: definicion remota difiere del candidato para '$name'" >&2; exit 1; }
+    done
+  fi
+
+  rm -f "$ids_json"
+  trap - EXIT
   echo "Verificacion remota OK"
 }
 
-activate_runtime_workflows() {
-  for workflow_name in 'WA - Inbound Entry' 'WA - Inbound Recovery'; do
-    workflow_id=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
-      "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT id FROM workflow_entity WHERE name = '$workflow_name' LIMIT 1;\"")
-    if [ -z "$workflow_id" ]; then
-      echo "ERROR: no existe workflow '$workflow_name' en n8n" >&2
-      exit 1
-    fi
-    compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$workflow_id" --active=true >/dev/null
-    echo "Workflow runtime activado: $workflow_name"
+set_callers_active() {
+  state="$1"
+  [ "${2:-both}" = entry ] && callers='WA - Inbound Entry' || callers='WA - Inbound Entry|WA - Inbound Recovery'
+  printf '%s\n' "$callers" | tr '|' '\n' | while IFS= read -r workflow_name; do
+    workflow_ids=$(query_workflow_ids | awk -F'|' -v name="$workflow_name" '$1 == name { print $2 }')
+    count=$(printf '%s\n' "$workflow_ids" | sed '/^$/d' | wc -l | tr -d ' ')
+    [ "$count" -ge 1 ] || { echo "ERROR: no existe workflow '$workflow_name' en n8n" >&2; exit 1; }
+    [ "$state" = false ] || [ "$count" -eq 1 ] || { echo "ERROR: activacion ambigua para '$workflow_name': $count IDs" >&2; exit 1; }
+    for workflow_id in $workflow_ids; do compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$workflow_id" --active="$state" >/dev/null; done
   done
   compose_cmd restart "$N8N_SERVICE" >/dev/null
+}
+
+snapshot_runtime_workflows() {
+  snapshot_dir="$1"
+  container_snapshot="$CONTAINER_TMP-snapshot"
+  [ ! -e "$snapshot_dir" ] || { echo "ERROR: el destino del snapshot ya existe: $snapshot_dir" >&2; exit 1; }
+  mkdir -p "$snapshot_dir"
+  compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$container_snapshot' && mkdir -p '$container_snapshot'"
+  compose_cmd exec -T -u node "$N8N_SERVICE" n8n export:workflow --backup --output="$container_snapshot" >/dev/null
+  compose_cmd cp "$N8N_SERVICE:$container_snapshot/." "$snapshot_dir"
+}
+
+restore_runtime_workflows() {
+  snapshot_dir="$1"
+  echo "Restaurando snapshot runtime; los callers permaneceran pausados..." >&2
+  set_callers_active false
+  copy_and_import "$snapshot_dir" "rollback"
+  restored_json=$(mktemp)
+  export_remote_definitions "$restored_json"
+  find "$snapshot_dir" -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
+    name=$(workflow_name_from_file "$snapshot_file")
+    [ "$(jq -r --arg name "$name" '[.[] | select(.name == $name)] | length' "$restored_json")" -eq 1 ] || { echo "ERROR: rollback ambiguo para '$name'" >&2; exit 1; }
+    expected=$(jq -cS "$WORKFLOW_LOGIC_JQ" "$snapshot_file")
+    actual=$(jq -cS --arg name "$name" "[.[] | select(.name == \$name)][0] | $WORKFLOW_LOGIC_JQ" "$restored_json")
+    [ "$actual" = "$expected" ] || { echo "ERROR: rollback remoto no coincide para '$name'" >&2; exit 1; }
+  done
+  rm -f "$restored_json"
+  echo "Rollback remoto verificado; trafico pausado" >&2
+}
+
+verify_remote() {
+  remote_json="$1"
+  require_paused="${2:-no}"
+  candidate_dir="${3:-}"
+  export_remote_definitions "$remote_json"
+  verify_remote_export "$remote_json" "$require_paused" "$candidate_dir"
+}
+
+activate_runtime_workflows() {
+  set_callers_active true
+  echo "Workflows runtime activados: Entry y Recovery"
+}
+
+run_controlled_acceptance() {
+  phone="$1"
+  evidence_file="$2"
+  acceptance_path="$3"
+  [ "${E2E_ALLOW_EXTERNAL_EFFECTS:-}" = yes ] || { echo "ERROR: exporta E2E_ALLOW_EXTERNAL_EFFECTS=yes para aceptar efectos externos controlados" >&2; return 1; }
+  . "$PROJECT_ROOT/.env"
+  EVOLUTION_WEBHOOK_STATE=$(mktemp)
+  curl -fsS -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/find/${EVOLUTION_DEFAULT_INSTANCE}" > "$EVOLUTION_WEBHOOK_STATE"
+  webhook_payload=$(jq -c '{webhook:{enabled:false,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:.headers}}' "$EVOLUTION_WEBHOOK_STATE")
+  curl -fsS -X POST -H 'Content-Type: application/json' -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/set/${EVOLUTION_DEFAULT_INSTANCE}" -d "$webhook_payload" >/dev/null
+  set +e
+  set_callers_active true entry
+  E2E_ALLOW_EXTERNAL_EFFECTS=yes E2E_EVIDENCE_FILE="$evidence_file" E2E_WEBHOOK_PATH="$acceptance_path" sh "$PROJECT_ROOT/scripts/ops/test-e2e-lead-creation.sh" "$phone"
+  status=$?
+  set_callers_active false || status=1
+  restore_evolution_webhook || status=1
+  set -e
+  return "$status"
+}
+
+restore_evolution_webhook() {
+  [ -n "$EVOLUTION_WEBHOOK_STATE" ] && [ -f "$EVOLUTION_WEBHOOK_STATE" ] || return 0
+  payload=$(jq -c '{webhook:{enabled:.enabled,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:.headers}}' "$EVOLUTION_WEBHOOK_STATE")
+  attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    if curl -fsS -X POST -H 'Content-Type: application/json' -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/set/${EVOLUTION_DEFAULT_INSTANCE}" -d "$payload" >/dev/null; then rm -f "$EVOLUTION_WEBHOOK_STATE"; EVOLUTION_WEBHOOK_STATE=""; return 0; fi
+    attempt=$((attempt + 1)); sleep 1
+  done
+  return 1
+}
+
+verify_webhook_ready() {
+  attempt=0
+  while [ "$attempt" -lt 20 ]; do
+    webhook_path=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT \\\"webhookPath\\\" FROM webhook_entity WHERE \\\"workflowId\\\"=(SELECT id FROM workflow_entity WHERE name='WA - Inbound Entry') AND node='InboundHealthCheck' LIMIT 1;\"")
+    [ -n "$webhook_path" ] && curl -fsS "http://127.0.0.1:${N8N_PORT:-5678}/webhook/$webhook_path" >/dev/null && return 0
+    sleep 1; attempt=$((attempt + 1))
+  done
+  echo "ERROR: webhook de Entry no quedo disponible despues de activar" >&2
+  return 1
 }
 
 ensure_default_instance_mapping() {
@@ -315,6 +446,7 @@ ensure_default_instance_mapping() {
 }
 
 sync_workflows() {
+  controlled_phone="$1"
   validate_local
   require_command docker
 
@@ -328,25 +460,36 @@ sync_workflows() {
 
   before_ids="$tmp_dir/before.ids"
   before_ids_json="$tmp_dir/before.ids.json"
-  after_ids="$tmp_dir/after.ids"
-  after_ids_json="$tmp_dir/after.ids.json"
-  base_dir="$tmp_dir/base"
   resolved_dir="$tmp_dir/resolved"
   remote_json="$tmp_dir/remote.json"
+  snapshot_dir="$tmp_dir/runtime-snapshot"
 
   query_workflow_ids > "$before_ids"
+  ensure_unique_runtime_names "$before_ids"
   write_ids_json "$before_ids" "$before_ids_json"
-  prepare_import_dir "$before_ids_json" "$base_dir" "no"
-  copy_and_import "$base_dir" "base"
-
-  query_workflow_ids > "$after_ids"
-  write_ids_json "$after_ids" "$after_ids_json"
-  ensure_all_workflows_have_ids "$after_ids_json"
-  prepare_import_dir "$after_ids_json" "$resolved_dir" "yes"
+  ensure_all_workflows_have_ids "$before_ids_json"
+  snapshot_runtime_workflows "$snapshot_dir"
+  set_callers_active false
+  rollback_required=yes
+  trap 'status=$?; trap - EXIT HUP INT TERM; restore_evolution_webhook || true; if [ "$status" -ne 0 ] && [ "${rollback_required:-no}" = yes ]; then restore_runtime_workflows "$snapshot_dir" || true; fi; rm -rf "$tmp_dir"; exit "$status"' EXIT
+  trap 'exit 130' HUP INT TERM
+  prepare_import_dir "$before_ids_json" "$resolved_dir" "yes"
   copy_and_import "$resolved_dir" "links resueltos"
-  verify_remote "$after_ids_json" "$remote_json"
+  verify_remote "$remote_json" yes "$resolved_dir"
   ensure_default_instance_mapping
+  acceptance_dir="$tmp_dir/acceptance"; cp -R "$resolved_dir" "$acceptance_dir"
+  acceptance_path="acceptance-$(date +%s)-$$"
+  entry_file=$(find "$acceptance_dir" -type f -name '*.json' -exec jq -r 'select(.name == "WA - Inbound Entry") | input_filename' {} + | head -n 1)
+  jq --arg path "$acceptance_path" '(.nodes[] | select(.name == "EvolutionWebhook") | .parameters.path) = $path' "$entry_file" > "$entry_file.tmp" && mv "$entry_file.tmp" "$entry_file"
+  copy_and_import "$acceptance_dir" "acceptance aislada"
+  verify_remote "$tmp_dir/acceptance.json" yes "$acceptance_dir"
+  run_controlled_acceptance "$controlled_phone" "$tmp_dir/e2e-evidence.json" "$acceptance_path"
+  copy_and_import "$resolved_dir" "candidato post-acceptance"
+  verify_remote "$remote_json" yes "$resolved_dir"
   activate_runtime_workflows
+  verify_remote "$tmp_dir/post-activation.json" no "$resolved_dir"
+  verify_webhook_ready
+  rollback_required=no
 
   compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$CONTAINER_TMP'" >/dev/null 2>&1 || true
   echo "Workflows sincronizados con CLI oficial de n8n"
@@ -354,10 +497,36 @@ sync_workflows() {
 
 case "${1:-}" in
   "")
-    sync_workflows
+    echo "ERROR: usa --deploy TELEFONO_CONTROLADO con E2E_ALLOW_EXTERNAL_EFFECTS=yes" >&2
+    exit 1
+    ;;
+  --deploy)
+    [ -n "${2:-}" ] || { usage >&2; exit 1; }
+    sync_workflows "$2"
     ;;
   --preflight)
     validate_local
+    ;;
+  --verify-remote)
+    validate_local
+    if [ -n "${2:-}" ]; then
+      verify_remote_export "$2" no "${3:-}"
+    else
+      require_command docker
+      tmp_remote=$(mktemp)
+      trap 'rm -f "$tmp_remote"' EXIT
+      verify_remote "$tmp_remote"
+    fi
+    ;;
+  --snapshot)
+    [ -n "${2:-}" ] || { usage >&2; exit 1; }
+    require_command docker
+    snapshot_runtime_workflows "$2"
+    ;;
+  --rollback)
+    [ -d "${2:-}" ] || { echo "ERROR: snapshot de rollback invalido" >&2; exit 1; }
+    require_command docker
+    restore_runtime_workflows "$2"
     ;;
   --mapping-only)
     require_command docker
