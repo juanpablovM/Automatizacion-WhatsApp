@@ -635,6 +635,102 @@
         1620,
         1040
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Ensure Media Attachment — A-009: fotos y archivos recibidos (P0).\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". SOURCE OF TRUTH\n// de la politica de media: tipos permitidos, limites de tamano, validacion de\n// host (misma instancia Evolution) y gate de extension `attached_to`\n// (ClickUp CR-014 PENDIENTE, no implementado).\n//\n// El mismo archivo es, en pruebas (harness), un modulo Node: expone\n// MEDIA_POLICY, MEDIA_BACKOFF_SECONDS, evaluateMediaPolicy,\n// buildMediaDedupeKey, sanitizeLog, shouldAllowMediaHost y mediaScopeFor para\n// tests de contrato. En n8n (Code node \"Ensure Media Attachment\") solo se\n// ejecuta la seccion final que lee `items`.\n//\n// Contrato:\n//   - Sin media (attachment_type nulo) -> media_skipped=true, NO escribe.\n//   - Con media -> media_write=true: SIEMPRE se registra metadata (trazabilidad\n//     sin perder el evento), incluso si la descarga luego se rechaza.\n//   - Politica evaluada ANTES de descargar: tipo no permitido, tamano fuera de\n//     limite o url de host no permitido -> download_state 'rejected' con\n//     rejected_reason (no se descarga).\n//   - El rail JAMAS bloquea la respuesta al cliente (carril lateral).\n//   - Idempotencia: dedupe key 'media:<media_key>'; fallback 'url:<external_url>'\n//     (el hash se une despues de descargar).\n// =============================================================================\n\nconst MEDIA_POLICY = {\n  allowed_types: ['image', 'document', 'audio', 'video'],\n  max_bytes: {\n    image: 25 * 1024 * 1024,\n    document: 25 * 1024 * 1024,\n    audio: 25 * 1024 * 1024,\n    video: 50 * 1024 * 1024,\n  },\n};\n\nconst MEDIA_BACKOFF_SECONDS = 10;\n\nconst normalizeSize = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : null;\n  if (typeof value === 'bigint') return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;\n  if (typeof value === 'string' && /^\\d+$/.test(value.trim())) {\n    const parsed = Number(value.trim());\n    return Number.isSafeInteger(parsed) ? parsed : null;\n  }\n  return null;\n};\n\nconst evaluateMediaPolicy = (row, policyOverride) => {\n  const policy = policyOverride || MEDIA_POLICY;\n  const type = String(row.attachment_type || '').trim();\n  if (!type) return { allowed_download: false, decision: 'skipped', reason: 'no_media' };\n  if (!policy.allowed_types.includes(type)) {\n    return { allowed_download: false, decision: 'rejected', reason: 'unsupported_type' };\n  }\n  const declaredSize = normalizeSize(row.file_size);\n  if (declaredSize !== null && declaredSize > policy.max_bytes[type]) {\n    return { allowed_download: false, decision: 'rejected', reason: 'oversized_declared' };\n  }\n  if (!String(row.external_url || '').trim()) {\n    return { allowed_download: false, decision: 'rejected', reason: 'missing_url' };\n  }\n  return { allowed_download: true, decision: 'proceed', reason: null };\n};\n\nconst buildMediaDedupeKey = (row) => {\n  const mediaKey = String(row.media_key || '').trim();\n  if (mediaKey) return `media:${mediaKey}`;\n  const url = String(row.external_url || '').trim();\n  if (url) return `url:${url}`;\n  return null;\n};\n\nconst sanitizeLog = (value) => {\n  const text = String(value ?? '');\n  if (text.length <= 96) return text;\n  return `${text.slice(0, 92)}...(${text.length} chars)`;\n};\n\nconst shouldAllowMediaHost = (url, allowedHosts) => {\n  if (!url) return false;\n  let parsed;\n  try {\n    parsed = new URL(url);\n  } catch (_error) {\n    return false;\n  }\n  const hosts = (allowedHosts || [])\n    .map((host) => String(host).trim())\n    .filter(Boolean);\n  if (hosts.length === 0) return true;\n  return hosts.includes(parsed.host) || hosts.includes(parsed.hostname);\n};\n\nconst mediaScopeFor = (row, env = {}) => {\n  const conversationId = Number(row.conversation_id);\n  const inboundEventId = Number(row.inbound_event_id);\n  const type = String(row.attachment_type || '').trim();\n\n  const envMaxBytes = {};\n  for (const mediaType of MEDIA_POLICY.allowed_types) {\n    const envKey = `MEDIA_MAX_BYTES_${mediaType.toUpperCase()}`;\n    const raw = env[envKey];\n    if (raw !== undefined && raw !== null && raw !== '') {\n      const parsed = Number(raw);\n      if (Number.isFinite(parsed) && parsed > 0) envMaxBytes[mediaType] = parsed;\n    }\n  }\n  const allowedHosts = String(env.MEDIA_ALLOWED_HOSTS || '')\n    .split(',')\n    .map((host) => host.trim())\n    .filter(Boolean);\n\n  const policy = {\n    allowed_types: MEDIA_POLICY.allowed_types,\n    max_bytes: { ...MEDIA_POLICY.max_bytes, ...envMaxBytes },\n  };\n  const evaluation = evaluateMediaPolicy(row, policy);\n  const hostAllowed = shouldAllowMediaHost(String(row.external_url || '').trim(), allowedHosts);\n  const rejectedByHost = evaluation.decision === 'proceed' && !hostAllowed;\n\n  return {\n    media_write: evaluation.decision !== 'skipped',\n    media_skipped: evaluation.decision === 'skipped',\n    media_scope: {\n      media_key: String(row.media_key || '').trim() || null,\n      external_url: String(row.external_url || '').trim() || null,\n      media_url_log: sanitizeLog(row.external_url || ''),\n      message_id: String(row.external_message_id || row.message_id || '').trim() || null,\n      inbound_event_id: Number.isSafeInteger(inboundEventId) && inboundEventId > 0 ? inboundEventId : null,\n      conversation_id: Number.isSafeInteger(conversationId) && conversationId > 0 ? conversationId : null,\n      source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n      instance_name: String(row.instance_name || '').trim() || null,\n      phone_number: String(row.phone_number || '').trim() || null,\n      attachment_type: type || null,\n      mime_type: String(row.mime_type || '').trim() || null,\n      filename: String(row.filename || '').trim() || null,\n      file_size: normalizeSize(row.file_size),\n      policy: {\n        allowed_download: evaluation.allowed_download && hostAllowed,\n        reason: rejectedByHost ? 'host_not_allowed' : evaluation.reason,\n      },\n      dedupe_key: buildMediaDedupeKey(row),\n      url_host_allowed: hostAllowed,\n      download_state: evaluation.decision === 'proceed'\n        ? (hostAllowed ? 'pending' : 'rejected')\n        : (evaluation.decision === 'skipped' ? 'pending' : 'rejected'),\n      rejected_reason: rejectedByHost ? 'host_not_allowed' : evaluation.reason,\n      attach_pending: false,\n      attached_to: null,\n    },\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    MEDIA_POLICY,\n    MEDIA_BACKOFF_SECONDS,\n    normalizeSize,\n    evaluateMediaPolicy,\n    buildMediaDedupeKey,\n    sanitizeLog,\n    shouldAllowMediaHost,\n    mediaScopeFor,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const decision = mediaScopeFor(row, $env ?? {});\n  const scope = decision.media_scope;\n  return [{\n    json: {\n      ...row,\n      ...scope,\n      media_write: decision.media_write,\n      media_skipped: decision.media_skipped,\n      media_scope: scope,\n    },\n  }];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000060",
+      "name": "Ensure Media Attachment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3420,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 01_upsert_media_attachment.sql — Registro idempotente de media (A-009).\n-- Nodo n8n: \"Upsert Media Attachment\" (WA - Inbound Downstream Dispatcher).\n-- -----------------------------------------------------------------------------\n-- Idempotencia por `media_key` (uq_media_attachments_media_key) o, cuando no\n-- hay media_key, por `external_url` (sin hash aun: el hash se une tras la\n-- descarga y uq_media_attachments_url_hash evita duplicados de contenido).\n-- Replay del mismo evento -> 'duplicate_skipped' con duplicate_count++ y\n-- auditoria en audit_logs (el evento del mensaje no se pierde nunca).\n--\n-- Params:\n--   :should_write        false -> sin media, no escribe (ni audita)\n--   :media_key, :external_url, :message_id   identidad de la media\n--   :inbound_event_id, :conversation_id, :source_number_id (opcional/nullable)\n--   :instance_name, :phone_number, :attachment_type, :mime_type\n--   :filename, :file_size (nullable), :download_state, :rejected_reason\n--   :dedupe_key (traza del evento)\n-- =============================================================================\n\nWITH resolved AS (\n  SELECT\n    NULLIF(:media_key, '')::text AS media_key,\n    NULLIF(:external_url, '')::text AS external_url,\n    NULLIF(:message_id, '')::text AS message_id,\n    NULLIF(:instance_name, '')::text AS instance_name,\n    NULLIF(:phone_number, '')::text AS phone_number,\n    NULLIF(:attachment_type, '')::text AS attachment_type,\n    NULLIF(:mime_type, '')::text AS mime_type,\n    NULLIF(:filename, '')::text AS filename,\n    NULLIF(:file_size::text, '')::bigint AS file_size_value,\n    NULLIF(:rejected_reason, '')::text AS rejected_reason,\n    NULLIF(:dedupe_key, '')::text AS dedupe_key,\n    NULLIF(:inbound_event_id::text, '')::bigint AS inbound_event_id_value,\n    NULLIF(:conversation_id::text, '')::bigint AS conversation_id_value,\n    NULLIF(:source_number_id::text, '')::bigint AS source_number_id_value\n),\nexisting AS (\n  SELECT id\n  FROM media_attachments\n  WHERE deleted_at IS NULL\n    AND (\n      (media_key IS NOT NULL AND media_key = (SELECT media_key FROM resolved))\n      OR (media_key IS NULL AND external_url IS NOT NULL\n          AND external_url = (SELECT external_url FROM resolved))\n    )\n  LIMIT 1\n),\ntouched AS (\n  UPDATE media_attachments\n  SET duplicate_count = duplicate_count + 1\n  WHERE id IN (SELECT id FROM existing)\n  RETURNING id, 'duplicate_skipped'::text AS touch_result\n),\ninserted AS (\n  INSERT INTO media_attachments (\n    media_key, external_url, message_id, inbound_event_id, conversation_id,\n    source_number_id, instance_name, phone_number, attachment_type, mime_type,\n    filename, file_size, download_state, rejected_reason, metadata\n  )\n  SELECT\n    media_key, external_url, message_id, inbound_event_id_value, conversation_id_value,\n    source_number_id_value, instance_name, phone_number, attachment_type, mime_type,\n    filename, file_size_value,\n    COALESCE(NULLIF(:download_state, '')::text, 'pending')::media_download_state,\n    rejected_reason,\n    jsonb_strip_nulls(jsonb_build_object('dedupe_key', dedupe_key, 'message_id', message_id))\n  FROM resolved\n  WHERE (:media_key IS NOT NULL OR :external_url IS NOT NULL)\n    AND NOT EXISTS (SELECT 1 FROM existing)\n    AND :should_write\n  ON CONFLICT DO NOTHING\n  RETURNING id, 'created'::text AS insert_result\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'media_sync',\n    'media_attachment',\n    events.id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    events.result,\n    '{}'::jsonb,\n    jsonb_strip_nulls(jsonb_build_object(\n      'media_key', (SELECT media_key FROM resolved),\n      'external_url_log', left((SELECT external_url FROM resolved), 64),\n      'attachment_type', (SELECT attachment_type FROM resolved),\n      'download_state', COALESCE(NULLIF(:download_state, '')::text, 'pending')\n    )),\n    jsonb_build_object('dedupe_key', (SELECT dedupe_key FROM resolved))\n  FROM (\n    SELECT id, 'created'::text AS result FROM inserted\n    UNION ALL\n    SELECT id, 'duplicate_skipped'::text AS result FROM touched\n  ) events\n  RETURNING result\n)\nSELECT id, result FROM (\n  SELECT id, 'created'::text AS result FROM inserted\n  UNION ALL\n  SELECT id, 'duplicate_skipped'::text AS result FROM touched\n) final\nORDER BY result DESC\nLIMIT 1;"
+      },
+      "id": "50000000-0000-0000-0000-000000000061",
+      "name": "Upsert Media Attachment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3520,
+        1160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Prepare Media Download — contrato de descarga determinista (A-009).\n// -----------------------------------------------------------------------------\n// Decide SI se descarga y CON QUE configuracion, a partir del estado\n// persistido (download_state, retry_count, max_retries) y de la politica de\n// media evaluada por \"Ensure Media Attachment\".\n//\n// Contrato:\n//   - pending + intentos disponibles -> should_download=true con manifiesto.\n//   - pending pero retry_count >= max_retries -> no descarga.\n//   - estado terminal (downloaded/rejected/expired/exhausted) -> no descarga\n//     (nunca se vuelve a bajar una media rechazada ni expirada).\n//   - downloaded -> no descarga (el binario ya existe; idempotencia).\n//\n// El `download_manifest` expone la url COMPLETA solo como campo interno del\n// rail (lo consume Dispatch en el mismo turno y el apply marca el intento).\n// Para logging se usa el truncado `media_url_log`; ningun log de este carril\n// emite la url completa.\n// =============================================================================\n\nconst MEDIA_DEFAULT_MAX_BYTES = {\n  image: 25 * 1024 * 1024,\n  document: 25 * 1024 * 1024,\n  audio: 25 * 1024 * 1024,\n  video: 50 * 1024 * 1024,\n};\n\nconst shouldDownload = (scope, row = {}) => {\n  const state = String(row.media_download_state || scope.download_state || '').trim();\n  const retryCount = Number(scope.retry_count ?? row.retry_count ?? 0) || 0;\n  const maxRetries = Number(scope.max_retries ?? row.max_retries ?? 3) || 3;\n\n  if (state === 'downloaded') return false;\n  if (state === 'rejected') return false;\n  if (state === 'expired') return false;\n  if (state === 'exhausted') return false;\n  if (retryCount >= maxRetries) return false;\n\n  return true;\n};\n\nconst buildDownloadManifest = (scope, row = {}, env = {}) => {\n  const url = String(scope.external_url || row.external_url || '').trim();\n  const mediaKey = String(scope.media_key || row.media_key || '').trim();\n  const type = String(scope.attachment_type || row.attachment_type || '').trim();\n  const mimeType = String(scope.mime_type || row.mime_type || '').trim();\n  const envMax = Number(env[`MEDIA_MAX_BYTES_${type.toUpperCase()}`]);\n  const maxBytes = Number.isFinite(envMax) && envMax > 0\n    ? envMax\n    : MEDIA_DEFAULT_MAX_BYTES[type] || 25 * 1024 * 1024;\n\n  return {\n    url,\n    media_key: mediaKey || null,\n    attachment_type: type,\n    mime_type: mimeType,\n    max_bytes: maxBytes,\n    expected_sha256: String(row.sha256 || '') || null,\n    dedupe_key: String(scope.dedupe_key || row.dedupe_key || '').trim() || null,\n    storage_strategy: 'local_relative',\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    shouldDownload,\n    buildDownloadManifest,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const scope = row.media_scope ?? {};\n  const wantsDownload = shouldDownload(scope, row);\n  return [{\n    json: {\n      ...row,\n      should_download: wantsDownload,\n      download_manifest: wantsDownload ? buildDownloadManifest(scope, row, $env ?? {}) : null,\n    },\n  }];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000062",
+      "name": "Prepare Media Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3620,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Dispatch Media Download — descarga determinista (stub) + hash (A-009).\n// -----------------------------------------------------------------------------\n// Ejecuta la descarga a traves de `backend` (inyectable/mockeable, sin red) y\n// calcula el SHA-256 real de los bytes recibidos.\n//\n// Contrato del backend (determinista para tests):\n//   backend.fetch(manifest) -> { status: number, bytes?: Buffer|Uint8Array,\n//                                 error?: string }\n//\n// Outcomes:\n//   - 200 con bytes <= max_bytes        -> 'downloaded' (hash real de bytes).\n//   - 200 con bytes > max_bytes        -> 'rejected' ('oversized_actual';\n//                                          no se persiste el binario).\n//   - 410/404 con 'expired'            -> 'expired' (url vencida; el mensaje\n//                                          NO se pierde: message_id queda).\n//   - 4xx/5xx/error                    -> 'failed' (reintento con backoff).\n//\n// Protecciones:\n//   - La url debe pasar la allowlist del rail (policy.allowed_download); si\n//     no, 'failed' con 'host_not_allowed' y el backend NO se toca.\n//   - El hash se calcula SOLO sobre bytes en memoria; nunca se loguea ni\n//     audita el binario; `storage_path` es relativo/interno (sin rutas\n//     absolutas del sistema) y `storage_token` es un id generico.\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst sha256Of = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');\n\nconst dispatchDownload = (manifest, backend, scope = {}) => {\n  if (!manifest || !manifest.url) {\n    return { outcome: 'failed', error: 'missing_url', attempt_spent: false };\n  }\n  if (scope.policy && scope.policy.allowed_download === false) {\n    return { outcome: 'failed', error: scope.policy.reason || 'host_not_allowed', attempt_spent: false };\n  }\n\n  let response;\n  try {\n    response = backend.fetch(manifest);\n  } catch (error) {\n    return { outcome: 'failed', error: String(error?.message || 'backend_error'), attempt_spent: true };\n  }\n\n  const status = Number(response?.status) || 0;\n  const error = String(response?.error || '').trim();\n\n  if (status === 410 || (status >= 400 && error.includes('expired'))) {\n    return { outcome: 'expired', error: error || 'media_expired', attempt_spent: true };\n  }\n\n  const raw = response?.bytes;\n  const bytes = raw instanceof Uint8Array ? Buffer.from(raw) : raw;\n  if (!Buffer.isBuffer(bytes)) {\n    return { outcome: 'failed', error: error || 'no_bytes', attempt_spent: true };\n  }\n\n  if (bytes.length > manifest.max_bytes) {\n    return {\n      outcome: 'rejected',\n      error: 'oversized_actual',\n      reason: 'oversized_actual',\n      bytes_length: bytes.length,\n      max_bytes: manifest.max_bytes,\n      attempt_spent: true,\n    };\n  }\n\n  return {\n    outcome: 'downloaded',\n    sha256: sha256Of(bytes),\n    bytes_length: bytes.length,\n    storage_token: `m-${crypto.randomBytes(4).toString('hex')}`,\n    storage_path: `media/${manifest.attachment_type || 'file'}/${crypto.randomBytes(4).toString('hex')}`,\n    attempt_spent: true,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    sha256Of,\n    dispatchDownload,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const manifest = row.download_manifest ?? {};\n  const backend = row.media_backend ?? { fetch: () => ({ status: 503, error: 'no_backend_configured' }) };\n  const outcome = dispatchDownload(manifest, backend, row.media_scope ?? {});\n  return [{\n    json: {\n      ...row,\n      media_download: {\n        outcome: outcome.outcome,\n        sha256: outcome.sha256 ?? null,\n        bytes_length: outcome.bytes_length ?? null,\n        error: outcome.error ?? null,\n        rejected_reason: outcome.reason ?? null,\n        storage_token: outcome.storage_token ?? null,\n        storage_path: outcome.storage_path ?? null,\n        attempt_spent: Boolean(outcome.attempt_spent),\n      },\n    },\n  }];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000063",
+      "name": "Dispatch Media Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3720,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 02_apply_download_result.sql — Aplica el resultado de la descarga (A-009).\n-- Nodo n8n: \"Mark Media Download\" (WA - Inbound Downstream Dispatcher).\n-- -----------------------------------------------------------------------------\n-- Outcomes del stub/backend de descarga:\n--   - downloaded  -> download_state='downloaded', sha256 + storage_path/\n--                    storage_token, attach_pending=true (extension ClickUp\n--                    CR-014 queda PENDIENTE: attached_to=NULL y nadie llama\n--                    a mark_media_attached en el dispatcher).\n--   - failed      -> retry_count++ con next_retry_at = now + 10s * 2^retry\n--                    (backoff); al agotar max_retries -> 'exhausted'\n--                    (el mensaje NUNCA se borra: message_id permanece).\n--   - expired     -> 'expired' (url vencida; terminal y preserva mensaje).\n--   - rejected    -> 'rejected' con motivo (tipo/tamano/host).\n-- Idempotente: un replay 'downloaded' no reaplica (revisa estado previo).\n-- -----------------------------------------------------------------------------\n\nWITH target AS (\n  SELECT id, download_state, retry_count, max_retries\n  FROM media_attachments\n  WHERE id = :media_id::bigint AND deleted_at IS NULL\n),\noutcome_resolution AS (\n  SELECT\n    t.id,\n    t.download_state,\n    t.retry_count,\n    t.max_retries,\n    CASE\n      WHEN t.id IS NULL THEN 'media_missing'\n      WHEN t.download_state = 'downloaded' THEN 'already_downloaded'\n      WHEN t.download_state IN ('rejected', 'expired', 'exhausted') THEN 'state_final'\n      WHEN :outcome::text = 'downloaded' THEN 'downloaded'\n      WHEN :outcome::text = 'expired' THEN 'expired'\n      WHEN :outcome::text = 'rejected' THEN 'rejected'\n      WHEN (t.retry_count + 1) >= t.max_retries THEN 'exhausted'\n      ELSE 'failed'\n    END AS result\n  FROM target t\n),\napply AS (\n  UPDATE media_attachments m\n  SET\n    download_state = CASE o.result\n      WHEN 'downloaded' THEN 'downloaded'::media_download_state\n      WHEN 'expired' THEN 'expired'::media_download_state\n      WHEN 'rejected' THEN 'rejected'::media_download_state\n      WHEN 'exhausted' THEN 'exhausted'::media_download_state\n      ELSE 'failed'::media_download_state\n    END,\n    retry_count = CASE\n      WHEN o.result IN ('failed', 'exhausted')\n        THEN m.retry_count + 1\n      ELSE m.retry_count\n    END,\n    next_retry_at = CASE\n      WHEN o.result = 'failed'\n        THEN NOW() + ((10 * POWER(2, m.retry_count))) * INTERVAL '1 second'\n      ELSE m.next_retry_at\n    END,\n    sha256 = CASE\n      WHEN o.result = 'downloaded' THEN NULLIF(:sha256, '')::text\n      ELSE m.sha256\n    END,\n    storage_path = CASE\n      WHEN o.result = 'downloaded' THEN NULLIF(:storage_path, '')::text\n      ELSE m.storage_path\n    END,\n    storage_token = CASE\n      WHEN o.result = 'downloaded' THEN NULLIF(:storage_token, '')::text\n      ELSE m.storage_token\n    END,\n    attach_pending = CASE\n      WHEN o.result = 'downloaded' THEN TRUE\n      ELSE m.attach_pending\n    END,\n    last_error = CASE\n      WHEN o.result IN ('failed', 'exhausted')\n        THEN NULLIF(:error, '')::text\n      ELSE NULL\n    END,\n    rejected_reason = CASE\n      WHEN o.result = 'rejected' THEN NULLIF(:error, '')::text\n      ELSE m.rejected_reason\n    END,\n    updated_at = NOW()\n  FROM outcome_resolution o\n  WHERE m.id = o.id\n    AND o.result IN ('downloaded', 'failed', 'expired', 'rejected', 'exhausted')\n  RETURNING m.id, m.download_state, m.retry_count, m.next_retry_at\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'media_download',\n    'media_attachment',\n    o.id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    o.result,\n    jsonb_build_object('download_state', o.download_state, 'retry_count', o.retry_count),\n    jsonb_build_object(\n      'download_state', COALESCE(a.download_state, o.download_state),\n      'retry_count', COALESCE(a.retry_count, o.retry_count),\n      'error', NULLIF(:error, '')\n    ),\n    jsonb_build_object('outcome', :outcome::text)\n  FROM outcome_resolution o\n  LEFT JOIN apply a ON a.id = o.id\n  WHERE o.id IS NOT NULL\n  RETURNING result\n)\nSELECT\n  COALESCE(a.id, o.id) AS media_id,\n  COALESCE(a.download_state::text, o.download_state::text) AS download_state,\n  COALESCE(a.retry_count, o.retry_count) AS retry_count,\n  a.next_retry_at,\n  o.result\nFROM outcome_resolution o\nLEFT JOIN apply a ON a.id = o.id;"
+      },
+      "id": "50000000-0000-0000-0000-000000000064",
+      "name": "Mark Media Download",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3820,
+        1160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { media_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000065",
+      "name": "Media Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3920,
+        1160
+      ]
     }
   ],
   "connections": {
@@ -679,6 +775,11 @@
           },
           {
             "node": "Ensure Escalation Handoff",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Media Attachment",
             "type": "main",
             "index": 0
           }
@@ -1009,6 +1110,61 @@
         [
           {
             "node": "Escalation Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Media Attachment": {
+      "main": [
+        [
+          {
+            "node": "Upsert Media Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Media Attachment": {
+      "main": [
+        [
+          {
+            "node": "Prepare Media Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Media Download": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Media Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Media Download": {
+      "main": [
+        [
+          {
+            "node": "Mark Media Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Media Download": {
+      "main": [
+        [
+          {
+            "node": "Media Lane Complete",
             "type": "main",
             "index": 0
           }

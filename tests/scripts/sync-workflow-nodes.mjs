@@ -66,6 +66,21 @@ const NODES = [
     node: 'Dispatch Handoff Notification',
     fixture: 'wa-inbound-downstream-dispatcher/dispatch-handoff-notification.js',
   },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Ensure Media Attachment',
+    fixture: 'wa-inbound-downstream-dispatcher/ensure-media-attachment.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Prepare Media Download',
+    fixture: 'wa-inbound-downstream-dispatcher/prepare-media-download.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Dispatch Media Download',
+    fixture: 'wa-inbound-downstream-dispatcher/dispatch-media-download.js',
+  },
 ];
 
 const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--backup-only') ? 'backup' : 'patch';
