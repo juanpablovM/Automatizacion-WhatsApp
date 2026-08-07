@@ -435,6 +435,8 @@ Accion:
 - Sugerir llamada.
 - No dejar conversacion sin responsable humano.
 
+Mensaje: "Por el tipo de proyecto que nos indicas, esto requiere revision prioritaria para cotizar bien instalacion, materiales y tiempos. Te voy a derivar con una ejecutiva para que lo revise contigo."
+
 ### 11.2 Lead B
 
 Criterios:
@@ -450,6 +452,8 @@ Accion:
 - Completar datos.
 - Derivar a ventas.
 - Crear seguimiento.
+
+Mensaje: "Con esos datos ya podemos preparar una cotizacion mas clara. Te derivare con una ejecutiva para revisar valores y disponibilidad."
 
 ### 11.3 Lead C
 
@@ -467,6 +471,8 @@ Accion:
 - Pedir datos minimos.
 - Derivar si solicita cotizacion.
 - Puede mantener respuesta automatica si es consulta simple.
+
+Mensaje: "Te puedo orientar con la informacion general y, si quieres avanzar, dejamos tus datos para que una ejecutiva te cotice."
 
 ### 11.4 Lead D
 
@@ -487,6 +493,8 @@ Accion:
 - Levantar empresa, obra, contacto, OC y plazo.
 - No tratar como cliente particular.
 - Si hay condicion especial, marcar para Gerencia.
+
+Mensaje: "Al ser una solicitud de empresa/constructora, la derivare al area B2B para revisar volumen, condiciones, documentacion y plazos de obra."
 
 ---
 
@@ -578,11 +586,15 @@ El agente no debe confirmar stock real si no tiene integracion con inventario.
 
 Respuesta permitida: "Puedo levantar tu solicitud, pero la disponibilidad debe confirmarla el equipo antes de cerrar la venta."
 
+Si existe integracion futura con inventario, puede mostrar disponibilidad advirtiendo que puede variar hasta la confirmacion y reservar solo cuando el flujo lo permita.
+
 ---
 
 ## 16. Reglas de respuesta sobre pagos
 
 El agente puede informar medios de pago, pero no validar pagos.
+
+Medios posibles: transferencia, tarjeta de debito, tarjeta de credito, efectivo y Orden de Compra B2B cuando corresponda.
 
 Mensaje obligatorio ante comprobantes: "Recibimos el comprobante. La validacion final del pago la realiza Finanzas una vez que el monto este acreditado. Te avisaremos cuando quede confirmado."
 
@@ -594,6 +606,8 @@ El agente no debe decir: "Pago confirmado", "Transferencia recibida", "Ya puedes
 
 El agente debe explicar que instalacion requiere revision adicional.
 
+Debe levantar producto, metros, comuna, tipo de terreno, existencia de radier o base, acceso, fotos, retiro de escombros y fecha tentativa.
+
 Mensaje: "Para instalacion necesitamos revisar medidas, comuna, terreno, acceso y si hay retiro de escombros. Con eso se puede preparar una cotizacion mas precisa."
 
 ---
@@ -604,6 +618,8 @@ El agente debe preguntar en toda instalacion: "La instalacion requiere retiro de
 
 Si cliente dice si: marcar campo "requiere retiro de escombros", advertir que debe evaluarse y cotizarse, derivar a ejecutiva.
 
+Mensaje: "Perfecto. Lo dejo marcado porque el retiro de escombros requiere coordinacion logistica adicional y puede modificar el valor o la programacion."
+
 ---
 
 ## 19. Reglas de respuesta sobre B2B
@@ -611,6 +627,8 @@ Si cliente dice si: marcar campo "requiere retiro de escombros", advertir que de
 El agente debe detectar palabras clave: constructora, inmobiliaria, empresa, OC, orden de compra, licitacion, proyecto, obra, supervisor, jefe de obra, compras, factura, pago a 30 dias, proveedor, volumen, cotizacion formal.
 
 Cuando detecte B2B: responder solicitando nombre de la empresa, RUT, obra, comuna, producto, cantidad aproximada, plazo requerido y si cuentan con Orden de Compra o condicion de pago definida.
+
+Mensaje: "Gracias. Esta solicitud corresponde al canal empresas/B2B. Para derivarte correctamente necesito algunos datos: nombre de la empresa, RUT, obra, comuna, producto, cantidad aproximada, plazo requerido y si cuentan con Orden de Compra o condicion de pago definida."
 
 Luego debe derivar a Patricia / area B2B.
 
@@ -621,6 +639,8 @@ Regla: si hay condicion especial de pago, debe marcarse como "requiere aprobacio
 ## 20. Reglas de respuesta sobre descuentos
 
 El agente no puede ofrecer descuentos libremente.
+
+El descuento tactico del 10% solo puede usarse si la campana esta activa, corresponde a una cotizacion antigua, existe intencion real de compra, esta autorizado por Gerencia, tiene vigencia corta y no se utiliza por defecto.
 
 Respuesta permitida: "Las condiciones comerciales especiales las revisa una ejecutiva segun el caso, volumen, producto y vigencia de la cotizacion. Te puedo derivar para evaluacion."
 
@@ -670,80 +690,324 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 
 ## 24. Mensajes base configurables
 
-24.1 Bienvenida, 24.2 Solicitud de datos para cotizar, 24.3 Instalacion, 24.4 Despacho, 24.5 B2B, 24.6 Comprobante de pago, 24.7 Precio, 24.8 Competencia, 24.9 Derivacion, 24.10 Fuera de horario.
+### 24.1 Bienvenida
+
+"Hola, gracias por escribir a Hormiglass. Te ayudare a orientar tu solicitud para que podamos cotizarte o derivarte correctamente. Que necesitas resolver hoy: cierre, pastelones, baldosas, adoquines, solerillas, despacho, instalacion u otro producto?"
+
+### 24.2 Solicitud de datos para cotizar
+
+"Para cotizarte bien necesito algunos datos: producto que buscas, cantidad o medidas aproximadas, comuna y si necesitas solo material, despacho, retiro o instalacion."
+
+### 24.3 Instalacion
+
+"Si buscas instalacion, ademas necesitamos saber comuna, metros aproximados, tipo de terreno, acceso, fecha tentativa y si requiere retiro de escombros. Tambien puedes enviarnos fotos del lugar."
+
+### 24.4 Despacho
+
+"Para revisar despacho necesito comuna, direccion aproximada, producto, cantidad y fecha estimada de entrega."
+
+### 24.5 B2B
+
+"Como es una solicitud de empresa/constructora, necesito algunos datos para derivarte al area B2B: nombre de empresa, RUT, obra, comuna, producto, cantidad, plazo requerido y si cuentan con Orden de Compra."
+
+### 24.6 Comprobante de pago
+
+"Recibimos el comprobante. La validacion final la realiza Finanzas una vez que el monto este acreditado. Te avisaremos cuando quede confirmado."
+
+### 24.7 Precio
+
+"Para darte un valor correcto necesito revisar producto, cantidad, comuna y modalidad. No es lo mismo solo material que despacho o instalacion. Te ayudo con esos datos."
+
+### 24.8 Competencia
+
+"Perfecto que compares. Solo revisa que ambas cotizaciones incluyan lo mismo: material, espesor, despacho, instalacion, retiro de escombros, plazo y garantia."
+
+### 24.9 Derivacion
+
+"Gracias, ya tengo la informacion base. Te derivare con una ejecutiva para que revise disponibilidad, valores y proximos pasos."
+
+### 24.10 Fuera de horario
+
+"Gracias por escribir a Hormiglass. En este momento estamos fuera de horario de atencion, pero dejare registrada tu solicitud para que el equipo pueda responderte. Para avanzar, indicame producto, comuna, cantidad aproximada y si necesitas material, despacho o instalacion."
 
 ---
 
 ## 25. Campos que el agente debe enviar al CRM / ClickUp
 
-Campos comerciales, de diagnostico, B2B y de seguimiento segun lo definido en la seccion 25 del PRD completo.
+### 25.1 Campos comerciales
+
+- ID conversacion.
+- Fecha y hora.
+- Nombre cliente.
+- Telefono.
+- Canal: WhatsApp.
+- Tipo cliente: B2C / contratista / B2B / antiguo / reclamo.
+- Producto de interes.
+- Comuna.
+- Cantidad aproximada.
+- Modalidad: material / retiro / despacho / instalacion.
+- Requiere retiro de escombros.
+- Urgencia.
+- Clasificacion A/B/C/D.
+- Objecion detectada.
+- Proxima accion.
+- Ejecutiva asignada.
+- Estado comercial.
+
+### 25.2 Campos de diagnostico
+
+- Dolor.
+- Alcance.
+- Tiempo.
+- Obstaculo.
+- Siguiente paso.
+- Fotos adjuntas.
+- Medidas enviadas.
+- Comentario del cliente.
+
+### 25.3 Campos B2B
+
+- Empresa.
+- RUT empresa.
+- Contacto.
+- Cargo.
+- Correo.
+- Obra.
+- Comuna de obra.
+- OC adjunta.
+- Condicion de pago solicitada.
+- Requiere aprobacion Gerencia.
+
+### 25.4 Campos de seguimiento
+
+- Fecha proximo contacto.
+- Motivo de seguimiento.
+- Dia de cadencia: 0, 1, 3, 7, 14.
+- Resultado ultimo contacto.
+- Motivo de perdida, si aplica.
 
 ---
 
 ## 26. Estados recomendados del agente
 
-Conversacion nueva, en diagnostico, pendiente datos cliente, cotizacion solicitada, derivado a ventas, derivado B2B, derivado Finanzas, derivado Postventa, reclamo urgente, comprobante recibido, esperando respuesta cliente, cliente no responde, cerrado por derivacion, cerrado sin interes, recuperable.
+- Conversacion nueva.
+- En diagnostico.
+- Pendiente datos cliente.
+- Cotizacion solicitada.
+- Derivado a ventas.
+- Derivado B2B.
+- Derivado Finanzas.
+- Derivado Postventa.
+- Reclamo urgente.
+- Comprobante recibido.
+- Esperando respuesta cliente.
+- Cliente no responde.
+- Cerrado por derivacion.
+- Cerrado sin interes.
+- Recuperable.
 
 ---
 
 ## 27. Automatizaciones sugeridas
 
-A-001 a A-010 segun lo definido en la seccion 27 del PRD completo.
+### A-001 — Crear oportunidad
+
+Cuando un cliente nuevo escribe, crear oportunidad en CRM / ClickUp.
+
+### A-002 — Detectar producto
+
+Si el cliente menciona pastelon, baldosa, cierre, adocreto, adoquin u otro producto, guardar producto de interes.
+
+### A-003 — Detectar comuna
+
+Si el cliente indica comuna, guardar campo.
+
+### A-004 — Detectar instalacion
+
+Si menciona instalar, instalacion, maestro, obra, terreno o retiro de escombros, marcar posible instalacion.
+
+### A-005 — Detectar B2B
+
+Si menciona constructora, empresa, OC, licitacion, obra o factura, clasificar como Lead D.
+
+### A-006 — Detectar Lead A
+
+Si menciona instalacion, cierre completo, obra grande o monto superior a $2.000.000, marcar como Lead A.
+
+### A-007 — Derivar urgente
+
+Si Lead A o reclamo, notificar a equipo humano.
+
+### A-008 — Comprobante recibido
+
+Si cliente envia comprobante, derivar a Finanzas o ejecutiva y responder que Finanzas debe validar.
+
+### A-009 — Fotos recibidas
+
+Si cliente envia fotos, adjuntar a oportunidad.
+
+### A-010 — Seguimiento pendiente
+
+Si cliente no responde, programar seguimiento automatico.
 
 ---
 
 ## 28. Integraciones deseadas
 
-ClickUp/CRM, WhatsApp Business, base de productos, base de comunas/despacho, Finanzas, Dashboard.
+### 28.1 ClickUp / CRM
+
+El agente debe crear o actualizar oportunidades. Como minimo debe crear tareas, actualizar campos, adjuntar conversacion y fotos, asignar responsable, cambiar estado y agregar un comentario resumen.
+
+### 28.2 WhatsApp Business
+
+Debe recibir y enviar mensajes, identificar el numero, guardar archivos adjuntos y detectar audios, imagenes y documentos.
+
+### 28.3 Base de productos
+
+Es deseable disponer de productos, categorias, unidades, imagenes, descripcion breve, ficha tecnica y precio cuando este autorizado.
+
+### 28.4 Base de comunas/despacho
+
+Es deseable disponer de comunas atendidas, reglas de despacho, zonas, restricciones y observaciones.
+
+### 28.5 Finanzas
+
+La integracion futura debe exponer estado de pago, validacion manual por Finanzas y registro de comprobantes. No debe validar automaticamente sin respaldo.
+
+### 28.6 Dashboard
+
+Debe alimentar leads por canal, producto y comuna; clasificacion A/B/C/D; derivaciones; conversaciones sin cerrar; objeciones; solicitudes B2B, de instalacion y reclamos.
 
 ---
 
 ## 29. Guardrails del agente
 
-No debe: inventar precios, stock, confirmar pagos, despacho, instalacion, garantia, autorizar descuentos, aprobar condiciones B2B, emitir documentos, prometer plazos, discutir, culpar areas, usar lenguaje tecnico excesivo, cerrar reclamos sin humano.
+No debe inventar precios o stock; confirmar pagos, despacho, instalacion o garantia; autorizar descuentos; aprobar condiciones B2B; emitir documentos tributarios; prometer plazos no validados; discutir; culpar a otras areas; usar lenguaje tecnico excesivo; cerrar reclamos sin humano ni dar instrucciones que contradigan el proceso interno.
 
-Debe: diagnosticar, levantar datos, orientar, explicar valor, derivar, registrar, escalar, proteger experiencia del cliente y operacion interna.
+Debe diagnosticar, levantar datos, orientar, explicar valor, derivar correctamente, registrar, escalar y proteger tanto la experiencia del cliente como la operacion interna, evitando compromisos no autorizados.
 
 ---
 
 ## 30. Reglas de cierre de conversacion
 
-Puede cerrar solo si consulta fue respondida, cliente derivado, datos minimos registrados, siguiente paso claro, sin reclamo, pago, B2B ni instalacion pendientes sin derivar.
+Puede cerrar solo si la consulta fue respondida, el cliente fue derivado correctamente, se registraron los datos minimos, el siguiente paso esta claro y no quedan reclamos, pagos, solicitudes B2B ni instalaciones complejas pendientes sin derivar.
+
+Mensaje de cierre: "Gracias. Deje registrada tu solicitud y el siguiente paso es que el equipo revise la informacion para continuar correctamente."
 
 ---
 
 ## 31. Evaluacion del agente
 
-Casos de prueba 1 al 8 segun lo definido.
+1. "Cuanto sale el metro de cierre": no entregar solo precio; preguntar comuna, metros, modalidad, uso y fecha.
+2. "En otro lado me sale mas barato": explicar costo total y comparar inclusiones sin bajar precio automaticamente.
+3. "Soy de una constructora, necesito cotizar 500 metros": clasificar B2B y pedir empresa, RUT, obra, comuna, producto, cantidad, plazo y OC.
+4. "Te mande comprobante, cuando despachan?": indicar que Finanzas debe validar y derivar.
+5. "Quiero instalar pastelones en mi patio": pedir comuna, metros, fotos, terreno, acceso, fecha y retiro de escombros.
+6. "Necesito factura": pedir datos de facturacion y derivar a Finanzas/Administracion.
+7. "Quiero reclamar por una instalacion": solicitar datos basicos y fotos, y derivar urgentemente a humano.
+8. "Solo quiero saber si tienen stock": sin integracion, no confirmar; levantar producto y cantidad y derivar para validacion.
 
 ---
 
 ## 32. Metricas del agente
 
-Metricas de atencion, comerciales, operativas y de calidad segun seccion 32.
+### 32.1 Metricas de atencion
+
+- Tiempo de primera respuesta.
+- Conversaciones atendidas, derivadas, cerradas y sin respuesta del cliente.
+
+### 32.2 Metricas comerciales
+
+- Leads calificados y Leads A/B/C/D detectados.
+- Cotizaciones solicitadas.
+- Solicitudes de instalacion, B2B y despacho.
+- Objeciones de precio.
+
+### 32.3 Metricas operativas
+
+- Comprobantes recibidos.
+- Solicitudes de factura, reclamos y garantia.
+- Solicitudes con fotos.
+- Conversaciones con datos incompletos.
+
+### 32.4 Metricas de calidad
+
+- Porcentaje de conversaciones con diagnostico completo.
+- Porcentaje de derivaciones correctas.
+- Porcentaje de leads sin comuna, producto o modalidad.
+- Porcentaje de reclamos escalados correctamente.
 
 ---
 
 ## 33. Criterios de aceptacion
 
-20 criterios segun seccion 33.
+El agente se considera correctamente configurado si:
+
+1. Responde de forma clara y profesional.
+2. No inventa precios ni stock.
+3. No valida pagos.
+4. Detecta intencion del cliente.
+5. Levanta datos minimos.
+6. Usa diagnostico D.A.T.O.S.
+7. Clasifica Leads A/B/C/D.
+8. Detecta B2B.
+9. Detecta instalacion.
+10. Pregunta por retiro de escombros cuando corresponde.
+11. Maneja objeciones sin bajar precio automaticamente.
+12. Deriva a humano cuando corresponde.
+13. Registra datos en CRM/ClickUp.
+14. Adjunta archivos o fotos a la oportunidad.
+15. Crea resumen util para la ejecutiva.
+16. No cierra reclamos sin derivacion.
+17. No promete plazos no validados.
+18. Deja claro el siguiente paso.
+19. Alimenta metricas.
+20. Mejora la calidad de las conversaciones comerciales.
 
 ---
 
 ## 34. Resumen que debe recibir la ejecutiva humana
 
-Template con: Cliente, Telefono, Tipo, Clasificacion, Producto, Modalidad, Comuna, Cantidad/medidas, Urgencia, Dolor, objecion, Retiro escombros, Fotos, Factura, OC, Siguiente paso, Comentario.
+El resumen de oportunidad debe incluir:
+
+- Cliente y telefono.
+- Tipo de cliente y clasificacion.
+- Producto y modalidad.
+- Comuna y cantidad/medidas.
+- Urgencia.
+- Dolor o necesidad.
+- Objecion detectada.
+- Retiro de escombros.
+- Fotos adjuntas.
+- Requiere factura.
+- OC.
+- Siguiente paso recomendado: llamar, cotizar, pedir datos, derivar B2B, revisar pago o revisar reclamo.
+- Comentario breve del agente.
 
 ---
 
 ## 35. Configuracion inicial recomendada
 
-Fase 1: Diagnostico (implementado). Fase 2: Seguimiento (pendiente). Fase 3: Operativo (pendiente). Fase 4: Avanzado (pendiente).
+### Fase 1 — Agente de diagnostico
+
+Bienvenida, deteccion de intencion, preguntas D.A.T.O.S., clasificacion A/B/C/D, derivacion humana, registro en CRM/ClickUp, objeciones basicas y guardrails de precio, pago y stock.
+
+### Fase 2 — Agente de seguimiento
+
+Seguimiento en dias 1, 3, 7 y 14; recuperacion de cotizaciones; recordatorios; motivos de perdida y recontacto.
+
+### Fase 3 — Agente operativo
+
+Derivacion a Finanzas, comprobantes, factura, postventa, reclamos, garantia y resenas.
+
+### Fase 4 — Agente avanzado
+
+Integraciones con stock, precios, programacion y dashboard; alertas gerenciales y prediccion de prioridad.
 
 ---
 
 ## 36. Instruccion final para el desarrollador
 
-El agente debe configurarse como un asistente comercial consultivo, no como un bot de catalogo. Su objetivo es: recibir rapido, diagnosticar bien, clasificar correctamente, evitar perdida de oportunidades, preparar mejores cotizaciones, derivar al humano correcto, registrar informacion util, proteger las reglas operativas de Hormiglass.
+El agente debe configurarse como un asistente comercial consultivo, no como un bot de catalogo. Su objetivo es recibir rapido, diagnosticar bien, clasificar correctamente, evitar perdida de oportunidades, preparar mejores cotizaciones, derivar al humano correcto, registrar informacion util y proteger las reglas operativas de Hormiglass.
 
-Regla final: nunca avanzar una conversacion comercial sin entender que necesita el cliente, que quiere resolver, donde esta, que modalidad busca y cual es el siguiente paso correcto.
+Regla final: **nunca avanzar una conversacion comercial sin entender que necesita el cliente, que quiere resolver, donde esta, que modalidad busca y cual es el siguiente paso correcto.**
