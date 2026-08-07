@@ -129,6 +129,16 @@
                 "operation": "true",
                 "singleValue": true
               }
+            },
+            {
+              "id": "condition-Boolean($json-commercial-gate-clear)",
+              "leftValue": "={{ !(Array.isArray($json.commercial_missing_fields) && $json.commercial_missing_fields.length > 0) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
             }
           ],
           "combinator": "and"
