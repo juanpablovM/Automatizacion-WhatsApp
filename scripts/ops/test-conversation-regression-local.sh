@@ -439,8 +439,16 @@ if (validAi.customer_type !== 'b2c' || validAi.lead_class !== 'A' || validAi.mod
 if (!String(validAi.diagnostic_datos_json).includes('Renovar baño')) {
   fail('AI valida debe exponer diagnostico D.A.T.O.S. para auditoria');
 }
-if (!String(validAi.commercial_missing_fields_json).includes('measurements')) {
-  fail('AI valida debe exponer datos comerciales faltantes');
+const validCommercialMissing = JSON.parse(validAi.commercial_missing_fields_json);
+if (!['quantity', 'terrain', 'access', 'debris_removal'].every((field) => validCommercialMissing.includes(field))) {
+  fail('AI valida debe exponer los campos obligatorios deterministas faltantes para instalacion');
+}
+if (validCommercialMissing.includes('measurements') || validCommercialMissing.includes('photos')) {
+  fail('Campos condicionales de instalacion no deben bloquear la confirmacion comercial');
+}
+const validAiMetadata = JSON.parse(validAi.metadata_json);
+if (!['measurements', 'photos'].every((field) => validAiMetadata.ai_commercial_missing_fields.includes(field))) {
+  fail('El diagnostico AI de campos condicionales debe conservarse separado para auditoria');
 }
 if (validAi.escalation_area !== 'sales' || !String(validAi.executive_summary).includes('Tipo de cliente: b2c')) {
   fail('AI valida debe conservar escalamiento y resumen ejecutivo');
@@ -453,6 +461,36 @@ if (!String(validAi.price_context_json).includes('12990')) {
 }
 if (!String(validAi.commercial_context_counts_json).includes('price_rules')) {
   fail('AI valida debe exponer conteos de contexto comercial para auditoria');
+}
+
+const preservedContext = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  qualification_context: {
+    customer_type: 'b2b',
+    lead_class: 'D',
+    modality: 'delivery',
+    objection_detected: 'price',
+    diagnostic_datos: { pain: 'Necesita despacho para una obra' },
+  },
+}, {
+  ai_skipped_1: false,
+  intent_1: 'provide_info',
+  confidence: 0.9,
+  customer_type: 'unknown',
+  lead_class: 'none',
+  modality: 'unknown',
+  objection_detected: 'none',
+  diagnostic_datos: {},
+  reply_text: '¿Que dato te falta confirmar?',
+}));
+if (
+  preservedContext.qualification_context.customer_type !== 'b2b'
+  || preservedContext.qualification_context.lead_class !== 'D'
+  || preservedContext.qualification_context.modality !== 'delivery'
+  || preservedContext.qualification_context.objection_detected !== 'price'
+  || preservedContext.qualification_context.diagnostic_datos?.pain !== 'Necesita despacho para una obra'
+) {
+  fail('Sentinelas unknown/none o diagnostico vacio no deben borrar contexto comercial valido');
 }
 
 const correctedRequest = await runApplyAi(mergedAiShape({
@@ -537,6 +575,12 @@ const confirmedAi = await runApplyAi(mergedAiShape({
   response_kind: 'confirmation_question',
   response_text: '¿Está correcto?',
   completed_fields_count: 3,
+  qualification_context: {
+    product: 'Baldosas',
+    quantity: '20 unidades',
+    commune: 'Santiago',
+    modality: 'material',
+  },
 }, {
   ai_skipped_1: false,
   intent_1: 'confirmation_yes',
@@ -570,6 +614,9 @@ const aiConfirmationAttempt = async ({
   response_kind: 'confirmation_question',
   response_text: '¿Está correcto?',
   completed_fields_count: 3,
+  qualification_context: {
+    product: 'Baldosas', quantity: '20 unidades', commune: 'Santiago', modality: 'material',
+  },
 }, {
   ai_skipped_1: false,
   intent_1: 'confirmation_yes',
@@ -646,6 +693,9 @@ const salesHandoffWinsOverAiEscalation = await runApplyAi(mergedAiShape({
   current_step: 'confirm',
   response_kind: 'confirmation_question',
   completed_fields_count: 3,
+  qualification_context: {
+    product: 'Baldosas', quantity: '20 unidades', commune: 'Santiago', modality: 'material',
+  },
 }, {
   ai_skipped_1: false,
   intent_1: 'confirmation_yes',
@@ -723,6 +773,9 @@ const finalSummaryState = {
   service: 'Placas',
   city: 'Vitacura',
   requirement: 'Cierre perimetral',
+  qualification_context: {
+    product: 'Placas', quantity: '40 unidades', commune: 'Vitacura', modality: 'material',
+  },
   current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%20perimetral%22%7D',
   conversation_status_code: 'waiting_user',
   pending_question_key: 'final_confirmation',
@@ -973,7 +1026,7 @@ const contextualNo = await runEvaluate({
   state_service: 'Placas',
   state_city: 'Vitacura',
   state_requirement: 'Cierre perimetral',
-  qualification_context: { measurements: '150 metros', terrain: 'plano', truck_access: true },
+  qualification_context: { modality: 'installation', measurements: '150 metros', terrain: 'plano', truck_access: true },
   pending_question_key: 'debris_removal',
 });
 if (contextualNo.reset_conversation_lead === true) {

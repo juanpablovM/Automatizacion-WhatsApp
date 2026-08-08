@@ -451,11 +451,21 @@ if (deterministic.pending_question_key === 'terrain' && normalizedCurrentText &&
   qualificationContext.terrain = safe(deterministic.text_body);
 }
 if (!resetQualificationContext) {
-  qualificationContext.diagnostic_datos = ai.diagnostic_datos;
-  qualificationContext.customer_type = ai.customer_type || qualificationContext.customer_type || null;
-  qualificationContext.lead_class = ai.lead_class || qualificationContext.lead_class || null;
-  qualificationContext.modality = ai.modality || qualificationContext.modality || null;
-  qualificationContext.objection_detected = ai.objection_detected || qualificationContext.objection_detected || 'none';
+  const meaningfulEnum = (value, sentinels) => {
+    const normalized = safe(value).toLowerCase();
+    return normalized && !sentinels.has(normalized) ? value : null;
+  };
+  if (Object.keys(ai.diagnostic_datos).length > 0) {
+    qualificationContext.diagnostic_datos = ai.diagnostic_datos;
+  }
+  qualificationContext.customer_type = meaningfulEnum(ai.customer_type, new Set(['unknown']))
+    || qualificationContext.customer_type || null;
+  qualificationContext.lead_class = meaningfulEnum(ai.lead_class, new Set(['none', 'unknown']))
+    || qualificationContext.lead_class || null;
+  qualificationContext.modality = meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
+    || qualificationContext.modality || null;
+  qualificationContext.objection_detected = meaningfulEnum(ai.objection_detected, new Set(['none', 'unknown']))
+    || qualificationContext.objection_detected || 'none';
   qualificationContext.executive_summary = ai.executive_summary || qualificationContext.executive_summary || null;
 }
 const beforeState = { ...state };
@@ -1129,4 +1139,3 @@ return [
     },
   },
 ];
-
