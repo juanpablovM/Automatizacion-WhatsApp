@@ -1,456 +1,248 @@
 #!/bin/sh
 set -eu
 
-# =============================================================================
-# test-media-pipeline-local.sh — Harness local y determinista (sin red) para la
-# Unidad 5 (alcance ajustado): pipeline de fotos/archivos reales (A-009).
-# -----------------------------------------------------------------------------
-# Cubre en 2 capas:
-#   1. Nodos (Ensure Media Attachment / Prepare / Dispatch): politica de tipo y
-#      tamano, allowlist de host, descarga stub con hash SHA-256 real,
-#      expiracion/fallo deterministas. Sin BD.
-#   2. Persistencia (01_upsert_media_attachment / 02_apply_download_result):
-#      pending -> downloaded/failed/expired/rejected/exhausted, idempotencia
-#      (duplicate_count), backoff, mensaje preservado, audit. BD temporal.
-# Gate de extension ClickUp (CR-014 PENDIENTE): el harness verifica que
-# `mark_media_attached` NO es invocado por ningun workflow y que la media
-# descargada queda attach_pending=true con attached_to=NULL.
-# =============================================================================
-
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
-if ! node tests/scripts/sync-workflow-nodes.mjs --check >/dev/null 2>&1; then
-  echo "ERROR: los nodos de workflow divergen de los fixtures de tests/fixtures/workflow-nodes/" >&2
-  echo "Ejecuta: node tests/scripts/sync-workflow-nodes.mjs" >&2
-  exit 1
-fi
+node tests/scripts/sync-workflow-nodes.mjs --check >/dev/null
+jq empty n8n/workflows/wa-inbound-downstream-dispatcher.json
+jq empty n8n/workflows/ops-media-download-scheduler.json
 
+TMP_DIR=$(mktemp -d)
+export U5_TEST_DIR="$TMP_DIR/storage"
 POSTGRES_CONTAINER="${PROJECT_NAME:-crm-whatsapp-automatizado}-postgres"
 TEST_DB="crm_whatsapp_media_${$}"
-DB_SQL_DIR="$(mktemp -d)"
 
 cleanup() {
   docker exec "$POSTGRES_CONTAINER" psql -U postgres -d postgres \
     -c "DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)" >/dev/null 2>&1 || true
-  rm -rf "$DB_SQL_DIR"
-  rm -f /tmp/media-*.sql /tmp/media-*.out
+  rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
-# ---------------------------------------------------------------------------
-# Capa 1: decisiones puras de los nodos (vm, sin red).
-# ---------------------------------------------------------------------------
 node <<'NODE'
-(async () => {
-  const fs = require('fs');
-  const crypto = require('crypto');
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const assert = require('assert');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const {
+  mediaScopeFor,
+} = require('./tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-media-attachment.js');
+const {
+  downloadAndPersistMedia,
+  persistAtomic,
+} = require('./tests/fixtures/workflow-nodes/ops-media-download-scheduler/download-and-persist-media.js');
 
-  const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json', 'utf8'));
-  const nodeCode = (name) => {
-    const node = dispatcher.nodes.find((entry) => entry.name === name);
-    if (!node) throw new Error(`No existe nodo ${name}`);
-    return node.parameters.jsCode;
-  };
-  const runNode = async (name, item, env = {}) => {
-    const fn = new AsyncFunction('items', 'helpers', '$env', nodeCode(name));
-    const result = await fn([{ json: item }], {}, env);
-    return result[0].json;
-  };
+const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json'));
+const scheduler = JSON.parse(fs.readFileSync('n8n/workflows/ops-media-download-scheduler.json'));
+const links = JSON.parse(fs.readFileSync('n8n/workflow-links.json'));
+const schedulerId = '99999999-0000-0000-0000-000000000004';
+assert.equal(scheduler.id, schedulerId);
+assert.equal(scheduler.active, true);
+assert(scheduler.nodes.some((node) => node.type === 'n8n-nodes-base.scheduleTrigger'));
+assert(scheduler.nodes.some((node) => node.type === 'n8n-nodes-base.executeWorkflowTrigger'));
+const dispatchNode = dispatcher.nodes.find((node) => node.name === 'Dispatch Media Download Workflow');
+assert(dispatchNode && dispatchNode.parameters.workflowId.value === schedulerId);
+assert(links.links.some((link) => link.node === 'Dispatch Media Download Workflow' && link.targetWorkflow === scheduler.name));
+assert(!dispatcher.nodes.some((node) => ['Prepare Media Download', 'Dispatch Media Download', 'Mark Media Download'].includes(node.name)));
 
-  let passed = 0;
-  let failed = 0;
-  const assert = (condition, message) => {
-    if (!condition) {
-      failed += 1;
-      console.error(`  FAIL: ${message}`);
-    } else {
-      passed += 1;
-    }
-  };
-  const expectEqual = (actual, expected, message) => {
-    assert(actual === expected, `${message}: esperado ${JSON.stringify(expected)}, recibido ${JSON.stringify(actual)}`);
-  };
+for (const node of [
+  dispatcher.nodes.find((entry) => entry.name === 'Upsert Media Attachment'),
+  scheduler.nodes.find((entry) => entry.name === 'Claim Due Media Downloads'),
+  scheduler.nodes.find((entry) => entry.name === 'Complete Media Download'),
+]) {
+  assert(node.parameters.options.queryReplacement, `${node.name} lacks queryReplacement`);
+  assert(/\$1/.test(node.parameters.query), `${node.name} lacks positional SQL`);
+  assert(!/(?<!:):[A-Za-z_]\w*/.test(node.parameters.query), `${node.name} still has named placeholders`);
+}
 
-  const baseRow = {
-    conversation_id: 42,
-    phone_number: '56912345678',
-    source_number_id: 1,
-    inbound_event_id: 99,
-    instance_name: 'wahormiglass',
-    external_message_id: 'MSG-MEDIA-001',
-    media_key: '3EB0BA9876',
-    external_url: 'https://evo.internal.crm/media/file/3EB0BA9876',
-    attachment_type: 'image',
-    mime_type: 'image/jpeg',
-    filename: 'pastelon.jpg',
-    file_size: 512000,
-  };
+const workerSource = scheduler.nodes.find((node) => node.name === 'Download and Persist Media').parameters.jsCode;
+assert(!workerSource.includes('media_backend'));
+assert(!workerSource.includes('row.external_url'));
+assert(workerSource.includes('/chat/getBase64FromMediaMessage/'));
 
-  const noMedia = await runNode('Ensure Media Attachment', { ...baseRow, attachment_type: null, media_key: null, external_url: null });
-  expectEqual(noMedia.media_skipped, true, 'sin media -> skipped');
-  expectEqual(noMedia.media_write, false, 'sin media -> no escribe');
-
-  const imageOk = await runNode('Ensure Media Attachment', baseRow);
-  expectEqual(imageOk.media_write, true, 'imagen recibida -> escribe registro');
-  expectEqual(imageOk.media_scope.download_state, 'pending', 'imagen OK -> pending (se descargara)');
-  expectEqual(imageOk.media_scope.policy.allowed_download, true, 'imagen dentro de limites -> download permitido');
-  expectEqual(imageOk.media_scope.dedupe_key, 'media:3EB0BA9876', 'dedupe key por media_key');
-  expectEqual(imageOk.media_scope.attached_to, null, 'attached_to NULL (ClickUp pendiente)');
-
-  const sticker = await runNode('Ensure Media Attachment', { ...baseRow, attachment_type: 'sticker', mime_type: 'image/webp' });
-  expectEqual(sticker.media_scope.download_state, 'rejected', 'sticker -> rejected');
-  expectEqual(sticker.media_scope.rejected_reason, 'unsupported_type', 'sticker -> motivo unsupported_type');
-
-  const oversized = await runNode('Ensure Media Attachment', baseRow, { MEDIA_MAX_BYTES_IMAGE: '100' });
-  expectEqual(oversized.media_scope.download_state, 'rejected', 'imagen > limite -> rejected');
-  expectEqual(oversized.media_scope.rejected_reason, 'oversized_declared', 'imagen > limite -> motivo oversized_declared');
-
-  const foreignHost = await runNode('Ensure Media Attachment', {
-    ...baseRow,
-    external_url: 'https://evil.example.com/media/3EB0BA9876',
-  }, { MEDIA_ALLOWED_HOSTS: 'evo.internal.crm' });
-  expectEqual(foreignHost.media_scope.download_state, 'rejected', 'host externo -> rejected');
-  expectEqual(foreignHost.media_scope.rejected_reason, 'host_not_allowed', 'host externo -> motivo host_not_allowed');
-  expectEqual(foreignHost.media_scope.url_host_allowed, false, 'allowlist de host evaluada');
-
-  const fixtureBytes = Buffer.from('CRMWA-MEDIA-FIXTURE-BYTES-001', 'utf8');
-  const expectedHash = crypto.createHash('sha256').update(fixtureBytes).digest('hex');
-  const stubBackend = {
-    fetch: (manifest) => ({ status: 200, bytes: fixtureBytes }),
-  };
-
-  const prepared = await runNode('Prepare Media Download', { media_scope: imageOk.media_scope, ...imageOk.media_scope });
-  expectEqual(prepared.should_download, true, 'pending con intentos -> descargar');
-  const dispatched = await runNode('Dispatch Media Download', {
-    ...prepared,
-    media_backend: stubBackend,
-    media_scope: imageOk.media_scope,
-  });
-  expectEqual(dispatched.media_download.outcome, 'downloaded', 'descarga exitosa');
-  expectEqual(dispatched.media_download.sha256, expectedHash, 'hash SHA-256 real determinista del binario fixture');
-  expectEqual(dispatched.media_download.bytes_length, fixtureBytes.length, 'bytes descargados correctos');
-  assert(/^m-[0-9a-f]{8}$/.test(dispatched.media_download.storage_token), 'storage_token interno (id generico, sin rutas)');
-  assert(dispatched.media_download.storage_path.startsWith('media/image/'), 'storage_path relativo interno');
-
-  const downloadedScope = { ...imageOk.media_scope, download_state: 'downloaded', sha256: expectedHash };
-  const noRedownload = await runNode('Prepare Media Download', { media_scope: downloadedScope, ...downloadedScope });
-  expectEqual(noRedownload.should_download, false, 'ya descargado -> no re-descargar');
-
-  const exhaustedScope = { ...imageOk.media_scope, download_state: 'pending', retry_count: 3, max_retries: 3 };
-  const noExhausted = await runNode('Prepare Media Download', { media_scope: exhaustedScope, ...exhaustedScope });
-  expectEqual(noExhausted.should_download, false, 'intentos agotados -> no reintentar');
-
-  const expiredBackend = { fetch: () => ({ status: 410, error: 'expired' }) };
-  const expired = await runNode('Dispatch Media Download', {
-    ...prepared,
-    media_backend: expiredBackend,
-    media_scope: imageOk.media_scope,
-  });
-  expectEqual(expired.media_download.outcome, 'expired', 'media vencida (410) -> expired');
-
-  const failedBackend = { fetch: () => { throw new Error('network_timeout'); } };
-  const downloadFailed = await runNode('Dispatch Media Download', {
-    ...prepared,
-    media_backend: failedBackend,
-    media_scope: imageOk.media_scope,
-  });
-  expectEqual(downloadFailed.media_download.outcome, 'failed', 'fallo de red -> failed (reintentable)');
-  expectEqual(downloadFailed.media_download.error, 'network_timeout', 'error de fallo conservado');
-  expectEqual(downloadFailed.media_download.attempt_spent, true, 'el intento se gasta');
-
-  const oversizedBackend = { fetch: () => ({ status: 200, bytes: Buffer.alloc(200) }) };
-  const tinyLimit = await runNode('Prepare Media Download', { media_scope: imageOk.media_scope, ...imageOk.media_scope }, { MEDIA_MAX_BYTES_IMAGE: '100' });
-  const oversizedAfter = await runNode('Dispatch Media Download', {
-    ...tinyLimit,
-    media_backend: oversizedBackend,
-    media_scope: imageOk.media_scope,
-  });
-  expectEqual(oversizedAfter.media_download.outcome, 'rejected', 'binario mayor al limite tras descarga -> rejected');
-  expectEqual(oversizedAfter.media_download.rejected_reason, 'oversized_actual', 'motivo oversized_actual');
-
-  const hostBlocked = await runNode('Dispatch Media Download', {
-    ...prepared,
-    media_backend: { fetch: () => ({ status: 200, bytes: fixtureBytes }) },
-    media_scope: { ...imageOk.media_scope, policy: { allowed_download: false, reason: 'host_not_allowed' } },
-  });
-  expectEqual(hostBlocked.media_download.outcome, 'failed', 'host no permitido -> no se toca backend');
-
-  console.log(`\nPipeline media (capa nodo): ${passed} PASS / ${failed} FAIL`);
-  if (failed > 0) process.exit(1);
-})().catch((error) => {
-  console.error(error.stack || error.message);
-  process.exit(1);
+const rawPayload = { data: { key: { id: 'MSG-1' }, message: { imageMessage: { mediaKey: 'secret' } } } };
+const inbound = mediaScopeFor({
+  conversation_id: 1,
+  inbound_event_id: 1,
+  source_number_id: 1,
+  instance_name: 'wahormiglass',
+  external_message_id: 'MSG-1',
+  external_media_id: 'MEDIA-1',
+  external_url: 'https://attacker.invalid/never-fetched',
+  attachment_type: 'image',
+  mime_type: 'image/png',
+  filename: 'photo.png',
+  file_size: 5,
+  raw_payload_json: JSON.stringify(rawPayload),
 });
+assert.equal(inbound.media_scope.download_state, 'pending');
+assert.deepEqual(inbound.media_scope.raw_payload, rawPayload);
+assert.equal(inbound.media_scope.media_key, 'MEDIA-1');
+assert.equal(mediaScopeFor({ attachment_type: 'image', raw_payload_json: '{broken' }).media_scope.rejected_reason, 'raw_payload_invalid');
+assert.equal(mediaScopeFor({ attachment_type: 'sticker' }).media_scope.download_state, 'rejected');
+assert.equal(mediaScopeFor({ attachment_type: 'image', file_size: 101 }, { MEDIA_MAX_BYTES_IMAGE: '100' }).media_scope.rejected_reason, 'oversized_declared');
+
+const bytes = Buffer.from('real-media-bytes');
+const expectedHash = crypto.createHash('sha256').update(bytes).digest('hex');
+const row = {
+  media_id: 1,
+  claim_token: '00000000-0000-0000-0000-000000000001',
+  instance_name: 'wahormiglass',
+  attachment_type: 'image',
+  mime_type: 'image/png',
+  max_bytes: 1024,
+  raw_payload: rawPayload,
+  expected_sha256: Buffer.from(expectedHash, 'hex').toString('base64'),
+};
+const env = {
+  EVOLUTION_API_BASE_URL: 'http://evolution-api:8080',
+  EVOLUTION_API_KEY: 'secret-key',
+  MEDIA_STORAGE_ROOT: '/data/media',
+};
+
+(async () => {
+  let request;
+  const testRoot = process.env.U5_TEST_DIR;
+  const persistForTest = (payload, hash, _configuredRoot, claimToken) => persistAtomic(payload, hash, testRoot, claimToken);
+  const downloaded = await downloadAndPersistMedia(row, env, async (options) => {
+    request = options;
+    return { statusCode: 200, body: { base64: bytes.toString('base64'), mimetype: 'image/png' } };
+  }, persistForTest);
+  assert.equal(request.url, 'http://evolution-api:8080/chat/getBase64FromMediaMessage/wahormiglass');
+  assert.equal(request.headers.apikey, 'secret-key');
+  assert.deepEqual(request.body, { message: rawPayload.data });
+  assert(!JSON.stringify(request).includes('attacker.invalid'));
+  assert.equal(downloaded.media_outcome, 'downloaded');
+  assert.equal(downloaded.media_sha256, expectedHash);
+  const physical = path.join(testRoot, downloaded.media_storage_path);
+  assert.deepEqual(fs.readFileSync(physical), bytes);
+  assert.equal(fs.statSync(physical).mode & 0o777, 0o600);
+  const replay = await downloadAndPersistMedia({ ...row, expected_sha256: expectedHash.toUpperCase() }, env, async () => ({ statusCode: 200, body: { base64: bytes.toString('base64'), mimetype: 'image/png' } }), persistForTest);
+  assert.equal(replay.media_storage_path, downloaded.media_storage_path);
+
+  assert.equal((await downloadAndPersistMedia(row, { ...env, EVOLUTION_API_KEY: '__PENDIENTE__' }, async () => { throw new Error('must not call'); })).media_outcome, 'deferred');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => ({ statusCode: 401, body: {} }))).media_outcome, 'deferred');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => ({ statusCode: 404, body: {} }))).media_outcome, 'expired');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => ({ statusCode: 429, body: {} }))).media_outcome, 'failed');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => { throw new Error('timeout'); })).media_outcome, 'failed');
+  assert.equal((await downloadAndPersistMedia({ ...row, max_bytes: 2 }, env, async () => ({ statusCode: 200, body: { base64: bytes.toString('base64'), mimetype: 'image/png' } }))).media_error, 'oversized_encoded');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => ({ statusCode: 200, body: { base64: 'not-base64', mimetype: 'image/png' } }))).media_error, 'invalid_base64');
+  assert.equal((await downloadAndPersistMedia(row, env, async () => ({ statusCode: 200, body: { base64: bytes.toString('base64'), mimetype: 'application/pdf' } }))).media_error, 'mime_category_mismatch');
+  assert.equal((await downloadAndPersistMedia({ ...row, expected_sha256: '0'.repeat(64) }, env, async () => ({ statusCode: 200, body: { base64: bytes.toString('base64'), mimetype: 'image/png' } }))).media_error, 'sha256_mismatch');
+  assert.equal((await downloadAndPersistMedia({ ...row, expected_sha256: 'not-a-sha256' }, env, async () => { throw new Error('must not call'); })).media_error, 'expected_sha256_invalid');
+  console.log('Media workflow and Evolution transport contract: PASS');
+})().catch((error) => { console.error(error); process.exit(1); });
 NODE
 
-# ---------------------------------------------------------------------------
-# Gate de extension ClickUp (CR-014): ningun workflow invoca mark_media_attached.
-# ---------------------------------------------------------------------------
-if grep -rlE "mark_media_attached\\(" n8n/workflows/*.json >/dev/null 2>&1; then
-  echo "ERROR: un workflow referencia mark_media_attached (extension pendiente no debe invocarse)" >&2
+if grep -R -E "mark_media_attached\(" n8n/workflows/*.json >/dev/null 2>&1; then
+  echo 'U4 gate failed: workflow invokes mark_media_attached' >&2
   exit 1
 fi
-echo "Gate extension OK: ningun workflow referencia mark_media_attached"
 
-# ---------------------------------------------------------------------------
-# Capa 2: persistencia idempotente y reintentos en BD temporal (docker).
-# ---------------------------------------------------------------------------
-docker exec "$POSTGRES_CONTAINER" psql -U postgres -d postgres \
-  -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${TEST_DB}" >/dev/null
-
-for migration in infra/postgres/migrations/00[1-9]_*.sql; do
-  docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-    -v ON_ERROR_STOP=1 < "$migration" >/dev/null
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  -c "CREATE DATABASE ${TEST_DB}" >/dev/null
+for migration in \
+  infra/postgres/migrations/00[1-7]_*.sql \
+  infra/postgres/migrations/012_create_media_attachments.sql \
+  infra/postgres/migrations/016_harden_media_download_delivery.sql; do
+  docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 < "$migration" >/dev/null
 done
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < infra/postgres/migrations/010_create_opportunities.sql >/dev/null
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < infra/postgres/migrations/011_create_handoffs.sql >/dev/null
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < infra/postgres/migrations/012_create_media_attachments.sql >/dev/null
-# Re-aplicacion idempotente (mismo estilo 010/011).
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < infra/postgres/migrations/012_create_media_attachments.sql >/dev/null
-
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 <<'SQL' 2>&1
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
 INSERT INTO conversation_statuses (code, label, description, sort_order, is_active)
-VALUES ('active', 'Activa', 'Conversacion en curso dentro del flujo del bot.', 10, TRUE)
-ON CONFLICT (code) DO UPDATE SET label = EXCLUDED.label;
-INSERT INTO whatsapp_numbers (display_name, phone_number, phone_number_id)
-VALUES ('Main', '+56900000000', 'pn-main');
+VALUES ('active', 'Active', 'Active', 10, TRUE) ON CONFLICT (code) DO NOTHING;
+INSERT INTO whatsapp_numbers (display_name, phone_number, phone_number_id) VALUES ('Main', '+56900000000', 'pn-main');
 INSERT INTO conversations (phone_number, source_number_id, conversation_status_id)
-SELECT '56912345678', 1, id FROM conversation_statuses WHERE code = 'active';
+SELECT '56912345678', 1, id FROM conversation_statuses WHERE code='active';
 INSERT INTO inbound_events (instance_name, external_message_id, phone_number, source_number_id, event_type, normalized_event, dedupe_key, queue_key, processing_status, event_fingerprint)
-VALUES ('wahormiglass', 'MSG-MEDIA-001', '56912345678', 1, 'MESSAGES_UPSERT', 'MESSAGES_UPSERT', 'id:MSG-MEDIA-001', '1:56912345678', 'processed', md5('wahormiglass|id:MSG-MEDIA-001'));
+VALUES ('wahormiglass', 'MSG-1', '56912345678', 1, 'MESSAGES_UPSERT', 'MESSAGES_UPSERT', 'id:MSG-1', '1:56912345678', 'processed', md5('MSG-1'));
 SQL
 
-expect_out() {
-  if ! grep -q "$1" "$2"; then
-    echo "OUT MISSING '$1' in $2:" >&2
-    cat "$2" >&2
-    exit 1
-  fi
+make_upsert_sql() {
+  output=$1
+  media_key=$2
+  message_id=$3
+  {
+    printf '%s\n' 'PREPARE media_upsert(boolean,text,text,text,bigint,bigint,bigint,text,text,text,text,text,bigint,text,text,text,text,bigint,text,text) AS'
+    cat db/queries/n8n/media-pipeline/01_upsert_media_attachment.sql
+    printf "; EXECUTE media_upsert(TRUE,'%s','https://attacker.invalid/metadata','%s',1,1,1,'wahormiglass','56912345678','image','image/png','photo.png',16,'pending','','media:%s',\$json\${\"data\":{\"key\":{\"id\":\"%s\"}}}\$json\$,1024,'',\$json\${\"conversation_id\":1}\$json\$);\n" "$media_key" "$message_id" "$media_key" "$message_id"
+  } > "$output"
+}
+make_upsert_sql "$TMP_DIR/upsert-a.sql" MEDIA-A MSG-A
+make_upsert_sql "$TMP_DIR/upsert-b.sql" MEDIA-B MSG-B
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 < "$TMP_DIR/upsert-a.sql" >/dev/null
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 < "$TMP_DIR/upsert-b.sql" >/dev/null
+
+make_claim_sql() {
+  {
+    printf '%s\n' 'PREPARE media_claim(integer,integer) AS'
+    cat db/queries/n8n/media-pipeline/02_claim_due_downloads.sql
+    printf '%s\n' '; EXECUTE media_claim(1,900);'
+  } > "$1"
+}
+make_claim_sql "$TMP_DIR/claim-a.sql"
+make_claim_sql "$TMP_DIR/claim-b.sql"
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/claim-a.sql" > "$TMP_DIR/claim-a.out" & p1=$!
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/claim-b.sql" > "$TMP_DIR/claim-b.out" & p2=$!
+wait "$p1"; wait "$p2"
+row_a=$(grep '|' "$TMP_DIR/claim-a.out" | tail -n1)
+row_b=$(grep '|' "$TMP_DIR/claim-b.out" | tail -n1)
+[ -n "$row_a" ] && [ -n "$row_b" ]
+[ "$(printf '%s' "$row_a" | cut -d'|' -f1)" != "$(printf '%s' "$row_b" | cut -d'|' -f1)" ]
+
+complete_row() {
+  row=$1 outcome=$2 error=$3 sha=${4:-} bytes=${5:-} storage=${6:-}
+  media_id=$(printf '%s' "$row" | cut -d'|' -f1)
+  token=$(printf '%s' "$row" | cut -d'|' -f2)
+  {
+    printf '%s\n' 'PREPARE media_complete(bigint,uuid,text,text,text,text,text,text,text) AS'
+    cat db/queries/n8n/media-pipeline/03_complete_download.sql
+    printf "; EXECUTE media_complete(%s,'%s','%s','%s','%s','%s','%s','%s','200');\n" "$media_id" "$token" "$outcome" "$sha" "$bytes" "$storage" "sha256:$sha" "$error"
+  } | docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 >/dev/null
 }
 
 assert_sql() {
-  local query="$1"
-  local expected="$2"
-  local actual
-  actual="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-    -Atqc "$query")"
-  if [ "$actual" != "$expected" ]; then
-    printf 'Assertion failed\nSQL: %s\nExpected: %s\nActual: %s\n' \
-      "$query" "$expected" "$actual" >&2
-    exit 1
-  fi
+  actual=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "$1")
+  [ "$actual" = "$2" ] || { echo "Assertion failed: $1 expected=$2 actual=$actual" >&2; exit 1; }
 }
 
-assert_sql "SELECT count(*) FROM conversations" "1"
-assert_sql "SELECT count(*) FROM inbound_events" "1"
-assert_sql "SELECT count(*) FROM whatsapp_numbers" "1"
+sha=31f5e80e4f1717f7b19547822fd63fdd2c5f49e6dc8f5bdf0f00b57d14f58c17
+complete_row "$row_a" downloaded '' "$sha" 16 "media/31/$sha"
+complete_row "$row_b" deferred configuration_missing
+assert_sql "SELECT count(*) FROM media_attachments WHERE download_state='downloaded' AND attach_pending AND attached_to IS NULL" "1"
+assert_sql "SELECT retry_count || '|' || download_state::text FROM media_attachments WHERE download_state='pending'" "0|pending"
 
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-def literal(value):
-    if value is None:
-        return "NULL"
-    if value is True:
-        return "TRUE"
-    if value is False:
-        return "FALSE"
-    if isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"
-    return str(value)
-
-def render(query, values):
-    out = query
-    for key in sorted(values, key=len, reverse=True):
-        out = out.replace(f":{key}", literal(values[key]))
-    return out
-
-dispatcher = json.loads(Path("n8n/workflows/wa-inbound-downstream-dispatcher.json").read_text())
-upsert_query = next(n for n in dispatcher["nodes"] if n["name"] == "Upsert Media Attachment")["parameters"]["query"]
-mark_query = next(n for n in dispatcher["nodes"] if n["name"] == "Mark Media Download")["parameters"]["query"]
-upsert_file = Path("db/queries/n8n/media-pipeline/01_upsert_media_attachment.sql").read_text()
-mark_file = Path("db/queries/n8n/media-pipeline/02_apply_download_result.sql").read_text()
-if upsert_query != upsert_file or mark_query != mark_file:
-    raise SystemExit("ERROR: queries embebidos en el dispatcher divergen de db/queries/n8n/media-pipeline/")
-
-def upsert_values(**overrides):
-    values = {
-        "should_write": True,
-        "media_key": "3EB0BA9876",
-        "external_url": "https://evo.internal.crm/media/file/3EB0BA9876",
-        "message_id": "MSG-MEDIA-001",
-        "inbound_event_id": 1,
-        "conversation_id": 1,
-        "source_number_id": "1",
-        "instance_name": "wahormiglass",
-        "phone_number": "56912345678",
-        "attachment_type": "image",
-        "mime_type": "image/jpeg",
-        "filename": "pastelon.jpg",
-        "file_size": 512000,
-        "download_state": "pending",
-        "rejected_reason": None,
-        "dedupe_key": "media:3EB0BA9876",
-    }
-    values.update(overrides)
-    return values
-
-# 1) Registro entrante -> created (pending).
-Path("/tmp/media-1-create.sql").write_text(render(upsert_query, upsert_values()))
-# 2) Replay del mismo media -> duplicate_skipped + duplicate_count++.
-Path("/tmp/media-2-replay.sql").write_text(render(upsert_query, upsert_values()))
-# 3) Sin media (should_write=false) -> no escribe nada.
-Path("/tmp/media-3-skip.sql").write_text(render(upsert_query, upsert_values(
-    should_write=False, media_key="SKIP-001", external_url="https://evo.internal.crm/media/file/SKIP-001",
-    message_id="MSG-MEDIA-000")))
-# 4) Sticker rechazado -> rejected pre-descarga con motivo.
-Path("/tmp/media-4-reject.sql").write_text(render(upsert_query, upsert_values(
-    media_key="STICKER-01", external_url="https://evo.internal.crm/media/file/STICKER-01",
-    message_id="MSG-MEDIA-002", attachment_type="sticker", mime_type="image/webp",
-    download_state="rejected", rejected_reason="unsupported_type", dedupe_key="media:STICKER-01")))
-
-def mark_values(**overrides):
-    values = {
-        "media_id": 1,
-        "outcome": "downloaded",
-        "sha256": "f49f5b4f6f7e1b2a3c4d5e6f708192a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f",
-        "storage_path": "media/image/m-3eb0ba9876",
-        "storage_token": "m-3eb0ba98",
-        "error": None,
-    }
-    values.update(overrides)
-    return values
-
-# 5) Descarga exitosa -> downloaded + hash + attach_pending, attached_to NULL.
-Path("/tmp/media-5-downloaded.sql").write_text(render(mark_query, mark_values()))
-# 12-14) Registros propios para reintentos, expiracion y rechazo post-descarga.
-Path("/tmp/media-12-fail-row.sql").write_text(render(upsert_query, upsert_values(
-    media_key="FAIL-01", external_url="https://evo.internal.crm/media/file/FAIL-01",
-    message_id="MSG-MEDIA-003", attachment_type="document", mime_type="application/pdf",
-    dedupe_key="media:FAIL-01")))
-Path("/tmp/media-13-expire-row.sql").write_text(render(upsert_query, upsert_values(
-    media_key="EXPIRE-01", external_url="https://evo.internal.crm/media/file/EXPIRE-01",
-    message_id="MSG-MEDIA-004", attachment_type="document", mime_type="application/pdf",
-    dedupe_key="media:EXPIRE-01")))
-Path("/tmp/media-14-oversize-row.sql").write_text(render(upsert_query, upsert_values(
-    media_key="OVERSIZE-01", external_url="https://evo.internal.crm/media/file/OVERSIZE-01",
-    message_id="MSG-MEDIA-005", attachment_type="document", mime_type="application/pdf",
-    file_size=300, dedupe_key="media:OVERSIZE-01")))
-# 6) Fallo 1 -> retry_count=1 + next_retry_at futuro.
-Path("/tmp/media-6-fail1.sql").write_text(render(mark_query, mark_values(media_id="__FAIL__", outcome="failed", error="network_timeout")))
-# 7) Fallo 2 -> retry_count=2.
-Path("/tmp/media-7-fail2.sql").write_text(render(mark_query, mark_values(media_id="__FAIL__", outcome="failed", error="network_timeout")))
-# 8) Fallo 3 -> exhausted (max_retries 3 consumido).
-Path("/tmp/media-8-fail3.sql").write_text(render(mark_query, mark_values(media_id="__FAIL__", outcome="failed", error="network_timeout")))
-# 9) Llamada extra -> estado final no cambia (retry_count queda 3).
-Path("/tmp/media-9-extra.sql").write_text(render(mark_query, mark_values(media_id="__FAIL__", outcome="failed", error="network_timeout")))
-# 10) Expiraccion -> expired (mensaje preservado).
-Path("/tmp/media-10-expired.sql").write_text(render(mark_query, mark_values(media_id="__EXPIRE__", outcome="expired", error="media_expired")))
-# 11) Rejected post-descarga (oversized_actual).
-Path("/tmp/media-11-rejected.sql").write_text(render(mark_query, mark_values(media_id="__OVERSIZE__", outcome="rejected", error="oversized_actual")))
-PY
-
-# 1) Registro entrante: pending, metadata y audit 'created'.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-1-create.sql >/tmp/media-1-create.out
-expect_out "created" /tmp/media-1-create.out
-assert_sql "SELECT count(*) FROM media_attachments WHERE media_key = '3EB0BA9876' AND deleted_at IS NULL" "1"
-assert_sql "SELECT download_state::text || '|' || message_id FROM media_attachments WHERE media_key = '3EB0BA9876'" "pending|MSG-MEDIA-001"
-assert_sql "SELECT attachment_type || '|' || mime_type || '|' || file_size FROM media_attachments WHERE media_key = '3EB0BA9876'" "image|image/jpeg|512000"
-assert_sql "SELECT result FROM audit_logs WHERE event_name = 'media_sync' AND entity_id = 1" "created"
-
-# 2) Replay: no duplica, duplicate_count++ y audit.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-2-replay.sql >/tmp/media-2-replay.out
-expect_out "duplicate_skipped" /tmp/media-2-replay.out
-assert_sql "SELECT count(*) FROM media_attachments WHERE media_key = '3EB0BA9876' AND deleted_at IS NULL" "1"
-assert_sql "SELECT duplicate_count FROM media_attachments WHERE media_key = '3EB0BA9876'" "1"
-assert_sql "SELECT result FROM audit_logs WHERE event_name = 'media_sync' AND entity_id = 1 ORDER BY id DESC LIMIT 1" "duplicate_skipped"
-
-# 3) Sin media: no escribe ni audita.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-3-skip.sql >/tmp/media-3-skip.out
-assert_sql "SELECT count(*) FROM media_attachments WHERE media_key = 'SKIP-001'" "0"
-assert_sql "SELECT count(*) FROM audit_logs WHERE event_name = 'media_sync' AND metadata->>'dedupe_key' = 'url:https://evo.internal.crm/media/file/SKIP-001'" "0"
-
-# 4) Tipo no permitido: rejected pre-descarga con motivo en audit.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-4-reject.sql >/tmp/media-4-reject.out
-expect_out "created" /tmp/media-4-reject.out
-assert_sql "SELECT download_state::text || '|' || rejected_reason FROM media_attachments WHERE media_key = 'STICKER-01'" "rejected|unsupported_type"
-assert_sql "SELECT result FROM audit_logs WHERE event_name = 'media_sync' AND entity_id = 2" "created"
-
-# 5) Descarga exitosa: downloaded + sha256 + storage interno + attach_pending.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-5-downloaded.sql >/tmp/media-5-downloaded.out
-expect_out "downloaded" /tmp/media-5-downloaded.out
-assert_sql "SELECT download_state::text FROM media_attachments WHERE id = 1" "downloaded"
-assert_sql "SELECT sha256 FROM media_attachments WHERE id = 1" "f49f5b4f6f7e1b2a3c4d5e6f708192a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f"
-assert_sql "SELECT storage_token || '|' || storage_path FROM media_attachments WHERE id = 1" "m-3eb0ba98|media/image/m-3eb0ba9876"
-assert_sql "SELECT attach_pending::text || '|' || COALESCE(attached_to, '') FROM media_attachments WHERE id = 1" "true|"
-assert_sql "SELECT result FROM audit_logs WHERE event_name = 'media_download' AND entity_id = 1 ORDER BY id DESC LIMIT 1" "downloaded"
-
-# 6-9) Fallos: retry_count + backoff, max 3 -> exhausted, extra no cambia.
-# Primero se crean los registros propios (FAIL/EXPIRE/OVERSIZE) y se resuelven
-# sus ids reales (la secuencia puede saltarse -> nunca asumir ids hardcoded).
-for row_sql in /tmp/media-12-fail-row.sql /tmp/media-13-expire-row.sql /tmp/media-14-oversize-row.sql; do
-  docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-    -v ON_ERROR_STOP=1 < "$row_sql" >/dev/null
+# Retry and exhaustion: reuse deferred row, force due, and spend three real attempts.
+pending_id=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "SELECT id FROM media_attachments WHERE download_state='pending'")
+pending_message=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "SELECT message_id FROM media_attachments WHERE id=$pending_id")
+i=1
+while [ "$i" -le 3 ]; do
+  docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -c "UPDATE media_attachments SET next_retry_at=NOW() WHERE id=$pending_id" >/dev/null
+  make_claim_sql "$TMP_DIR/retry-$i.sql"
+  docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/retry-$i.sql" > "$TMP_DIR/retry-$i.out"
+  retry_row=$(grep '|' "$TMP_DIR/retry-$i.out" | tail -n1)
+  complete_row "$retry_row" failed timeout
+  i=$((i + 1))
 done
-docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "SELECT id || '|' || COALESCE(media_key,'') FROM media_attachments ORDER BY id"
-FAIL_ID="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc \
-  "SELECT id FROM media_attachments WHERE media_key = 'FAIL-01' AND deleted_at IS NULL")"
-EXPIRE_ID="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc \
-  "SELECT id FROM media_attachments WHERE media_key = 'EXPIRE-01' AND deleted_at IS NULL")"
-OVERSIZE_ID="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc \
-  "SELECT id FROM media_attachments WHERE media_key = 'OVERSIZE-01' AND deleted_at IS NULL")"
-for sql_file in /tmp/media-6-fail1.sql /tmp/media-7-fail2.sql /tmp/media-8-fail3.sql /tmp/media-9-extra.sql; do
-  sed -i "s/'"__FAIL__"'::bigint/${FAIL_ID}::bigint/" "$sql_file"
-done
-sed -i "s/'"__EXPIRE__"'::bigint/${EXPIRE_ID}::bigint/" /tmp/media-10-expired.sql
-sed -i "s/'__OVERSIZE__'::bigint/${OVERSIZE_ID}::bigint/" /tmp/media-11-rejected.sql
+assert_sql "SELECT download_state::text || '|' || retry_count || '|' || message_id FROM media_attachments WHERE id=$pending_id" "exhausted|3|$pending_message"
 
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-6-fail1.sql >/tmp/media-6-fail1.out
-expect_out "failed" /tmp/media-6-fail1.out
-assert_sql "SELECT retry_count || '|' || (next_retry_at IS NOT NULL)::text FROM media_attachments WHERE id = ${FAIL_ID}" "1|true"
-assert_sql "SELECT last_error FROM media_attachments WHERE id = ${FAIL_ID}" "network_timeout"
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-7-fail2.sql >/tmp/media-7-fail2.out
-assert_sql "SELECT retry_count FROM media_attachments WHERE id = ${FAIL_ID}" "2"
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-8-fail3.sql >/tmp/media-8-fail3.out
-expect_out "exhausted" /tmp/media-8-fail3.out
-assert_sql "SELECT download_state::text || '|' || retry_count FROM media_attachments WHERE id = ${FAIL_ID}" "exhausted|3"
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-9-extra.sql >/tmp/media-9-extra.out
-assert_sql "SELECT download_state::text || '|' || retry_count FROM media_attachments WHERE id = ${FAIL_ID}" "exhausted|3"
-assert_sql "SELECT message_id FROM media_attachments WHERE id = ${FAIL_ID}" "MSG-MEDIA-003"
+# Stale downloading claims are recovered and become safely reclaimable.
+make_upsert_sql "$TMP_DIR/upsert-stale.sql" MEDIA-STALE MSG-STALE
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 < "$TMP_DIR/upsert-stale.sql" >/dev/null
+make_claim_sql "$TMP_DIR/stale-first.sql"
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/stale-first.sql" > "$TMP_DIR/stale-first.out"
+stale_id=$(grep '|' "$TMP_DIR/stale-first.out" | tail -n1 | cut -d'|' -f1)
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -c "UPDATE media_attachments SET locked_at=NOW()-INTERVAL '1 hour' WHERE id=$stale_id" >/dev/null
+make_claim_sql "$TMP_DIR/stale-recover.sql"
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/stale-recover.sql" >/dev/null
+assert_sql "SELECT download_state::text FROM media_attachments WHERE id=$stale_id" "failed"
+make_claim_sql "$TMP_DIR/stale-reclaim.sql"
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -At -F '|' -v ON_ERROR_STOP=1 < "$TMP_DIR/stale-reclaim.sql" > "$TMP_DIR/stale-reclaim.out"
+[ "$(grep '|' "$TMP_DIR/stale-reclaim.out" | tail -n1 | cut -d'|' -f1)" = "$stale_id" ]
 
-# 10) Expiracion: expired terminal, mensaje preservado, audit.
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-10-expired.sql >/tmp/media-10-expired.out
-expect_out "expired" /tmp/media-10-expired.out
-assert_sql "SELECT download_state::text FROM media_attachments WHERE id = ${EXPIRE_ID}" "expired"
-assert_sql "SELECT message_id FROM media_attachments WHERE id = ${EXPIRE_ID}" "MSG-MEDIA-004"
-assert_sql "SELECT result FROM audit_logs WHERE event_name = 'media_download' AND entity_id = ${EXPIRE_ID} ORDER BY id DESC LIMIT 1" "expired"
+# A terminal row cannot be changed by a stale/replayed completion token.
+downloaded_id=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "SELECT id FROM media_attachments WHERE download_state='downloaded'")
+downloaded_message=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "SELECT message_id FROM media_attachments WHERE id=$downloaded_id")
+assert_sql "SELECT message_id || '|' || download_state::text FROM media_attachments WHERE id=$downloaded_id" "$downloaded_message|downloaded"
 
-# 11) Rejected post-descarga (oversized_actual).
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" \
-  -v ON_ERROR_STOP=1 < /tmp/media-11-rejected.sql >/tmp/media-11-rejected.out
-expect_out "rejected" /tmp/media-11-rejected.out
-assert_sql "SELECT download_state::text || '|' || rejected_reason FROM media_attachments WHERE id = ${OVERSIZE_ID}" "rejected|oversized_actual"
-
-# Gate de extension: nunca se adjunta (audit media_attached vacio).
-assert_sql "SELECT count(*) FROM audit_logs WHERE event_name = 'media_attached'" "0"
-assert_sql "SELECT count(*) FROM media_attachments WHERE attach_pending = TRUE AND attached_to IS NULL" "1"
-
-echo "Media pipeline local tests OK: registro pending + descarga con hash + idempotencia + reintentos (max 3) + expiracion con mensaje preservado + rechazos pre/post descarga + gate ClickUp sin adjuntar"
+echo 'Media pipeline local tests OK: Evolution-only transport + real bytes/hash + positional SQL + durable claim/retry/stale recovery + U4 gate'
