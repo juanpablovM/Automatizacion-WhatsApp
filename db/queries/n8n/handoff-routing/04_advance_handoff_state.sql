@@ -9,21 +9,20 @@
 -- 'invalid_transition' (el gate de no-cierre depende de este contrato).
 --
 -- Params:
---   :handoff_id   id del handoff
---   :estado       'acknowledged' | 'resolved'
+--   $1 handoff_id, $2 estado ('acknowledged' | 'resolved')
 -- =============================================================================
 WITH target AS (
   SELECT h.id, h.estado
   FROM handoffs h
-  WHERE h.id = :handoff_id::bigint AND h.deleted_at IS NULL
+  WHERE h.id = $1::bigint AND h.deleted_at IS NULL
 ),
 valid AS (
   SELECT
     t.id,
     t.estado AS before_estado,
     CASE
-      WHEN :estado::text = 'acknowledged' AND t.estado = 'notified' THEN TRUE
-      WHEN :estado::text = 'resolved' AND t.estado IN ('notified', 'acknowledged') THEN TRUE
+      WHEN $2::text = 'acknowledged' AND t.estado = 'notified' THEN TRUE
+      WHEN $2::text = 'resolved' AND t.estado IN ('notified', 'acknowledged') THEN TRUE
       ELSE FALSE
     END AS allowed
   FROM target t
@@ -31,9 +30,9 @@ valid AS (
 apply AS (
   UPDATE handoffs h
   SET
-    estado = :estado::text,
-    acknowledged_at = CASE WHEN :estado::text = 'acknowledged' AND h.acknowledged_at IS NULL THEN NOW() ELSE h.acknowledged_at END,
-    resolved_at = CASE WHEN :estado::text = 'resolved' AND h.resolved_at IS NULL THEN NOW() ELSE h.resolved_at END,
+    estado = $2::text,
+    acknowledged_at = CASE WHEN $2::text = 'acknowledged' AND h.acknowledged_at IS NULL THEN NOW() ELSE h.acknowledged_at END,
+    resolved_at = CASE WHEN $2::text = 'resolved' AND h.resolved_at IS NULL THEN NOW() ELSE h.resolved_at END,
     updated_at = NOW()
   FROM valid v
   WHERE h.id = v.id AND v.allowed
@@ -53,7 +52,7 @@ audit_entry AS (
     CASE WHEN v.allowed THEN 'advanced' ELSE 'invalid_transition' END,
     jsonb_build_object('estado', v.before_estado),
     jsonb_build_object('estado', COALESCE(a.estado, v.before_estado)),
-    jsonb_build_object('requested', :estado::text)
+    jsonb_build_object('requested', $2::text)
   FROM valid v
   LEFT JOIN apply a ON a.id = v.id
   WHERE v.id IS NOT NULL

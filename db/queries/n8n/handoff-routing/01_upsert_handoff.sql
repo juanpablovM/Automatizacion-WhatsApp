@@ -10,30 +10,25 @@
 -- degrada en un upsert posterior.
 --
 -- Params:
---   :should_write         false -> sin escalamiento, no escribe (ni audita)
---   :conversation_id, :phone_number   identidad de la conversacion
---   :source_number_id, :inbound_event_id   contexto del evento (opcionales)
---   :motivo, :area, :area_label, :prioridad, :responsable  routing PRD #22/#23
---   :idempotency_key       `{conversation_id}:{motivo}:{trigger}`
---   :trigger, :escalation_reason, :escalation_area, :intent  contexto
+-- Params posicionales n8n Postgres v2: $1..$15 (ver queryReplacement del workflow).
 -- =============================================================================
 WITH input_payload AS (
   SELECT
-    :should_write::boolean AS should_write,
-    :conversation_id::bigint AS conversation_id,
-    :phone_number::text AS phone_number,
-    NULLIF(:source_number_id::text, '')::bigint AS source_number_id,
-    NULLIF(:inbound_event_id::text, '')::bigint AS inbound_event_id,
-    :motivo::text AS motivo,
-    :area::text AS area,
-    :area_label::text AS area_label,
-    :prioridad::text AS prioridad,
-    :responsable::text AS responsable,
-    :idempotency_key::text AS idempotency_key,
-    NULLIF(:trigger::text, '') AS trigger,
-    NULLIF(:escalation_reason::text, '') AS escalation_reason,
-    NULLIF(:escalation_area::text, '') AS escalation_area,
-    NULLIF(:intent::text, '') AS intent
+    $1::boolean AS should_write,
+    $2::bigint AS conversation_id,
+    $3::text AS phone_number,
+    NULLIF($4::text, '')::bigint AS source_number_id,
+    NULLIF($5::text, '')::bigint AS inbound_event_id,
+    $6::text AS motivo,
+    $7::text AS area,
+    $8::text AS area_label,
+    $9::text AS prioridad,
+    $10::text AS responsable,
+    $11::text AS idempotency_key,
+    NULLIF($12::text, '') AS trigger,
+    NULLIF($13::text, '') AS escalation_reason,
+    NULLIF($14::text, '') AS escalation_area,
+    NULLIF($15::text, '') AS intent
 ),
 existing AS MATERIALIZED (
   SELECT h.id, h.estado, h.notification_attempt_count
