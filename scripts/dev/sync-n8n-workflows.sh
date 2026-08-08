@@ -216,6 +216,38 @@ prepare_import_dir() {
               end
           ))
       ' "$file" > "$out_file"
+    elif [ "$resolve_links" = "bootstrap" ]; then
+      jq \
+        --slurpfile ids "$ids_json" \
+        --slurpfile manifest "$LINK_MANIFEST" '
+        def workflow_id($name): ($ids[0][$name] // "");
+        . as $workflow
+        | (workflow_id($workflow.name)) as $ownId
+        | if $ownId != "" then .id = $ownId else del(.id) end
+        | if .name != $manifest[0].errorWorkflow.name then
+            .settings = (.settings // {})
+            | (workflow_id($manifest[0].errorWorkflow.name)) as $errorId
+            | if $errorId != "" then .settings.errorWorkflow = $errorId else del(.settings.errorWorkflow) end
+          else
+            .
+          end
+        | .nodes = (.nodes | map(
+            . as $node
+            | ($manifest[0].links | map(select(.sourceWorkflow == $workflow.name and .node == $node.name)) | first) as $link
+            | if $link then
+                (workflow_id($link.targetWorkflow)) as $targetId
+                | .parameters.source = "database"
+                | .parameters.workflowId = {
+                    "__rl": true,
+                    "value": $targetId,
+                    "mode": "list",
+                    "cachedResultName": $link.targetWorkflow
+                  }
+              else
+                .
+              end
+          ))
+      ' "$file" > "$out_file"
     else
       jq --slurpfile ids "$ids_json" '
         (.name as $workflowName | ($ids[0][$workflowName] // "")) as $ownId
@@ -223,6 +255,60 @@ prepare_import_dir() {
       ' "$file" > "$out_file"
     fi
   done
+}
+
+capture_bootstrap_created_workflows() {
+  before_ids="$1"
+  after_ids="$2"
+  created_json="$3"
+
+  jq -Rn \
+    --rawfile before "$before_ids" \
+    --argjson names "$(workflow_files | while IFS= read -r file; do workflow_name_from_file "$file"; done | jq -Rsc 'split("\n") | map(select(length > 0))')" '
+      ($before | split("\n") | map(select(length > 0) | split("|") | .[0])) as $beforeNames
+      | [inputs
+          | select(length > 0)
+          | split("|")
+          | select(length == 2)
+          | {name: .[0], id: .[1]}
+          | . as $row
+          | select(($names | index($row.name)) != null)
+          | select(($beforeNames | index($row.name)) == null)
+        ]
+      | unique_by([.name, .id])
+    ' "$after_ids" > "$created_json"
+}
+
+snapshot_has_workflow_name() {
+  snapshot_dir="$1"
+  expected_name="$2"
+  find "$snapshot_dir" -maxdepth 1 -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
+    [ "$(workflow_name_from_file "$snapshot_file")" = "$expected_name" ] && {
+      echo yes
+      exit 0
+    }
+  done | grep -q '^yes$'
+}
+
+discover_bootstrap_workflows_for_rollback() {
+  snapshot_dir="$1"
+  runtime_ids="$2"
+  discovered_json="$3"
+  snapshot_names=$(find "$snapshot_dir" -maxdepth 1 -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do workflow_name_from_file "$snapshot_file"; done | jq -Rsc 'split("\n") | map(select(length > 0))')
+  local_names=$(workflow_files | while IFS= read -r file; do workflow_name_from_file "$file"; done | jq -Rsc 'split("\n") | map(select(length > 0))')
+
+  jq -Rn --argjson snapshotNames "$snapshot_names" --argjson localNames "$local_names" '
+    [inputs
+      | select(length > 0)
+      | split("|")
+      | select(length == 2)
+      | {name: .[0], id: .[1]}
+      | . as $row
+      | select(($localNames | index($row.name)) != null)
+      | select(($snapshotNames | index($row.name)) == null)
+    ]
+    | unique_by([.name, .id])
+  ' "$runtime_ids" > "$discovered_json"
 }
 
 ensure_all_workflows_have_ids() {
@@ -245,6 +331,61 @@ copy_and_import() {
   compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$CONTAINER_TMP' && mkdir -p '$CONTAINER_TMP'"
   compose_cmd cp "$import_dir/." "$N8N_SERVICE:$CONTAINER_TMP"
   compose_cmd exec -T -u node "$N8N_SERVICE" n8n import:workflow --separate --input="$CONTAINER_TMP"
+}
+
+delete_bootstrap_workflows_transaction() {
+  created_json="$1"
+  container_created="$CONTAINER_TMP-bootstrap-created-$$.json"
+
+  compose_cmd cp "$created_json" "$POSTGRES_SERVICE:$container_created"
+  compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc \
+    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1" <<SQL
+BEGIN;
+WITH requested AS (
+  SELECT name, id
+  FROM jsonb_to_recordset(pg_read_file('$container_created')::jsonb) AS x(name text, id text)
+)
+DELETE FROM workflow_entity AS workflow
+USING requested
+WHERE workflow.name = requested.name
+  AND workflow.id = requested.id;
+COMMIT;
+SQL
+  compose_cmd exec -T "$POSTGRES_SERVICE" rm -f "$container_created" >/dev/null 2>&1 || true
+}
+
+cleanup_bootstrap_workflows() {
+  snapshot_dir="$1"
+  created_json="${2:-}"
+  rollback_ids=$(mktemp)
+  cleanup_json=$(mktemp)
+  query_workflow_ids > "$rollback_ids"
+  discover_bootstrap_workflows_for_rollback "$snapshot_dir" "$rollback_ids" "$cleanup_json"
+
+  if [ -n "$created_json" ] && [ -s "$created_json" ]; then
+    jq -e 'type == "array" and all(.[]; (.name | type == "string") and (.id | type == "string") and (.name | length > 0) and (.id | length > 0))' "$created_json" >/dev/null
+  fi
+  [ "$(jq 'length' "$cleanup_json")" -gt 0 ] || { rm -f "$rollback_ids" "$cleanup_json"; return 0; }
+
+  jq -r '.[].name' "$cleanup_json" | while IFS= read -r created_name; do
+    if snapshot_has_workflow_name "$snapshot_dir" "$created_name"; then
+      echo "ERROR: rollback rechazo borrar '$created_name': el nombre existe en el snapshot" >&2
+      return 1
+    fi
+  done
+
+  delete_bootstrap_workflows_transaction "$cleanup_json"
+
+  query_workflow_ids > "$rollback_ids"
+  jq -r '.[] | [.name, .id] | @tsv' "$cleanup_json" | while IFS='	' read -r created_name created_id; do
+    if awk -F'|' -v name="$created_name" -v id="$created_id" '$1 == name && $2 == id { found=1 } END { exit !found }' "$rollback_ids"; then
+      echo "ERROR: rollback no elimino workflow bootstrap '$created_name' ($created_id)" >&2
+      rm -f "$rollback_ids"
+      return 1
+    fi
+  done
+  rm -f "$rollback_ids" "$cleanup_json"
+  echo "Workflows creados durante bootstrap eliminados en rollback" >&2
 }
 
 export_remote_definitions() {
@@ -352,9 +493,12 @@ snapshot_runtime_workflows() {
 
 restore_runtime_workflows() {
   snapshot_dir="$1"
+  created_json="${2:-}"
   echo "Restaurando snapshot runtime; los callers permaneceran pausados..." >&2
   set_callers_active false
   copy_and_import "$snapshot_dir" "rollback"
+  cleanup_bootstrap_workflows "$snapshot_dir" "$created_json"
+  compose_cmd restart "$N8N_SERVICE" >/dev/null
   restored_json=$(mktemp)
   export_remote_definitions "$restored_json"
   find "$snapshot_dir" -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
@@ -460,6 +604,10 @@ sync_workflows() {
 
   before_ids="$tmp_dir/before.ids"
   before_ids_json="$tmp_dir/before.ids.json"
+  after_bootstrap_ids="$tmp_dir/after-bootstrap.ids"
+  after_bootstrap_ids_json="$tmp_dir/after-bootstrap.ids.json"
+  bootstrap_created_json="$tmp_dir/bootstrap-created.json"
+  bootstrap_dir="$tmp_dir/bootstrap"
   resolved_dir="$tmp_dir/resolved"
   remote_json="$tmp_dir/remote.json"
   snapshot_dir="$tmp_dir/runtime-snapshot"
@@ -467,13 +615,20 @@ sync_workflows() {
   query_workflow_ids > "$before_ids"
   ensure_unique_runtime_names "$before_ids"
   write_ids_json "$before_ids" "$before_ids_json"
-  ensure_all_workflows_have_ids "$before_ids_json"
   snapshot_runtime_workflows "$snapshot_dir"
-  set_callers_active false
+  printf '[]\n' > "$bootstrap_created_json"
   rollback_required=yes
-  trap 'status=$?; trap - EXIT HUP INT TERM; restore_evolution_webhook || true; if [ "$status" -ne 0 ] && [ "${rollback_required:-no}" = yes ]; then restore_runtime_workflows "$snapshot_dir" || true; fi; rm -rf "$tmp_dir"; exit "$status"' EXIT
+  trap 'status=$?; trap - EXIT HUP INT TERM; restore_evolution_webhook || true; if [ "$status" -ne 0 ] && [ "${rollback_required:-no}" = yes ]; then restore_runtime_workflows "$snapshot_dir" "$bootstrap_created_json" || true; fi; rm -rf "$tmp_dir"; exit "$status"' EXIT
   trap 'exit 130' HUP INT TERM
-  prepare_import_dir "$before_ids_json" "$resolved_dir" "yes"
+  set_callers_active false
+  prepare_import_dir "$before_ids_json" "$bootstrap_dir" "bootstrap"
+  copy_and_import "$bootstrap_dir" "bootstrap de IDs"
+  query_workflow_ids > "$after_bootstrap_ids"
+  capture_bootstrap_created_workflows "$before_ids" "$after_bootstrap_ids" "$bootstrap_created_json"
+  ensure_unique_runtime_names "$after_bootstrap_ids"
+  write_ids_json "$after_bootstrap_ids" "$after_bootstrap_ids_json"
+  ensure_all_workflows_have_ids "$after_bootstrap_ids_json"
+  prepare_import_dir "$after_bootstrap_ids_json" "$resolved_dir" "yes"
   copy_and_import "$resolved_dir" "links resueltos"
   verify_remote "$remote_json" yes "$resolved_dir"
   ensure_default_instance_mapping
@@ -494,6 +649,10 @@ sync_workflows() {
   compose_cmd exec -T "$N8N_SERVICE" sh -lc "rm -rf '$CONTAINER_TMP'" >/dev/null 2>&1 || true
   echo "Workflows sincronizados con CLI oficial de n8n"
 }
+
+if [ "${SYNC_N8N_SOURCE_ONLY:-no}" = yes ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 case "${1:-}" in
   "")

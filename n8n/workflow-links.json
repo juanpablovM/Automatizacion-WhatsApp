@@ -60,6 +60,16 @@
     },
     {
       "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch Handoff Notification Workflow",
+      "targetWorkflow": "OPS - Handoff Notification Scheduler"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch Media Download Workflow",
+      "targetWorkflow": "OPS - Media Download Scheduler"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
       "node": "Dispatch Next Inbox Event",
       "targetWorkflow": "WA - Inbound Recovery"
     },

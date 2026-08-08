@@ -57,14 +57,14 @@ const NODES = [
     fixture: 'wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js',
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Prepare Handoff Notification',
-    fixture: 'wa-inbound-downstream-dispatcher/prepare-handoff-notification.js',
+    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
+    node: 'Prepare Handoff ClickUp Task',
+    fixture: 'ops-handoff-notification-scheduler/prepare-handoff-clickup-task.js',
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Dispatch Handoff Notification',
-    fixture: 'wa-inbound-downstream-dispatcher/dispatch-handoff-notification.js',
+    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
+    node: 'Dispatch Handoff ClickUp Task',
+    fixture: 'ops-handoff-notification-scheduler/dispatch-handoff-clickup-task.js',
   },
   {
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
@@ -72,14 +72,9 @@ const NODES = [
     fixture: 'wa-inbound-downstream-dispatcher/ensure-media-attachment.js',
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Prepare Media Download',
-    fixture: 'wa-inbound-downstream-dispatcher/prepare-media-download.js',
-  },
-  {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Dispatch Media Download',
-    fixture: 'wa-inbound-downstream-dispatcher/dispatch-media-download.js',
+    workflow: 'n8n/workflows/ops-media-download-scheduler.json',
+    node: 'Download and Persist Media',
+    fixture: 'ops-media-download-scheduler/download-and-persist-media.js',
   },
   {
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
@@ -90,6 +85,11 @@ const NODES = [
     workflow: 'n8n/workflows/ops-followup-scheduler.json',
     node: 'Prepare Follow-Up Message',
     fixture: 'ops-followup-scheduler/prepare-follow-up-message.js',
+  },
+  {
+    workflow: 'n8n/workflows/ops-followup-scheduler.json',
+    node: 'Normalize Follow-Up Delivery',
+    fixture: 'ops-followup-scheduler/normalize-follow-up-delivery.js',
   },
 ];
 
