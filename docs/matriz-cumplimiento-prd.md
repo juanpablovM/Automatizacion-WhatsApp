@@ -1,5 +1,7 @@
 # Matriz de Cumplimiento del PRD — Línea Base y Trazabilidad (Unidad 0)
 
+> **Baseline histórico de U0.** Los estados y totales de esta matriz representan el relevamiento del `2026-08-07`; no describen las remediaciones posteriores ni el runtime vigente. Consultar el [estado actual del proyecto](./estado-actual-2026-08-08.md) antes de tomar decisiones de implementación o certificación.
+
 ## 1. Propósito
 
 Este documento es el artefacto de la **Unidad 0** del plan de cierre de brechas del proyecto

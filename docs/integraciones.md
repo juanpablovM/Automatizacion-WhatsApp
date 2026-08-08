@@ -13,6 +13,11 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 - gestion de instancias por numero
 - soporte futuro para multiples numeros
 - instancia default versionada `wahormiglass`, reconectada y validada en estado `open`
+- descarga durable de media mediante `OPS - Media Download Scheduler` y el endpoint interno fijo `getBase64FromMediaMessage`
+- `external_url` se conserva únicamente como metadata y nunca se usa como destino HTTP
+- los bytes se validan antes de decodificar, se verifican por tipo, tamaño y SHA-256, y se escriben atómicamente en `/data/media/media/<prefijo>/<sha256>`
+- la cola usa claim concurrente, recuperación de claims vencidos y backoff; errores de credenciales/configuración no consumen intentos
+- el adjunto del binario a ClickUp continúa pendiente y ningún workflow invoca `mark_media_attached`
 
 ### ClickUp API
 
@@ -28,8 +33,19 @@ Consolidar el inventario de integraciones externas y sus credenciales requeridas
 
 - canal prioritario: ClickUp
 - comentario asignado al vendedor en la tarea del lead
+- los handoffs operativos crean una tarea dedicada mediante `OPS - Handoff Notification Scheduler`
+- la asignacion por area se configura con `HANDOFF_CLICKUP_ASSIGNEES_JSON`; si falta token, lista o area, el envio falla cerrado
+- `external_operations` reclama cada handoff una sola vez; `425/429` admiten backoff y un resultado ambiguo (`timeout`, `408`, `5xx`) exige reconciliacion manual sin reintento automatico
 - auditoria e incidente operativo si la notificacion falla
 - reintentos con backoff para errores de red y estados reintentables
+
+### Seguimiento automático
+
+- `OPS - Follow-Up Scheduler` ejecuta la cadencia 1/3/7/14 mediante `WA - Outbound Messages`
+- cada turno inbound cancela la cadencia anterior y, si el bot queda esperando respuesta, abre un ciclo nuevo idempotente
+- `FOLLOW_UP_WINDOW_START` y `FOLLOW_UP_WINDOW_END` restringen los envíos; los claims vencidos y errores confirmados se recuperan con backoff
+- un resultado outbound ambiguo queda en cuarentena y nunca se reenvía automáticamente
+- el opt-out se persiste en `follow_up_preferences` aunque todavía no existan filas en `follow_ups`, y bloquea ciclos futuros
 
 ### AI API directa
 

@@ -36,33 +36,15 @@ Principio clave:
 
 ## Estado del proyecto
 
-Estado actual de madurez:
+Estado recomendado: `preproduccion / validacion controlada`.
 
-- base tecnica implementada y documentada
-- workflows principales versionados
-- integracion con WhatsApp, `PostgreSQL` y `ClickUp` ya incorporada al flujo
-- asistente AI definitivo preparado con fallback seguro ante error real del proveedor o configuracion invalida
-- asesor comercial AI desplegado con memoria persistente, guardrails PRD y handoff verificado
-- esquema de base ampliado con `qualification_context` y `pending_question_key`
-- catalogo, precios, condiciones, FAQ y objeciones cargados como contexto oficial
-- prueba E2E Vitacura validada con Gemini, lead, asignacion, ClickUp y respuesta final
+- U0 y U2 están completas en la rama.
+- U1, U3, U5 y U6 tienen remediaciones verificadas en el working tree, todavía sin commit, push ni deploy.
+- U4, U7, U8 y U9 permanecen pendientes por decisión.
+- La certificación vigente no demuestra todavía el cierre del PRD.
+- El runtime requiere aplicar las migraciones `015`–`017`, importar y activar workflows, configurar el ambiente y repetir la validación controlada.
 
-Estado recomendado para comunicar publicamente:
-
-- `preproduccion / validacion controlada`
-
-Eso significa que el proyecto ya tiene implementacion real y documentacion amplia, pero todavia requiere endurecimiento operativo, validacion ampliada y cierre formal antes de considerarse listo para produccion.
-
-Hallazgos observados en la revision del `2026-06-30`:
-
-- stack local arriba y healthy
-- preflight de workflows, contrato AI local y regresion conversacional local en `OK`
-- ejecuciones recientes reales con lead, ClickUp, notificacion y mensaje saliente exitosos
-- errores historicos todavia presentes en auditoria y mensajeria saliente
-- se detectaron casos de continuidad conversacional con campos contaminados como `service='holaa'` o `city='Si'`
-- el round robin actual todavia incluye un vendedor de pruebas
-
-El detalle de este corte operativo vive en [`docs/estado-actual-2026-06-30.md`](./docs/estado-actual-2026-06-30.md).
+El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual-2026-08-08.md`](./docs/estado-actual-2026-08-08.md).
 
 ## Alcance actual
 
@@ -253,7 +235,7 @@ Para entender el proyecto desde lo general a lo especifico:
 - [Asesor comercial AI](./docs/asesor-comercial-ai.md)
 - [Fuentes comerciales AI](./docs/fuentes-comerciales-ai.md)
 - [Guia de produccion](./docs/guia-produccion.md)
-- [Estado actual 2026-06-30](./docs/estado-actual-2026-06-30.md)
+- [Estado actual 2026-08-08](./docs/estado-actual-2026-08-08.md)
 
 La documentacion operativa de mantenimiento diario, runbooks y handoff conviene tratarla como material interno del equipo si el repositorio va a mantenerse publico.
 

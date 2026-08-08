@@ -4,18 +4,23 @@
 
 `Hormi Atencion` opera como asesor comercial de WhatsApp sobre Evolution API, n8n, PostgreSQL, Gemini y ClickUp.
 
-Estado observado en la revision del `2026-06-30`:
+Estado del repositorio en el corte del `2026-08-08`:
+
+- U1, U3, U5 y U6 tienen remediaciones verificadas en el working tree, todavía sin commit, push ni deploy
+- U4, U7, U8 y U9 permanecen pendientes por decisión
+- el runtime todavía requiere migraciones, importación, activación y configuración para incorporar esas remediaciones
+
+Último runtime observado, correspondiente a la revisión del `2026-06-30`:
 
 - stack local arriba y healthy
 - `WA - Inbound Entry` activo en `n8n`
 - `wahormiglass` en `Evolution API` con estado `open`
-- contrato local AI y regresion conversacional local en `OK`
+- contrato local AI y regresión conversacional local en `OK`
 - restore check del ultimo backup estructurado en `OK`
 - existen ejecuciones reales recientes con lead, ClickUp, notificacion y mensaje saliente exitosos
-- persisten errores historicos en auditoria y algunos casos de calidad conversacional todavia no resueltos
 - el round robin aun incluye un vendedor de pruebas como notificable
 
-El corte detallado de estado vive en [`docs/estado-actual-2026-06-30.md`](./estado-actual-2026-06-30.md).
+El corte canónico vive en [`docs/estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md).
 
 La instancia local validada incluye:
 
@@ -80,7 +85,11 @@ Los enlaces se resuelven desde `n8n/workflow-links.json`.
 
 - preflight de workflows: OK
 - contrato local AI y fallback: OK
-- regresion conversacional: 18 casos OK
+- gate U1: 126 PASS / 0 FAIL
+- regresión conversacional: 30 casos PASS
+- contrato AI: 7 casos PASS
+- U2: 20 PASS / 0 FAIL
+- U3, U5 y U6: PASS
 - `OPS - Error Handler`: smoke OK con auditoria creada
 - E2E asesor Vitacura: OK
 - respuestas `no` aplicadas a acceso/escombros sin perder contexto
@@ -106,7 +115,8 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 - integrar una fuente verificable de stock o disponibilidad
 - ampliar la matriz E2E para pagos, garantias, reclamos y B2B
 - implementar carga del binario de adjuntos a ClickUp
-- corregir casos de continuidad conversacional donde se guardan campos contaminados como `service='holaa'` o `city='Si'`
+- corregir KPI-19, KPI-26 y KPI-29 antes de regenerar la certificación U8
+- aplicar las migraciones `015`–`017` e importar, activar y configurar los workflows remediados en el runtime
 - sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
 ## Puesta en marcha local

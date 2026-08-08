@@ -10,36 +10,44 @@ La carpeta `.hermes` fue retirada del repo para evitar duplicar planes historico
 
 ## Estado actual resumido
 
-Hoy el proyecto ya tiene:
+El corte canónico está en [`estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md). En síntesis:
 
-- flujo local funcional con `Docker Compose`
-- `n8n`, `PostgreSQL`, `Redis` y `Evolution API` levantando correctamente
-- sesion de WhatsApp reconectada y validada
-- webhook actual de `WA - Inbound Entry` persistido y operativo
-- conversacion real de prueba procesada de punta a punta
-- mensajes salientes reales enviados con estado `sent`
-- lead y derivacion comercial funcionando en pruebas reales
-- sincronizacion de workflows con script oficial de `n8n`
-- correccion aplicada para que `scripts/dev/evolution-connect-instance.sh` use la instancia real configurada
-- endurecimiento parcial del manejo de timestamps entrantes
-- Hormi Atencion implementado como asesor comercial AI con memoria, catalogo, precios, condiciones, FAQ y manejo de objeciones
-- migracion base del asesor comercial AI agregada para preparar fuentes comerciales y auditoria de decisiones
-- catalogo publico Hormiglass y 28 reglas de precio publicas cargadas como primera fuente comercial
-- 8 condiciones comerciales, 12 FAQ y 5 playbooks de objeciones activos
-- memoria `qualification_context` y `pending_question_key` aplicada mediante migracion 006
-- workflow AI actualizado para cargar contexto comercial activo antes de llamar al proveedor
-- workflow AI sincronizado localmente en n8n; `WA - Inbound Entry` quedo activo
-- regresion local y E2E de instalacion en Vitacura validados con Gemini real
-- smoke de `OPS - Error Handler` validado con incremento de auditoria
+- U0 y U2 están completas en la rama.
+- U1, U3, U5 y U6 tienen remediaciones locales verificadas.
+- Los gates recientes están verdes: U1 126/0, conversación 30, AI 7, U2 20/0 y U3/U5/U6 PASS.
+- Estas remediaciones siguen sin commit, push ni deploy; el runtime no debe considerarse sincronizado.
+- U4, U7, U8 y U9 permanecen pendientes por decisión.
+- U7 conserva errores en KPI-19, KPI-26 y KPI-29.
+- U8 no tiene una certificación válida: la ejecución anterior falló por SQL posicional sin parámetros y no debe regenerarse antes de corregir U7/U8.
 
 Pendientes reales detectados:
 
+- aplicar las migraciones `015_harden_handoff_delivery.sql`, `016_harden_media_download_delivery.sql` y `017_harden_follow_up_delivery.sql`
+- importar y activar `OPS - Handoff Notification Scheduler`, `OPS - Media Download Scheduler` y los workflows modificados
+- configurar credenciales ClickUp/Evolution, variables de follow-up y el volumen persistente de media en el ambiente objetivo
+- ejecutar preflight, verificación remota, gates y E2E controlado después de sincronizar el runtime
+- remediar U7 y rehacer U8 sólo cuando se retome explícitamente ese alcance
 - limpiar ruido historico de logs viejos para diagnostico mas claro
 - formalizar despliegue productivo, secretos, backups y monitoreo
 - separar claramente `dev`, `staging` y `prod`
 - ampliar la matriz E2E en staging antes de abrir trafico productivo
 - definir una fuente de agenda real antes de ofrecer horarios
 - aplicar la migracion comercial en cualquier ambiente nuevo antes de sincronizar el workflow AI actualizado
+
+## Despliegue de las remediaciones locales
+
+No ejecutar esta secuencia sin autorización de despliegue y un snapshot recuperable del ambiente.
+
+1. Confirmar el commit/release que contiene U1, U3, U5 y U6.
+2. Crear y verificar el backup previo.
+3. Aplicar, en orden, las migraciones `015`, `016` y `017` sobre `crm_whatsapp_app`.
+4. Configurar las variables y credenciales requeridas por ClickUp, Evolution API, follow-up y almacenamiento de media.
+5. Ejecutar `sh scripts/dev/sync-n8n-workflows.sh --preflight`.
+6. Importar y activar los workflows mediante el procedimiento controlado de sincronización.
+7. Ejecutar `sh scripts/dev/sync-n8n-workflows.sh --verify-remote` y los gates U1/U2/U3/U5/U6.
+8. Cerrar con un E2E sobre un teléfono controlado y guardar evidencia del runtime.
+
+Un gate local verde valida el repositorio; sólo los pasos 3–8 validan el runtime.
 
 ## Plan de ejecucion por etapas
 
