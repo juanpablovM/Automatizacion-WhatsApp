@@ -1026,7 +1026,7 @@ const contextualNo = await runEvaluate({
   state_service: 'Placas',
   state_city: 'Vitacura',
   state_requirement: 'Cierre perimetral',
-  qualification_context: { modality: 'installation', measurements: '150 metros', terrain: 'plano', truck_access: true },
+  qualification_context: { product: 'Placas', commune: 'Vitacura', modality: 'installation', measurements: '150 metros', terrain: 'plano', truck_access: true },
   pending_question_key: 'debris_removal',
 });
 if (contextualNo.reset_conversation_lead === true) {
@@ -1035,6 +1035,9 @@ if (contextualNo.reset_conversation_lead === true) {
 if (contextualNo.service !== 'Placas' || contextualNo.city !== 'Vitacura') {
   fail('Un no contextual debe conservar producto y comuna');
 }
+// PRD 13.4 (B06): product y commune llevan evidencia del cliente (mensajes
+// previos del flujo), asi el turno responde la pregunta de escombros y vuelve
+// a la confirmacion final sin re-abrir campos ya garantizados por evidencia.
 
 const contextualAi = await runApplyAi(mergedAiShape(contextualNo, {
   ai_skipped_1: false,

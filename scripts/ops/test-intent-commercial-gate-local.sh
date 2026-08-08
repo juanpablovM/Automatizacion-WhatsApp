@@ -153,6 +153,27 @@ node <<'NODE'
       createsLead: true,
       kind: 'sales',
     },
+    // PRD 13.4 (B06): el servicio nunca satisface product. El cliente dijo
+    // solo servicio/ciudad/requerimiento; el gate debe listar product primero
+    // aunque state.service este presente y pedirlo al cliente.
+    material_producto: {
+      intent: 'quote_request',
+      modality: 'material',
+      customer_type: 'b2c',
+      lead_class: 'B',
+      complete: {
+        qualification_context: {
+          product: 'Baldosas', commune: 'Santiago', quantity: '40 unidades',
+          modality: 'material', customer_type: 'b2c', lead_class: 'B',
+        },
+        service: 'Baldosas', city: 'Santiago',
+      },
+      missingField: 'product',
+      missingCtx: { commune: 'Santiago', quantity: '40 unidades', modality: 'material', customer_type: 'b2c', lead_class: 'B' },
+      expectedQuestionKey: 'product',
+      createsLead: true,
+      kind: 'sales',
+    },
     instalacion: {
       intent: 'installation_inquiry',
       modality: 'installation',
@@ -445,6 +466,46 @@ node <<'NODE'
     const materialResult = await runCode(orchestrator, 'Apply AI Assistance', materialRow, {}, env);
     expectIncludes(materialResult.commercial_missing_fields, 'quantity', 'orquestador detecta quantity faltante pese al LLM');
     expectEqual(materialResult.should_create_lead, false, 'sin quantity no crea lead aunque el LLM diga ok');
+
+    // PRD 13.4 (B06): el servicio presente NO auto-satisface product. Con
+    // service='Baldosas' pero sin product en qualification_context, el gate
+    // debe listar 'product' y bloquear la creacion (regresion del viejo hole).
+    const noProductEvidenceRow = {
+      ...buildRow(PROFILES.material, {}),
+      qualification_context: {
+        commune: 'Santiago', quantity: '40 unidades',
+        modality: 'material', customer_type: 'b2c', lead_class: 'B',
+      },
+    };
+    const noProductEvidenceResult = await runCode(orchestrator, 'Apply AI Assistance', noProductEvidenceRow, {}, env);
+    expectEqual(noProductEvidenceResult.commercial_policy_profile, 'material', 'sin producto el perfil sigue siendo material');
+    expectIncludes(noProductEvidenceResult.commercial_missing_fields, 'product', 'el servicio no debe auto-satisfacer product (PRD 13.4)');
+    expectEqual(noProductEvidenceResult.should_create_lead, false, 'sin product en contexto no se crea lead');
+    expectEqual(
+      noProductEvidenceResult.commercial_field_evidence.product, 'missing',
+      'la evidencia de product sin contexto debe reportarse missing'
+    );
+    expectEqual(
+      noProductEvidenceResult.commercial_field_evidence.quantity, 'client_evidence',
+      'quantity con contexto real debe reportar client_evidence'
+    );
+
+    // PRD 13.4 (B06): una modalidad aportada SOLO por la IA (sin evidencia en el
+    // texto ni pregunta pendiente) no debe llenar qualification_context.
+    const aiOnlyModalityRow = {
+      ...buildRow(PROFILES.material, {}),
+      qualification_context: {
+        commune: 'Santiago', quantity: '40 unidades', product: 'Baldosas',
+        customer_type: 'b2c', lead_class: 'B',
+      },
+    };
+    const aiOnlyModalityResult = await runCode(orchestrator, 'Apply AI Assistance', aiOnlyModalityRow, {}, env);
+    assert(
+      !aiOnlyModalityResult.qualification_context.modality,
+      'modalidad AI sin evidencia no debe persistirse en el contexto'
+    );
+    expectIncludes(aiOnlyModalityResult.commercial_missing_fields, 'modality', 'modalidad sin evidencia queda pendiente');
+    expectEqual(aiOnlyModalityResult.should_create_lead, false, 'sin modalidad evidenciada no crea lead');
   }
 
   // ---------------------------------------------------------------------------

@@ -193,11 +193,20 @@ const encodeStep = (field, state) => {
   const hasPayload = Object.values(payload).some((value) => safe(value));
   return hasPayload ? field + '|' + encodeURIComponent(JSON.stringify(payload)) : field;
 };
-const confirmationText = (state) => [
+const commercialSummaryParts = (qctx) => {
+  const parts = [];
+  if (hasValue(qctx.product)) parts.push('Producto: ' + qctx.product);
+  if (hasValue(qctx.quantity) || hasValue(qctx.measurements)) parts.push('Cantidad: ' + (qctx.quantity || qctx.measurements));
+  if (hasValue(qctx.commune)) parts.push('Comuna: ' + qctx.commune);
+  if (hasValue(qctx.modality)) parts.push('Modalidad: ' + qctx.modality);
+  return parts;
+};
+const confirmationText = (state, qctx) => [
   'Tengo esto:',
   'Servicio: ' + state.service,
   'Ciudad: ' + state.city,
   'Requerimiento: ' + state.requirement,
+  ...commercialSummaryParts(qctx),
   '',
   '¿Está correcto?',
 ].join('\n');
@@ -462,8 +471,17 @@ if (!resetQualificationContext) {
     || qualificationContext.customer_type || null;
   qualificationContext.lead_class = meaningfulEnum(ai.lead_class, new Set(['none', 'unknown']))
     || qualificationContext.lead_class || null;
-  qualificationContext.modality = meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
-    || qualificationContext.modality || null;
+  // PRD 13 (B06): modality is persisted ONLY with client evidence — the client
+  // just answered the modality question, or the current text carries a direct
+  // mention (secondaryFieldHasDirectEvidence). Without evidence the previous
+  // context value is preserved (never wiped) and the AI cannot fill the field
+  // by itself: an AI-only modality is a guess, not a client statement.
+  const modalityAnswered = deterministic.pending_question_key === 'modality'
+    || secondaryFieldHasDirectEvidence('modality', normalizedCurrentText);
+  const modalityFromAi = modalityAnswered
+    ? meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
+    : null;
+  qualificationContext.modality = modalityFromAi || qualificationContext.modality || null;
   qualificationContext.objection_detected = meaningfulEnum(ai.objection_detected, new Set(['none', 'unknown']))
     || qualificationContext.objection_detected || 'none';
   qualificationContext.executive_summary = ai.executive_summary || qualificationContext.executive_summary || null;
@@ -602,7 +620,12 @@ const COMMERCIAL_FIELD_POLICY = {
 };
 
 const COMMERCIAL_FIELD_SOURCES = {
-  product: (ctx, s) => ctx.product || s.service,
+  // PRD 13.1/13.2/13.4 (B06): product requires client evidence in
+  // qualification_context (answered pending question, direct mention, or
+  // evidenced field_updates). state.service NEVER satisfies product: they are
+  // different concepts, and the old service equivalence auto-satisfied the
+  // compulsory field without ever asking the client.
+  product: (ctx) => ctx.product,
   quantity: (ctx) => ctx.quantity || ctx.measurements,
   measurements: (ctx) => ctx.measurements,
   commune: (ctx, s) => s.city || ctx.commune,
@@ -697,6 +720,35 @@ const commercialMissingProfile = commercialAssessment.profile;
 const commercialMissingFields = commercialAssessment.missing;
 const firstCommercialMissingField = firstMissedCommercialField(commercialAssessment);
 const activeCommercialProfile = COMMERCIAL_FIELD_POLICY[commercialMissingProfile] || null;
+
+// PRD 13.4 (B06): per-field evidence map for the resolved profile. Every
+// compulsory field reports 'client_evidence' (real context value) or 'missing'
+// (never auto-satisfied from service or an unevidenced AI modality).
+const commercialFieldEvidence = (() => {
+  const profile = COMMERCIAL_FIELD_POLICY[commercialMissingProfile];
+  if (!profile) return {};
+  const evidence = {};
+  for (const field of profile.compulsory) {
+    evidence[field] = commercialFieldSatisfied(field, qualificationContext, state) ? 'client_evidence' : 'missing';
+  }
+  return evidence;
+})();
+
+// Confirmation summary shown to the client: base fields plus every commercial
+// field that actually carries evidence. Output-only object, no DB schema change.
+const confirmationSummary = (() => {
+  const summary = {};
+  if (hasValue(state.service)) summary.service = state.service;
+  if (hasValue(state.city)) summary.city = state.city;
+  if (hasValue(state.requirement)) summary.requirement = state.requirement;
+  if (hasValue(qualificationContext.product)) summary.product = qualificationContext.product;
+  if (hasValue(qualificationContext.quantity) || hasValue(qualificationContext.measurements)) {
+    summary.quantity = qualificationContext.quantity || qualificationContext.measurements;
+  }
+  if (hasValue(qualificationContext.commune)) summary.commune = qualificationContext.commune;
+  if (hasValue(qualificationContext.modality)) summary.modality = qualificationContext.modality;
+  return summary;
+})();
 
 const explicitRejectionText = /^(no|nop|incorrecto|incorrecta|no encontrada|incorrecto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizedCurrentText);
 const explicitConfirmationText = /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizedCurrentText);
@@ -895,7 +947,7 @@ const selectResponseText = () => {
   // PRIORITY 3: AI fields were accepted - use deterministic next question
   if (acceptedAiFields.length) {
     if (missing === 'confirm') {
-      return { text: confirmationText(state), kind: 'confirmation_question' };
+      return { text: confirmationText(state, qualificationContext), kind: 'confirmation_question' };
     }
     return { text: nextQuestion(missing), kind: 'ai_assisted_question' };
   }
@@ -936,7 +988,9 @@ const advisorQuestion = (key) => {
   if (key === 'issue_description') return 'Cuéntame brevemente qué problema necesitas resolver para poder ayudarte y derivarte correctamente.';
   if (key === 'payment_details') return 'Para registrar el comprobante necesito el monto y el medio de pago utilizado. ¿Me los confirmas?';
   if (key === 'final_confirmation') {
-    return `Tengo registrado ${project}${city} para ${state.requirement}. ¿Confirmas que estos datos están correctos para derivar la cotización?`;
+    const detail = commercialSummaryParts(qualificationContext);
+    const detailSentence = detail.length > 0 ? ` Detalle: ${detail.join('; ')}.` : '';
+    return `Tengo registrado ${project}${city} para ${state.requirement}.${detailSentence} ¿Confirmas que estos datos están correctos para derivar la cotización?`;
   }
   return responseText;
 };
@@ -1020,6 +1074,8 @@ const aiMetadata = {
     ? (firstCommercialMissingField ? firstCommercialMissingField.field : null)
     : null,
   commercial_confirmation_cancelled: commercialGateBlocked && ai.intent === 'confirmation_yes',
+  // PRD 13.4 (B06): per-field evidence snapshot for audit (client_evidence|missing).
+  commercial_field_evidence: commercialFieldEvidence,
   ai_escalation_requested: isEscalation,
   ai_provider: ai.provider || null,
   ai_model: ai.model || null,
@@ -1113,6 +1169,9 @@ return [
       // y la usa el dispatcher y la capa de persistencia para bloquear la creacion.
       commercial_missing_fields: commercialMissingFields,
       commercial_missing_fields_json: jsonString(commercialMissingFields, []),
+      commercial_field_evidence: commercialFieldEvidence,
+      commercial_field_evidence_json: jsonString(commercialFieldEvidence, {}),
+      confirmation_summary: confirmationSummary,
       commercial_policy_profile: commercialMissingProfile,
       confirmation_status: effectiveConfirmationStatus,
       needs_confirmation: needsConfirmationFlag,

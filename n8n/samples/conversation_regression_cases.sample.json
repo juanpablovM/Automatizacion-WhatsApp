@@ -57,7 +57,7 @@
           "ciudad",
           "requerimiento"
         ],
-        "next_step": "confirm",
+        "next_step": "quantity",
         "audit_required": true
       }
     },
