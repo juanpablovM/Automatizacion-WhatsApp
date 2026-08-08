@@ -54,7 +54,7 @@ const inWindow = (timestamp, windowStart, windowEnd) => {
 const prepareFollowUp = (row, { windowStart, windowEnd, contactName } = {}) => {
   const motivo = String(row.motivo || '').trim() || 'lead_sin_respuesta';
   const stepDia = Number(row.step_dia);
-  const scheduledAt = row.scheduled_at || row.claimed_at || null;
+  const scheduledAt = row.claimed_at || row.scheduled_at || null;
   const message = fillTemplate(pickMessage(motivo, stepDia), contactName);
   const windowOk = inWindow(scheduledAt, windowStart, windowEnd);
 
@@ -63,6 +63,9 @@ const prepareFollowUp = (row, { windowStart, windowEnd, contactName } = {}) => {
     follow_up_text: message,
     follow_up_window_ok: windowOk,
     follow_up_will_send: Boolean(message.trim()) && windowOk,
+    response_text: message,
+    response_kind: `follow_up_day_${stepDia}`,
+    message_id: `follow-up:${row.id}`,
   };
 };
 
@@ -83,12 +86,13 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 if (typeof items !== 'undefined') {
-  const row = items[0]?.json ?? {};
-  const contactName = row.lead_name || row.customer_name || null;
-  const prepared = prepareFollowUp(row, {
-    windowStart: row.follow_up_window_start || $env.FOLLOW_UP_WINDOW_START,
-    windowEnd: row.follow_up_window_end || $env.FOLLOW_UP_WINDOW_END,
-    contactName,
+  return items.map((item) => {
+    const row = item.json ?? {};
+    const contactName = row.lead_name || row.customer_name || null;
+    return { json: prepareFollowUp(row, {
+      windowStart: row.follow_up_window_start || $env.FOLLOW_UP_WINDOW_START,
+      windowEnd: row.follow_up_window_end || $env.FOLLOW_UP_WINDOW_END,
+      contactName,
+    }) };
   });
-  return [{ json: prepared }];
 }

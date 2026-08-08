@@ -1,34 +1,13 @@
-// =============================================================================
-// ensure-follow-up-cancellation.js — Nodo "Ensure Follow-Up Cancellation"
-// (WA - Inbound Downstream Dispatcher). SOURCE OF TRUTH de cuando una
-// conversacion cancela su cadencia de seguimiento (A-010).
-// -----------------------------------------------------------------------------
-// Reglas (PRD #20/#849 A-010, 25.4):
-//   1. El cliente responde (mensaje entrante del usuario) -> 'client_replied':
-//      la persona volvio a conversar; los follow_ups pendientes se cancelan.
-//   2. El agente deriva a humano (handoff_escalated/handoff_scope presente) o
-//      el lead se cierra -> 'escalated' | 'closed'.
-//   3. Perdida de interes (detectLostIntent sobre el texto, p. ej. "ya no me
-//      interesa", "no voy a comprar") -> 'lost' con lost_reason.
-//   4. Opt-out explicito (detectOptOut, p. ej. "no me escribas mas", "baja
-//      pas") -> 'opt_out' (estado definitivo: el pipeline nunca vuelve a
-//      escribirle).
-//
-// La decision es PURA (string por item) y la escritura la hace el nodo
-// Postgres "Cancel Pending Follow Ups" (queries 05/06) con el scope emitido
-// aqui; si no hay follow-ups pendientes, la query devuelve already_cancelled
-// y no se escribe nada.
-// =============================================================================
 const OPT_OUT_PATTERNS = [
   /no me escribas mas/i,
   /escribas mas/i,
   /baja.*(de la lista|pas|mensajes|programa)/i,
-  /stop/i,
+  /\bstop\b/i,
   /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-  /dej[a|en] de escribirme/i,
+  /dej(?:a|en) de escribirme/i,
   /no me envies mas mensajes/i,
   /darme de baja/i,
-  /quitar(me)? de la lista/i,
+  /quitarme de la lista/i,
   /no me molestes/i,
 ];
 
@@ -40,93 +19,72 @@ const LOST_PATTERNS = [
   /cerremos el tema/i,
 ];
 
-const detectOptOut = (text) => {
-  const source = String(text ?? '').trim().toLowerCase();
-  if (!source) return false;
-  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(source));
-};
+const matches = (patterns, text) => patterns.some((pattern) => pattern.test(String(text || '').trim()));
+const detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);
+const detectLostIntent = (text) => matches(LOST_PATTERNS, text);
 
-const detectLostIntent = (text) => {
-  const source = String(text ?? '').trim();
-  if (!source) return false;
-  return LOST_PATTERNS.some((pattern) => pattern.test(source));
-};
-
-const hasPendingFollowUps = (row) => {
-  if (row.declared_follow_up_pending === true) return true;
-  const pending = row.follow_up_pending_count;
-  if (typeof pending === 'number') return pending > 0;
-  if (typeof pending === 'string') return Number(pending) > 0;
-  return row.follow_up_pending === true;
-};
-
-const resolveCancellationAction = (row) => {
-  const customerText = String(row.customer_message || row.user_text || row.message_text || '').trim();
-  const isCustomerTurn = Boolean(row.from_user) || Boolean(row.is_customer_message) || String(row.direction || '') === 'inbound';
+const resolveCancellationAction = (row, now = new Date()) => {
+  const conversationId = Number(row.conversation_id);
+  const validConversation = Number.isSafeInteger(conversationId) && conversationId > 0;
+  const customerText = String(row.text_body || '').trim();
+  const inboundMessageId = Number(row.message_id || 0) || null;
+  const inboundEventId = Number(row.inbound_event_id || 0) || null;
   const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);
-  const escalated = Boolean(row.should_escalate) || handoffWrite;
-  const lost = detectLostIntent(customerText);
+  const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);
+  const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));
   const optOut = detectOptOut(customerText);
-  const pending = hasPendingFollowUps(row);
+  const lost = detectLostIntent(customerText);
 
-  let action = null;
-  let cancelReason = null;
-  let lostReason = null;
-
+  let action = validConversation ? 'cancel' : null;
+  let cancelReason = validConversation ? 'client_replied' : null;
   if (optOut) {
     action = 'opt_out';
     cancelReason = 'opt_out';
   } else if (lost) {
-    action = 'cancel';
     cancelReason = 'lost';
-    lostReason = customerText.slice(0, 120);
   } else if (escalated) {
-    action = 'cancel';
     cancelReason = 'escalated';
-  } else if (isCustomerTurn && customerText) {
-    action = 'cancel';
-    cancelReason = 'client_replied';
+  } else if (closed) {
+    cancelReason = 'closed';
   }
 
-  const shouldApply = action && pending;
+  const responseText = String(row.response_text || '').trim();
+  const shouldSchedule = validConversation
+    && action === 'cancel'
+    && cancelReason === 'client_replied'
+    && responseText.length > 0
+    && String(row.conversation_status_code || '') === 'waiting_user';
+  const sourceKey = inboundMessageId || inboundEventId;
+  const cycleKey = sourceKey ? `inbound:${sourceKey}` : null;
+  const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));
 
   return {
-    decided: Boolean(action),
-    should_apply: shouldApply,
     follow_up_cancel_action: action,
     follow_up_cancel_reason: cancelReason,
-    follow_up_lost_reason: lostReason,
-    follow_up_pending: pending,
-    follow_up_scope: shouldApply
-      ? {
-          conversation_id: Number(row.conversation_id) > 0 ? Number(row.conversation_id) : null,
-          cancel_reason: cancelReason,
-          lost_reason: lostReason,
-        }
+    follow_up_source_text: customerText || null,
+    follow_up_source_message_id: inboundMessageId,
+    follow_up_should_schedule: shouldSchedule,
+    follow_up_cycle_key: cycleKey,
+    follow_up_motivo: 'lead_sin_respuesta',
+    follow_up_scheduled_at: shouldSchedule
+      ? new Date(now.getTime() + firstDelayHours * 3600000).toISOString()
       : null,
+    follow_up_cancel_decided: Boolean(action),
   };
 };
 
-// ---------------------------------------------------------------------------
-// Seccion n8n: procesa el item del dispatcher.
-// ---------------------------------------------------------------------------
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    OPT_OUT_PATTERNS,
-    LOST_PATTERNS,
-    detectOptOut,
-    detectLostIntent,
-    hasPendingFollowUps,
-    resolveCancellationAction,
-  };
+  module.exports = { OPT_OUT_PATTERNS, LOST_PATTERNS, detectOptOut, detectLostIntent, resolveCancellationAction };
 }
 
 if (typeof items !== 'undefined') {
-  const rows = items.map((item) => ({
-    ...item.json,
-    resolution: resolveCancellationAction(item.json),
-  }));
-  return rows.map(({ resolution, ...rest }) => ({
-    json: { ...rest, ...resolution, follow_up_cancel_decided: true },
+  return items.map((item) => ({
+    json: {
+      ...item.json,
+      ...resolveCancellationAction({
+        ...item.json,
+        follow_up_first_delay_hours: Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24),
+      }),
+    },
   }));
 }

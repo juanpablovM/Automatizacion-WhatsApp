@@ -1,69 +1,33 @@
--- =============================================================================
--- 01_schedule_follow_up.sql — Agenda un step de cadencia (A-010).
--- Nodo n8n: "Schedule Follow Up" (OPS - Follow-Up Scheduler).
--- -----------------------------------------------------------------------------
--- Idempotente: por (conversation_id, step_dia) solo existe UN follow_up activo
--- (pending/sending); si el step ya esta agendado o enviado, el INSERT no hace
--- nada y se devuelve 'duplicate_skipped'. La clave de idempotencia canonica es
--- `{conversation_id}:{step_dia}` (el motivo se agrega a la clave para no
--- permitir dos cadencias distintas sobre el mismo step).
---
--- Params:
---   :conversation_id  conversacion de la cadencia
---   :opportunity_id   oportunidad vinculada (opcional)
---   :phone_number     numero del cliente
---   :source_number_id linea que atendera el envio (opcional)
---   :motivo           motivo canonico (cotizacion_pendiente/lead_sin_respuesta/...)
---   :step_dia         0|1|3|7|14
---   :scheduled_at     momento de la proxima emision (calculado por la fixture)
--- =============================================================================
-WITH scheduled AS (
+-- Schedule one cadence step. Positional parameters are required by n8n Postgres v2.
+-- $1 conversation_id, $2 opportunity_id, $3 phone_number, $4 source_number_id,
+-- $5 motivo, $6 step_dia, $7 scheduled_at, $8 cycle_key
+WITH input AS (
+  SELECT $1::bigint conversation_id, NULLIF($2::text, '')::bigint opportunity_id,
+    $3::text phone_number, NULLIF($4::text, '')::bigint source_number_id,
+    $5::text motivo, $6::smallint step_dia, $7::timestamptz scheduled_at,
+    NULLIF($8::text, '') cycle_key
+), inserted AS (
   INSERT INTO follow_ups (
-    idempotency_key, conversation_id, opportunity_id, phone_number,
-    source_number_id, motivo, step_dia, scheduled_at
+    idempotency_key, cycle_key, conversation_id, opportunity_id, phone_number,
+    source_number_id, motivo, step_dia, scheduled_at, metadata
   )
-  SELECT
-    :conversation_id::bigint || ':' || :step_dia::smallint::text,
-    :conversation_id::bigint,
-    NULLIF(:opportunity_id::text, '')::bigint,
-    :phone_number::text,
-    NULLIF(:source_number_id::text, '')::bigint,
-    :motivo::text,
-    :step_dia::smallint,
-    :scheduled_at::timestamptz
-  WHERE NOT EXISTS (
-    SELECT 1 FROM follow_ups f
-    WHERE f.conversation_id = :conversation_id::bigint
-      AND f.step_dia = :step_dia::smallint
-      AND f.deleted_at IS NULL
-      AND f.estado IN ('pending', 'sending')
-  )
+  SELECT i.conversation_id || ':' || i.cycle_key || ':' || i.step_dia,
+    i.cycle_key, i.conversation_id, i.opportunity_id, i.phone_number,
+    i.source_number_id, i.motivo, i.step_dia, i.scheduled_at,
+    jsonb_build_object('cycle_key', i.cycle_key)
+  FROM input i
+  WHERE i.cycle_key IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM follow_up_preferences p
+      WHERE p.conversation_id = i.conversation_id AND p.opted_out = TRUE
+    )
+  ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING
   RETURNING id
-),
-scheduled_info AS (
-  SELECT COUNT(*) AS n FROM scheduled
-),
-audit_entry AS (
-  INSERT INTO audit_logs (
-    event_name, entity_type, entity_id, actor_type, actor_id,
-    result, before_payload, after_payload, metadata
-  )
-  SELECT
-    'follow_up_step',
-    'follow_up',
-    COALESCE((SELECT s.id FROM scheduled s LIMIT 1), :conversation_id::bigint * 1000 + :step_dia::smallint),
-    'system',
-    'ops-follow-up-scheduler',
-    CASE WHEN (SELECT n FROM scheduled_info) > 0 THEN 'scheduled' ELSE 'duplicate_skipped' END,
-    '{}'::JSONB,
-    jsonb_build_object(
-      'conversation_id', :conversation_id::bigint,
-      'step_dia', :step_dia::smallint,
-      'scheduled_at', :scheduled_at::timestamptz
-    ),
-    '{}'::JSONB
-  RETURNING result
 )
-SELECT
-  CASE WHEN (SELECT n FROM scheduled_info) > 0 THEN 'scheduled' ELSE 'duplicate_skipped' END AS result,
-  (SELECT n FROM scheduled_info) AS scheduled_count;
+SELECT CASE
+  WHEN EXISTS (SELECT 1 FROM inserted) THEN 'scheduled'
+  WHEN EXISTS (SELECT 1 FROM follow_up_preferences p, input i
+               WHERE p.conversation_id = i.conversation_id AND p.opted_out = TRUE)
+    THEN 'opted_out_blocked'
+  ELSE 'duplicate_skipped'
+END result, (SELECT id FROM inserted LIMIT 1) follow_up_id;

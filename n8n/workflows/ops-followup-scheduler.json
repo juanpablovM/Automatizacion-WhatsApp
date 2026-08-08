@@ -2,150 +2,79 @@
   "name": "OPS - Follow-Up Scheduler",
   "nodes": [
     {
-      "name": "Follow-Up Schedule Trigger",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
+      "parameters": {},
+      "id": "workflow-input",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
       "position": [
-        200,
-        300
-      ],
+        -720,
+        -80
+      ]
+    },
+    {
       "parameters": {
         "rule": {
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 10
+              "minutesInterval": 5
             }
           ]
         }
-      }
+      },
+      "id": "follow-up-schedule-trigger",
+      "name": "Follow-Up Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -720,
+        120
+      ]
     },
     {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- $1 batch_size, $2 window_start, $3 window_end, $4 now, $5 stale_seconds\nSELECT * FROM claim_due_follow_ups(\n  COALESCE(NULLIF($1::text, '')::integer, 50),\n  COALESCE(NULLIF($2::text, ''), '09:00'),\n  COALESCE(NULLIF($3::text, ''), '20:00'),\n  COALESCE(NULLIF($4::text, '')::timestamptz, NOW()),\n  COALESCE(NULLIF($5::text, '')::integer, 900)\n);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$env.FOLLOW_UP_BATCH_SIZE || 50, $env.FOLLOW_UP_WINDOW_START || '09:00', $env.FOLLOW_UP_WINDOW_END || '20:00', '', $env.FOLLOW_UP_CLAIM_STALE_SECONDS || 900] }}"
+        }
+      },
+      "id": "claim-due-follow-ups",
       "name": "Claim Due Follow-Ups",
       "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2,
+      "typeVersion": 2.6,
       "position": [
-        420,
-        460
+        -460,
+        20
       ],
       "credentials": {
         "postgres": {
           "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
           "name": "Postgres CRM App Local"
         }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// prepare-follow-up-message.js — Nodo \"Prepare Follow-Up Message\"\n// (OPS - Follow-Up Scheduler). SOURCE OF TRUTH de la eleccion del texto por\n// step y motivo y de la plantilla final del envio.\n// -----------------------------------------------------------------------------\n// In: item reclamado por claim_due_follow_ups (fila follow_ups).\n// Out: texto final + guardrail de ventana. El claim ya solo reclama items\n// dentro de la ventana configurable; el chequeo aqui cubre relojes\n// desalineados (follow_up_window_ok=false => follow_up_will_send=false).\n// =============================================================================\n\nconst MESSAGES = {\n  cotizacion_lead: {\n    0: 'Hola {{nombre}}, quedamos a tu disposicion por la cotizacion que consultaste. ¿Seguimos avanzando?',\n    1: 'Hola {{nombre}}, te escribimos para saber si queres seguir avanzando con tu consulta sobre la cotizacion.',\n    3: 'Hola {{nombre}}, aun no tuvimos novedades tuyas. Si ya resolviste, avisanos; si no, seguimos a disposicion.',\n    7: 'Hola {{nombre}}, te recordamos que tu cotizacion sigue vigente. ¿Queres que la retomemos hoy?',\n    14: 'Hola {{nombre}}, este es nuestro ultimo recordatorio por este tema. Si seguis necesitando la cotizacion, escribinos cuando quieras.',\n  },\n  lead_sin_respuesta: {\n    0: 'Hola {{nombre}}, te vimos escribiendo antes y nos quedamos con tu consulta. ¿En que podemos ayudarte?',\n    1: 'Hola {{nombre}}, queriamos retomar la consulta que nos dejaste. ¿Seguimos necesitando algo?',\n    3: 'Hola {{nombre}}, te buscamos por tu consulta anterior. Si ya no te hace falta, avisanos; si seguis interesado, aqui estamos.',\n    7: 'Hola {{nombre}}, te volvemos a escribir por tu consulta en Hormiglass. ¿Queres retomarla?',\n    14: 'Hola {{nombre}}, ultimo recordatorio por tu consulta en Hormiglass. Cuando quieras, seguimos a disposicion.',\n  },\n};\n\nconst FALLBACK_MESSAGES = {\n  0: 'Hola {{nombre}}, quedamos a tu disposicion por tu consulta. ¿Seguimos avanzando?',\n  1: 'Hola {{nombre}}, te escribimos para retomar tu consulta en Hormiglass.',\n  3: 'Hola {{nombre}}, nos gustaria saber si seguis necesitando algo.',\n  7: 'Hola {{nombre}}, te recordamos que seguimos a tu disposicion.',\n  14: 'Hola {{nombre}}, ultimo recordatorio por tu consulta. Cuando quieras, aqui estamos.',\n};\n\nconst WINDOW_START_DEFAULT = '09:00';\nconst WINDOW_END_DEFAULT = '20:00';\n\nconst pickMessage = (motivo, stepDia) =>\n  (MESSAGES[motivo]?.[stepDia] ?? FALLBACK_MESSAGES[stepDia]) || null;\n\nconst fillTemplate = (message, contactName) =>\n  (message || '').replace(/\\{\\{nombre\\}\\}/g, contactName ? String(contactName).trim() : '');\n\nconst inWindow = (timestamp, windowStart, windowEnd) => {\n  const date = timestamp ? new Date(timestamp) : new Date();\n  const minutes = date.getHours() * 60 + date.getMinutes();\n  const [h0, m0] = String(windowStart || WINDOW_START_DEFAULT).split(':').map(Number);\n  const [h1, m1] = String(windowEnd || WINDOW_END_DEFAULT).split(':').map(Number);\n  return minutes >= h0 * 60 + m0 && minutes <= h1 * 60 + m1;\n};\n\nconst prepareFollowUp = (row, { windowStart, windowEnd, contactName } = {}) => {\n  const motivo = String(row.motivo || '').trim() || 'lead_sin_respuesta';\n  const stepDia = Number(row.step_dia);\n  const scheduledAt = row.claimed_at || row.scheduled_at || null;\n  const message = fillTemplate(pickMessage(motivo, stepDia), contactName);\n  const windowOk = inWindow(scheduledAt, windowStart, windowEnd);\n\n  return {\n    ...row,\n    follow_up_text: message,\n    follow_up_window_ok: windowOk,\n    follow_up_will_send: Boolean(message.trim()) && windowOk,\n    response_text: message,\n    response_kind: `follow_up_day_${stepDia}`,\n    message_id: `follow-up:${row.id}`,\n  };\n};\n\n// ---------------------------------------------------------------------------\n// Seccion n8n: procesa el item del claim.\n// ---------------------------------------------------------------------------\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    MESSAGES,\n    FALLBACK_MESSAGES,\n    WINDOW_START_DEFAULT,\n    WINDOW_END_DEFAULT,\n    pickMessage,\n    fillTemplate,\n    inWindow,\n    prepareFollowUp,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => {\n    const row = item.json ?? {};\n    const contactName = row.lead_name || row.customer_name || null;\n    return { json: prepareFollowUp(row, {\n      windowStart: row.follow_up_window_start || $env.FOLLOW_UP_WINDOW_START,\n      windowEnd: row.follow_up_window_end || $env.FOLLOW_UP_WINDOW_END,\n      contactName,\n    }) };\n  });\n}\n"
       },
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "-- =============================================================================\n-- 02_claim_due_follow_ups.sql — Reclama items vencidos para este tick.\n-- Nodo n8n: \"Claim Due Follow Ups\" (OPS - Follow-Up Scheduler).\n-- -----------------------------------------------------------------------------\n-- Delega en claim_due_follow_ups() (migration 013): lock FOR UPDATE\n-- SKIP LOCKED + ventana horaria. Devuelve SOLO lo reclamado por este tick.\n-- Los items fuera de ventana quedan pending (se reevaluaran).\n--\n-- Params:\n--   :batch_size       max items por tick (default 50)\n--   :window_start     'HH:MM' hora local (default 09:00)\n--   :window_end       'HH:MM' hora local (default 20:00)\n--   :now              reloj del tick (determinista en tests; NOW() en prod)\n--   :claim_stale_seconds  abandonar claims viejos mas alla de N segundos\n-- =============================================================================\nSELECT * FROM claim_due_follow_ups(\n  NULLIF(:batch_size::text, '')::integer,\n  NULLIF(:window_start::text, ''),\n  NULLIF(:window_end::text, ''),\n  COALESCE(NULLIF(:now::text, '')::timestamptz, NOW()),\n  NULLIF(:claim_stale_seconds::text, '')::integer\n);",
-        "additionalFields": {
-          "mode": "multiple",
-          "queryParams": "batch_size,window_start,window_end,now,claim_stale_seconds"
-        }
-      }
-    },
-    {
-      "name": "Log Out-Of-Window Items",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2,
-      "position": [
-        420,
-        740
-      ],
-      "credentials": {
-        "postgres": {
-          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
-          "name": "Postgres CRM App Local"
-        }
-      },
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "-- =============================================================================\n-- 07_log_window_skip.sql — Registra items vencidos fuera de la ventana.\n-- Nodo n8n: \"Log Out Of Window Follow Ups\" (OPS - Follow-Up Scheduler).\n-- -----------------------------------------------------------------------------\n-- Cada tick ejecuta esta consulta antes/despues del claim: los follow_ups\n-- pending vencidos pero fuera de la ventana de envio NO se reclaman (el claim\n-- ya los deja pending). Esta consulta los marca como visto (window_skip_at)\n-- y deja el evento en audit para trazabilidad (no spamear: solo se actualiza\n-- last_window_skip_at si paso mas de una hora desde el ultimo registro).\n--\n-- Params:\n--   :window_start  HH:MM local (default 09:00)\n--   :window_end    HH:MM local (default 20:00)\n--   :now           reloj del tick\n-- =============================================================================\nWITH vencidos AS (\n  SELECT f.id\n  FROM follow_ups f\n  WHERE f.deleted_at IS NULL\n    AND f.estado = 'pending'\n    AND f.opted_out = FALSE\n    AND f.scheduled_at <= COALESCE(NULLIF(:now::text, '')::timestamptz, NOW())\n    AND (\n      COALESCE(NULLIF(:now::text, '')::timestamptz, NOW())::TIME\n        < NULLIF(:window_start::text, '')::TIME\n      OR COALESCE(NULLIF(:now::text, '')::timestamptz, NOW())::TIME\n        > NULLIF(:window_end::text, '')::TIME\n    )\n),\nmarked AS (\n  UPDATE follow_ups f\n  SET last_window_skip_at = NOW(),\n      updated_at = NOW()\n  FROM vencidos v\n  WHERE f.id = v.id\n    AND (\n      f.last_window_skip_at IS NULL\n      OR f.last_window_skip_at < NOW() - INTERVAL '1 hour'\n    )\n  RETURNING f.id\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'follow_up_skipped_window',\n    'follow_up',\n    COALESCE((SELECT MIN(m.id) FROM marked m), 0),\n    'system',\n    'ops-follow-up-scheduler',\n    CASE WHEN (SELECT COUNT(*) FROM marked) > 0 THEN 'skipped_window' ELSE 'in_window' END,\n    jsonb_build_object(\n      'due_outside_window', (SELECT COUNT(*) FROM vencidos),\n      'window_start', NULLIF(:window_start::text, ''),\n      'window_end', NULLIF(:window_end::text, '')\n    ),\n    jsonb_build_object('marked', (SELECT COUNT(*) FROM marked)),\n    '{}'::JSONB\n  RETURNING id\n)\nSELECT\n  (SELECT COUNT(*) FROM vencidos) AS due_outside_window,\n  CASE WHEN (SELECT COUNT(*) FROM marked) > 0 THEN 'skipped_window' ELSE 'in_window' END AS result;",
-        "additionalFields": {
-          "mode": "multiple",
-          "queryParams": "window_start,window_end,now"
-        }
-      }
-    },
-    {
-      "name": "Follow-Ups Claimed?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.1,
-      "position": [
-        880,
-        375
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose"
-          },
-          "combinator": "and",
-          "conditions": [
-            {
-              "id": "c1",
-              "leftValue": "={{ $items().length }}",
-              "rightValue": "0",
-              "operator": {
-                "type": "number",
-                "operation": "gt",
-                "value": 0
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
+      "id": "prepare-follow-up-message",
       "name": "Prepare Follow-Up Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1120,
-        240
-      ],
-      "parameters": {
-        "jsCode": "// =============================================================================\n// prepare-follow-up-message.js — Nodo \"Prepare Follow-Up Message\"\n// (OPS - Follow-Up Scheduler). SOURCE OF TRUTH de la eleccion del texto por\n// step y motivo y de la plantilla final del envio.\n// -----------------------------------------------------------------------------\n// In: item reclamado por claim_due_follow_ups (fila follow_ups).\n// Out: texto final + guardrail de ventana. El claim ya solo reclama items\n// dentro de la ventana configurable; el chequeo aqui cubre relojes\n// desalineados (follow_up_window_ok=false => follow_up_will_send=false).\n// =============================================================================\n\nconst MESSAGES = {\n  cotizacion_lead: {\n    0: 'Hola {{nombre}}, quedamos a tu disposicion por la cotizacion que consultaste. ¿Seguimos avanzando?',\n    1: 'Hola {{nombre}}, te escribimos para saber si queres seguir avanzando con tu consulta sobre la cotizacion.',\n    3: 'Hola {{nombre}}, aun no tuvimos novedades tuyas. Si ya resolviste, avisanos; si no, seguimos a disposicion.',\n    7: 'Hola {{nombre}}, te recordamos que tu cotizacion sigue vigente. ¿Queres que la retomemos hoy?',\n    14: 'Hola {{nombre}}, este es nuestro ultimo recordatorio por este tema. Si seguis necesitando la cotizacion, escribinos cuando quieras.',\n  },\n  lead_sin_respuesta: {\n    0: 'Hola {{nombre}}, te vimos escribiendo antes y nos quedamos con tu consulta. ¿En que podemos ayudarte?',\n    1: 'Hola {{nombre}}, queriamos retomar la consulta que nos dejaste. ¿Seguimos necesitando algo?',\n    3: 'Hola {{nombre}}, te buscamos por tu consulta anterior. Si ya no te hace falta, avisanos; si seguis interesado, aqui estamos.',\n    7: 'Hola {{nombre}}, te volvemos a escribir por tu consulta en Hormiglass. ¿Queres retomarla?',\n    14: 'Hola {{nombre}}, ultimo recordatorio por tu consulta en Hormiglass. Cuando quieras, seguimos a disposicion.',\n  },\n};\n\nconst FALLBACK_MESSAGES = {\n  0: 'Hola {{nombre}}, quedamos a tu disposicion por tu consulta. ¿Seguimos avanzando?',\n  1: 'Hola {{nombre}}, te escribimos para retomar tu consulta en Hormiglass.',\n  3: 'Hola {{nombre}}, nos gustaria saber si seguis necesitando algo.',\n  7: 'Hola {{nombre}}, te recordamos que seguimos a tu disposicion.',\n  14: 'Hola {{nombre}}, ultimo recordatorio por tu consulta. Cuando quieras, aqui estamos.',\n};\n\nconst WINDOW_START_DEFAULT = '09:00';\nconst WINDOW_END_DEFAULT = '20:00';\n\nconst pickMessage = (motivo, stepDia) =>\n  (MESSAGES[motivo]?.[stepDia] ?? FALLBACK_MESSAGES[stepDia]) || null;\n\nconst fillTemplate = (message, contactName) =>\n  (message || '').replace(/\\{\\{nombre\\}\\}/g, contactName ? String(contactName).trim() : '');\n\nconst inWindow = (timestamp, windowStart, windowEnd) => {\n  const date = timestamp ? new Date(timestamp) : new Date();\n  const minutes = date.getHours() * 60 + date.getMinutes();\n  const [h0, m0] = String(windowStart || WINDOW_START_DEFAULT).split(':').map(Number);\n  const [h1, m1] = String(windowEnd || WINDOW_END_DEFAULT).split(':').map(Number);\n  return minutes >= h0 * 60 + m0 && minutes <= h1 * 60 + m1;\n};\n\nconst prepareFollowUp = (row, { windowStart, windowEnd, contactName } = {}) => {\n  const motivo = String(row.motivo || '').trim() || 'lead_sin_respuesta';\n  const stepDia = Number(row.step_dia);\n  const scheduledAt = row.scheduled_at || row.claimed_at || null;\n  const message = fillTemplate(pickMessage(motivo, stepDia), contactName);\n  const windowOk = inWindow(scheduledAt, windowStart, windowEnd);\n\n  return {\n    ...row,\n    follow_up_text: message,\n    follow_up_window_ok: windowOk,\n    follow_up_will_send: Boolean(message.trim()) && windowOk,\n  };\n};\n\n// ---------------------------------------------------------------------------\n// Seccion n8n: procesa el item del claim.\n// ---------------------------------------------------------------------------\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    MESSAGES,\n    FALLBACK_MESSAGES,\n    WINDOW_START_DEFAULT,\n    WINDOW_END_DEFAULT,\n    pickMessage,\n    fillTemplate,\n    inWindow,\n    prepareFollowUp,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const contactName = row.lead_name || row.customer_name || null;\n  const prepared = prepareFollowUp(row, {\n    windowStart: row.follow_up_window_start || $env.FOLLOW_UP_WINDOW_START,\n    windowEnd: row.follow_up_window_end || $env.FOLLOW_UP_WINDOW_END,\n    contactName,\n  });\n  return [{ json: prepared }];\n}"
-      }
+        -200,
+        20
+      ]
     },
     {
-      "name": "Within Follow-Up Window?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.1,
-      "position": [
-        1390,
-        300
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "leftValue": "",
-            "typeValidation": "loose"
-          },
-          "combinator": "and",
-          "conditions": [
-            {
-              "type": "boolean",
-              "leftValue": "={{ $json.follow_up_will_send }}",
-              "rightValue": true
-            }
-          ]
-        }
-      }
-    },
-    {
-      "name": "Send Via Outbound Rail",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        1620,
-        200
-      ],
       "parameters": {
         "source": "database",
         "workflowId": {
-          "value": "",
+          "value": "77777777-0000-0000-0000-000000000001",
           "mode": "list",
           "cachedResultName": "WA - Outbound Messages"
         },
@@ -153,66 +82,73 @@
         "options": {
           "waitForSubWorkflow": true
         }
-      }
+      },
+      "id": "send-via-outbound-rail",
+      "name": "Send Via Outbound Rail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        60,
+        20
+      ],
+      "onError": "continueRegularOutput"
     },
     {
-      "name": "Apply Follow-Up Result",
-      "type": "n8n-nodes-base.postgres",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const normalizeFollowUpDelivery = (origin, outbound) => {\n  const deliveryStatus = String(outbound?.delivery_status || outbound?.outbound_dispatch_status || '').trim();\n  const errorMessage = String(outbound?.error?.message || outbound?.message || '').trim();\n  let outcome = 'unknown';\n  if (deliveryStatus === 'sent' || deliveryStatus === 'already_sent') outcome = 'sent';\n  else if (deliveryStatus === 'failed') outcome = 'failed';\n  else if (!deliveryStatus && /requiere|configurad|missing|required/i.test(errorMessage)) outcome = 'failed';\n\n  return {\n    ...origin,\n    outbound_delivery_status: deliveryStatus || 'unknown',\n    outbound_message_id: outbound?.message_id || null,\n    follow_up_outcome: outcome,\n    follow_up_error: outcome === 'sent' ? null : (errorMessage || `outbound_${deliveryStatus || 'unknown'}`),\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { normalizeFollowUpDelivery };\n}\n\nif (typeof items !== 'undefined') {\n  let origins = [];\n  try { origins = $('Prepare Follow-Up Message').all().map((item) => item.json || {}); } catch (_error) { origins = []; }\n  return items.map((item, index) => ({\n    json: normalizeFollowUpDelivery(origins[index] || {}, item.json || {}),\n  }));\n}\n"
+      },
+      "id": "normalize-follow-up-delivery",
+      "name": "Normalize Follow-Up Delivery",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1880,
-        320
+        320,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Complete one claimed send and atomically create the next cadence step.\n-- $1 follow_up_id, $2 claim_token, $3 outcome(sent|failed|unknown),\n-- $4 error, $5 outbound_delivery_status, $6 outbound_message_id\nWITH target AS (\n  SELECT f.* FROM follow_ups f\n  WHERE f.id = $1::bigint AND f.deleted_at IS NULL\n  FOR UPDATE\n), authorized AS (\n  SELECT * FROM target\n  WHERE estado = 'sending' AND claim_token::text = NULLIF($2::text, '')\n), resolved AS (\n  SELECT a.*,\n    CASE\n      WHEN $3::text = 'sent' THEN 'sent'\n      WHEN $3::text = 'unknown' THEN 'unknown'\n      WHEN a.send_attempt_count + 1 >= a.max_send_attempts THEN 'send_exhausted'\n      ELSE 'retry'\n    END resolution\n  FROM authorized a\n), applied AS (\n  UPDATE follow_ups f SET\n    estado = CASE WHEN r.resolution = 'sent' THEN 'sent' ELSE 'error' END,\n    result = CASE WHEN r.resolution = 'sent' THEN COALESCE(f.result, 'no_response') ELSE f.result END,\n    sent_at = CASE WHEN r.resolution = 'sent' THEN COALESCE(f.sent_at, NOW()) ELSE f.sent_at END,\n    send_attempt_count = f.send_attempt_count + 1,\n    next_retry_at = CASE WHEN r.resolution = 'retry'\n      THEN NOW() + LEAST(3600, 30 * (2 ^ f.send_attempt_count)) * INTERVAL '1 second'\n      ELSE NULL END,\n    last_send_error = CASE WHEN r.resolution = 'sent' THEN NULL ELSE COALESCE(NULLIF($4::text, ''), r.resolution) END,\n    claim_token = NULL, claimed_at = NULL,\n    delivery_log = f.delivery_log || jsonb_build_object(\n      'at', NOW(), 'status', r.resolution,\n      'outbound_delivery_status', NULLIF($5::text, ''),\n      'outbound_message_id', NULLIF($6::text, ''),\n      'error', NULLIF($4::text, '')\n    ), updated_at = NOW()\n  FROM resolved r WHERE f.id = r.id\n  RETURNING f.*, r.resolution\n), next_values AS (\n  SELECT a.*,\n    CASE a.step_dia WHEN 0 THEN 1 WHEN 1 THEN 3 WHEN 3 THEN 7 WHEN 7 THEN 14 END::smallint next_step\n  FROM applied a WHERE a.resolution = 'sent'\n), next_insert AS (\n  INSERT INTO follow_ups (\n    idempotency_key, cycle_key, conversation_id, opportunity_id, phone_number,\n    source_number_id, motivo, step_dia, scheduled_at, metadata\n  )\n  SELECT n.conversation_id || ':' || n.cycle_key || ':' || n.next_step,\n    n.cycle_key, n.conversation_id, n.opportunity_id, n.phone_number,\n    n.source_number_id, n.motivo, n.next_step,\n    n.scheduled_at + (n.next_step - n.step_dia) * INTERVAL '1 day',\n    jsonb_build_object('cycle_key', n.cycle_key, 'previous_follow_up_id', n.id)\n  FROM next_values n\n  WHERE n.next_step IS NOT NULL\n    AND NOT EXISTS (SELECT 1 FROM follow_up_preferences p\n                    WHERE p.conversation_id = n.conversation_id AND p.opted_out = TRUE)\n  ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING\n  RETURNING id\n), audit_entry AS (\n  INSERT INTO audit_logs (event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata)\n  SELECT 'follow_up_send', 'follow_up', a.id, 'system', 'ops-follow-up-scheduler',\n    a.resolution, '{}'::jsonb,\n    jsonb_build_object('estado', a.estado, 'attempts', a.send_attempt_count),\n    jsonb_build_object('outcome', $3::text, 'next_scheduled', EXISTS(SELECT 1 FROM next_insert))\n  FROM applied a RETURNING id\n)\nSELECT a.id follow_up_id, a.estado follow_up_estado, a.send_attempt_count,\n  a.resolution result, (SELECT id FROM next_insert LIMIT 1) next_follow_up_id\nFROM applied a\nUNION ALL\nSELECT t.id, t.estado, t.send_attempt_count, 'claim_rejected', NULL::bigint\nFROM target t WHERE NOT EXISTS (SELECT 1 FROM authorized);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.id, $json.claim_token, $json.follow_up_outcome, $json.follow_up_error || '', $json.outbound_delivery_status || '', $json.outbound_message_id || ''] }}"
+        }
+      },
+      "id": "complete-follow-up-delivery",
+      "name": "Complete Follow-Up Delivery",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        580,
+        20
       ],
       "credentials": {
         "postgres": {
           "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
           "name": "Postgres CRM App Local"
-        }
-      },
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "-- =============================================================================\n-- 03_apply_send_result.sql — Registra el resultado del envio de un follow_up.\n-- Nodo n8n: \"Apply Follow-Up Result\" (OPS - Follow-Up Scheduler).\n-- -----------------------------------------------------------------------------\n-- Transiciones (patron de las unidades previas, todo auditado):\n--   sent     -> estado='sent', sent_at, delivery_log += {result}; idempotente:\n--               si ya estaba 'sent', devuelve 'already_sent' sin re-aplicar.\n--   failed   -> send_attempt_count+1 y estado='error' con next_retry_at\n--               (backoff 10s * 2^(intentos-1), cap a max_send_attempts);\n--               al agotar intentos queda 'error' con send_exhausted=true.\n--   skipped  -> solo delivery_log (scheduler decidio no emitir: opt-out/otra\n--               condicion); estado no cambia.\n--\n-- Params:\n--   :follow_up_id   id reclamado (claim_token valida que sea el mismo tick)\n--   :claim_token    token del claim (requerido para all transitions)\n--   :outcome        'sent' | 'failed' | 'skipped'\n--   :error          mensaje de error (cuando outcome='failed')\n-- =============================================================================\nWITH target AS (\n  SELECT f.id, f.estado, f.send_attempt_count, f.max_send_attempts, f.opted_out, f.claim_token\n  FROM follow_ups f\n  WHERE f.id = :follow_up_id::bigint AND f.deleted_at IS NULL\n),\nauthorized AS (\n  SELECT t.*\n  FROM target t\n  WHERE t.claim_token IS NOT NULL\n    AND t.claim_token::text = :origin_token::text\n),\noutcome_resolution AS (\n  SELECT\n    a.id,\n    a.estado,\n    a.send_attempt_count AS attempts,\n    a.max_send_attempts,\n    CASE\n      WHEN a.id IS NULL THEN 'follow_up_missing'\n      WHEN a.claim_token IS NULL THEN 'authorization_missing'\n      WHEN a.estado = 'sent' THEN 'already_sent'\n      WHEN :outcome::text = 'sent' THEN 'sent'\n      WHEN :outcome::text = 'skipped' THEN 'skipped'\n      WHEN a.send_attempt_count + 1 >= a.max_send_attempts THEN 'send_exhausted'\n      ELSE 'retry'\n    END AS result\n  FROM authorized a\n),\napply AS (\n  UPDATE follow_ups f\n  SET\n    estado = CASE\n      WHEN o.result = 'sent' THEN 'sent'\n      WHEN o.result IN ('retry', 'send_exhausted') THEN 'error'\n      ELSE f.estado\n    END,\n    result = CASE\n      WHEN o.result = 'sent' THEN COALESCE(f.result, 'no_response')\n      ELSE f.result\n    END,\n    sent_at = CASE\n      WHEN o.result = 'sent' AND f.sent_at IS NULL THEN NOW()\n      ELSE f.sent_at\n    END,\n    send_attempt_count = CASE\n      WHEN o.result IN ('sent', 'retry', 'send_exhausted')\n        THEN f.send_attempt_count + 1\n      ELSE f.send_attempt_count\n    END,\n    next_retry_at = CASE\n      WHEN o.result = 'retry' THEN NOW() + (10 * (2 ^ f.send_attempt_count)) * INTERVAL '1 second'\n      ELSE f.next_retry_at\n    END,\n    last_send_error = CASE\n      WHEN o.result IN ('retry', 'send_exhausted') THEN NULLIF(:error::text, '')\n      ELSE f.last_send_error\n    END,\n    delivery_log = CASE\n      WHEN o.result = 'skipped'\n        THEN f.delivery_log || jsonb_build_object(\n               'at', NOW(), 'status', 'skipped',\n               'reason', COALESCE(NULLIF(:error::text, ''), 'window_not_applicable'))\n      ELSE f.delivery_log || jsonb_build_object(\n               'at', NOW(), 'status', o.result,\n               'error', NULLIF(:error::text, ''))\n    END,\n    updated_at = NOW()\n  FROM outcome_resolution o\n  WHERE f.id = o.id\n    AND o.result IN ('sent', 'skipped', 'retry', 'send_exhausted')\n  RETURNING f.id, f.estado, f.send_attempt_count\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'follow_up_send',\n    'follow_up',\n    o.id,\n    'system',\n    'ops-follow-up-scheduler',\n    o.result,\n    jsonb_build_object('estado', o.estado, 'send_attempt_count', o.attempts),\n    jsonb_build_object(\n      'estado', COALESCE(a.estado, o.estado),\n      'send_attempt_count', COALESCE(a.send_attempt_count, o.attempts),\n      'error', NULLIF(:error::text, '')\n    ),\n    jsonb_build_object('outcome', :outcome::text)\n  FROM outcome_resolution o\n  LEFT JOIN apply a ON a.id = o.id\n  WHERE o.id IS NOT NULL\n  RETURNING 1\n)\nSELECT\n  COALESCE(a.id, o.id) AS follow_up_id,\n  COALESCE(a.estado, o.estado) AS follow_up_estado,\n  COALESCE(a.send_attempt_count, o.attempts) AS send_attempt_count,\n  o.result\nFROM outcome_resolution o\nLEFT JOIN apply a ON a.id = o.id;",
-        "additionalFields": {
-          "mode": "multiple",
-          "queryParams": "follow_up_id,origin_token,outcome,error"
-        }
-      }
-    },
-    {
-      "name": "Schedule Next Follow-Up",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2,
-      "position": [
-        2150,
-        460
-      ],
-      "credentials": {
-        "postgres": {
-          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
-          "name": "Postgres CRM App Local"
-        }
-      },
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "-- =============================================================================\n-- 04_schedule_next_step.sql — Agenda el step siguiente de la cadencia.\n-- Nodo n8n: \"Schedule Next Follow-Up\" (OPS - Follow-Up Scheduler).\n-- -----------------------------------------------------------------------------\n-- Cuando un step se envio con exito (estado='sent'), la cadencia continua con\n-- el proximo step de la serie 0/1/3/7/14. Idempotente como el 01: si el\n-- proximo step ya existe activo, no se duplica (duplicate_skipped).\n--\n-- Params:\n--   :conversation_id    conversacion de la cadencia\n--   :opportunity_id     oportunidad vinculada (opcional)\n--   :phone_number       numero del cliente\n--   :source_number_id   linea (opcional)\n--   :motivo             mismo motivo de la cadencia\n--   :step_dia           paso siguiente (1|3|7|14)\n--   :scheduled_at       momento de la proxima emision\n--   :previous_id        id del step recien enviado (trazabilidad)\n-- =============================================================================\nWITH next_step AS (\n  INSERT INTO follow_ups (\n    idempotency_key, conversation_id, opportunity_id, phone_number,\n    source_number_id, motivo, step_dia, scheduled_at, metadata\n  )\n  SELECT\n    :conversation_id::bigint || ':' || :step_dia::smallint::text,\n    :conversation_id::bigint,\n    NULLIF(:opportunity_id::text, '')::bigint,\n    :phone_number::text,\n    NULLIF(:source_number_id::text, '')::bigint,\n    :motivo::text,\n    :step_dia::smallint,\n    :scheduled_at::timestamptz,\n    jsonb_build_object('previous_follow_up_id', :previous_id::bigint)\n  WHERE NOT EXISTS (\n    SELECT 1 FROM follow_ups f\n    WHERE f.conversation_id = :conversation_id::bigint\n      AND f.step_dia = :step_dia::smallint\n      AND f.deleted_at IS NULL\n      AND f.estado IN ('pending', 'sending')\n  )\n  RETURNING id, idempotency_key, conversation_id, step_dia, scheduled_at\n)\nSELECT\n  CASE WHEN (SELECT COUNT(*) FROM next_step) > 0\n    THEN 'next_scheduled' ELSE 'duplicate_skipped' END AS result,\n  (SELECT id FROM next_step LIMIT 1) AS follow_up_id;",
-        "additionalFields": {
-          "mode": "multiple",
-          "queryParams": "conversation_id,opportunity_id,phone_number,source_number_id,motivo,step_dia,scheduled_at,previous_id"
         }
       }
     }
   ],
   "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Claim Due Follow-Ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Follow-Up Schedule Trigger": {
       "main": [
         [
           {
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
+            "node": "Claim Due Follow-Ups",
             "type": "main",
             "index": 0
           }
@@ -223,44 +159,18 @@
       "main": [
         [
           {
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Follow-Ups Claimed?": {
-      "main": [
-        [
-          {
             "node": "Prepare Follow-Up Message",
             "type": "main",
             "index": 0
           }
-        ],
-        []
+        ]
       ]
     },
     "Prepare Follow-Up Message": {
       "main": [
         [
           {
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Within Follow-Up Window?": {
-      "main": [
-        [
-          {
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
+            "node": "Send Via Outbound Rail",
             "type": "main",
             "index": 0
           }
@@ -271,16 +181,18 @@
       "main": [
         [
           {
+            "node": "Normalize Follow-Up Delivery",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Apply Follow-Up Result": {
+    "Normalize Follow-Up Delivery": {
       "main": [
         [
           {
+            "node": "Complete Follow-Up Delivery",
             "type": "main",
             "index": 0
           }
@@ -288,13 +200,12 @@
       ]
     }
   },
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "timezone": "America/Santiago"
   },
-  "active": false,
-  "pinData": {},
-  "versionId": "00000000-0000-0000-0000-000000000000",
-  "meta": {},
-  "tags": [],
-  "id": "88888888-0000-0000-0000-000000000001"
+  "versionId": "u6-followup-durable-v2",
+  "id": "88888888-0000-0000-0000-000000000001",
+  "tags": []
 }
