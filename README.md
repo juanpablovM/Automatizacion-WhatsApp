@@ -39,10 +39,10 @@ Principio clave:
 Estado recomendado: `preproduccion / validacion controlada`.
 
 - U0 y U2 están completas en la rama.
-- U1, U3, U5 y U6 tienen remediaciones verificadas en el working tree, todavía sin commit, push ni deploy.
+- U1, U3, U5 y U6 están remediadas y desplegadas en el runtime local; los blindajes más recientes del pipeline siguen sin commit ni push.
 - U4, U7, U8 y U9 permanecen pendientes por decisión.
 - La certificación vigente no demuestra todavía el cierre del PRD.
-- El runtime requiere aplicar las migraciones `015`–`017`, importar y activar workflows, configurar el ambiente y repetir la validación controlada.
+- El runtime local ya tiene las migraciones `015`–`017`, Entry/Recovery y los schedulers OPS activos; queda pendiente la aceptación externa controlada y publicar los últimos blindajes del pipeline.
 
 El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual-2026-08-08.md`](./docs/estado-actual-2026-08-08.md).
 

@@ -13,17 +13,18 @@ La carpeta `.hermes` fue retirada del repo para evitar duplicar planes historico
 El corte canónico está en [`estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md). En síntesis:
 
 - U0 y U2 están completas en la rama.
-- U1, U3, U5 y U6 tienen remediaciones locales verificadas.
+- U1, U3, U5 y U6 están remediadas y desplegadas en el runtime local.
 - Los gates recientes están verdes: U1 126/0, conversación 30, AI 7, U2 20/0 y U3/U5/U6 PASS.
-- Estas remediaciones siguen sin commit, push ni deploy; el runtime no debe considerarse sincronizado.
+- Las 14 definiciones runtime coinciden con el repositorio; Entry/Recovery y los tres schedulers OPS están activos.
+- Los blindajes recientes del pipeline siguen sin commit ni push y falta la aceptación externa con teléfono controlado.
 - U4, U7, U8 y U9 permanecen pendientes por decisión.
 - U7 conserva errores en KPI-19, KPI-26 y KPI-29.
 - U8 no tiene una certificación válida: la ejecución anterior falló por SQL posicional sin parámetros y no debe regenerarse antes de corregir U7/U8.
 
 Pendientes reales detectados:
 
-- aplicar las migraciones `015_harden_handoff_delivery.sql`, `016_harden_media_download_delivery.sql` y `017_harden_follow_up_delivery.sql`
-- importar y activar `OPS - Handoff Notification Scheduler`, `OPS - Media Download Scheduler` y los workflows modificados
+- publicar los blindajes del pipeline después de revisar el diff
+- repetir migraciones e importación únicamente en los ambientes objetivo que todavía no recibieron este corte
 - configurar credenciales ClickUp/Evolution, variables de follow-up y el volumen persistente de media en el ambiente objetivo
 - ejecutar preflight, verificación remota, gates y E2E controlado después de sincronizar el runtime
 - remediar U7 y rehacer U8 sólo cuando se retome explícitamente ese alcance

@@ -1,19 +1,19 @@
 # Estado actual — 2026-08-08
 
-Este es el corte canónico del proyecto. El repositorio contiene remediaciones verificadas que todavía **no fueron publicadas ni aplicadas al runtime**.
+Este es el corte canónico del proyecto. Las remediaciones U1/U3/U5/U6 están desplegadas en el runtime local; los últimos blindajes del pipeline permanecen sin commit ni push.
 
 ## Resumen ejecutivo
 
 | Área | Estado |
 |---|---|
 | Rama | `feat/afinar-hormi-atencion` |
-| HEAD base | `80718c3` |
-| Divergencia remota | 21 commits ahead de `origin/feat/afinar-hormi-atencion` |
-| Working tree | 51 archivos: 30 modificados, 7 eliminados y 14 nuevos |
-| Unidades completas en HEAD | U0 y U2 |
-| Remediaciones locales sin commit | U1, U3, U5 y U6 |
+| HEAD | `32c1de7` |
+| Divergencia remota | 1 commit ahead de `origin/feat/afinar-hormi-atencion` |
+| Working tree | Blindajes n8n, regresiones y este estado sin commit |
+| Unidades remediadas | U1, U3, U5 y U6 |
+| Runtime | Migraciones `015`–`017`, schedulers OPS y webhook canónico activos |
 | Pendientes por decisión | U4, U7, U8 y U9 |
-| Publicación | Sin commit, push ni deploy de las remediaciones locales |
+| Publicación | Runtime reparado; cambios de blindaje aún sin commit ni push |
 
 ## Estado por capa
 
@@ -28,14 +28,13 @@ Este es el corte canónico del proyecto. El repositorio contiene remediaciones v
 
 ### Runtime
 
-El runtime no refleja todavía las remediaciones locales. Antes de validarlas en un ambiente deben:
+- Las migraciones `015`, `016` y `017` están aplicadas en `crm_whatsapp_app`.
+- `WA - Inbound Entry`, `WA - Inbound Recovery` y los tres schedulers OPS están activos.
+- Evolution apunta al POST canónico `.../evolutionwebhook/wa-inbound-entry`; n8n registra ese POST y el GET de healthcheck.
+- Las 14 definiciones remotas coinciden con los candidatos locales resueltos.
+- El smoke runtime de invocación `Execute Workflow -> OPS - Handoff Notification Scheduler` finalizó correctamente y no dejó workflows temporales.
 
-1. aplicarse las migraciones `015`, `016` y `017`;
-2. importarse y activarse los workflows OPS nuevos o modificados;
-3. configurarse credenciales, variables y almacenamiento persistente;
-4. ejecutarse el preflight, la verificación remota y un E2E controlado.
-
-No debe inferirse estado productivo a partir del working tree.
+La reparación se hizo desde un snapshot completo en `backups/runtime-repair-20260808-192944/`, sin enviar mensajes E2E ni crear efectos externos.
 
 ### Certificación
 
@@ -54,12 +53,18 @@ No se debe regenerar `suite/report-certificacion.md` hasta remediar U7 y U8.
 | U3 — handoff | PASS |
 | U5 — media | PASS |
 | U6 — follow-up | PASS |
-| Integridad dispatcher, sincronización de nodos, JSON y `git diff --check` | PASS |
+| Bootstrap y contratos de subworkflow | PASS |
+| Integridad dispatcher, unicidad de IDs, sincronización de nodos, JSON y `git diff --check` | PASS |
+| Verificación remota completa | 14/14 definiciones PASS |
+| Webhooks Entry | POST canónico + GET healthcheck PASS |
+| Smoke runtime de subworkflow | PASS |
 
-Esta evidencia demuestra consistencia local del repositorio; no reemplaza migración, importación, configuración ni pruebas sobre el runtime objetivo.
+Esta evidencia cubre repositorio y runtime local. Todavía no reemplaza la aceptación externa controlada con un teléfono de prueba.
 
 ## Próximo corte
 
 - Mantener U7 y U8 pendientes hasta retomarlas explícitamente.
 - Mantener U4 y U9 fuera de alcance.
-- Cuando se autorice el despliegue, seguir [`guia-produccion.md`](./guia-produccion.md) y registrar evidencia separada de repositorio y runtime.
+- Commit/push de los blindajes pendientes después de revisar el diff completo.
+- Ejecutar la aceptación externa controlada cuando se disponga de un teléfono de prueba.
+- Mantener evidencia separada de repositorio, runtime y efectos externos.

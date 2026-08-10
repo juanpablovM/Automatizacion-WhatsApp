@@ -6,14 +6,16 @@
 
 Estado del repositorio en el corte del `2026-08-08`:
 
-- U1, U3, U5 y U6 tienen remediaciones verificadas en el working tree, todavía sin commit, push ni deploy
+- U1, U3, U5 y U6 están remediadas y desplegadas en el runtime local
 - U4, U7, U8 y U9 permanecen pendientes por decisión
-- el runtime todavía requiere migraciones, importación, activación y configuración para incorporar esas remediaciones
+- el pipeline de sync, los triggers de subworkflow y la unicidad de IDs tienen blindajes locales pendientes de commit/push
+- Entry, Recovery y los tres schedulers OPS están activos; el webhook POST canónico y el GET de salud están registrados
 
-Último runtime observado, correspondiente a la revisión del `2026-06-30`:
+Último runtime observado, correspondiente a la reparación controlada del `2026-08-08`:
 
 - stack local arriba y healthy
-- `WA - Inbound Entry` activo en `n8n`
+- `WA - Inbound Entry`, `WA - Inbound Recovery` y los tres schedulers OPS activos en `n8n`
+- POST canónico de Evolution y GET de healthcheck registrados
 - `wahormiglass` en `Evolution API` con estado `open`
 - contrato local AI y regresión conversacional local en `OK`
 - restore check del ultimo backup estructurado en `OK`
@@ -90,6 +92,9 @@ Los enlaces se resuelven desde `n8n/workflow-links.json`.
 - contrato AI: 7 casos PASS
 - U2: 20 PASS / 0 FAIL
 - U3, U5 y U6: PASS
+- bootstrap, triggers passthrough y unicidad de IDs: PASS
+- verificación remota completa: 14/14 definiciones PASS
+- smoke runtime `Execute Workflow -> Handoff Scheduler`: PASS
 - `OPS - Error Handler`: smoke OK con auditoria creada
 - E2E asesor Vitacura: OK
 - respuestas `no` aplicadas a acceso/escombros sin perder contexto
@@ -116,7 +121,8 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 - ampliar la matriz E2E para pagos, garantias, reclamos y B2B
 - implementar carga del binario de adjuntos a ClickUp
 - corregir KPI-19, KPI-26 y KPI-29 antes de regenerar la certificación U8
-- aplicar las migraciones `015`–`017` e importar, activar y configurar los workflows remediados en el runtime
+- revisar y publicar los blindajes locales del pipeline n8n
+- ejecutar la aceptación externa controlada con un teléfono de prueba
 - sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
 ## Puesta en marcha local
