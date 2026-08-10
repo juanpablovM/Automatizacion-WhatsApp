@@ -11,6 +11,9 @@ const vm = require('vm');
 const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const node = (name) => workflow.nodes.find((candidate) => candidate.name === name);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const nodeIds = workflow.nodes.map((candidate) => candidate.id);
+assert(nodeIds.every((id) => typeof id === 'string' && id.length > 0), 'every dispatcher node must have a stable ID');
+assert(new Set(nodeIds).size === nodeIds.length, 'dispatcher node IDs must be unique');
 const prepare = node('Prepare Verified Handoff');
 assert(prepare, 'Prepare Verified Handoff node is missing');
 const merge = node('Merge Lead Context');
@@ -107,22 +110,33 @@ NODE
   jq '.[0].meta = {tampered:true}' "$tmp_dir/valid.json" > "$tmp_dir/case.json"; assert_rejected "metadata drift"
   jq '.[0].staticData = {mutable:true}' "$tmp_dir/valid.json" > "$tmp_dir/case.json"
   sh "$ROOT_DIR/scripts/dev/sync-n8n-workflows.sh" --verify-remote "$tmp_dir/case.json" "$tmp_dir/candidate" >/dev/null
-  node - "$ROOT_DIR/scripts/dev/sync-n8n-workflows.sh" <<'NODE'
+  node - "$ROOT_DIR/scripts/dev/sync-n8n-workflows.sh" "$ROOT_DIR/scripts/ops/test-e2e-lead-creation.sh" <<'NODE'
 const source = require('fs').readFileSync(process.argv[2], 'utf8');
+const e2e = require('fs').readFileSync(process.argv[3], 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const restore = source.slice(source.indexOf('restore_runtime_workflows()'), source.indexOf('activate_runtime_workflows()'));
 assert(restore.indexOf('set_callers_active false') < restore.indexOf('copy_and_import "$snapshot_dir"'), 'rollback must pause before import');
 assert(source.includes('for workflow_id in $workflow_ids'), 'pause must cover every duplicate caller ID');
+assert(source.includes('assert_workflows_active'), 'activation must verify persisted runtime state');
 assert(source.includes('set_callers_active true entry'), 'acceptance may activate Entry only');
 assert(source.includes('restore_evolution_webhook'), 'Evolution cleanup must be registered');
 assert(source.includes('E2E_WEBHOOK_PATH='), 'acceptance must use a temporary webhook path');
+assert(source.includes('purge_inbound_entry_acceptance_webhook_rows'), 'cleanup must be scoped to acceptance webhooks');
+assert(!source.includes("AND method='POST' AND node='EvolutionWebhook';\""), 'cleanup must never delete every Entry POST webhook');
+assert(source.includes("node='EvolutionWebhook'") && source.includes("node='InboundHealthCheck'"), 'runtime readiness must verify POST and GET webhooks');
+assert(e2e.includes("LIKE '%/${E2E_WEBHOOK_PATH}'"), 'E2E must resolve the exact temporary webhook suffix');
+assert(!e2e.includes('ORDER BY \\"webhookPath\\" DESC LIMIT 1'), 'E2E must not select an arbitrary lexicographic webhook');
 assert(source.includes("<<'SQL'"), 'remote export SQL must use a quote-preserving heredoc');
 assert(source.includes('"staticData"') && source.includes('"pinData"'), 'camelCase workflow columns must stay quoted');
 const sync = source.slice(source.indexOf('sync_workflows()'), source.indexOf('case "${1:-}"'));
 assert(sync.indexOf('ensure_unique_runtime_names') < sync.indexOf('snapshot_runtime_workflows "$snapshot_dir"'), 'runtime names must be unique before snapshot');
 assert(sync.indexOf('run_controlled_acceptance') < sync.indexOf('activate_runtime_workflows'), 'acceptance must precede final activation');
+const activation = source.slice(source.indexOf('activate_runtime_workflows()'), source.indexOf('purge_inbound_entry_acceptance_webhook_rows()'));
+assert(activation.includes("'.active // false'") && activation.includes('set_named_workflows_active true'), 'final activation must restore declared active schedulers');
+const verifyCli = source.slice(source.indexOf('  --verify-remote)'), source.indexOf('  --snapshot)'));
+assert(verifyCli.includes('prepare_import_dir') && verifyCli.includes('verify_remote'), '--verify-remote must compare resolved local definitions');
 NODE
-  echo "Dispatcher sync integrity OK: 1 valid + 9 rejected fixtures + release ordering"
+  echo "Dispatcher sync integrity OK: 1 valid + 9 rejected fixtures + release ordering + webhook gates"
 }
 
 

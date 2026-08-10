@@ -4,7 +4,9 @@
   "active": true,
   "nodes": [
     {
-      "parameters": {},
+      "parameters": {
+        "inputSource": "passthrough"
+      },
       "id": "91000000-0000-0000-0000-000000000001",
       "name": "Workflow Input",
       "type": "n8n-nodes-base.executeWorkflowTrigger",

@@ -55,9 +55,26 @@ PHONE_NUMBER="$1"
 TEST_MESSAGE="Quiero cotizar hormigón armado en Santiago para una losa de 100 m2"
 CONFIRM_MESSAGE="Si, correcto"
 
-webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
-  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
-  -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' LIMIT 1;")
+[ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$E2E_WEBHOOK_PATH" in
+  *[!A-Za-z0-9._-]*) echo "ERROR: E2E_WEBHOOK_PATH contiene caracteres invalidos" >&2; exit 1 ;;
+esac
+
+webhook_path=""
+webhook_attempt=0
+while [ "$webhook_attempt" -lt 30 ]; do
+  if [ -n "${E2E_WEBHOOK_PATH:-}" ]; then
+    webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+      psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
+      -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' AND \"webhookPath\" LIKE '%/${E2E_WEBHOOK_PATH}' LIMIT 1;")
+  else
+    webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+      psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
+      -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' AND \"webhookPath\" NOT LIKE '%/acceptance-%' LIMIT 1;")
+  fi
+  [ -z "$webhook_path" ] || break
+  webhook_attempt=$((webhook_attempt + 1))
+  sleep 1
+done
 [ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$webhook_path" in *"/${E2E_WEBHOOK_PATH}") ;; *) echo "ERROR: el webhook activo no es el temporal esperado" >&2; exit 1 ;; esac
 
 if [ -z "$webhook_path" ]; then

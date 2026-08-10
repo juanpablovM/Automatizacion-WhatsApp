@@ -2,7 +2,9 @@
   "name": "OPS - Follow-Up Scheduler",
   "nodes": [
     {
-      "parameters": {},
+      "parameters": {
+        "inputSource": "passthrough"
+      },
       "id": "workflow-input",
       "name": "Workflow Input",
       "type": "n8n-nodes-base.executeWorkflowTrigger",

@@ -646,7 +646,8 @@
       ],
       "parameters": {
         "jsCode": "const OPT_OUT_PATTERNS = [\n  /no me escribas mas/i,\n  /escribas mas/i,\n  /baja.*(de la lista|pas|mensajes|programa)/i,\n  /\\bstop\\b/i,\n  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,\n  /dej(?:a|en) de escribirme/i,\n  /no me envies mas mensajes/i,\n  /darme de baja/i,\n  /quitarme de la lista/i,\n  /no me molestes/i,\n];\n\nconst LOST_PATTERNS = [\n  /ya no (me interesa|necesito|quiero)/i,\n  /lo pense y no (voy a|quiero)/i,\n  /estoy con (otra|la competencia)/i,\n  /no voy a (comprar|avanzar)/i,\n  /cerremos el tema/i,\n];\n\nconst matches = (patterns, text) => patterns.some((pattern) => pattern.test(String(text || '').trim()));\nconst detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);\nconst detectLostIntent = (text) => matches(LOST_PATTERNS, text);\n\nconst resolveCancellationAction = (row, now = new Date()) => {\n  const conversationId = Number(row.conversation_id);\n  const validConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\n  const customerText = String(row.text_body || '').trim();\n  const inboundMessageId = Number(row.message_id || 0) || null;\n  const inboundEventId = Number(row.inbound_event_id || 0) || null;\n  const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);\n  const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);\n  const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));\n  const optOut = detectOptOut(customerText);\n  const lost = detectLostIntent(customerText);\n\n  let action = validConversation ? 'cancel' : null;\n  let cancelReason = validConversation ? 'client_replied' : null;\n  if (optOut) {\n    action = 'opt_out';\n    cancelReason = 'opt_out';\n  } else if (lost) {\n    cancelReason = 'lost';\n  } else if (escalated) {\n    cancelReason = 'escalated';\n  } else if (closed) {\n    cancelReason = 'closed';\n  }\n\n  const responseText = String(row.response_text || '').trim();\n  const shouldSchedule = validConversation\n    && action === 'cancel'\n    && cancelReason === 'client_replied'\n    && responseText.length > 0\n    && String(row.conversation_status_code || '') === 'waiting_user';\n  const sourceKey = inboundMessageId || inboundEventId;\n  const cycleKey = sourceKey ? `inbound:${sourceKey}` : null;\n  const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));\n\n  return {\n    follow_up_cancel_action: action,\n    follow_up_cancel_reason: cancelReason,\n    follow_up_source_text: customerText || null,\n    follow_up_source_message_id: inboundMessageId,\n    follow_up_should_schedule: shouldSchedule,\n    follow_up_cycle_key: cycleKey,\n    follow_up_motivo: 'lead_sin_respuesta',\n    follow_up_scheduled_at: shouldSchedule\n      ? new Date(now.getTime() + firstDelayHours * 3600000).toISOString()\n      : null,\n    follow_up_cancel_decided: Boolean(action),\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { OPT_OUT_PATTERNS, LOST_PATTERNS, detectOptOut, detectLostIntent, resolveCancellationAction };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({\n    json: {\n      ...item.json,\n      ...resolveCancellationAction({\n        ...item.json,\n        follow_up_first_delay_hours: Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24),\n      }),\n    },\n  }));\n}\n"
-      }
+      },
+      "id": "50000000-0000-0000-0000-000000000066"
     },
     {
       "name": "Follow-Up Lane Complete",
@@ -658,7 +659,8 @@
       ],
       "parameters": {
         "jsCode": "const out = (items || []).map((i) => ({ json: { ...i.json, follow_up_lane: \"complete\" } })); return out;"
-      }
+      },
+      "id": "50000000-0000-0000-0000-000000000067"
     },
     {
       "parameters": {
@@ -673,7 +675,7 @@
           "waitForSubWorkflow": true
         }
       },
-      "id": "50000000-0000-0000-0000-000000000045",
+      "id": "50000000-0000-0000-0000-000000000044",
       "name": "Dispatch Handoff Notification Workflow",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,

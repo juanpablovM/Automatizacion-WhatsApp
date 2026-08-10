@@ -97,6 +97,24 @@ validate_local() {
       echo "ERROR: workflow sin nombre en $file" >&2
       exit 1
     fi
+    if ! jq -e '
+      (.nodes | type == "array")
+      and all(.nodes[]; (.id | type == "string") and (.id | length > 0))
+      and (([.nodes[].id] | unique | length) == (.nodes | length))
+    ' "$file" >/dev/null; then
+      echo "ERROR: '$name' tiene IDs de nodo vacios o duplicados" >&2
+      exit 1
+    fi
+    if ! jq -e '
+      all(
+        .nodes[] | select(.type == "n8n-nodes-base.executeWorkflowTrigger" and (.typeVersion // 1) >= 1.1);
+        .parameters.inputSource == "passthrough"
+        or ((.parameters.workflowInputs.values // []) | length > 0)
+      )
+    ' "$file" >/dev/null; then
+      echo "ERROR: '$name' tiene Execute Workflow Trigger v1.1 sin passthrough ni schema" >&2
+      exit 1
+    fi
     printf '%s\n' "$name" >> "$tmp_names"
     workflow_count=$((workflow_count + 1))
   done
@@ -468,10 +486,21 @@ verify_remote_export() {
   echo "Verificacion remota OK"
 }
 
-set_callers_active() {
+assert_workflows_active() {
   state="$1"
-  [ "${2:-both}" = entry ] && callers='WA - Inbound Entry' || callers='WA - Inbound Entry|WA - Inbound Recovery'
-  printf '%s\n' "$callers" | tr '|' '\n' | while IFS= read -r workflow_name; do
+  shift
+  expected=f
+  [ "$state" = true ] && expected=t
+  for workflow_name do
+    actual=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT active FROM workflow_entity WHERE name='$workflow_name';\"")
+    [ "$actual" = "$expected" ] || { echo "ERROR: '$workflow_name' active=$actual, esperado=$expected" >&2; return 1; }
+  done
+}
+
+set_named_workflows_active() {
+  state="$1"
+  shift
+  for workflow_name do
     workflow_ids=$(query_workflow_ids | awk -F'|' -v name="$workflow_name" '$1 == name { print $2 }')
     count=$(printf '%s\n' "$workflow_ids" | sed '/^$/d' | wc -l | tr -d ' ')
     [ "$count" -ge 1 ] || { echo "ERROR: no existe workflow '$workflow_name' en n8n" >&2; exit 1; }
@@ -479,6 +508,16 @@ set_callers_active() {
     for workflow_id in $workflow_ids; do compose_cmd exec -T -u node "$N8N_SERVICE" n8n update:workflow --id="$workflow_id" --active="$state" >/dev/null; done
   done
   compose_cmd restart "$N8N_SERVICE" >/dev/null
+  assert_workflows_active "$state" "$@"
+}
+
+set_callers_active() {
+  state="$1"
+  if [ "${2:-both}" = entry ]; then
+    set_named_workflows_active "$state" 'WA - Inbound Entry'
+  else
+    set_named_workflows_active "$state" 'WA - Inbound Entry' 'WA - Inbound Recovery'
+  fi
 }
 
 snapshot_runtime_workflows() {
@@ -521,9 +560,26 @@ verify_remote() {
 }
 
 activate_runtime_workflows() {
-  set_callers_active true
-  echo "Workflows runtime activados: Entry y Recovery"
+  set -- 'WA - Inbound Entry' 'WA - Inbound Recovery'
+  workflow_files | while IFS= read -r file; do
+    if [ "$(jq -r '.active // false' "$file")" = true ]; then
+      workflow_name_from_file "$file"
+    fi
+  done > /tmp/crm-n8n-active-workflows-$$
+  while IFS= read -r workflow_name; do
+    [ -z "$workflow_name" ] || set -- "$@" "$workflow_name"
+  done < /tmp/crm-n8n-active-workflows-$$
+  rm -f /tmp/crm-n8n-active-workflows-$$
+  set_named_workflows_active true "$@"
+  echo "Workflows runtime activados: Entry, Recovery y schedulers declarados activos"
 }
+
+purge_inbound_entry_acceptance_webhook_rows() {
+  entry_id=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT id FROM workflow_entity WHERE name='WA - Inbound Entry' LIMIT 1;\"")
+  [ -n "$entry_id" ] || { echo "ERROR: no se resolvio 'WA - Inbound Entry' para limpiar webhooks de acceptance" >&2; exit 1; }
+  compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"DELETE FROM webhook_entity WHERE \\\"workflowId\\\"='$entry_id' AND method='POST' AND node='EvolutionWebhook' AND \\\"webhookPath\\\" LIKE '%/acceptance-%';\"" >/dev/null
+}
+
 
 run_controlled_acceptance() {
   phone="$1"
@@ -533,9 +589,10 @@ run_controlled_acceptance() {
   . "$PROJECT_ROOT/.env"
   EVOLUTION_WEBHOOK_STATE=$(mktemp)
   curl -fsS -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/find/${EVOLUTION_DEFAULT_INSTANCE}" > "$EVOLUTION_WEBHOOK_STATE"
-  webhook_payload=$(jq -c '{webhook:{enabled:false,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:.headers}}' "$EVOLUTION_WEBHOOK_STATE")
+  webhook_payload=$(jq -c '{webhook:{enabled:false,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:(.headers // {})}}' "$EVOLUTION_WEBHOOK_STATE")
   curl -fsS -X POST -H 'Content-Type: application/json' -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/set/${EVOLUTION_DEFAULT_INSTANCE}" -d "$webhook_payload" >/dev/null
   set +e
+  purge_inbound_entry_acceptance_webhook_rows
   set_callers_active true entry
   E2E_ALLOW_EXTERNAL_EFFECTS=yes E2E_EVIDENCE_FILE="$evidence_file" E2E_WEBHOOK_PATH="$acceptance_path" sh "$PROJECT_ROOT/scripts/ops/test-e2e-lead-creation.sh" "$phone"
   status=$?
@@ -547,7 +604,7 @@ run_controlled_acceptance() {
 
 restore_evolution_webhook() {
   [ -n "$EVOLUTION_WEBHOOK_STATE" ] && [ -f "$EVOLUTION_WEBHOOK_STATE" ] || return 0
-  payload=$(jq -c '{webhook:{enabled:.enabled,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:.headers}}' "$EVOLUTION_WEBHOOK_STATE")
+  payload=$(jq -c '{webhook:{enabled:.enabled,url:.url,byEvents:.webhookByEvents,base64:.webhookBase64,events:.events,headers:(.headers // {})}}' "$EVOLUTION_WEBHOOK_STATE")
   attempt=0
   while [ "$attempt" -lt 3 ]; do
     if curl -fsS -X POST -H 'Content-Type: application/json' -H "apikey: $EVOLUTION_API_KEY" "$EVOLUTION_SERVER_URL/webhook/set/${EVOLUTION_DEFAULT_INSTANCE}" -d "$payload" >/dev/null; then rm -f "$EVOLUTION_WEBHOOK_STATE"; EVOLUTION_WEBHOOK_STATE=""; return 0; fi
@@ -557,13 +614,25 @@ restore_evolution_webhook() {
 }
 
 verify_webhook_ready() {
+  entry_file=$(workflow_files | while IFS= read -r file; do
+    [ "$(workflow_name_from_file "$file")" = 'WA - Inbound Entry' ] && { printf '%s\n' "$file"; exit 0; }
+  done)
+  [ -n "$entry_file" ] || { echo "ERROR: no se encontro el workflow local 'WA - Inbound Entry'" >&2; return 1; }
+  post_path=$(jq -r '.nodes[] | select(.name == "EvolutionWebhook") | .parameters.path // empty' "$entry_file")
+  health_path=$(jq -r '.nodes[] | select(.name == "InboundHealthCheck") | .parameters.path // empty' "$entry_file")
+  [ -n "$post_path" ] && [ -n "$health_path" ] || { echo "ERROR: Entry no declara paths POST/GET canonicos" >&2; return 1; }
+
   attempt=0
   while [ "$attempt" -lt 20 ]; do
-    webhook_path=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT \\\"webhookPath\\\" FROM webhook_entity WHERE \\\"workflowId\\\"=(SELECT id FROM workflow_entity WHERE name='WA - Inbound Entry') AND node='InboundHealthCheck' LIMIT 1;\"")
-    [ -n "$webhook_path" ] && curl -fsS "http://127.0.0.1:${N8N_PORT:-5678}/webhook/$webhook_path" >/dev/null && return 0
+    post_webhook=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT \\\"webhookPath\\\" FROM webhook_entity WHERE \\\"workflowId\\\"=(SELECT id FROM workflow_entity WHERE name='WA - Inbound Entry') AND method='POST' AND node='EvolutionWebhook' AND \\\"webhookPath\\\" LIKE '%/$post_path' LIMIT 1;\"")
+    health_webhook=$(compose_cmd exec -T "$POSTGRES_SERVICE" sh -lc "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -At -c \"SELECT \\\"webhookPath\\\" FROM webhook_entity WHERE \\\"workflowId\\\"=(SELECT id FROM workflow_entity WHERE name='WA - Inbound Entry') AND method='GET' AND node='InboundHealthCheck' AND \\\"webhookPath\\\" LIKE '%/$health_path' LIMIT 1;\"")
+    if [ -n "$post_webhook" ] && [ -n "$health_webhook" ] && curl -fsS "http://127.0.0.1:${N8N_PORT:-5678}/webhook/$health_webhook" >/dev/null; then
+      echo "Webhooks runtime de Entry verificados: POST canonico + GET healthcheck"
+      return 0
+    fi
     sleep 1; attempt=$((attempt + 1))
   done
-  echo "ERROR: webhook de Entry no quedo disponible despues de activar" >&2
+  echo "ERROR: webhooks POST/GET de Entry no quedaron disponibles despues de activar" >&2
   return 1
 }
 
@@ -642,6 +711,7 @@ sync_workflows() {
   copy_and_import "$resolved_dir" "candidato post-acceptance"
   verify_remote "$remote_json" yes "$resolved_dir"
   activate_runtime_workflows
+  purge_inbound_entry_acceptance_webhook_rows
   verify_remote "$tmp_dir/post-activation.json" no "$resolved_dir"
   verify_webhook_ready
   rollback_required=no
@@ -672,9 +742,14 @@ case "${1:-}" in
       verify_remote_export "$2" no "${3:-}"
     else
       require_command docker
-      tmp_remote=$(mktemp)
-      trap 'rm -f "$tmp_remote"' EXIT
-      verify_remote "$tmp_remote"
+      tmp_verify=$(mktemp -d)
+      trap 'rm -rf "$tmp_verify"' EXIT
+      query_workflow_ids > "$tmp_verify/runtime.ids"
+      ensure_unique_runtime_names "$tmp_verify/runtime.ids"
+      write_ids_json "$tmp_verify/runtime.ids" "$tmp_verify/runtime.ids.json"
+      ensure_all_workflows_have_ids "$tmp_verify/runtime.ids.json"
+      prepare_import_dir "$tmp_verify/runtime.ids.json" "$tmp_verify/resolved" yes
+      verify_remote "$tmp_verify/remote.json" no "$tmp_verify/resolved"
     fi
     ;;
   --snapshot)

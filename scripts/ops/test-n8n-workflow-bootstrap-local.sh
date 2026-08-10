@@ -131,4 +131,16 @@ resolve_line=$(grep -n 'copy_and_import "$resolved_dir" "links resueltos"' "$SYN
 [ "$pause_line" -lt "$bootstrap_line" ]
 [ "$bootstrap_line" -lt "$resolve_line" ]
 
-echo "n8n workflow bootstrap local tests OK: missing workflow creation + second-phase links + rollback cleanup"
+# Runtime-imported subworkflows must accept the complete item explicitly on
+# executeWorkflowTrigger v1.1. Empty workflowInputs are rejected by n8n when
+# the scheduler is called from another workflow, even though its cron lane runs.
+for scheduler in "$PROJECT_ROOT"/n8n/workflows/ops-*-scheduler.json; do
+  jq -e '
+    all(
+      .nodes[] | select(.type == "n8n-nodes-base.executeWorkflowTrigger" and .typeVersion >= 1.1);
+      .parameters.inputSource == "passthrough"
+    )
+  ' "$scheduler" >/dev/null
+done
+
+echo "n8n workflow bootstrap local tests OK: missing workflow creation + second-phase links + rollback cleanup + subworkflow passthrough"
