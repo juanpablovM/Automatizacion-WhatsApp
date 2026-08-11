@@ -153,9 +153,10 @@ node <<'NODE'
       createsLead: true,
       kind: 'sales',
     },
-    // PRD 13.4 (B06): el servicio nunca satisface product. El cliente dijo
-    // solo servicio/ciudad/requerimiento; el gate debe listar product primero
-    // aunque state.service este presente y pedirlo al cliente.
+    // PRD 6.10 (mencion directa de producto): el producto se satisface con la
+    // mencion del cliente; lo que falta es la MODALIDAD (se pregunta primero,
+    // regla de orden: modalidad antes que cantidad). El cliente dice solo
+    // "Baldosas" -> el gate debe pedir modality, no product.
     material_producto: {
       intent: 'quote_request',
       modality: 'material',
@@ -168,9 +169,10 @@ node <<'NODE'
         },
         service: 'Baldosas', city: 'Santiago',
       },
-      missingField: 'product',
-      missingCtx: { commune: 'Santiago', quantity: '40 unidades', modality: 'material', customer_type: 'b2c', lead_class: 'B' },
-      expectedQuestionKey: 'product',
+      missingField: 'modality',
+      missingCtx: { commune: 'Santiago', quantity: '40 unidades', customer_type: 'b2c', lead_class: 'B' },
+      mentionText: 'Baldosas',
+      expectedQuestionKey: 'modality',
       createsLead: true,
       kind: 'sales',
     },
@@ -340,7 +342,7 @@ node <<'NODE'
     },
   };
 
-  const buildRow = (profile, ctx, { confirmation = true, text = 'Si', overrides = {} } = {}) => ({
+  const buildRow = (profile, ctx, { confirmation = true, text, overrides = {} } = {}) => ({
     ...baseRow,
     ...profile.complete,
     qualification_context: { ...ctx },
@@ -353,7 +355,7 @@ node <<'NODE'
     lead_class: profile.lead_class,
     escalation_area: profile.escalation_area || 'none',
     pending_question_key: 'final_confirmation',
-    text_body: text,
+    text_body: text ?? profile.mentionText ?? 'Si',
     confirmation_status: confirmation ? 'confirmed' : 'none',
     should_create_lead: confirmation,
     ...overrides,
@@ -427,7 +429,17 @@ node <<'NODE'
       expectEqual(blocked.confirmation_status, 'pending', `${profileKey}: confirmacion queda pendiente`);
       expectEqual(blocked.needs_confirmation, true, `${profileKey}: pide confirmacion/necesita datos`);
       if (profile.expectedQuestionKey) {
-        expectEqual(blocked.response_kind, 'advisor_guardrail_question', `${profileKey}: pregunta el faltante`);
+        // Regla PRD (sin pregunta circular de producto): product nunca es una
+        // pregunta advisor; la mencion directa lo satisface. Si aun faltara,
+        // la pregunta la formula el modelo, no el advisor.
+        if (profile.expectedQuestionKey === 'product') {
+          expectEqual(
+            blocked.response_kind !== 'advisor_guardrail_question', true,
+            `${profileKey}: product NO se pregunta por el advisor`
+          );
+        } else {
+          expectEqual(blocked.response_kind, 'advisor_guardrail_question', `${profileKey}: pregunta el faltante`);
+        }
         expectEqual(blocked.pending_question_key, profile.expectedQuestionKey, `${profileKey}: pregunta el primer faltante`);
         assert(String(blocked.response_text).trim().length > 0, `${profileKey}: la pregunta es un mensaje natural`);
       }
@@ -481,6 +493,10 @@ node <<'NODE'
     expectEqual(noProductEvidenceResult.commercial_policy_profile, 'material', 'sin producto el perfil sigue siendo material');
     expectIncludes(noProductEvidenceResult.commercial_missing_fields, 'product', 'el servicio no debe auto-satisfacer product (PRD 13.4)');
     expectEqual(noProductEvidenceResult.should_create_lead, false, 'sin product en contexto no se crea lead');
+    expectEqual(
+      noProductEvidenceResult.pending_question_key, 'product',
+      'sin producto el pending queda en product (el texto de la mencion lo formula el modelo)'
+    );
     expectEqual(
       noProductEvidenceResult.commercial_field_evidence.product, 'missing',
       'la evidencia de product sin contexto debe reportarse missing'
@@ -559,6 +575,73 @@ node <<'NODE'
 
     const okLead = await runCode(crm, 'Prepare Lead Assignment', crmRow([]), {}, env);
     expectEqual(okLead.lead_status_code, 'qualified_complete', 'crm crea lead cuando no hay comerciales pendientes');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 6. PRD 6.10: anti-repeticion de la pregunta comercial (clarify -> handoff).
+  // El historial vive en metadata_json y el conteo solo avanza si el cliente
+  // NO aporta evidencia nueva en el turno.
+  // ---------------------------------------------------------------------------
+  console.log('[6] Anti-repeticion: la misma pregunta sin progreso clarifica y luego escala');
+  {
+    const antiRepeatCtx = {
+      product: 'Baldosas', commune: 'Santiago', quantity: '40 unidades',
+      customer_type: 'b2c', lead_class: 'B',
+    };
+    const antiRepeatRow = (retry) => ({
+      ...buildRow(PROFILES.material, antiRepeatCtx, { confirmation: false }),
+      modality: 'unknown',
+      text_body: 'No se',
+      metadata_json: JSON.stringify({
+        pending_question_key: 'modality',
+        commercial_question_retry: retry,
+      }),
+      pending_question_key: 'modality',
+    });
+    const metadataOf = (result) => {
+      try { return JSON.parse(result.metadata_json); } catch (_error) { return {}; }
+    };
+
+    // Turno 1: sin respuesta, el conteo sube a 1 y se sigue preguntando normal.
+    const t1 = await runCode(orchestrator, 'Apply AI Assistance', antiRepeatRow(0), {}, env);
+    expectEqual(t1.pending_question_key, 'modality', 'anti-repeat: turno 1 sigue en modality');
+    expectEqual(t1.response_kind, 'advisor_guardrail_question', 'anti-repeat: turno 1 pregunta por advisor');
+    expectEqual(metadataOf(t1).commercial_question_retry, 1, 'anti-repeat: turno 1 sin progreso -> retry 1');
+    expectEqual(metadataOf(t1).anti_repeat_action, 'none', 'anti-repeat: retry 1 no dispara accion');
+
+    // Turno 2: segundo turno sin progreso -> el bot aclara con voz propia.
+    const t2 = await runCode(orchestrator, 'Apply AI Assistance', antiRepeatRow(1), {}, env);
+    expectEqual(metadataOf(t2).commercial_question_retry, 2, 'anti-repeat: turno 2 -> retry 2');
+    expectEqual(t2.response_kind, 'anti_repeat_clarify', 'anti-repeat: retry 2 clarifica con texto propio');
+    expectEqual(
+      metadataOf(t2).anti_repeat_action, 'clarify',
+      'anti-repeat: retry 2 dispara clarify'
+    );
+    assert(
+      String(t2.response_text).includes('no quiero insistir'),
+      'anti-repeat: la clarificacion tiene voz propia del bot'
+    );
+
+    // Turno 3: tercer turno sin progreso -> escala a humano.
+    const t3 = await runCode(orchestrator, 'Apply AI Assistance', antiRepeatRow(2), {}, env);
+    expectEqual(t3.should_escalate, true, 'anti-repeat: retry 3 escala a humano');
+    expectEqual(t3.response_kind, 'escalation_routing', 'anti-repeat: retry 3 deriva');
+    expectEqual(t3.escalation_reason, 'no_progress_commercial_question_loop', 'anti-repeat: razon de escalacion explicita');
+    expectEqual(t3.pending_question_key, null, 'anti-repeat: al escalar no queda pregunta pendiente');
+    expectEqual(metadataOf(t3).anti_repeat_action, 'handoff', 'anti-repeat: retry 3 dispara handoff');
+
+    // Turno 4: el cliente responde la modalidad -> el conteo se resetea.
+    const t4 = await runCode(orchestrator, 'Apply AI Assistance', {
+      ...antiRepeatRow(3),
+      text_body: 'Solo material',
+      field_updates: { modality: 'material' },
+    }, {}, env);
+    expectEqual(metadataOf(t4).commercial_question_retry, 0, 'anti-repeat: con avance el conteo vuelve a 0');
+    expectEqual(t4.should_escalate, false, 'anti-repeat: con avance no escala');
+    expectEqual(
+      metadataOf(t4).anti_repeat_action, 'none',
+      'anti-repeat: con avance no dispara accion'
+    );
   }
 
   // ---------------------------------------------------------------------------

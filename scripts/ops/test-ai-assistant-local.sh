@@ -94,8 +94,21 @@ node <<'NODE'
     expectIncludes(schema.required, 'diagnostic_datos', 'Contrato debe exigir diagnostico D.A.T.O.S.');
     expectIncludes(schema.required, 'executive_summary', 'Contrato debe exigir resumen ejecutivo');
     expectIncludes(schema.required, 'explicitly_mentioned_fields', 'Contrato debe exigir trazabilidad de campos explicitos');
+    expectIncludes(
+      schema.properties.explicitly_mentioned_fields.items.enum,
+      'product',
+      'Contrato debe permitir marcar la mencion directa de producto'
+    );
     assert(request.ai_request.input[0].content.includes('D.A.T.O.S.'), 'Prompt no incorpora metodo D.A.T.O.S.');
     assert(request.ai_request.input[0].content.includes('Clasifica el lead'), 'Prompt no incorpora clasificacion comercial');
+    assert(
+      request.ai_request.input[0].content.includes('CLASIFICACION PRODUCTO vs SERVICIO'),
+      'Prompt no incorpora la regla de clasificacion product vs service'
+    );
+    assert(
+      request.ai_request.input[0].content.includes('Hormigon Armado Losa'),
+      'Prompt no ejemplifica que "Hormigon Armado Losa" es un producto'
+    );
     expectEqual(schema.additionalProperties, false, 'Contrato debe rechazar propiedades extra');
 
     const serializedHistory = JSON.stringify([
@@ -389,7 +402,10 @@ node <<'NODE'
       expectEqual(result.requirement, 'Renovar un baño', 'completo requirement');
       expectEqual(result.should_create_lead, false, 'sin confirmacion no crea lead');
       expectEqual(result.lead_class, 'A', 'clasificacion comercial');
-      expectEqual(result.modality, 'installation', 'modalidad');
+      // Regla PRD (clasificacion product vs service): "cotizar baldosas" sin
+      // evidencia de servicio -> la modalidad no se infiere (unknown).
+      expectEqual(result.modality, 'unknown', 'modalidad sin servicio no se infiere (product only)');
+      expectEqual(result.field_updates.product, 'Baldosas', 'mencion directa de producto satisface el campo');
       expectIncludes(result.missing_fields, 'confirmation', 'debe pedir confirmacion');
     },
   });
@@ -499,7 +515,66 @@ node <<'NODE'
     },
   });
 
-  console.log('AI assistant local contract OK: 7 escenarios simulados + fallback de configuracion');
+  await runSimulatedScenario({
+    name: 'hormigon armado losa es producto',
+    input: {
+      ...readSample('ai_greeting.sample.json'),
+      message_current: 'Necesito hormigon armado losa para una losa de 100 m2',
+      text_body: 'Necesito hormigon armado losa para una losa de 100 m2',
+    },
+    body: makeProviderBody({
+      ...baseResponse,
+      intent: 'installation_inquiry',
+      lead_quality: 'high',
+      customer_type: 'b2c',
+      lead_class: 'A',
+      modality: 'installation',
+      service: 'Hormigon',
+      city: '',
+      requirement: '',
+      confidence: 0.95,
+      reply_text: 'Para instalacion necesitamos revisar medidas y terreno.',
+      explicitly_mentioned_fields: [],
+    }),
+    expect: (result) => {
+      // Regla PRD (clasificacion product vs service): "Hormigon Armado Losa"
+      // es un PRODUCTO; sin evidencia de servicio la consulta es de cotizacion
+      // y la modalidad no se infiere.
+      expectEqual(result.intent, 'quote_request', 'producto sin servicio reclasifica a quote_request');
+      expectEqual(result.modality, 'unknown', 'producto sin servicio no infiere modalidad');
+      expectEqual(result.field_updates.product, 'Hormigon Armado Losa', 'mencion literal de producto completa el campo');
+    },
+  });
+
+  await runSimulatedScenario({
+    name: 'suministro implica solo material',
+    input: {
+      ...readSample('ai_greeting.sample.json'),
+      message_current: 'Necesito suministro de adoquines, solo material',
+      text_body: 'Necesito suministro de adoquines, solo material',
+    },
+    body: makeProviderBody({
+      ...baseResponse,
+      intent: 'installation_inquiry',
+      lead_quality: 'medium',
+      customer_type: 'b2c',
+      lead_class: 'B',
+      modality: 'installation',
+      service: 'Adoquines',
+      confidence: 0.92,
+      reply_text: 'Te puedo ayudar con eso.',
+      explicitly_mentioned_fields: [],
+    }),
+    expect: (result) => {
+      // Regla PRD (clasificacion product vs service): "suministro" /
+      // "solo material" es el servicio de material -> modalidad material,
+      // aunque el modelo haya inferido instalacion.
+      expectEqual(result.modality, 'material', 'suministro/solo material impone modalidad material');
+      expectEqual(result.field_updates.product, 'Adoquines', 'mencion de adoquines completa el campo');
+    },
+  });
+
+  console.log('AI assistant local contract OK: 9 escenarios simulados + fallback de configuracion');
 })().catch((error) => {
   console.error(error.stack || error.message);
   process.exit(1);

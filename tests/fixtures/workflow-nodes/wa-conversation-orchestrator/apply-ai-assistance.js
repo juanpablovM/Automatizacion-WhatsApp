@@ -165,6 +165,35 @@ const userMentionedField = (field, userText) => {
   return false;
 };
 
+// Regla PRD 6.10 (mencion directa de producto): la mencion del cliente es
+// evidencia "client_evidence" valida del campo product aunque no porte SKU.
+// Terminos del catalogo + hormigon/armado/losas/vigas/muros/cierres (el nombre
+// "Hormigon Armado Losa" es un PRODUCTO, no un servicio).
+const PRODUCT_TERM_RE = /\b(adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|armado|losa|loseta|viga|muro|solera|cierre|cierro|tapa)\w*\b/i;
+const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material']);
+const productPhraseFromClient = (text, catalogMatches) => {
+  const normalized = normalizeText(text);
+  const match = normalized.match(PRODUCT_TERM_RE);
+  if (!match) return null;
+  const grounded = (Array.isArray(catalogMatches) ? catalogMatches : [])
+    .map((item) => safe(item.name))
+    .filter(Boolean)
+    .find((name) => {
+      const head = String(name).toLowerCase().split(/\s+/)[0];
+      return head && normalized.includes(head);
+    });
+  if (grounded) return safe(grounded);
+  const tail = [];
+  for (const word of normalized.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
+    if (/\d|[.,/]/.test(word) || word.endsWith('m2')) break;
+    if (PRODUCT_PHRASE_STOPWORDS.has(word)) break;
+    tail.push(word);
+    if (tail.length === 2) break;
+  }
+  const phrase = [match[0], ...tail].join(' ');
+  return phrase.replace(/(^|\s)\S/g, (character) => character.toUpperCase());
+};
+
 const decodeStepState = (encoded) => {
   if (!encoded) return {};
   try {
@@ -388,6 +417,9 @@ if (resetQualificationContext) {
   for (const key of Object.keys(qualificationContext)) delete qualificationContext[key];
 }
 const allowedQualificationKeys = new Set(['name', 'product', 'commune', 'quantity', 'measurements', 'use_case', 'modality', 'urgency', 'desired_date', 'photos', 'terrain', 'truck_access', 'debris_removal', 'customer_type', 'company', 'company_rut', 'contact_name', 'contact_role', 'email', 'purchase_order', 'invoice_required', 'address', 'access_restrictions', 'reception_contact', 'sale_number', 'purchase_date', 'issue_description', 'payment_amount', 'payment_method', 'quote_number']);
+// Snapshot previo a la aplicacion de evidencia del turno: base para detectar
+// "sin progreso" (anti-repeticion PRD 6.10).
+const ctxBeforeEvidence = { ...qualificationContext };
 const normalizedCurrentText = normalizeText(deterministic.text_body);
 const pendingQuestionToField = {
   product: 'product', commune: 'commune', quantity: 'quantity', measurements: 'measurements',
@@ -399,11 +431,11 @@ const pendingQuestionToField = {
 };
 const secondaryFieldHasDirectEvidence = (key, text) => {
   const patterns = {
-    product: /\b(adocret|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|cuarzo)\w*\b/,
+    product: PRODUCT_TERM_RE,
     commune: /\b(comuna|ciudad|en|desde)\s+[a-zñ]+/,
     quantity: /\b\d+(?:[.,]\d+)?\s*(?:unidades?|piezas?|sacos?|palets?)\b/,
     measurements: /\b\d+(?:[.,]\d+)?\s*(?:m2|m²|metros?|cm|mm)\b/,
-    modality: /\b(solo material|retiro|despacho|delivery|instalacion|instalar)\b/,
+    modality: /\b(solo material|retiro|despacho|delivery|instalacion|instalar|suministr\w*)\b/,
     urgency: /\b(urgente|urgencia|esta semana|este mes|cuanto antes)\b/,
     desired_date: /\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|\d{1,2}[/-]\d{1,2})\b/,
     photos: /\b(foto|imagen)\w*\b/,
@@ -431,7 +463,12 @@ const secondaryFieldHasDirectEvidence = (key, text) => {
   };
   return Boolean(patterns[key]?.test(text));
 };
-if (aiFieldsAcceptable && !resetQualificationContext) {
+// Nota B06/primer turno: la captura de evidencia del turno ACTUAL no depende de
+// resetQualificationContext. El reset limpia contexto de conversaciones previas
+// (L416-418), pero el mensaje actual del cliente es evidencia fresca: sin esta
+// regla, el primer mensaje (el mas rico en datos) perdia product/terrain/access/
+// debris_removal y el lead nunca se completaba.
+if (aiFieldsAcceptable) {
   const pendingField = pendingQuestionToField[deterministic.pending_question_key] || null;
   for (const [key, value] of Object.entries(ai.field_updates)) {
     if (!allowedQualificationKeys.has(key) || value === null || value === '') continue;
@@ -441,6 +478,16 @@ if (aiFieldsAcceptable && !resetQualificationContext) {
     }
   }
 }
+// Regla PRD 6.10: la mencion directa del cliente satisface product sin SKU.
+// Solo se completa cuando el modelo no lo aporto; nunca se inventa producto
+// (sin mencion no hay relleno, y el gate sigue listando product como faltante).
+// Corre incluso con reset: se basa solo en text_body del turno actual.
+if (!hasValue(qualificationContext.product) && !hasValue(ai.field_updates && ai.field_updates.product)) {
+  const directProduct = productPhraseFromClient(String(deterministic.text_body || ''), ai.catalog_matches);
+  if (directProduct) qualificationContext.product = directProduct;
+}
+const modalityAnsweredByClient = deterministic.pending_question_key === 'modality'
+  || secondaryFieldHasDirectEvidence('modality', normalizedCurrentText);
 const booleanByQuestion = {
   debris_removal: 'debris_removal',
   photos: 'photos',
@@ -456,14 +503,43 @@ const measurementMatch = String(deterministic.text_body || '').match(/\b\d+(?:[.
 if (measurementMatch && !qualificationContext.measurements) {
   qualificationContext.measurements = measurementMatch[0];
 }
+
+// Regla PRD 6.10/B06 (evidencia directa del turno actual): cuando el cliente
+// declara detalles de instalacion en el mensaje, esos campos se capturan de su
+// texto, sin depender de que la IA los devuelva en field_updates. Las
+// negaciones ganan (decir "no necesito retiro de escombros" deja el campo en
+// false). Solo se captura si el campo aun no tiene valor en el contexto.
+const directFieldEvidenceFromText = (key, text) => {
+  if (key === 'terrain') {
+    const match = text.match(/\b(plano|nivelado|pendiente|irregular)\b/);
+    return match ? (match[1] === 'nivelado' ? 'nivelado' : match[1]) : null;
+  }
+  if (key === 'truck_access') {
+    if (/\b(no hay acceso|sin acceso|no entra|no llega|acceso restringido|sin entrada)\b/.test(text)) return false;
+    if (/\b(hay acceso|acceso para camion|camion accede|entra camion|llega camion|acceso vehicular)\b/.test(text)) return true;
+    return null;
+  }
+  if (key === 'debris_removal') {
+    if (/\b(no necesito retiro|sin retiro|no retiro|sin escombros|no hay escombros)\b/.test(text)) return false;
+    if (/\b(con retiro|necesito retiro|retiro de escombro|retirar escombro|retiro del material|retiro de material)\b/.test(text)) return true;
+    return null;
+  }
+  return null;
+};
+for (const key of ['terrain', 'truck_access', 'debris_removal']) {
+  if (!hasValue(qualificationContext[key])) {
+    const directValue = directFieldEvidenceFromText(key, normalizedCurrentText);
+    if (directValue !== null) qualificationContext[key] = directValue;
+  }
+}
 if (deterministic.pending_question_key === 'terrain' && normalizedCurrentText && normalizedCurrentText.length <= 80) {
   qualificationContext.terrain = safe(deterministic.text_body);
 }
+const meaningfulEnum = (value, sentinels) => {
+  const normalized = safe(value).toLowerCase();
+  return normalized && !sentinels.has(normalized) ? value : null;
+};
 if (!resetQualificationContext) {
-  const meaningfulEnum = (value, sentinels) => {
-    const normalized = safe(value).toLowerCase();
-    return normalized && !sentinels.has(normalized) ? value : null;
-  };
   if (Object.keys(ai.diagnostic_datos).length > 0) {
     qualificationContext.diagnostic_datos = ai.diagnostic_datos;
   }
@@ -471,20 +547,25 @@ if (!resetQualificationContext) {
     || qualificationContext.customer_type || null;
   qualificationContext.lead_class = meaningfulEnum(ai.lead_class, new Set(['none', 'unknown']))
     || qualificationContext.lead_class || null;
-  // PRD 13 (B06): modality is persisted ONLY with client evidence — the client
-  // just answered the modality question, or the current text carries a direct
-  // mention (secondaryFieldHasDirectEvidence). Without evidence the previous
-  // context value is preserved (never wiped) and the AI cannot fill the field
-  // by itself: an AI-only modality is a guess, not a client statement.
-  const modalityAnswered = deterministic.pending_question_key === 'modality'
-    || secondaryFieldHasDirectEvidence('modality', normalizedCurrentText);
-  const modalityFromAi = modalityAnswered
-    ? meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
-    : null;
-  qualificationContext.modality = modalityFromAi || qualificationContext.modality || null;
   qualificationContext.objection_detected = meaningfulEnum(ai.objection_detected, new Set(['none', 'unknown']))
     || qualificationContext.objection_detected || 'none';
   qualificationContext.executive_summary = ai.executive_summary || qualificationContext.executive_summary || null;
+}
+// PRD 13 (B06): modality is persisted ONLY with client evidence — the client
+// just answered the modality question, or the current text carries a direct
+// mention (secondaryFieldHasDirectEvidence). Without evidence the previous
+// context value is preserved (never wiped) and the AI cannot fill the field
+// by itself: an AI-only modality is a guess, not a client statement.
+// Fuera del bloque reset: la evidencia es del turno ACTUAL, no contexto previo.
+// Sin esto, el primer turno (reset=true) perdia modality y el siguiente turno
+// volvia a preguntarla pese a que el cliente ya la menciono.
+const modalityFromAi = modalityAnsweredByClient
+  ? meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
+  : null;
+if (modalityFromAi) {
+  qualificationContext.modality = modalityFromAi;
+} else if (!qualificationContext.modality) {
+  delete qualificationContext.modality;
 }
 const beforeState = { ...state };
 const acceptedAiFields = [];
@@ -517,6 +598,35 @@ if (aiHealthy) {
   maybeApply('service');
   maybeApply('requirement');
 }
+
+// Regla PRD 6.10 (anti-repeticion): si la misma pregunta comercial queda
+// pendiente sin avance nuevo del cliente, el bot primero aclara con voz propia
+// y luego escala a una persona. El conteo vive en metadata_json para sobrevivir
+// turnos. Los artefactos del modelo (customer_type/lead_class/objection/
+// diagnostic_datos) NO cuentan como progreso del cliente.
+const ANTI_REPEAT_CLARIFY_THRESHOLD = 2;
+const ANTI_REPEAT_HANDOFF_THRESHOLD = 3;
+const ANTI_REPEAT_CLARIFY_TEXT = 'Disculpa, no quiero insistir en lo mismo, pero necesito ese dato para preparar bien la cotización. ¿Me lo confirmas?';
+const COMMERCIAL_PROGRESS_KEYS = [...allowedQualificationKeys].filter((key) => !['customer_type', 'lead_class', 'objection_detected', 'diagnostic_datos', 'executive_summary'].includes(key));
+const contextValueAt = (ctx, key) => {
+  const value = ctx[key];
+  return value === undefined || value === null ? '' : JSON.stringify(value);
+};
+const hasNewCommercialEvidence = acceptedAiFields.length > 0
+  || COMMERCIAL_PROGRESS_KEYS.some((key) => contextValueAt(qualificationContext, key) !== contextValueAt(ctxBeforeEvidence, key));
+const previousTurnMetadata = parseJsonObject(deterministic.metadata_json);
+const previousTurnPendingKey = previousTurnMetadata.pending_question_key || null;
+const previousTurnRetry = Number(previousTurnMetadata.commercial_question_retry || 0) || 0;
+const dbPendingKey = safe(deterministic.pending_question_key);
+const antiRepeatExcludedPending = !dbPendingKey || ['final_confirmation', 'confirmation_correction'].includes(dbPendingKey);
+const noProgressTurn = !resetQualificationContext && !antiRepeatExcludedPending && !hasNewCommercialEvidence
+  && Boolean(previousTurnPendingKey) && dbPendingKey === previousTurnPendingKey;
+const commercialQuestionRetry = noProgressTurn ? previousTurnRetry + 1 : 0;
+const antiRepeatClarify = commercialQuestionRetry >= ANTI_REPEAT_CLARIFY_THRESHOLD
+  && commercialQuestionRetry < ANTI_REPEAT_HANDOFF_THRESHOLD;
+const antiRepeatHandoff = commercialQuestionRetry >= ANTI_REPEAT_HANDOFF_THRESHOLD;
+const antiRepeatAction = antiRepeatHandoff ? 'handoff' : antiRepeatClarify ? 'clarify' : 'none';
+
 const displayValue = (value) => typeof value === 'boolean' ? (value ? 'Si' : 'No') : (safe(value) || 'No informado');
 const executiveSummary = [
   `Cliente: ${qualificationContext.name || deterministic.whatsapp_name || 'No informado'}`,
@@ -556,7 +666,9 @@ const hasRequiredLeadFields = hasValue(state.service) && hasValue(state.city) &&
 const COMMERCIAL_FIELD_POLICY = {
   material: {
     profile: 'Cotizacion de material (PRD 13.1)',
-    compulsory: ['product', 'quantity', 'commune', 'modality'],
+    // Regla PRD (orden de preguntas): primero producto, luego modalidad,
+    // despues cantidad/comuna (contexto antes de datos personales).
+    compulsory: ['product', 'modality', 'quantity', 'commune'],
     conditional: ['desired_date', 'urgency', 'invoice'],
     satisfiedByWhatsApp: ['name', 'phone'],
     payment: ['invoice'],
@@ -584,7 +696,9 @@ const COMMERCIAL_FIELD_POLICY = {
   },
   b2b: {
     profile: 'Cotizacion B2B (PRD 13.3)',
-    compulsory: ['company', 'contact', 'product', 'quantity', 'commune', 'oc'],
+    // Regla PRD (orden de preguntas): contexto comercial (producto/modalidad/
+    // cantidad/comuna) antes que los datos de la empresa/contacto/OC.
+    compulsory: ['product', 'modality', 'quantity', 'commune', 'company', 'contact', 'oc'],
     conditional: ['rut', 'email', 'desired_date', 'invoice', 'human_review'],
     satisfiedByWhatsApp: ['name', 'phone'],
     payment: ['invoice', 'oc'],
@@ -675,7 +789,18 @@ const COMMERCIAL_QUESTION_KEYS = {
 
 const resolveCommercialProfile = (qctx) => {
   const intent = safe(ai.intent);
-  const modality = safe(qctx.modality || ai.modality);
+  // PRD 6.10/B06: la modalidad que aporta SOLO el modelo (sin pregunta
+  // respondida ni mencion directa) es una suposicion, no define el perfil.
+  // Sin evidencia el perfil queda material y se pregunta modalidad al cliente.
+  const modality = safe(qctx.modality || (modalityAnsweredByClient ? ai.modality : ''));
+  // Regla PRD (clasificacion product vs service): un intent de instalacion/
+  // despacho/retiro sin evidencia de servicio en el turno ni modalidad en
+  // contexto es una suposicion del modelo; el perfil queda material hasta que
+  // el cliente confirme el servicio.
+  const serviceEvidenceMention = /\b(instal\w+|despach\w+|retir\w*|suministr\w+|env\w*|transporte|domicilio)\b/.test(normalizedCurrentText);
+  const profileIntent = (serviceEvidenceMention || modalityAnsweredByClient || !['installation_inquiry', 'delivery_inquiry', 'plant_pickup', 'debris_removal'].includes(intent))
+    ? intent
+    : 'quote_request';
   const isB2b = !resetQualificationContext && Boolean(
     ai.customer_type === 'b2b'
     || ai.lead_class === 'D'
@@ -683,9 +808,9 @@ const resolveCommercialProfile = (qctx) => {
     || qctx.lead_class === 'D'
   );
   if (isB2b || intent === 'b2b_request' || intent === 'purchase_order') return 'b2b';
-  if (intent === 'installation_inquiry' || intent === 'debris_removal' || modality === 'installation') return 'instalacion';
-  if (intent === 'delivery_inquiry' || modality === 'delivery') return 'despacho';
-  if (intent === 'plant_pickup' || modality === 'pickup') return 'retiro';
+  if (profileIntent === 'installation_inquiry' || profileIntent === 'debris_removal' || modality === 'installation') return 'instalacion';
+  if (profileIntent === 'delivery_inquiry' || modality === 'delivery') return 'despacho';
+  if (profileIntent === 'plant_pickup' || modality === 'pickup') return 'retiro';
   if (intent === 'complaint' || qctx.customer_type === 'complaint' || (ai.customer_type === 'complaint')) return 'reclamo';
   if (intent === 'warranty_inquiry') return 'garantia';
   if (intent === 'payment_proof') return 'comprobante';
@@ -768,7 +893,7 @@ const aiRequestsOperationalEscalation = Boolean(
   && ai.escalation_area !== 'none'
   && ai.escalation_area !== 'sales'
 );
-const isEscalation = deterministic.should_escalate || aiRequestsOperationalEscalation;
+const isEscalation = deterministic.should_escalate || aiRequestsOperationalEscalation || antiRepeatHandoff;
 const deterministicCreatesLead = Boolean(deterministic.should_create_lead);
 const shouldCreateLead = !isEscalation && !commercialGateBlocked && (deterministicCreatesLead || aiCanCreateLead);
 // Estados de confirmacion del turno (PRD-1): pending mientras el gate pida datos.
@@ -976,7 +1101,6 @@ const advisorQuestion = (key) => {
   if (key === 'company') return 'Para preparar correctamente la solicitud B2B, ¿cuál es el nombre de la empresa?';
   if (key === 'contact') return '¿Cuál es el nombre y cargo de la persona de contacto para esta cotización?';
   if (key === 'purchase_order') return '¿La compra se gestionará con Orden de Compra?';
-  if (key === 'product') return `¿Qué producto de hormigón necesitas para ${project}?`;
   if (key === 'commune') return '¿En qué comuna o ciudad se realizará el proyecto?';
   if (key === 'modality') return '¿La necesitas como solo material, con despacho, retiro en planta o instalación?';
   if (key === 'photos') return '¿Puedes enviarnos fotos del lugar o del material para evaluarlo mejor?';
@@ -995,8 +1119,15 @@ const advisorQuestion = (key) => {
   return responseText;
 };
 if (!shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && requiredQuestionKey) {
-  responseText = advisorQuestion(requiredQuestionKey);
-  responseKind = 'advisor_guardrail_question';
+  // PRD 6.10 (anti-repeticion): al alcanzar el umbral de clarify, el bot
+  // aclara con voz propia antes de volver a preguntar lo mismo.
+  if (antiRepeatClarify) {
+    responseText = ANTI_REPEAT_CLARIFY_TEXT;
+    responseKind = 'anti_repeat_clarify';
+  } else {
+    responseText = advisorQuestion(requiredQuestionKey);
+    responseKind = 'advisor_guardrail_question';
+  }
 }
 
 // Model C: Step management
@@ -1010,7 +1141,9 @@ const effectiveCurrentStepField = parseStep(currentStep).field;
 // A confirmed lead handoff is a sales outcome, while operational escalations
 // are mutually exclusive with lead creation.
 const escalationReason = isEscalation
-  ? (deterministic.escalation_reason || ai.escalation_area || null)
+  ? (antiRepeatHandoff
+      ? 'no_progress_commercial_question_loop'
+      : (deterministic.escalation_reason || ai.escalation_area || null))
   : null;
 const conversationStatusCode = shouldCreateLead
   ? 'handed_to_sales'
@@ -1102,6 +1235,10 @@ const aiMetadata = {
   ai_answered_question_key: ai.answered_question_key,
   ai_next_question_key: ai.next_question_key,
   ai_advisor_reasoning_summary: ai.advisor_reasoning_summary || null,
+  // Regla PRD 6.10 (anti-repeticion): estado persistente en metadata_json.
+  pending_question_key: pendingQuestionKey,
+  commercial_question_retry: commercialQuestionRetry,
+  anti_repeat_action: antiRepeatAction,
   per_field_confidence: perFieldConfidence,
   commercial_context_counts: ai.commercial_context_counts,
   // Model C specific

@@ -440,8 +440,11 @@ if (!String(validAi.diagnostic_datos_json).includes('Renovar baño')) {
   fail('AI valida debe exponer diagnostico D.A.T.O.S. para auditoria');
 }
 const validCommercialMissing = JSON.parse(validAi.commercial_missing_fields_json);
-if (!['quantity', 'terrain', 'access', 'debris_removal'].every((field) => validCommercialMissing.includes(field))) {
-  fail('AI valida debe exponer los campos obligatorios deterministas faltantes para instalacion');
+if (!['modality', 'quantity'].every((field) => validCommercialMissing.includes(field))) {
+  fail('AI valida debe exponer modalidad y cantidad como obligatorios del perfil material');
+}
+if (validCommercialMissing.includes('terrain') || validCommercialMissing.includes('access') || validCommercialMissing.includes('debris_removal')) {
+  fail('La modalidad sin evidencia de instalacion no debe activar campos de instalacion');
 }
 if (validCommercialMissing.includes('measurements') || validCommercialMissing.includes('photos')) {
   fail('Campos condicionales de instalacion no deben bloquear la confirmacion comercial');
@@ -461,6 +464,102 @@ if (!String(validAi.price_context_json).includes('12990')) {
 }
 if (!String(validAi.commercial_context_counts_json).includes('price_rules')) {
   fail('AI valida debe exponer conteos de contexto comercial para auditoria');
+}
+
+// Regla PRD (mencion directa de producto): el cliente responde SOLO el nombre
+// del material -> product queda satisfecho por la mencion y se pregunta
+// modalidad (nada de preguntar el producto de nuevo).
+const productMentionedTurn = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: 'Baldosas',
+  normalized_text: 'baldosas',
+  pending_question_key: 'product',
+  response_text: '¿Qué producto de hormigón necesitas para tu proyecto?',
+  response_kind: 'advisor_guardrail_question',
+}, {
+  ai_skipped_1: false,
+  intent_1: 'quote_request',
+  confidence: 0.9,
+  service: 'Baldosas',
+  requirement: 'Cotizar baldosas',
+  explicitly_mentioned_fields: ['product'],
+  catalog_matches: [],
+  field_updates: {},
+  reply_text: 'Perfecto, ¿en qué modalidad la necesitas?',
+}));
+if (productMentionedTurn.qualification_context.product !== 'Baldosas') {
+  fail('La mencion directa del material debe satisfacer product sin SKU');
+}
+if (productMentionedTurn.pending_question_key !== 'modality') {
+  fail('Con producto satisfecho la siguiente pregunta comercial es la modalidad');
+}
+if (!String(productMentionedTurn.response_text).includes('solo material')) {
+  fail('La pregunta siguiente debe ir a la modalidad, no al producto');
+}
+if (String(productMentionedTurn.response_text).includes('¿Qué producto de hormigón necesitas')) {
+  fail('La pregunta circular del producto no debe reaparecer');
+}
+
+// Regla PRD (clasificacion product vs service): "Hormigón Armado Losa" es un
+// PRODUCTO aunque el modelo lo clasifique como instalacion; no se activa el
+// perfil de instalacion sin evidencia de servicio.
+const hormigonMention = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: 'Hormigón Armado Losa 100 M2',
+  normalized_text: 'hormigon armado losa 100 m2',
+}, {
+  ai_skipped_1: false,
+  intent_1: 'installation_inquiry',
+  confidence: 0.9,
+  service: 'Hormigon',
+  requirement: 'Cotizar una losa de hormigon',
+  modality: 'installation',
+  explicitly_mentioned_fields: ['product'],
+  catalog_matches: [],
+  field_updates: {},
+  reply_text: 'Para instalación necesitamos revisar medidas y terreno.',
+}));
+if (hormigonMention.qualification_context.product !== 'Hormigon Armado Losa') {
+  fail('La mencion literal "Hormigon Armado Losa" debe completar el producto');
+}
+if (hormigonMention.pending_question_key !== 'modality') {
+  fail('Producto de hormigon sin servicio debe preguntar modalidad primero');
+}
+const hormigonMissing = JSON.parse(hormigonMention.commercial_missing_fields_json);
+if (hormigonMissing.includes('terrain') || hormigonMissing.includes('access') || hormigonMissing.includes('debris_removal')) {
+  fail('La modalidad AI sin evidencia no debe activar el perfil de instalacion');
+}
+
+// Regla PRD (sin pregunta circular de producto): si el cliente no menciona
+// producto, el pending queda en product pero el advisor NO formula la
+// pregunta circula vieja; el texto lo pone la IA (o el fallback determinista).
+const noProductMention = await runApplyAi(mergedAiShape({
+  ...baseDeterministic,
+  text_body: 'Si',
+  normalized_text: 'si',
+  pending_question_key: 'product',
+  requirement: 'Seleccionar producto del menú',
+  response_text: 'Perfecto. Trabajamos con hormigón, losas, vigas, muros y cierres. ¿Cuál te interesa?',
+  response_kind: 'menu_productos',
+}, {
+  ai_skipped_1: false,
+  intent_1: 'quote_request',
+  confidence: 0.9,
+  service: 'Hormigón',
+  requirement: 'Seleccionar producto del menú',
+  explicitly_mentioned_fields: [],
+  field_updates: {},
+  catalog_matches: [],
+  reply_text: 'Genial, ¿qué producto necesitas?',
+}));
+if (noProductMention.pending_question_key !== 'product') {
+  fail('Sin mencion de producto el pending debe seguir en product');
+}
+if (String(noProductMention.response_text).includes('¿Qué producto de hormigón necesitas')) {
+  fail('El advisor no debe preguntar el producto con la pregunta circular vieja');
+}
+if (!String(noProductMention.response_text).includes('¿qué producto necesitas')) {
+  fail('La pregunta de producto la formula el modelo con su propia voz');
 }
 
 const preservedContext = await runApplyAi(mergedAiShape({

@@ -213,10 +213,52 @@ const inferIntentFromMessage = (value) => {
   if (/\b(hablar con|ejecutiva|ejecutivo|asesor|humano)\b/.test(text)) return 'talk_to_human';
   return null;
 };
+// Regla PRD (clasificacion product vs service): los unicos servicios reales son
+// instalacion, retiro de escombros, suministro (solo material) y despacho.
+// Todo lo demas es PRODUCTO (material); una mencion de producto sin evidencia
+// de servicio NO infiere modalidad y la consulta pasa a quote_request.
+// Listas alineadas con apply-ai-assistance.js (SOURCE OF TRUTH del orquestador).
+const PRODUCT_TERM_RE = /\b(adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|armado|losa|loseta|viga|muro|solera|cierre|cierro|tapa)\w*\b/i;
+const SERVICE_EVIDENCE_RE = /\b(instal\w+|despach\w+|retir\w*|suministr\w+|env\w*|transporte|domicilio)\b/;
+const SUMMINISTRO_MODALITY_RE = /\b(suministr|solo material|solo el material)\b/;
+const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material']);
+const productPhraseFromClient = (text, matches) => {
+  const normalized = normalizeText(text);
+  const match = normalized.match(PRODUCT_TERM_RE);
+  if (!match) return null;
+  const grounded = (Array.isArray(matches) ? matches : [])
+    .map((item) => safe(item.name))
+    .filter(Boolean)
+    .find((name) => {
+      const head = String(name).toLowerCase().split(/\s+/)[0];
+      return head && normalized.includes(head);
+    });
+  if (grounded) return safe(grounded);
+  const tail = [];
+  for (const word of normalized.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
+    if (/\d|[.,/]/.test(word) || word.endsWith('m2')) break;
+    if (PRODUCT_PHRASE_STOPWORDS.has(word)) break;
+    tail.push(word);
+    if (tail.length === 2) break;
+  }
+  const phrase = [match[0], ...tail].join(' ');
+  return phrase.replace(/(^|\s)\S/g, (character) => character.toUpperCase());
+};
 const inferredIntent = inferIntentFromMessage(row.ai_context?.message_current);
 const parsedIntent = allowedIntent.has(parsed.intent) ? parsed.intent : 'unknown';
 const intentMismatch = parsedIntent === 'greeting' && Boolean(inferredIntent);
 const effectiveIntent = intentMismatch ? inferredIntent : parsedIntent;
+const evidenceText = normalizeText(row.ai_context?.message_current);
+const productMention = PRODUCT_TERM_RE.test(evidenceText);
+const serviceEvidence = SERVICE_EVIDENCE_RE.test(evidenceText);
+const productOnlyMention = productMention && !serviceEvidence;
+const suministroMention = SUMMINISTRO_MODALITY_RE.test(evidenceText);
+// Regla PRD (clasificacion product vs service): si solo hay producto y el modelo
+// clasifico la consulta como instalacion/despacho/retiro, la consulta es de
+// COTIZACION de material (quote_request) porque no hay servicio evidenciado.
+const reclassifiedIntent = productOnlyMention && ['installation_inquiry', 'delivery_inquiry', 'debris_removal', 'plant_pickup'].includes(effectiveIntent)
+  ? 'quote_request'
+  : effectiveIntent;
 const allowedMissing = new Set(['service', 'city', 'requirement', 'confirmation']);
 const allowedCommercialMissing = new Set(['name', 'product', 'commune', 'quantity', 'measurements', 'modality', 'urgency', 'photos', 'terrain', 'access', 'debris_removal', 'company', 'rut', 'contact', 'email', 'oc', 'invoice', 'payment_validation', 'human_review', 'address', 'access_restrictions', 'desired_date', 'reception_contact', 'issue_description', 'payment_amount', 'payment_method', 'sale_number', 'purchase_date', 'quote_number']);
 const allowedConfirmation = new Set(['none', 'requested', 'confirmed', 'rejected', 'pending']);
@@ -263,7 +305,7 @@ const rawConfirmationStatus = allowedConfirmation.has(parsed.confirmation_status
 const confirmationStatus = contextualBooleanAnswer ? 'none' : rawConfirmationStatus;
 const contextualIntent = contextualBooleanAnswer && ['confirmation_yes', 'confirmation_no'].includes(parsed.intent)
   ? 'provide_info'
-  : effectiveIntent;
+  : reclassifiedIntent;
 const confirmationSatisfied = pendingQuestionKey === 'final_confirmation'
   && confirmationStatus === 'confirmed'
   && parsed.intent === 'confirmation_yes';
@@ -281,7 +323,7 @@ const HEALTHY_MIN = modelCEnabled
   ? Number($env.AI_HEALTHY_MIN_CONFIDENCE || 0.45)
   : 0.75;
 const explicitlyMentionedFields = Array.isArray(parsed.explicitly_mentioned_fields)
-  ? parsed.explicitly_mentioned_fields.filter((field) => ['service', 'city', 'requirement'].includes(field))
+  ? parsed.explicitly_mentioned_fields.filter((field) => ['service', 'city', 'requirement', 'product'].includes(field))
   : [];
 const fallbackReason = row.ai_request_error
   ? row.ai_request_error
@@ -310,13 +352,26 @@ const prdValidation = prdValidationEnabled
 const prdValidated = prdValidation.passed;
 const enhancementType = allowedEnhancementType.has(parsed.enhancement_type) ? parsed.enhancement_type : 'none';
 
+// Regla PRD (mencion directa de producto): si el cliente nombro material y el
+// modelo no lo devolvio, la mencion literal satisface el campo product. Nunca
+// se inventa producto sin mencion (productMention asegura que hubo mencione).
+const modelFieldUpdates = canAcceptModelFields ? sanitizeFieldUpdates(parsed.field_updates) : {};
+const productLiteral = productMention && !modelFieldUpdates.product
+  ? productPhraseFromClient(row.ai_context?.message_current, catalogMatches)
+  : null;
+const fieldUpdatedEntries = productLiteral ? { ...modelFieldUpdates, product: productLiteral } : modelFieldUpdates;
+
 const allowedSalesStage = new Set(['greeting', 'exploration', 'qualification', 'recommendation', 'objection', 'quote', 'agenda', 'confirmation', 'ready_for_sales', 'not_qualified']);
 const allowedBuyingIntent = new Set(['low', 'medium', 'high']);
 const allowedUrgency = new Set(['low', 'medium', 'high']);
 const allowedNextAction = new Set(['ask_data', 'recommend_product', 'answer_question', 'handle_objection', 'quote_reference', 'offer_agenda', 'confirm', 'handoff_sales', 'handoff_b2b', 'handoff_finance', 'handoff_post_sale', 'handoff_claims', 'close_not_qualified']);
 const customerType = allowedCustomerType.has(parsed.customer_type) ? parsed.customer_type : 'unknown';
 const leadClass = allowedLeadClass.has(parsed.lead_class) ? parsed.lead_class : 'none';
-const modality = allowedModality.has(parsed.modality) ? parsed.modality : 'unknown';
+const parsedModality = allowedModality.has(parsed.modality) ? parsed.modality : 'unknown';
+// Regla PRD (clasificacion product vs service): "suministro"/"solo material"
+// implican modalidad material; mencion de producto sin servicio NO infiere
+// modalidad (unknown) — el modelo no puede adivinar instalacion/despacho/retiro.
+const modality = suministroMention ? 'material' : productOnlyMention ? 'unknown' : parsedModality;
 const objectionDetected = allowedObjection.has(parsed.objection_detected) ? parsed.objection_detected : 'none';
 const escalationArea = allowedEscalationArea.has(parsed.escalation_area) ? parsed.escalation_area : 'none';
 const diagnosticDatos = sanitizeDatos(parsed.diagnostic_datos);
@@ -372,7 +427,7 @@ return [
       prd_rule_violated: prdValidation.rule || null,
       enhancement_type: enhancementType,
       explicitly_mentioned_fields: explicitlyMentionedFields,
-      field_updates: canAcceptModelFields ? sanitizeFieldUpdates(parsed.field_updates) : {},
+      field_updates: fieldUpdatedEntries,
       answered_question_key: answeredQuestionKey,
       next_question_key: allowedQuestionKeys.has(parsed.next_question_key) ? parsed.next_question_key : 'none',
       advisor_reasoning_summary: safe(parsed.advisor_reasoning_summary),
@@ -418,6 +473,9 @@ return [
         pending_question_key: pendingQuestionKey,
         answered_question_key: answeredQuestionKey,
         next_question_key: allowedQuestionKeys.has(parsed.next_question_key) ? parsed.next_question_key : 'none',
+        product_mention_literal: productLiteral || null,
+        intent_reclassified_to_product: productOnlyMention && reclassifiedIntent !== effectiveIntent,
+        modality_reclassified_to_unknown: productOnlyMention && parsedModality !== 'unknown',
         field_accept_min: FIELD_ACCEPT_MIN,
         healthy_min: HEALTHY_MIN,
       }),

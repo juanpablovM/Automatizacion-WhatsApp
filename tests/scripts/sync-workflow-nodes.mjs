@@ -32,6 +32,11 @@ const NODES = [
     fixture: 'wa-conversation-orchestrator/apply-ai-assistance.js',
   },
   {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Evaluate Conversation Step',
+    fixture: 'wa-conversation-orchestrator/evaluate-conversation-step.js',
+  },
+  {
     workflow: 'n8n/workflows/ai-lead-qualification-assistant.json',
     node: 'Build AI Request',
     fixture: 'ai-lead-qualification-assistant/build-ai-request.js',

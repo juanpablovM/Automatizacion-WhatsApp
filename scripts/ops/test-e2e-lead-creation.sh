@@ -52,7 +52,7 @@ fi
 
 timestamp=$(date +%s)
 PHONE_NUMBER="$1"
-TEST_MESSAGE="Quiero cotizar hormigón armado en Santiago para una losa de 100 m2"
+TEST_MESSAGE="Quiero cotizar hormigón armado para una losa de 100 m2 en Santiago, con instalación. El terreno es plano, hay acceso para camión y no necesito retiro de escombros"
 CONFIRM_MESSAGE="Si, correcto"
 
 [ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$E2E_WEBHOOK_PATH" in
@@ -147,7 +147,7 @@ while [ $attempt -lt 30 ]; do
   sleep 1
   confirm_count=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
     psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
-    -c "SELECT COUNT(*) FROM conversations WHERE phone_number = '${PHONE_NUMBER}' AND current_step LIKE 'confirm%';" 2>/dev/null || echo "0")
+    -c "SELECT COUNT(*) FROM conversations WHERE phone_number = '${PHONE_NUMBER}' AND current_step LIKE 'confirm%' AND updated_at >= NOW() - INTERVAL '2 minutes';" 2>/dev/null || echo "0")
 
   if [ "$confirm_count" -gt 0 ]; then
     confirm_ready=1
