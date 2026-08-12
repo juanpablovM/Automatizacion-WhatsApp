@@ -15,6 +15,7 @@ const { prepareHandoffClickup } = require('./tests/fixtures/workflow-nodes/ops-h
 const { dispatchHandoffClickup } = require('./tests/fixtures/workflow-nodes/ops-handoff-notification-scheduler/dispatch-handoff-clickup-task.js');
 const scheduler = JSON.parse(fs.readFileSync('n8n/workflows/ops-handoff-notification-scheduler.json'));
 const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json'));
+const escalationPolicy = require('./tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js');
 const schedulerId = '99999999-0000-0000-0000-000000000003';
 assert.equal(scheduler.id, schedulerId);
 assert.equal(scheduler.active, true);
@@ -23,6 +24,58 @@ assert(scheduler.nodes.some(n => n.type === 'n8n-nodes-base.executeWorkflowTrigg
 const link = dispatcher.nodes.find(n => n.name === 'Dispatch Handoff Notification Workflow');
 assert(link && link.parameters.workflowId.value === schedulerId);
 assert(!dispatcher.nodes.some(n => ['Prepare Handoff Notification','Dispatch Handoff Notification','Mark Handoff Attempt'].includes(n.name)));
+const edge = (source, lane, target, index = 0) =>
+  dispatcher.connections[source]?.main?.[lane]?.some(connection => connection.node === target && connection.index === index);
+assert(edge('Ensure Escalation Handoff', 0, 'Handoff Write Required?'));
+assert(edge('Handoff Write Required?', 0, 'Upsert Escalation Handoff'));
+assert(edge('Handoff Write Required?', 1, 'Escalation Lane Complete'));
+assert(edge('Upsert Escalation Handoff', 0, 'Dispatch Handoff Notification Workflow'));
+assert(edge('Dispatch Handoff Notification Workflow', 0, 'Escalation Lane Complete'));
+assert(edge('Escalation Lane Complete', 0, 'Merge Dispatch Completion', 0));
+assert(!edge('Normalize Durable Dispatch', 0, 'Merge Dispatch Completion', 0));
+const completionCode = dispatcher.nodes.find(n => n.name === 'Escalation Lane Complete').parameters.jsCode;
+assert(completionCode.includes("$('Ensure Escalation Handoff').first().json"));
+assert(completionCode.includes('...source') && completionCode.includes('...result'));
+
+const normalizeNode = dispatcher.nodes.find(n => n.name === 'Normalize Durable Dispatch');
+const normalize = new Function('items', normalizeNode.parameters.jsCode);
+const traverseEscalation = (row) => {
+  const visited = ['Ensure Escalation Handoff'];
+  const routed = escalationPolicy.routeEscalation(row);
+  let current = 'Handoff Write Required?';
+  visited.push(current);
+  const lane = routed.write ? 0 : 1;
+  while (current !== 'Merge Dispatch Completion') {
+    const next = dispatcher.connections[current]?.main?.[current === 'Handoff Write Required?' ? lane : 0]?.[0]?.node;
+    assert(next, `escalation route stops at ${current}`);
+    visited.push(next);
+    current = next;
+  }
+  return visited;
+};
+const runtimeBoundary = normalize([{ json: {
+  conversation_id: 126,
+  inbound_event_id: 249,
+  phone_number: '56900000000',
+  intent: 'talk_to_human',
+  escalation_area: 'sales',
+  after_payload_json: JSON.stringify({ should_escalate: true, escalation_reason: 'human_requested' }),
+} }])[0].json;
+assert.equal(runtimeBoundary.should_escalate, true);
+assert.equal(runtimeBoundary.escalation_reason, 'human_requested');
+const humanRoute = traverseEscalation(runtimeBoundary);
+assert(humanRoute.includes('Upsert Escalation Handoff'));
+assert.equal(humanRoute.filter(name => name === 'Escalation Lane Complete').length, 1);
+const noHandoffRoute = traverseEscalation({
+  conversation_id: 127,
+  inbound_event_id: 250,
+  phone_number: '56900000001',
+  intent: 'general_inquiry',
+  should_escalate: false,
+  escalation_area: 'none',
+});
+assert(!noHandoffRoute.includes('Upsert Escalation Handoff'));
+assert.equal(noHandoffRoute.filter(name => name === 'Escalation Lane Complete').length, 1);
 for (const name of ['Upsert Escalation Handoff']) {
   const query = dispatcher.nodes.find(n => n.name === name).parameters.query;
   assert(!/(?<!:):[A-Za-z_]\w*/.test(query), `${name} still has named placeholders`);

@@ -15,7 +15,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return items.map((item) => {\n  const source = item.json || {};\n  const payload = source.downstream_payload && typeof source.downstream_payload === 'object'\n    ? source.downstream_payload\n    : source;\n  return { json: {\n    ...payload,\n    inbound_event_id: source.inbound_event_id || payload.inbound_event_id || null,\n    processing_token: source.processing_token || payload.processing_token || null,\n  } };\n});"
+        "jsCode": "return items.map((item) => {\n  const source = item.json || {};\n  const payload = source.downstream_payload && typeof source.downstream_payload === 'object'\n    ? source.downstream_payload\n    : source;\n  let state = {};\n  try { state = JSON.parse(payload.after_payload_json || '{}'); } catch (_error) {}\n  return { json: {\n    ...payload,\n    should_escalate: payload.should_escalate ?? state.should_escalate ?? false,\n    escalation_reason: payload.escalation_reason ?? state.escalation_reason ?? null,\n    inbound_event_id: source.inbound_event_id || payload.inbound_event_id || null,\n    processing_token: source.processing_token || payload.processing_token || null,\n  } };\n});"
       },
       "id": "50000000-0000-0000-0000-000000000011",
       "name": "Normalize Durable Dispatch",
@@ -534,6 +534,40 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-handoff-write-required",
+              "leftValue": "={{ $json.handoff_write === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000042",
+      "name": "Handoff Write Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        1040
+      ]
+    },
+    {
+      "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "// =============================================================================\n// Ensure Escalation Handoff — Unidad 3: escalamiento humano durable (P0).\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". SOURCE OF TRUTH\n// del routing motivo->area->prioridad->responsable (PRD #22/#23/#9.5/#11) y\n// del gate de no-cierre de intenciones operativas (PRD #22.16/#31.7).\n//\n// El mismo archivo es, en pruebas (harness), un modulo Node: expone\n// HANDOFF_ROUTING, routeEscalation, evaluateClosureGate y buildIdempotencyKey\n// para los tests de contrato. En n8n (Code node) solo se ejecuta la seccion\n// final que lee `items`. Single source of truth: el fixture se reinyecta al\n// workflow con tests/scripts/sync-workflow-nodes.mjs.\n//\n// Idempotency key: `{conversation_id}:{motivo}:{trigger}` — el trigger es el\n// motivo textual normalizado (o 'intent:<codigo>'), de modo que un replay del\n// mismo evento no duplica y un motivo distinto abre un handoff propio.\n// =============================================================================\n\nconst HANDOFF_ROUTING = {\n  talk_human: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  frustration: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  high_urgency: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  large_project: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  complex_installation: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  stock_confirm: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  photos_eval: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  loop: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  purchase_order: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  payment_proof: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  invoice: { area: 'finance', area_label: 'Finanzas', prioridad: 'media', responsable: 'Finanzas / Administración' },\n  warranty: { area: 'post_sale', area_label: 'Postventa', prioridad: 'alta', responsable: 'Administración / Postventa' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n  complaint: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  scheduling_change: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  committed_issue: { area: 'scheduling', area_label: 'Programación', prioridad: 'alta', responsable: 'Programación (despacho/instalación)' },\n  discount: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n  special_payment_condition: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n};\n\n// Fallback determinista por area declarada por la AI (contrato del advisor).\nconst AREA_FALLBACK = {\n  sales: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  finance: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n  claims: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  scheduling: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  management: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n};\n\nconst DEFAULT_ROUTING = { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' };\n\nconst INTENT_TO_MOTIVE = {\n  talk_to_human: 'talk_human',\n  complaint: 'complaint',\n  warranty_inquiry: 'warranty',\n  payment_proof: 'payment_proof',\n  invoice_request: 'invoice',\n  b2b_request: 'b2b',\n  purchase_order: 'purchase_order',\n  discount_request: 'discount',\n  reschedule_delivery: 'scheduling_change',\n  reschedule_installation: 'scheduling_change',\n  post_sale: 'post_sale',\n  stock_inquiry: 'stock_confirm',\n  returning_customer: 'loop',\n  review: 'loop',\n};\n\n// Motivo por señales de texto del reason de escalamiento (PRD #22 triggers).\nconst REASON_TO_MOTIVE = [\n  ['complaint', /reclamo|queja|molest|frustr|mala atencion|falla|roto|quebr|problema/i],\n  ['warranty', /garant/i],\n  ['payment_proof', /comprobante|transferencia|abono|pago|pago enviado/i],\n  ['invoice', /factur/i],\n  ['b2b', /b2b|empresa|constructora|inmobiliaria|licitacion|orden de compra|proveedor|volumen/i],\n  ['discount', /descuento|igualar|bajo el precio|rebaja/i],\n  ['special_payment_condition', /condicion (especial|servicio de pago|pago a 30)/i],\n  ['large_project', /2\\.000\\.000|dos millones|millon/i],\n  ['high_urgency', /urgent/i],\n  ['scheduling_change', /reagend|cambio de fecha|fecha/i],\n  ['committed_issue', /despacho|programada|programado|pedido comprometido/i],\n  ['complex_installation', /instalacion|coordinacion logistica|acceso/i],\n  ['stock_confirm', /stock|disponibilidad/i],\n  ['photos_eval', /foto|fotos|imagen/i],\n];\n\nconst normalizeReason = (value) => String(value ?? '').trim().replace(/\\s+/g, ' ').toLowerCase();\n\nconst motiveFromReason = (reason) => {\n  const text = normalizeReason(reason);\n  if (!text) return null;\n  for (const [motive, pattern] of REASON_TO_MOTIVE) {\n    if (pattern.test(text)) return motive;\n  }\n  return null;\n};\n\nconst routeEscalation = (row) => {\n  const conversationId = Number(row.conversation_id);\n  const hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\n  const phoneNumber = String(row.phone_number || '').trim();\n  const shouldEscalate = Boolean(row.should_escalate) || Boolean(row.escalation_required);\n  const area = String(row.escalation_area || '').trim();\n  const aiRequestsOperational = Boolean(area && area !== 'none' && area !== 'sales');\n  const escalated = shouldEscalate || aiRequestsOperational;\n\n  if (!escalated || !hasConversation || !phoneNumber) {\nreturn {\n    escalated: false,\n    write: false,\n    motivo: null,\n    routing: null,\n    idempotency_key: null,\n    trigger: null,\n  };\n  }\n\n  const intent = String(row.intent || '').trim();\n  const rawReason = String(row.escalation_reason || '').trim();\n  const motivo = motiveFromReason(rawReason)\n    || INTENT_TO_MOTIVE[intent]\n    || (area && area !== 'none' ? area : null);\n  const routing = HANDOFF_ROUTING[motivo] || AREA_FALLBACK[area] || DEFAULT_ROUTING;\n  const trigger = rawReason || (intent ? `intent:${intent}` : routing.area);\n\n  return {\n    escalated: true,\n    write: true,\n    motivo: motivo || routing.area,\n    routing,\n    trigger,\n    idempotency_key: buildIdempotencyKey(conversationId, motivo || routing.area, trigger),\n  };\n};\n\nconst buildIdempotencyKey = (conversationId, motivo, trigger) =>\n  [conversationId, motivo, trigger].join(':');\n\n// =============================================================================\n// Gate de no-cierre (PRD #33.16, #33.8): ninguna intencion operativa\n// (reclamo, garantia, comprobante, factura) ni B2B se cierra mientras el\n// escalamiento no exista y este al menos 'notified'.\n// =============================================================================\nconst OPERATIONAL_CLOSURE_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n  'b2b_request',\n  'purchase_order',\n]);\n\nconst NOTIFIED_OR_BETTER = new Set(['notified', 'acknowledged', 'resolved']);\n\nconst evaluateClosureGate = (input) => {\n  const intent = String(input.intent || '').trim();\n  const shouldEscalate = Boolean(input.should_escalate || input.escalation_required);\n  const customerType = String(input.customer_type || '').trim();\n  const leadClass = String(input.lead_class || '').trim();\n  const operational = OPERATIONAL_CLOSURE_INTENTS.has(intent)\n    || customerType === 'b2b'\n    || leadClass === 'D';\n\n  if (!operational || !shouldEscalate) {\n    return {\n      operational,\n      requires_handoff: false,\n      closure_allowed: true,\n      required_status: null,\n      reason: 'no_handoff_required',\n      handoff_exists: false,\n    };\n  }\n\n  const handoffExists = Boolean(input.handoff_exists);\n  const handoffStatus = String(input.handoff_status || '').trim();\n  if (!handoffExists) {\n    return {\n      operational,\n      requires_handoff: true,\n      closure_allowed: false,\n      required_status: 'notified',\n      reason: 'handoff_missing',\n      handoff_exists: false,\n    };\n  }\n\n  const ready = NOTIFIED_OR_BETTER.has(handoffStatus);\n  return {\n    operational,\n    requires_handoff: true,\n    closure_allowed: ready,\n    required_status: 'notified',\n    reason: ready ? 'handoff_notified' : 'handoff_pending',\n    handoff_exists: true,\n    handoff_status: handoffStatus,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    HANDOFF_ROUTING,\n    AREA_FALLBACK,\n    DEFAULT_ROUTING,\n    motiveFromReason,\n    routeEscalation,\n    buildIdempotencyKey,\n    evaluateClosureGate,\n    OPERATIONAL_CLOSURE_INTENTS,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const resolution = routeEscalation(row);\n  const gate = evaluateClosureGate({\n    intent: row.intent,\n    should_escalate: resolution.escalated,\n    customer_type: row.customer_type,\n    lead_class: row.lead_class,\n    handoff_exists: row.declared_handoff_exists === true && resolution.escalated,\n    handoff_status: row.declared_handoff_status || row.handoff_status || 'pending',\n  });\n\n  return [\n    {\n      json: {\n        ...row,\n        handoff_write: resolution.write,\n        handoff_skipped: !resolution.write,\n        handoff_scope: {\n          conversation_id: Number(row.conversation_id) > 0 ? Number(row.conversation_id) : null,\n          phone_number: String(row.phone_number || '').trim() || null,\n          source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n          inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n          motivo: resolution.motivo,\n          area: resolution.routing?.area ?? null,\n          area_label: resolution.routing?.area_label ?? null,\n          prioridad: resolution.routing?.prioridad ?? null,\n          responsable: resolution.routing?.responsable ?? null,\n          idempotency_key: resolution.idempotency_key,\n          trigger: resolution.trigger,\n          escalation_reason: String(row.escalation_reason || '').trim() || null,\n          escalation_area: String(row.escalation_area || '').trim() || null,\n          intent: String(row.intent || '').trim() || null,\n          estado: 'pending',\n        },\n        handoff_gate: gate,\n      },\n    },\n  ];\n}"
       },
@@ -573,7 +607,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{ json: { escalation_lane_complete: true } }];"
+        "jsCode": "const source = $('Ensure Escalation Handoff').first().json;\nconst result = items[0]?.json ?? {};\nreturn [{ json: { ...source, ...result, escalation_lane_complete: true } }];"
       },
       "id": "50000000-0000-0000-0000-000000000045",
       "name": "Escalation Lane Complete",
@@ -772,11 +806,6 @@
           },
           {
             "node": "Merge Lead Context",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge Dispatch Completion",
             "type": "main",
             "index": 0
           },
@@ -1077,7 +1106,25 @@
       "main": [
         [
           {
+            "node": "Handoff Write Required?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Write Required?": {
+      "main": [
+        [
+          {
             "node": "Upsert Escalation Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalation Lane Complete",
             "type": "main",
             "index": 0
           }
@@ -1133,6 +1180,17 @@
         [
           {
             "node": "Escalation Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
             "type": "main",
             "index": 0
           }
