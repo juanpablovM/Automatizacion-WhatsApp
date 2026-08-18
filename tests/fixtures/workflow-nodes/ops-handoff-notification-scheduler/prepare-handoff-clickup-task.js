@@ -22,11 +22,15 @@ const prepareHandoffClickup = (row, env = {}) => {
   const configErrors = [];
   if (!configured(env.CLICKUP_API_TOKEN)) configErrors.push('CLICKUP_API_TOKEN_missing');
   if (!configured(env.CLICKUP_LIST_ID)) configErrors.push('CLICKUP_LIST_ID_missing');
-  const assignment = parseAssignees(env.HANDOFF_CLICKUP_ASSIGNEES_JSON, area);
+  const assignment = area === 'sales'
+    ? parseAssignees(env.HANDOFF_CLICKUP_ASSIGNEES_JSON, area)
+    : { error: `HANDOFF_CLICKUP_AREA_unsupported:${area || 'missing'}`, assignees: [] };
   if (assignment.error) configErrors.push(assignment.error);
 
   const handoffId = Number(row.handoff_id);
   if (!Number.isSafeInteger(handoffId) || handoffId <= 0) configErrors.push('handoff_id_invalid');
+  const operationKey = String(row.operation_key || '').trim();
+  if (!operationKey) configErrors.push('operation_key_missing');
 
   const description = [
     `Handoff interno #${handoffId || 'unknown'}`,
@@ -37,7 +41,7 @@ const prepareHandoffClickup = (row, env = {}) => {
     `Cliente: ${row.phone_number || 'No informado'}`,
     `Conversación: ${row.conversation_id || 'No informada'}`,
     row.escalation_reason ? `Detalle: ${row.escalation_reason}` : null,
-    `Idempotency key: ${row.idempotency_key || row.operation_key || ''}`,
+    `Operation key: ${operationKey}`,
   ].filter(Boolean).join('\n');
 
   return {
@@ -58,6 +62,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { configured, parseAssignees, prepareHandoffClickup };
 }
 
-if (typeof items !== 'undefined') {
-  return [{ json: prepareHandoffClickup(items[0]?.json ?? {}, $env ?? {}) }];
+if (typeof $json !== 'undefined') {
+  return { json: prepareHandoffClickup($json ?? {}, typeof $env !== 'undefined' ? $env : {}) };
 }

@@ -72,6 +72,13 @@ const NODES = [
     fixture: 'ops-handoff-notification-scheduler/dispatch-handoff-clickup-task.js',
   },
   {
+    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
+    node: 'Claim Pending Handoff Notifications',
+    fixture: 'db/queries/n8n/handoff-routing/02_claim_notification.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
+  {
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
     node: 'Ensure Media Attachment',
     fixture: 'wa-inbound-downstream-dispatcher/ensure-media-attachment.js',
@@ -109,17 +116,20 @@ let checkedCount = 0;
 for (const entry of NODES) {
   const workflowPath = path.join(repoRoot, entry.workflow);
   const workflow = loadJson(entry.workflow);
-  const target = workflow.nodes.find((n) => n.name === entry.node && n.type === 'n8n-nodes-base.code');
+  const target = workflow.nodes.find((n) => n.name === entry.node && n.type === (entry.type || 'n8n-nodes-base.code'));
   if (!target) {
     console.error(`[ERROR] Nodo '${entry.node}' no encontrado en ${entry.workflow}`);
     process.exitCode = 1;
     continue;
   }
 
-  const source = loadFixture(entry.fixture);
+  const source = entry.fixture.startsWith('db/')
+    ? fs.readFileSync(path.join(repoRoot, entry.fixture), 'utf8')
+    : loadFixture(entry.fixture);
+  const parameter = entry.parameter || 'jsCode';
   if (mode === 'check') {
     checkedCount += 1;
-    if (target.parameters.jsCode !== source) {
+    if (target.parameters[parameter] !== source) {
       console.log(`[DRIFT] ${entry.workflow} :: ${entry.node} difiere del fixture`);
       process.exitCode = 1;
     } else {
@@ -145,12 +155,12 @@ for (const entry of NODES) {
     continue;
   }
 
-  if (target.parameters.jsCode === source) {
+  if (target.parameters[parameter] === source) {
     console.log(`[SKIP]  ${entry.workflow} :: ${entry.node} ya sincronizado`);
     continue;
   }
 
-  target.parameters.jsCode = source;
+  target.parameters[parameter] = source;
   const bak = backupFile();
   fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, INDENT) + '\n', 'utf8');
   patchedCount += 1;

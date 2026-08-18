@@ -17,7 +17,9 @@ candidates AS MATERIALIZED (
   SELECT h.*,
          eo.id AS existing_operation_id,
          eo.status AS existing_operation_status,
-         eo.attempt_count AS existing_attempt_count
+         eo.attempt_count AS existing_attempt_count,
+         eo.reconciliation_required AS existing_reconciliation_required,
+         eo.request_payload AS existing_request_payload
   FROM handoffs h
   LEFT JOIN external_operations eo
     ON eo.operation_key = 'handoff-clickup:' || h.id::text
@@ -29,6 +31,8 @@ candidates AS MATERIALIZED (
       eo.id IS NULL
       OR eo.status = 'pending'
       OR (eo.status = 'failed' AND eo.retry_safe = TRUE AND eo.reconciliation_required = FALSE)
+      OR (eo.status = 'unknown' AND eo.reconciliation_required = TRUE
+          AND COALESCE(eo.request_payload->>'no_effect_authorization_consumed', 'false') = 'true')
     )
   ORDER BY h.next_notification_at, h.id
   LIMIT COALESCE(NULLIF($1::text, '')::integer, 20)
@@ -60,7 +64,10 @@ reclaimed AS (
       updated_at = NOW()
   FROM candidates c
   WHERE eo.id = c.existing_operation_id
-    AND (eo.status = 'pending' OR (eo.status = 'failed' AND eo.retry_safe = TRUE))
+    AND (eo.status = 'pending'
+      OR (eo.status = 'failed' AND eo.retry_safe = TRUE)
+      OR (eo.status = 'unknown' AND eo.reconciliation_required = TRUE
+          AND COALESCE(eo.request_payload->>'no_effect_authorization_consumed', 'false') = 'true'))
   RETURNING eo.*
 ),
 claimed AS (
@@ -85,7 +92,9 @@ SELECT
   cl.id AS operation_id,
   cl.operation_key,
   cl.attempt_count,
-  cl.claim_token
+  cl.claim_token,
+  cl.reconciliation_required,
+  COALESCE(cl.request_payload->>'no_effect_authorization_consumed', 'false') = 'true' AS no_effect_authorization_consumed
 FROM claimed cl
 JOIN handoffs h ON h.id = cl.entity_id
 ORDER BY h.id;

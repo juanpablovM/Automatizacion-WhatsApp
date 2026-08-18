@@ -14,6 +14,39 @@ const result = (row, outcome, statusCode, body, options = {}) => ({
   notification_response_json: JSON.stringify(normalizedBody(body)),
 });
 
+const reconcileExactMarker = (tasks, operationKey) => {
+  const matches = tasks.filter((task) => String(task.description || '').includes(`Operation key: ${operationKey}`));
+  return matches.length === 1
+    ? { outcome: 'succeeded', match: matches[0] }
+    : matches.length > 1 ? { outcome: 'duplicate_incident' } : { outcome: 'reconciliation_required' };
+};
+
+const searchExactMarker = async (row, httpRequest, apiToken) => {
+  const operationKey = String(row.operation_key || '').trim();
+  const listId = String(row.clickup_list_id || '').trim() || String(row.clickup_url || '').match(/\/list\/([^/]+)\/task$/)?.[1];
+  if (!operationKey || !listId) throw new Error('clickup_reconciliation_identity_missing');
+  const tasks = [];
+  for (const archived of [false, true]) {
+    for (let page = 0; page < 20; page += 1) {
+      const response = await httpRequest({
+        method: 'GET',
+        url: `https://api.clickup.com/api/v2/list/${encodeURIComponent(listId)}/task?include_closed=true&archived=${archived}&page=${page}`,
+        headers: { Authorization: apiToken },
+        json: true,
+        returnFullResponse: true,
+        ignoreHttpStatusErrors: true,
+        timeout: 30000,
+      });
+      const statusCode = Number(response?.statusCode || 0);
+      if (statusCode < 200 || statusCode >= 300) throw new Error(`clickup_reconciliation_http_${statusCode}`);
+      const body = normalizedBody(response?.body);
+      tasks.push(...(Array.isArray(body.tasks) ? body.tasks : []));
+      if (body.last_page === true) break;
+    }
+  }
+  return reconcileExactMarker(tasks, operationKey);
+};
+
 const dispatchHandoffClickup = async (row, httpRequest, apiToken) => {
   if (!row.should_dispatch_clickup) {
     return result(row, 'deferred', 0, {}, {
@@ -23,6 +56,24 @@ const dispatchHandoffClickup = async (row, httpRequest, apiToken) => {
   }
 
   try {
+    if (row.reconciliation_required) {
+      const reconciliation = await searchExactMarker(row, httpRequest, apiToken);
+      if (reconciliation.outcome === 'succeeded') {
+        if (!reconciliation.match?.id) {
+          return result(row, 'unknown', 0, reconciliation.match || {}, { error: 'clickup_reconciliation_match_missing_task_id' });
+        }
+        return result(row, 'succeeded', 200, reconciliation.match, {
+          externalId: String(reconciliation.match.id),
+          externalUrl: reconciliation.match.url ? String(reconciliation.match.url) : null,
+        });
+      }
+      if (reconciliation.outcome === 'duplicate_incident') {
+        return result(row, 'failed', 409, {}, { error: 'clickup_reconciliation_duplicate_marker' });
+      }
+      if (!row.no_effect_authorization_consumed) {
+        return result(row, 'unknown', 0, {}, { error: 'clickup_reconciliation_authorization_required' });
+      }
+    }
     const response = await httpRequest({
       method: 'POST',
       url: row.clickup_url,
@@ -72,10 +123,10 @@ const dispatchHandoffClickup = async (row, httpRequest, apiToken) => {
 };
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { normalizedBody, dispatchHandoffClickup };
+  module.exports = { normalizedBody, reconcileExactMarker, searchExactMarker, dispatchHandoffClickup };
 }
 
-if (typeof items !== 'undefined') {
-  return dispatchHandoffClickup(items[0]?.json ?? {}, helpers.httpRequest.bind(helpers), $env.CLICKUP_API_TOKEN)
-    .then((output) => [{ json: output }]);
+if (typeof $json !== 'undefined') {
+  return dispatchHandoffClickup($json ?? {}, helpers.httpRequest.bind(helpers), $env.CLICKUP_API_TOKEN)
+    .then((output) => ({ json: output }));
 }
