@@ -5,6 +5,34 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 umask 077
 
+usage() {
+  cat <<'EOF'
+Uso:
+  scripts/ops/configure-handoff-clickup.sh
+  scripts/ops/configure-handoff-clickup.sh --recreate-n8n
+  scripts/ops/configure-handoff-clickup.sh --help
+
+Opciones:
+  -h, --help       Muestra esta ayuda y termina sin efectos operativos.
+  --recreate-n8n   Recrea únicamente el servicio n8n con la configuración existente.
+
+Sin argumentos, configura la entrega de handoffs en ClickUp y sincroniza n8n.
+EOF
+}
+
+mode=configure
+case "$#" in
+  0) ;;
+  1)
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --recreate-n8n) mode=recreate-n8n ;;
+      *) echo "ERROR: argumento desconocido: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo 'ERROR: se admite como máximo una opción' >&2; usage >&2; exit 2 ;;
+esac
+
 require() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing dependency: $1" >&2; exit 1; }; }
 for tool in curl jq sha256sum node docker; do require "$tool"; done
 
@@ -21,7 +49,7 @@ recreate_n8n() {
   unset CLICKUP_LIST_ID HANDOFF_CLICKUP_ASSIGNEES_JSON
   docker compose --env-file "$ENV_FILE" up -d --no-deps --force-recreate n8n
 }
-if [ "${1:-}" = --recreate-n8n ]; then
+if [ "$mode" = recreate-n8n ]; then
   recreate_n8n
   exit 0
 fi

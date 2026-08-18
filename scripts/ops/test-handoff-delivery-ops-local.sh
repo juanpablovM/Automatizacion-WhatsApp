@@ -20,6 +20,48 @@ const os = require('os');
 const path = require('path');
 const [configPath, deployPath] = process.argv.slice(2);
 const [config, deploy] = [configPath, deployPath].map((path) => fs.readFileSync(path, 'utf8'));
+const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-config-cli-'));
+const isolatedConfig = path.join(cliDir, 'scripts', 'ops', 'configure-handoff-clickup.sh');
+const isolatedBin = path.join(cliDir, 'bin');
+fs.mkdirSync(path.dirname(isolatedConfig), { recursive: true });
+fs.mkdirSync(isolatedBin);
+fs.copyFileSync(configPath, isolatedConfig);
+fs.writeFileSync(path.join(isolatedBin, 'dirname'), '#!/bin/sh\n/usr/bin/dirname "$@"\n', { mode: 0o700 });
+fs.symlinkSync('/usr/bin/cat', path.join(isolatedBin, 'cat'));
+const envPath = path.join(cliDir, '.env');
+const sourcedMarker = path.join(cliDir, 'env-sourced');
+const envContents = ': > "$ENV_SOURCED_MARKER"\nCLICKUP_API_TOKEN=must-not-be-read\n';
+fs.writeFileSync(envPath, envContents);
+const runConfigCli = (args) => childProcess.spawnSync('/bin/sh', [isolatedConfig, ...args], {
+  env: { PATH: isolatedBin, ENV_SOURCED_MARKER: sourcedMarker },
+  encoding: 'utf8',
+});
+const assertNoConfigSideEffects = (result) => {
+  assert.strictEqual(fs.existsSync(sourcedMarker), false, 'CLI rejection/help must not source .env');
+  assert.strictEqual(fs.readFileSync(envPath, 'utf8'), envContents, 'CLI rejection/help must not write .env');
+  assert.strictEqual(fs.readdirSync(cliDir).sort().join(','), '.env,bin,scripts', 'CLI rejection/help must not create runtime files');
+  assert(!/missing dependency/.test(result.stderr), 'CLI parsing must happen before dependency checks');
+};
+for (const helpArg of ['-h', '--help']) {
+  const result = runConfigCli([helpArg]);
+  assert.strictEqual(result.status, 0, `${helpArg} must exit successfully without runtime dependencies`);
+  assert.match(result.stdout, /^Uso:/, `${helpArg} must print usage`);
+  assertNoConfigSideEffects(result);
+}
+for (const args of [['--unknown'], ['--help', '--recreate-n8n']]) {
+  const result = runConfigCli(args);
+  assert.notStrictEqual(result.status, 0, `${args.join(' ')} must fail`);
+  assert.match(result.stderr, /ERROR:.*\nUso:/s, 'invalid arguments must print a clear error and usage');
+  assertNoConfigSideEffects(result);
+}
+assert.match(runConfigCli(['--unknown']).stderr, /argumento desconocido: --unknown/, 'unknown option errors must identify the rejected argument');
+for (const args of [[], ['--recreate-n8n']]) {
+  const result = runConfigCli(args);
+  assert.notStrictEqual(result.status, 0, 'accepted operational modes must continue to dependency checks in the isolated harness');
+  assert.match(result.stderr, /missing dependency: curl/, 'accepted operational modes must preserve the guarded runtime path');
+  assert.strictEqual(fs.existsSync(sourcedMarker), false, 'dependencies must still be checked before sourcing .env');
+}
+fs.rmSync(cliDir, { recursive: true, force: true });
 const logicalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-logical-parity-'));
 const write = (name, value) => {
   const file = path.join(logicalDir, name);
@@ -93,7 +135,7 @@ assert(config.includes('recreate_n8n() {\n  unset CLICKUP_LIST_ID HANDOFF_CLICKU
 assert.strictEqual((config.match(/--force-recreate n8n/g) || []).length, 1, 'success and rollback must share the sole override-clearing n8n recreation helper');
 assert(config.includes('recreate_n8n >/dev/null 2>&1 || true'), 'rollback must recreate through the override-clearing helper');
 assert(config.includes('recreate_n8n >/dev/null'), 'success must recreate through the override-clearing helper');
-assert(config.includes('if [ "${1:-}" = --recreate-n8n ]; then\n  recreate_n8n\n  exit 0\nfi'), 'the authorized n8n-only recovery path must use the same override-clearing helper');
+assert(config.includes('if [ "$mode" = recreate-n8n ]; then\n  recreate_n8n\n  exit 0\nfi'), 'the explicitly parsed n8n-only recovery path must use the same override-clearing helper');
 assert(config.indexOf('members=$(api_get "/team")') < config.indexOf('api_post "/space/$space_id/list"'), 'joined active Sales owner must be preflighted before any list creation');
 for (const fragment of ['OPS - Handoff Notification Scheduler', 'WA - Inbound Downstream Dispatcher', 'export:workflow --id=', 'import:workflow', 'set_active false', 'rollback']) {
   assert(deploy.includes(fragment), `deployment guard missing ${fragment}`);
