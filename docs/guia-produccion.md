@@ -13,17 +13,21 @@ La carpeta `.hermes` fue retirada del repo para evitar duplicar planes historico
 El corte canónico está en [`estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md). En síntesis:
 
 - U0 y U2 están completas en la rama.
-- U1, U3, U5 y U6 están remediadas y desplegadas en el runtime local.
-- Los gates recientes están verdes: U1 126/0, conversación 30, AI 7, U2 20/0 y U3/U5/U6 PASS.
-- Las 14 definiciones runtime coinciden con el repositorio; Entry/Recovery y los tres schedulers OPS están activos.
-- Los blindajes recientes del pipeline siguen sin commit ni push y falta la aceptación externa con teléfono controlado.
+- U1, U5 y U6, junto con una versión previa de U3, están desplegadas en el runtime local observado.
+- El candidato final `complete-durable-handoff-delivery` está archivado y verificado con 10/10 requisitos y 10/10 escenarios PASS.
+- El contrato AI pasó 9 escenarios, la regresión conversacional 33 casos y los harnesses focalizados de handoff/operaciones/dispatcher están en PASS.
+- La remediación final Sales-only, con marcador exacto `Operation key: {operation_key}` y reconciliación GET-first, todavía no está desplegada.
+- El candidato permanece pendiente de revisión y commit; falta luego su despliegue controlado y la aceptación externa autorizada.
+- Un outbound persistente está `unknown/reconciliation_required` después de un HTTP 500. Su efecto es indeterminado y **no debe reejecutarse (`replay`) ni reintentarse**.
 - U4, U7, U8 y U9 permanecen pendientes por decisión.
 - U7 conserva errores en KPI-19, KPI-26 y KPI-29.
 - U8 no tiene una certificación válida: la ejecución anterior falló por SQL posicional sin parámetros y no debe regenerarse antes de corregir U7/U8.
 
 Pendientes reales detectados:
 
-- publicar los blindajes del pipeline después de revisar el diff
+- revisar y confirmar en commits el candidato final archivado
+- desplegar sólo el scheduler corregido, con snapshot, verificación de paridad y rollback disponible
+- reconciliar el outbound `unknown/reconciliation_required` sin reejecutarlo (`replay`) ni reintentarlo
 - repetir migraciones e importación únicamente en los ambientes objetivo que todavía no recibieron este corte
 - configurar credenciales ClickUp/Evolution, variables de follow-up y el volumen persistente de media en el ambiente objetivo
 - ejecutar preflight, verificación remota, gates y E2E controlado después de sincronizar el runtime
@@ -35,20 +39,21 @@ Pendientes reales detectados:
 - definir una fuente de agenda real antes de ofrecer horarios
 - aplicar la migracion comercial en cualquier ambiente nuevo antes de sincronizar el workflow AI actualizado
 
-## Despliegue de las remediaciones locales
+## Despliegue de la remediación final de handoff
 
 No ejecutar esta secuencia sin autorización de despliegue y un snapshot recuperable del ambiente.
 
-1. Confirmar el commit/release que contiene U1, U3, U5 y U6.
+1. Confirmar la revisión y el commit/release que contienen el candidato archivado `complete-durable-handoff-delivery`.
 2. Crear y verificar el backup previo.
-3. Aplicar, en orden, las migraciones `015`, `016` y `017` sobre `crm_whatsapp_app`.
-4. Configurar las variables y credenciales requeridas por ClickUp, Evolution API, follow-up y almacenamiento de media.
-5. Ejecutar `sh scripts/dev/sync-n8n-workflows.sh --preflight`.
-6. Importar y activar los workflows mediante el procedimiento controlado de sincronización.
-7. Ejecutar `sh scripts/dev/sync-n8n-workflows.sh --verify-remote` y los gates U1/U2/U3/U5/U6.
-8. Cerrar con un E2E sobre un teléfono controlado y guardar evidencia del runtime.
+3. Confirmar que las migraciones `015`, `016` y `017` ya estén aplicadas sobre `crm_whatsapp_app`; aplicarlas en orden sólo donde falten.
+4. Con autorización operativa, ejecutar `scripts/ops/configure-handoff-clickup.sh` para crear o reutilizar la lista dedicada, validar el responsable Sales, actualizar sólo las claves de entorno aprobadas y recrear `n8n`. Este paso no es read-only.
+5. Ejecutar los gates locales y confirmar 9 escenarios AI, 33 casos conversacionales y los harnesses focalizados en PASS.
+6. Desplegar únicamente `OPS - Handoff Notification Scheduler` mediante `scripts/ops/deploy-handoff-scheduler.sh`, conservando el dispatcher `791f9f3` y la ruta conversacional.
+7. Verificar paridad remota, activación y capacidad de rollback del scheduler.
+8. Reconciliar mediante GET cualquier operación ambigua; un POST de handoff posterior requiere cero coincidencias y autorización de no-efecto coincidente ya consumida. El outbound persistente `unknown/reconciliation_required` no debe reejecutarse (`replay`) ni reintentarse.
+9. Cerrar con un E2E nuevo sobre un teléfono controlado, bajo autorización independiente, y guardar evidencia del runtime.
 
-Un gate local verde valida el repositorio; sólo los pasos 3–8 validan el runtime.
+Un gate local verde valida el repositorio; sólo los pasos de despliegue y verificación remota validan el runtime.
 
 ## Plan de ejecucion por etapas
 
@@ -502,6 +507,9 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Confirmar notificacion al vendedor
 - [ ] Confirmar comportamiento cuando ClickUp falle
 - [ ] Confirmar comportamiento cuando no haya vendedor notificable
+- [ ] Confirmar que sólo `sales` genera payload y POST de handoff a ClickUp
+- [ ] Confirmar el marcador exacto `Operation key: {operation_key}` en la descripción
+- [ ] Confirmar reconciliación GET-first de operaciones ambiguas y ausencia de replay del outbound persistente
 
 ### 10. AI
 

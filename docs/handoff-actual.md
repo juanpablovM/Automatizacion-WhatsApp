@@ -4,12 +4,16 @@
 
 `Hormi Atencion` opera como asesor comercial de WhatsApp sobre Evolution API, n8n, PostgreSQL, Gemini y ClickUp.
 
-Estado del repositorio en el corte del `2026-08-08`:
+Estado de entrega en el corte del `2026-08-17`:
 
-- U1, U3, U5 y U6 están remediadas y desplegadas en el runtime local
+- el SDD `complete-durable-handoff-delivery` está archivado con 10/10 requisitos y 10/10 escenarios en PASS
+- el candidato final limita ClickUp a Sales, usa exactamente `Operation key: {operation_key}` y aplica reconciliación GET-first antes de cualquier POST ambiguo
+- la corrección final está en el working tree, pendiente de revisión, commit y despliegue; no debe confundirse con el runtime observado
+- el runtime recibió un despliegue anterior acotado al scheduler, previo a la corrección final
 - U4, U7, U8 y U9 permanecen pendientes por decisión
-- el pipeline de sync, los triggers de subworkflow y la unicidad de IDs tienen blindajes locales pendientes de commit/push
 - Entry, Recovery y los tres schedulers OPS están activos; el webhook POST canónico y el GET de salud están registrados
+
+> **Riesgo operativo persistente:** un outbound de la aceptación controlada recibió HTTP 500 y permanece `unknown/reconciliation_required`. Su resultado es indeterminado y **no debe reejecutarse (`replay`) ni reintentarse**; requiere reconciliación operativa.
 
 Último runtime observado, correspondiente a la reparación controlada del `2026-08-08`:
 
@@ -20,6 +24,7 @@ Estado del repositorio en el corte del `2026-08-08`:
 - contrato local AI y regresión conversacional local en `OK`
 - restore check del ultimo backup estructurado en `OK`
 - existen ejecuciones reales recientes con lead, ClickUp, notificacion y mensaje saliente exitosos
+- este estado no incluye el despliegue de la remediación final Sales-only/GET-first
 - el round robin aun incluye un vendedor de pruebas como notificable
 
 El corte canónico vive en [`docs/estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md).
@@ -85,11 +90,13 @@ Los enlaces se resuelven desde `n8n/workflow-links.json`.
 
 ## Validacion ejecutada
 
+- SDD durable handoff: 10/10 requisitos y 10/10 escenarios PASS
+- contrato local AI: 9 escenarios PASS
+- regresión conversacional: 33 casos PASS
+- harnesses focalizados de handoff, operaciones y dispatcher: PASS
+- checks estáticos, sincronización de nodos, JSON y sintaxis shell: PASS
 - preflight de workflows: OK
-- contrato local AI y fallback: OK
 - gate U1: 126 PASS / 0 FAIL
-- regresión conversacional: 30 casos PASS
-- contrato AI: 7 casos PASS
 - U2: 20 PASS / 0 FAIL
 - U3, U5 y U6: PASS
 - bootstrap, triggers passthrough y unicidad de IDs: PASS
@@ -121,7 +128,9 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 - ampliar la matriz E2E para pagos, garantias, reclamos y B2B
 - implementar carga del binario de adjuntos a ClickUp
 - corregir KPI-19, KPI-26 y KPI-29 antes de regenerar la certificación U8
-- revisar y publicar los blindajes locales del pipeline n8n
+- revisar y confirmar en commits el candidato archivado de entrega durable
+- desplegar la corrección final sólo mediante el script acotado al scheduler y con autorización explícita
+- reconciliar el outbound persistente `unknown/reconciliation_required` sin reejecutarlo (`replay`) ni reintentarlo
 - ejecutar la aceptación externa controlada con un teléfono de prueba
 - sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
