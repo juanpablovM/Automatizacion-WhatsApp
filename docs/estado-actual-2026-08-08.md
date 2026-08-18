@@ -1,20 +1,20 @@
 # Estado actual — corte actualizado 2026-08-17
 
-Este es el corte canónico del proyecto. El candidato final de entrega durable está verificado y archivado, pero todavía no fue revisado para entrega, confirmado en un commit ni desplegado. El runtime y el repositorio no representan el mismo estado.
+Este es el corte canónico del proyecto. El candidato final de entrega durable está verificado, archivado, confirmado y publicado en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR. La remediación final todavía no fue desplegada, por lo que el runtime y el repositorio no representan el mismo estado.
 
 ## Resumen ejecutivo
 
 | Área | Estado |
 |---|---|
 | Rama | `feat/afinar-hormi-atencion` |
-| HEAD | `791f9f3` |
-| Divergencia remota | 1 commit ahead de `origin/feat/afinar-hormi-atencion` |
-| Working tree | Candidato final, archivo SDD y documentación sin commit |
+| HEAD publicado | `d38c371` |
+| Divergencia remota | Ninguna para el candidato: rama local y `origin/feat/afinar-hormi-atencion` en `d38c371` |
+| Publicación | Rama publicada; no existe PR |
 | Unidades remediadas | U1, U3, U5 y U6 |
 | Candidato de repositorio | `complete-durable-handoff-delivery` archivado; 10/10 requisitos y 10/10 escenarios PASS |
 | Runtime observado | Baseline anterior y un despliegue previo del scheduler; la corrección final no está desplegada |
 | Pendientes por decisión | U4, U7, U8 y U9 |
-| Entrega | Pendiente de revisión del diff, commit y despliegue controlado del scheduler |
+| Entrega | Candidato confirmado y publicado; pendiente el despliegue controlado exclusivo del scheduler |
 
 ## Estado por capa
 
@@ -38,7 +38,8 @@ Este es el corte canónico del proyecto. El candidato final de entrega durable e
 - Evolution apunta al POST canónico `.../evolutionwebhook/wa-inbound-entry`; n8n registra ese POST y el GET de healthcheck.
 - El último corte remoto completo validado antes de este candidato reportó 14/14 definiciones coincidentes.
 - Durante la implementación hubo un despliegue autorizado, acotado al scheduler, y una aceptación controlada. La corrección final posterior —Sales-only, marcador exacto y reconciliación GET-first autorizada— no se desplegó.
-- El outbound generado por esa aceptación recibió HTTP 500 del proveedor y permanece `unknown/reconciliation_required`. Su entrega es indeterminada: **no debe reejecutarse (`replay`), reintentarse ni usarse para otra aceptación**. Debe conservarse para reconciliación operativa.
+- El inventario observado contiene 5 outbounds en cuarentena `unknown/reconciliation_required`: 3 follow-ups históricos y 2 acuses de escalamiento, distribuidos en 4 conversaciones y 3 clientes. Todos tuvieron un único intento 5xx, sin ID ni acuse del proveedor, sin claim activo y sin ruta segura de retry: **no deben reejecutarse (`replay`), reintentarse ni usarse para otra aceptación**.
+- La aceptación controlada explica el riesgo histórico documentado de uno de esos outbounds, pero no constituía un inventario completo. Un despliegue limitado al scheduler no toca las 5 filas mientras no se invoque ningún workflow.
 
 La reparación del baseline del `2026-08-08` se hizo desde un snapshot completo en `backups/runtime-repair-20260808-192944/`, sin enviar mensajes E2E ni crear efectos externos.
 
@@ -73,8 +74,8 @@ La evidencia 9+33 y los harnesses focalizados cubren el candidato de repositorio
 
 - Mantener U7 y U8 pendientes hasta retomarlas explícitamente.
 - Mantener U4 y U9 fuera de alcance.
-- Revisar el diff completo y preparar commits por unidad de trabajo antes de cualquier publicación.
+- Mantener `d38c371` como candidato publicado de referencia; no existe PR.
 - Desplegar únicamente `OPS - Handoff Notification Scheduler` mediante el procedimiento controlado, con snapshot, paridad y rollback.
-- No reusar, reejecutar (`replay`) ni reintentar el outbound `unknown/reconciliation_required`; reconciliarlo como evidencia persistente.
+- No reusar, reejecutar (`replay`) ni reintentar los 5 outbounds `unknown/reconciliation_required`; conservarlos como evidencia persistente.
 - Ejecutar una nueva aceptación externa sólo con una autorización independiente y un teléfono de prueba controlado.
 - Mantener evidencia separada de repositorio, runtime y efectos externos.

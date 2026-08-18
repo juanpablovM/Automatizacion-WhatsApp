@@ -8,12 +8,12 @@ Estado de entrega en el corte del `2026-08-17`:
 
 - el SDD `complete-durable-handoff-delivery` está archivado con 10/10 requisitos y 10/10 escenarios en PASS
 - el candidato final limita ClickUp a Sales, usa exactamente `Operation key: {operation_key}` y aplica reconciliación GET-first antes de cualquier POST ambiguo
-- la corrección final está en el working tree, pendiente de revisión, commit y despliegue; no debe confundirse con el runtime observado
+- la corrección final está confirmada y publicada en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR y sigue pendiente su despliegue controlado exclusivo del scheduler
 - el runtime recibió un despliegue anterior acotado al scheduler, previo a la corrección final
 - U4, U7, U8 y U9 permanecen pendientes por decisión
 - Entry, Recovery y los tres schedulers OPS están activos; el webhook POST canónico y el GET de salud están registrados
 
-> **Riesgo operativo persistente:** un outbound de la aceptación controlada recibió HTTP 500 y permanece `unknown/reconciliation_required`. Su resultado es indeterminado y **no debe reejecutarse (`replay`) ni reintentarse**; requiere reconciliación operativa.
+> **Riesgo operativo persistente:** hay 5 outbounds en cuarentena `unknown/reconciliation_required`: 3 follow-ups históricos y 2 acuses de escalamiento, en 4 conversaciones de 3 clientes. Cada uno tuvo un único intento 5xx, sin ID/acuse del proveedor, claim activo ni ruta segura de retry. **No deben reejecutarse (`replay`) ni reintentarse**. La aceptación controlada conserva su contexto histórico, pero no representaba el inventario completo.
 
 Último runtime observado, correspondiente a la reparación controlada del `2026-08-08`:
 
@@ -128,9 +128,9 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 - ampliar la matriz E2E para pagos, garantias, reclamos y B2B
 - implementar carga del binario de adjuntos a ClickUp
 - corregir KPI-19, KPI-26 y KPI-29 antes de regenerar la certificación U8
-- revisar y confirmar en commits el candidato archivado de entrega durable
+- mantener `d38c371` como candidato publicado de referencia; no existe PR
 - desplegar la corrección final sólo mediante el script acotado al scheduler y con autorización explícita
-- reconciliar el outbound persistente `unknown/reconciliation_required` sin reejecutarlo (`replay`) ni reintentarlo
+- conservar los 5 outbounds `unknown/reconciliation_required` en cuarentena, sin reejecutarlos (`replay`) ni reintentarlos
 - ejecutar la aceptación externa controlada con un teléfono de prueba
 - sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
