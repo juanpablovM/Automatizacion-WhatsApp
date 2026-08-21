@@ -2,7 +2,7 @@ name: Delivery Validation
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'feat/**']
     paths:
       - '.github/workflows/parity-validation.yml'
       - '.gitignore'
