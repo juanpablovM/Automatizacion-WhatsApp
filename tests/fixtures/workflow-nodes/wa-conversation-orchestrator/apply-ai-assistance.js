@@ -127,12 +127,22 @@ const PRD_VALIDATORS = [
       && !/\b(revisar|evaluar|depende|necesitamos|sujeto|cotizar)\b/i.test(text),
     fallback: 'Para instalacion necesitamos revisar medidas, comuna, terreno, acceso y si hay retiro de escombros. Con eso se puede preparar una cotizacion mas precisa.',
   },
+  {
+    // Solo aplica cuando el llamador pasa blockDerivationPromise=true (PRIORITY 3,
+    // donde ya se sabe !shouldCreateLead && !isEscalation): ninguna derivacion real
+    // esta ocurriendo, asi que cualquier frase que la prometa es falsa por
+    // construccion. En PRIORITY 1 (shouldCreateLead real) no se activa.
+    name: 'NO_FALSE_DERIVATION_PROMISE',
+    test: (text, _catalogMatches, _priceContext, ctx) => Boolean(ctx && ctx.blockDerivationPromise)
+      && /\b(voy a derivar|te voy a derivar|te derivo|derivar[ée]\b|ya derive|ya derivé|he derivado|qued[oa]s? derivad[oa]|derive tu (caso|solicitud|consulta)|derivé tu (caso|solicitud|consulta)|un[ao]? (asesor|ejecutiv[oa]|persona del equipo) (te contactar[aá]|se comunicar[aá]|te escribir[aá]))\b/i.test(text),
+    fallback: 'Todavia estoy reuniendo los datos que necesito antes de derivar tu caso a un asesor. Sigamos completando la informacion para poder ayudarte.',
+  },
 ];
 
-const validatePrdRules = (text, catalogMatches, priceContext) => {
+const validatePrdRules = (text, catalogMatches, priceContext, ctx) => {
   if (!text) return { passed: true, rule: null };
   for (const validator of PRD_VALIDATORS) {
-    if (validator.test(text, catalogMatches, priceContext)) {
+    if (validator.test(text, catalogMatches, priceContext, ctx)) {
       return { passed: false, rule: validator.name, fallback: validator.fallback };
     }
   }
@@ -1022,7 +1032,7 @@ const selectResponseText = () => {
   // PRIORITY 3: AI response available - validate and select
   if (aiReplyAcceptable && ai.reply_text) {
     const validation = prdValidationEnabled
-      ? validatePrdRules(ai.reply_text, ai.catalog_matches, ai.price_context)
+      ? validatePrdRules(ai.reply_text, ai.catalog_matches, ai.price_context, { blockDerivationPromise: true })
       : { passed: true, rule: null };
     
     // PRD violation - use fallback
