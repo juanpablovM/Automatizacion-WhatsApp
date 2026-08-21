@@ -1,40 +1,38 @@
--- Load Conversation State (embedded en wa-conversation-orchestrator.json)
--- Carga el contexto activo de la conversación + lead anterior + mensajes recientes.
--- 
--- Nota: Este es el SQL REFERENCIA. El workflow embebe este mismo query
--- con parámetros posicionales ($1, $2, ...). Si modificás este archivo,
--- actualizá también el JSON del workflow y viceversa.
---
--- Parámetros (named style para documentación):
---   :phone_number        TEXT     — Número de WhatsApp del contacto
---   :source_number_id    BIGINT   — ID del número emisor (opcional)
---   :whatsapp_name       TEXT     — Nombre en WhatsApp (opcional)
---   :external_contact_id TEXT     — ID externo del contacto (opcional)
---   :external_message_id TEXT     — ID del mensaje en Evolution API
---   :message_type        TEXT     — Tipo de mensaje (text, image, etc.)
---   :text_body           TEXT     — Cuerpo del mensaje
---   :raw_payload_json    TEXT     — Payload completo de Evolution (JSON)
---   :attachment_*        varios   — Metadata del attachment (opcional)
---   :instance_name       TEXT     — Nombre de la instancia Evolution API
-
+-- Load Conversation State — canonical query embedded in wa-conversation-orchestrator.json.
+-- Temporal contract is based only on the latest previously persisted inbound:
+--   <= 48h          continuation
+--   > 48h and <=30d re-engagement
+--   > 30d           new request
 WITH input_payload AS (
   SELECT
-    :phone_number::text AS phone_number,
-    NULLIF(:source_number_id::text, '')::bigint AS source_number_id,
-    NULLIF(:whatsapp_name::text, '') AS whatsapp_name,
-    NULLIF(:external_contact_id::text, '') AS external_contact_id,
-    NULLIF(:external_message_id::text, '') AS external_message_id,
-    COALESCE(NULLIF(:message_type::text, ''), 'unknown') AS message_type,
-    NULLIF(:text_body::text, '') AS text_body,
-    COALESCE(NULLIF(:raw_payload_json::text, ''), '{}') AS raw_payload_json,
-    NULLIF(:attachment_type::text, '') AS attachment_type,
-    NULLIF(:mime_type::text, '') AS mime_type,
-    NULLIF(:filename::text, '') AS filename,
-    NULLIF(:external_media_id::text, '') AS external_media_id,
-    NULLIF(:external_url::text, '') AS external_url,
-    NULLIF(:sha256::text, '') AS sha256,
-    NULLIF(:file_size_raw::text, '') AS file_size_raw,
-    NULLIF(:instance_name::text, '') AS instance_name
+    $1::text AS phone_number,
+    NULLIF($2::text, '')::bigint AS source_number_id,
+    NULLIF($3::text, '') AS whatsapp_name,
+    NULLIF($4::text, '') AS external_contact_id,
+    NULLIF($5::text, '') AS external_message_id,
+    NULLIF($6::text, '') AS external_timestamp_raw,
+    COALESCE(NULLIF($7::text, ''), 'unknown') AS message_type,
+    NULLIF($8::text, '') AS text_body,
+    COALESCE(NULLIF($9::text, ''), '{}') AS raw_payload_json,
+    NULLIF($10::text, '') AS attachment_type,
+    NULLIF($11::text, '') AS mime_type,
+    NULLIF($12::text, '') AS filename,
+    NULLIF($13::text, '') AS external_media_id,
+    NULLIF($14::text, '') AS external_url,
+    NULLIF($15::text, '') AS sha256,
+    NULLIF($16::text, '') AS file_size_raw,
+    NULLIF($17::text, '') AS instance_name,
+    NULLIF($18::text, '')::bigint AS inbound_event_id,
+    NULLIF($19::text, '') AS processing_token
+),
+valid_claim AS (
+  SELECT ie.id, ie.processing_token
+  FROM inbound_events ie
+  JOIN input_payload ip ON ip.inbound_event_id = ie.id
+  WHERE ie.processing_status = 'processing'
+    AND ie.processing_token = ip.processing_token
+    AND ie.source_number_id = ip.source_number_id
+    AND ie.phone_number = ip.phone_number
 ),
 latest_conversation AS (
   SELECT
@@ -54,8 +52,24 @@ latest_conversation AS (
   JOIN input_payload ip ON TRUE
   WHERE c.deleted_at IS NULL
     AND c.phone_number = ip.phone_number
-    AND (ip.source_number_id IS NULL OR c.source_number_id = ip.source_number_id)
-  ORDER BY c.started_at DESC
+    AND ip.source_number_id IS NOT NULL
+    AND c.source_number_id = ip.source_number_id
+  ORDER BY c.started_at DESC, c.id DESC
+  LIMIT 1
+),
+last_persisted_inbound AS (
+  SELECT
+    ie.id AS last_inbound_event_id,
+    ie.created_at AS last_inbound_at,
+    EXTRACT(EPOCH FROM (NOW() - ie.created_at)) / 3600 AS elapsed_hours
+  FROM inbound_events ie
+  JOIN input_payload ip ON TRUE
+  WHERE ie.phone_number = ip.phone_number
+    AND ip.source_number_id IS NOT NULL
+    AND ie.source_number_id = ip.source_number_id
+    AND ie.processing_status = 'processed'
+    AND (ip.inbound_event_id IS NULL OR ie.id <> ip.inbound_event_id)
+  ORDER BY ie.created_at DESC, ie.id DESC
   LIMIT 1
 ),
 latest_conversation_state AS (
@@ -87,26 +101,21 @@ recent_messages AS (
       jsonb_build_object(
         'role', CASE WHEN history.direction = 'incoming' THEN 'user' ELSE 'assistant' END,
         'content', history.text_body
-      )
-      ORDER BY history.created_at ASC, history.id ASC
+      ) ORDER BY history.created_at ASC, history.id ASC
     ),
     '[]'::jsonb
   ) AS recent_messages
   FROM (
-    SELECT
-      m.id,
-      m.direction,
-      m.text_body,
-      m.created_at
+    SELECT m.id, m.direction, m.text_body, m.created_at
     FROM messages m
     JOIN latest_conversation lc ON lc.conversation_id = m.conversation_id
+    JOIN last_persisted_inbound lpi ON TRUE
     LEFT JOIN latest_conversation_reset lcr ON TRUE
     WHERE m.deleted_at IS NULL
       AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
-      AND (
-        m.direction = 'incoming'
-        OR (m.direction = 'outgoing' AND m.delivery_status = 'sent')
-      )
+      AND (m.direction = 'incoming' OR (m.direction = 'outgoing' AND m.delivery_status = 'sent'))
+      AND lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'
+      AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')
       AND (lcr.reset_at IS NULL OR m.created_at > lcr.reset_at)
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 8
@@ -128,16 +137,28 @@ latest_lead AS (
   JOIN input_payload ip ON TRUE
   WHERE l.deleted_at IS NULL
     AND l.phone_number = ip.phone_number
-  ORDER BY l.created_at DESC
+    AND ip.source_number_id IS NOT NULL
+    AND l.source_number_id = ip.source_number_id
+  ORDER BY l.created_at DESC, l.id DESC
   LIMIT 1
+),
+follow_up_status AS (
+  SELECT COUNT(*) FILTER (WHERE f.estado IN ('pending', 'sending', 'error')) AS pending_count
+  FROM follow_ups f
+  JOIN latest_conversation lc ON TRUE
+  WHERE f.deleted_at IS NULL
+    AND f.conversation_id = lc.conversation_id
 )
 SELECT
   ip.phone_number,
   ip.source_number_id AS input_source_number_id,
   ip.instance_name,
+  ip.inbound_event_id,
+  ip.processing_token,
   ip.whatsapp_name AS input_whatsapp_name,
   ip.external_contact_id AS input_external_contact_id,
   ip.external_message_id AS input_external_message_id,
+  ip.external_timestamp_raw AS input_external_timestamp,
   ip.message_type,
   ip.text_body,
   ip.raw_payload_json,
@@ -149,6 +170,7 @@ SELECT
   ip.sha256,
   ip.file_size_raw,
   lc.conversation_id,
+  lc.conversation_id AS target_conversation_id,
   lc.lead_id,
   lc.source_number_id,
   lc.current_step,
@@ -158,12 +180,28 @@ SELECT
   lc.last_message_at,
   lc.conversation_status_code,
   lc.conversation_status_label,
-  CASE
-    WHEN lc.conversation_id IS NOT NULL
-      AND lc.last_message_at >= NOW() - INTERVAL '24 hours'
-    THEN TRUE
-    ELSE FALSE
-  END AS has_active_conversation,
+  (lc.conversation_id IS NOT NULL) AS has_existing_conversation,
+  (
+    lc.conversation_id IS NOT NULL
+    AND lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'
+  ) AS is_recent_conversation,
+  (
+    lc.conversation_id IS NOT NULL
+    AND lpi.last_inbound_at < NOW() - INTERVAL '48 hours'
+  ) AS is_stale_context,
+  (
+    lc.conversation_id IS NOT NULL
+    AND lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'
+    AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')
+  ) AS has_active_conversation,
+  (
+    lc.conversation_id IS NOT NULL
+    AND lpi.last_inbound_at < NOW() - INTERVAL '48 hours'
+    AND lpi.last_inbound_at >= NOW() - INTERVAL '30 days'
+  ) AS is_reengagement,
+  lpi.last_inbound_event_id,
+  lpi.last_inbound_at,
+  lpi.elapsed_hours::numeric AS elapsed_hours_since_last_inbound,
   lcs.state_service,
   lcs.state_city,
   lcs.state_requirement,
@@ -174,10 +212,17 @@ SELECT
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.service END AS previous_service,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.city END AS previous_city,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.requirement END AS previous_requirement,
-  CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code
+  CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code,
+  COALESCE(fs.pending_count, 0) > 0 AS has_pending_followups,
+  COALESCE(lcs.state_service, ll.service) AS last_known_service,
+  COALESCE(lcs.state_city, ll.city) AS last_known_city,
+  COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement
 FROM input_payload ip
+JOIN valid_claim vc ON TRUE
 LEFT JOIN latest_conversation lc ON TRUE
+LEFT JOIN last_persisted_inbound lpi ON TRUE
 LEFT JOIN latest_conversation_state lcs ON TRUE
 LEFT JOIN recent_messages rm ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
-LEFT JOIN latest_lead ll ON TRUE;
+LEFT JOIN latest_lead ll ON TRUE
+LEFT JOIN follow_up_status fs ON TRUE;

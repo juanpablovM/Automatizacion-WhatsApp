@@ -136,11 +136,17 @@ if (!loadStateQuery.includes("metadata->>'reset_conversation_lead'")) {
 if (!loadStateQuery.includes('ll.previous_lead_created_at > lcr.reset_at')) {
   fail('Un reinicio debe ocultar leads anteriores al nuevo contexto');
 }
-if (!loadStateQuery.includes("lc.last_message_at >= NOW() - INTERVAL '24 hours'")) {
-  fail('El estado activo y el historial deben respetar el timeout de 24 horas');
+if (!loadStateQuery.includes('last_persisted_inbound')) {
+  fail('Load Conversation State debe basarse en el ultimo inbound persistido');
 }
-if (!loadStateQuery.includes("conversation_status_code NOT IN ('handed_to_sales', 'escalation_required', 'closed', 'inactive_timeout')")) {
-  fail('Los estados terminales no deben cargarse como contexto conversacional activo');
+if (!loadStateQuery.includes("lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'")) {
+  fail('La continuidad conversacional debe respetar el limite de 48 horas');
+}
+if (!loadStateQuery.includes("lpi.last_inbound_at >= NOW() - INTERVAL '30 days'")) {
+  fail('El re-engagement debe respetar el limite inclusivo de 30 dias');
+}
+if (!loadStateQuery.includes("lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')")) {
+  fail('Solo los estados conversacionales elegibles deben cargarse como contexto activo');
 }
 
 const buildAiNode = assistant.nodes.find((node) => node.name === 'Build AI Request');
@@ -213,7 +219,13 @@ const runApplyAi = async (row, env = {}) => {
 };
 const runEvaluate = async (row) => {
   const fn = new AsyncFunction('items', evaluateNode.parameters.jsCode);
-  const result = await fn([{ json: row }]);
+  const normalizedRow = {
+    has_existing_conversation: Boolean(
+      row.has_existing_conversation ?? row.has_active_conversation ?? row.conversation_id,
+    ),
+    ...row,
+  };
+  const result = await fn([{ json: normalizedRow }]);
   return result[0].json;
 };
 const mergedAiShape = (deterministicRow, aiRow) => ({
@@ -222,7 +234,7 @@ const mergedAiShape = (deterministicRow, aiRow) => ({
 });
 
 const baseDeterministic = {
-  phone_number: '+56911111111',
+  phone_number: 'test-contact-regression-011',
   source_number_id: 1,
   instance_name: 'principal',
   whatsapp_name: 'Cliente Prueba',
@@ -251,7 +263,7 @@ const baseDeterministic = {
 };
 
 const communeAndProduct = await runEvaluate({
-  phone_number: '+56911111112',
+  phone_number: 'test-contact-regression-012',
   message_type: 'text',
   text_body: 'Quiero cotizar 25 metros de adoquines en Las Condes, solo material',
   raw_payload_json: '{}',
@@ -270,12 +282,13 @@ if (communeAndProduct.city !== 'Las Condes') {
 if (communeAndProduct.service !== 'Adoquines') {
   fail('Extractor deterministico debe aislar Adoquines como producto');
 }
-if (!String(communeAndProduct.current_step).startsWith('confirm|')) {
+if (communeAndProduct.current_step !== 'confirm'
+    || !String(communeAndProduct.current_step_encoded).startsWith('confirm|')) {
   fail('Mensaje completo con comuna y producto debe pasar a confirmacion');
 }
 
 const adoquinRequest = await runEvaluate({
-  phone_number: '+56911111115',
+  phone_number: 'test-contact-regression-015',
   message_type: 'text',
   text_body: 'Necesito suministro de adoquines',
   raw_payload_json: '{}',
@@ -288,7 +301,7 @@ if (adoquinRequest.service !== 'Adoquines') {
   fail('Producto explicito no debe confundirse con una respuesta de ciudad');
 }
 const adoquinCity = await runEvaluate({
-  phone_number: '+56911111115',
+  phone_number: 'test-contact-regression-015',
   message_type: 'text',
   text_body: 'Quilicura',
   raw_payload_json: '{}',
@@ -304,7 +317,7 @@ if (adoquinCity.service !== 'Adoquines' || adoquinCity.city !== 'Quilicura') {
 }
 
 const preservedHistory = await runEvaluate({
-  phone_number: '+56911111113',
+  phone_number: 'test-contact-regression-013',
   message_type: 'text',
   text_body: 'Santiago',
   raw_payload_json: '{}',
@@ -322,7 +335,7 @@ if (!Array.isArray(preservedHistory.recent_messages) || preservedHistory.recent_
 }
 
 const resetHistory = await runEvaluate({
-  phone_number: '+56911111114',
+  phone_number: 'test-contact-regression-014',
   message_type: 'text',
   text_body: 'Iniciar una nueva',
   raw_payload_json: '{}',
@@ -850,7 +863,7 @@ const rejectedConfirmationAi = {
   escalation_area: 'none',
 };
 const rejectionStateInput = (previous, textBody = 'no') => ({
-  phone_number: '+56911111117',
+  phone_number: 'test-contact-regression-017',
   message_type: 'text',
   text_body: textBody,
   raw_payload_json: '{}',
@@ -1008,7 +1021,7 @@ if (correction.should_create_lead !== false) fail('Correccion AI no puede crear 
 
 // P0: provider/config errors must preserve the deterministic visible reply end-to-end.
 const deterministicGreeting = await runEvaluate({
-  phone_number: '+56911111120', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  phone_number: 'test-contact-regression-020', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
   has_active_conversation: false, conversation_status_code: null,
 });
 const integratedFallback = await runApplyAi(mergedAiShape(deterministicGreeting, {
@@ -1023,7 +1036,7 @@ if (!integratedFallback.response_text || integratedFallback.response_text !== de
 
 // P0: a terminal handoff starts a clean request in a new conversation row.
 const postHandoffFresh = await runEvaluate({
-  phone_number: '+56911111121', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  phone_number: 'test-contact-regression-021', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
   has_active_conversation: true, conversation_status_code: 'handed_to_sales', conversation_id: 84, lead_id: 30,
   current_step: 'complete|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
   state_current_step: 'complete|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
@@ -1037,20 +1050,22 @@ if (/^previous_context|^confirm/.test(postHandoffFresh.current_step) || postHand
   fail('Recontacto post-handoff no debe regenerar previous_context/final_confirmation ni campos antiguos');
 }
 
-// P0: after 24h Load marks the turn inactive; Evaluate must cut every implicit context source.
+// P0: after 30d the turn starts a new request and cuts implicit context.
 const timedOutFresh = await runEvaluate({
-  phone_number: '+56911111124', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
-  has_active_conversation: false, conversation_status_code: 'waiting_user', conversation_id: 92, lead_id: 32,
+  phone_number: 'test-contact-regression-024', message_type: 'text', text_body: 'Hola', raw_payload_json: '{}',
+  has_active_conversation: false, has_existing_conversation: true, is_stale_context: true,
+  is_reengagement: false, elapsed_hours_since_last_inbound: 31 * 24,
+  conversation_status_code: 'waiting_user', conversation_id: 92, lead_id: 32,
   current_step: 'confirm', state_current_step: 'confirm', state_service: 'Bloques', state_city: 'Colina',
   state_requirement: 'Muro', previous_lead_id: 32, previous_service: 'Bloques', previous_city: 'Colina',
   previous_requirement: 'Muro', qualification_context: { measurements: '40 m2' },
   recent_messages: [{ role: 'assistant', content: 'Resumen antiguo' }],
 });
 if (timedOutFresh.conversation_id !== null || !timedOutFresh.reset_conversation_lead) {
-  fail('Timeout de 24h debe iniciar una conversacion nueva');
+  fail('Contexto mayor a 30 dias debe iniciar una conversacion nueva');
 }
 if (timedOutFresh.service || timedOutFresh.city || timedOutFresh.requirement || timedOutFresh.recent_messages.length) {
-  fail('Timeout de 24h debe cortar campos e historial implicitos');
+  fail('Contexto mayor a 30 dias debe cortar campos e historial implicitos');
 }
 const timedOutApplied = await runApplyAi(mergedAiShape(timedOutFresh, {
   ai_skipped_1: false, intent_1: 'greeting', confidence: 0.95,
@@ -1058,12 +1073,12 @@ const timedOutApplied = await runApplyAi(mergedAiShape(timedOutFresh, {
   reply_text: 'Hola, ¿en que ciudad necesitas cotizar?',
 }));
 if (timedOutApplied.service || timedOutApplied.city || timedOutApplied.requirement || Object.keys(timedOutApplied.qualification_context).length) {
-  fail('Timeout de 24h no debe reinyectar campos, lead ni qualification_context mediante AI');
+  fail('Contexto mayor a 30 dias no debe reinyectar campos ni qualification_context mediante AI');
 }
 
 // P0: an escalated conversation can explicitly start a clean request instead of becoming a blackhole.
 const reopenedEscalation = await runEvaluate({
-  phone_number: '+56911111122', message_type: 'text', text_body: 'Nueva cotización', raw_payload_json: '{}',
+  phone_number: 'test-contact-regression-022', message_type: 'text', text_body: 'Nueva cotización', raw_payload_json: '{}',
   has_active_conversation: false, conversation_status_code: 'escalation_required', conversation_id: 90, lead_id: 31,
   current_step: 'escalation', state_current_step: 'escalation', previous_lead_id: 31,
   previous_service: 'Bloques', previous_city: 'Colina', previous_requirement: 'Muro',
@@ -1077,7 +1092,7 @@ if (!reopenedEscalation.deterministic_reply || reopenedEscalation.pending_questi
 
 // P0: explicit human request wins over confirmation and never creates a lead.
 const humanAtConfirmation = await runEvaluate({
-  phone_number: '+56911111123', message_type: 'text', text_body: 'Quiero hablar con una ejecutiva', raw_payload_json: '{}',
+  phone_number: 'test-contact-regression-023', message_type: 'text', text_body: 'Quiero hablar con una ejecutiva', raw_payload_json: '{}',
   has_active_conversation: true, conversation_status_code: 'waiting_user', conversation_id: 91,
   current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
   state_current_step: 'confirm|%7B%22service%22%3A%22Placas%22%2C%22city%22%3A%22Vitacura%22%2C%22requirement%22%3A%22Cierre%22%7D',
@@ -1114,7 +1129,7 @@ if (pendingMeasurement.qualification_context.measurements !== '40 m2') {
 }
 
 const contextualNo = await runEvaluate({
-  phone_number: '+56911111116',
+  phone_number: 'test-contact-regression-016',
   message_type: 'text',
   text_body: 'no',
   raw_payload_json: '{}',

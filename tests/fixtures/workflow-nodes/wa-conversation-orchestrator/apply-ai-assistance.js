@@ -274,6 +274,11 @@ const deterministicFields = [
   'sha256',
   'file_size',
   'conversation_id',
+  'target_conversation_id',
+  'original_conversation_id',
+  'has_existing_conversation',
+  'is_recent_conversation',
+  'is_stale_context',
   'lead_id',
   'reset_conversation_lead',
   'previous_lead_id',
@@ -967,6 +972,14 @@ const nextStepField = shouldCreateLead ? 'complete'
 
 // Model C: Response Selection Logic
 const selectResponseText = () => {
+  // Policy responses are deterministic and must not be overwritten by the model.
+  if (deterministic.escalation_reason === 'opt_out' || deterministic.escalation_reason === 'abandoned') {
+    return { text: deterministic.deterministic_reply, kind: deterministic.response_kind };
+  }
+  if (['previous_context_choice', 'previous_context_resumed'].includes(deterministic.response_kind)) {
+    return { text: deterministic.deterministic_reply, kind: deterministic.response_kind };
+  }
+
   // PRIORITY 1: Lead creation
   if (shouldCreateLead) {
     if (aiReplyAcceptable && ai.reply_text) {
@@ -1168,6 +1181,7 @@ const originalAfter = (() => {
 })();
 const afterPayload = {
   ...originalAfter,
+  target_conversation_id: deterministic.target_conversation_id || deterministic.original_conversation_id || null,
   service: state.service || null,
   city: state.city || null,
   requirement: state.requirement || null,
@@ -1187,6 +1201,7 @@ const afterPayload = {
 // Model C: Enhanced metadata
 const aiMetadata = {
   ...originalMetadata,
+  target_conversation_id: deterministic.target_conversation_id || deterministic.original_conversation_id || null,
   ai_enabled: aiEnabled,
   ai_invoked: aiEnabled,
   ai_applied: acceptedAiFields.length > 0 || (aiReplyAcceptable && Boolean(ai.reply_text)) || aiCanCreateLead,
