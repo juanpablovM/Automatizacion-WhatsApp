@@ -4,6 +4,14 @@
 .env.*.local
 *.log
 .local/
+node_modules/
+coverage/
+tests/evidence/
+rollback-state-*.sql
+n8n-logs-*.txt
+execution-history-*.txt
+inbox-state-*.txt
+conversation-state-*.txt
 
 # IDE
 .idea/
@@ -15,8 +23,6 @@ data/
 backups/
 .hermes/
 .herms/
-
--l
 
 # Datos operativos privados
 db/seeds/*_real.sql

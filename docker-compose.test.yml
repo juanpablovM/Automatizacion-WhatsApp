@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16.13-alpine}
+    environment:
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-testdb}
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-test}
+    ports:
+      - "${TEST_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test "$$(head -n 1 /var/lib/postgresql/data/postmaster.pid 2>/dev/null)" = "1" &&
+          pg_isready -U ${TEST_POSTGRES_USER:-test} -d ${TEST_POSTGRES_DB:-testdb}
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  n8n:
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:1.123.29}
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${TEST_POSTGRES_DB:-testdb}
+      DB_POSTGRESDB_USER: ${TEST_POSTGRES_USER:-test}
+      DB_POSTGRESDB_PASSWORD: ${TEST_POSTGRES_PASSWORD:-test}
+      DB_POSTGRESDB_SCHEMA: public
+      N8N_BASIC_AUTH_ACTIVE: "false"
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_ENCRYPTION_KEY: test-only-encryption-key-do-not-use-in-production
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto,fs,path
+      GENERIC_TIMEZONE: America/Santiago
+      TZ: America/Santiago
+      EVOLUTION_WEBHOOK_SECRET: test-secret
+      EVOLUTION_API_BASE_URL: http://mock-evolution:8080
+      EVOLUTION_API_KEY: test-key
+      EVOLUTION_DEFAULT_INSTANCE: test-instance
+      AI_LEAD_ASSISTANT_ENABLED: "false"
+      FOLLOW_UP_FIRST_DELAY_HOURS: 24
+      OUTBOUND_CLAIM_STALE_SECONDS: 300
+    ports:
+      - "${TEST_N8N_PORT:-5678}:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-evolution:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  mock-evolution:
+    image: node:20.19.4-alpine
+    ports:
+      - "${TEST_MOCK_EVOLUTION_PORT:-58080}:8080"
+    command:
+      - node
+      - -e
+      - |
+        const http = require('node:http');
+        const requests = [];
+        const server = http.createServer((request, response) => {
+          response.setHeader('content-type', 'application/json');
+          if (request.url === '/health') {
+            response.end(JSON.stringify({ status: 'ok' }));
+            return;
+          }
+          if (request.method === 'GET' && request.url === '/requests') {
+            response.end(JSON.stringify({ count: requests.length, requests }));
+            return;
+          }
+          if (request.method === 'POST' && request.url.startsWith('/message/sendText/')) {
+            const chunks = [];
+            request.on('data', (chunk) => chunks.push(chunk));
+            request.on('end', () => {
+              requests.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString('utf8') });
+              response.end(JSON.stringify({ success: true, key: { id: 'synthetic-message-id' } }));
+            });
+            return;
+          }
+          response.statusCode = 404;
+          response.end(JSON.stringify({ error: 'not_found' }));
+        });
+        server.listen(8080, '0.0.0.0');
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres_test_data:
