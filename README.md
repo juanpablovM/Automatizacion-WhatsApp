@@ -41,7 +41,7 @@ Estado recomendado: `preproduccion / validacion controlada`.
 - El candidato `complete-durable-handoff-delivery` está implementado, verificado y archivado: 10/10 requisitos y 10/10 escenarios en PASS.
 - La entrega ClickUp V1 queda limitada a Sales, usa el marcador exacto `Operation key: {operation_key}` y reconcilia mediante GET antes de cualquier POST ambiguo.
 - La corrección final está confirmada y publicada en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR. El runtime observado conserva el scheduler anterior y sigue pendiente el despliegue controlado exclusivo del scheduler.
-- El inventario observado contiene 5 outbounds en cuarentena `unknown/reconciliation_required`: 3 follow-ups históricos y 2 acuses de escalamiento, distribuidos en 4 conversaciones y 3 clientes. Todos tuvieron un único intento 5xx, sin ID/acuse del proveedor, claim activo ni ruta segura de retry; **no deben reejecutarse (`replay`) ni reintentarse**.
+- El inventario observado el 08/08 contenía 5 outbounds en cuarentena `unknown/reconciliation_required`. **Actualización 21/08 (verificado en runtime):** 0 operaciones en `unknown`/`reconciliation_required`; quedan únicamente 2 registros `failed` históricos (`handoff_clickup_notification`, ids 89 y 90, del 12/08 y 17/08), cerrados sin reintento (`last_error: preserved_test_artifact_closed_no_replay`) y conservados como evidencia. **No deben reejecutarse (`replay`) ni reintentarse**.
 - U4, U7, U8 y U9 permanecen pendientes por decisión.
 - La certificación vigente no demuestra todavía el cierre del PRD.
 - El runtime local observado tiene las migraciones `015`–`017`, Entry/Recovery y los schedulers OPS activos; queda pendiente entregar la corrección final mediante el procedimiento controlado.

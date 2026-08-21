@@ -13,7 +13,7 @@ Estado de entrega en el corte del `2026-08-17`:
 - U4, U7, U8 y U9 permanecen pendientes por decisión
 - Entry, Recovery y los tres schedulers OPS están activos; el webhook POST canónico y el GET de salud están registrados
 
-> **Riesgo operativo persistente:** hay 5 outbounds en cuarentena `unknown/reconciliation_required`: 3 follow-ups históricos y 2 acuses de escalamiento, en 4 conversaciones de 3 clientes. Cada uno tuvo un único intento 5xx, sin ID/acuse del proveedor, claim activo ni ruta segura de retry. **No deben reejecutarse (`replay`) ni reintentarse**. La aceptación controlada conserva su contexto histórico, pero no representaba el inventario completo.
+> **Riesgo operativo (resuelto 21/08):** el 08/08 había 5 outbounds en cuarentena `unknown/reconciliation_required`. Verificado en runtime al 21/08: 0 operaciones en `unknown`/`reconciliation_required`; quedan únicamente 2 registros `failed` históricos (`handoff_clickup_notification`, ids 89 y 90, del 12/08 y 17/08), cerrados sin reintento (`last_error: preserved_test_artifact_closed_no_replay`) y conservados como evidencia. **No deben reejecutarse (`replay`) ni reintentarse**.
 
 Último runtime observado, correspondiente a la reparación controlada del `2026-08-08`:
 
@@ -130,7 +130,7 @@ sh scripts/ops/test-advisor-vitacura-e2e.sh
 - corregir KPI-19, KPI-26 y KPI-29 antes de regenerar la certificación U8
 - mantener `d38c371` como candidato publicado de referencia; no existe PR
 - desplegar la corrección final sólo mediante el script acotado al scheduler y con autorización explícita
-- conservar los 5 outbounds `unknown/reconciliation_required` en cuarentena, sin reejecutarlos (`replay`) ni reintentarlos
+- conservar los 2 registros `failed` históricos (ids 89, 90) cerrados sin reintento, sin reejecutarlos (`replay`) ni reintentarlos — 0 operaciones activas en cuarentena `unknown/reconciliation_required` al 21/08
 - ejecutar la aceptación externa controlada con un teléfono de prueba
 - sacar vendedores y datos de prueba del flujo operativo real antes de produccion
 
