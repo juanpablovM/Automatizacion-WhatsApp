@@ -5,6 +5,7 @@ on:
     branches: [main, develop, 'feat/**']
     paths:
       - '.github/workflows/parity-validation.yml'
+      - '.env.example'
       - '.gitignore'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
@@ -14,15 +15,18 @@ on:
       - 'infra/postgres/migrations/**'
       - 'db/seeds/**'
       - 'db/queries/n8n/**'
+      - 'db/queries/ops/**'
       - 'n8n/workflow-links.json'
       - 'n8n/workflows/**'
       - 'scripts/dev/sync-n8n-workflows.sh'
       - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/reset-controlled-test-session.sh'
       - 'tests/**'
   pull_request:
     branches: [main, develop]
     paths:
       - '.github/workflows/parity-validation.yml'
+      - '.env.example'
       - '.gitignore'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
@@ -32,10 +36,12 @@ on:
       - 'infra/postgres/migrations/**'
       - 'db/seeds/**'
       - 'db/queries/n8n/**'
+      - 'db/queries/ops/**'
       - 'n8n/workflow-links.json'
       - 'n8n/workflows/**'
       - 'scripts/dev/sync-n8n-workflows.sh'
       - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/reset-controlled-test-session.sh'
       - 'tests/**'
 
 permissions:
@@ -73,6 +79,9 @@ jobs:
 
       - name: Run Code node wrapper and guardrail unit tests
         run: npm run test:unit
+
+      - name: Run operational script contracts
+        run: npm run test:ops-contract
 
   fixture-contract:
     name: Conversation fixture contract

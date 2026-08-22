@@ -10,6 +10,7 @@
     "test:fixture-contract": "vitest run tests/contract --globals --testTimeout=60000",
     "test:e2e:n8n": "sh scripts/ops/test-reengagement-n8n-e2e.sh",
     "test:integration:postgres": "TEST_PG_INTEGRATION=1 vitest run tests/integration --globals --testTimeout=30000",
+    "test:ops-contract": "vitest run tests/ops --globals",
     "test:property": "vitest run tests/property/precedence-order.test.js --globals",
     "test:smoke": "vitest run tests/smoke --globals --testTimeout=30000",
     "test:unit": "vitest run tests/unit --globals"
