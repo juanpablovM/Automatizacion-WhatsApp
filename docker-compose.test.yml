@@ -1,3 +1,8 @@
+# Pin a dedicated Compose project name. Without it this file derives the same
+# project name as docker-compose.yml from the checkout directory, so a
+# `down -v --remove-orphans` here would tear down the production stack.
+name: automatizacion-whatsapp-test
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16.13-alpine}

@@ -41,6 +41,11 @@ npm run test:integration:postgres
 docker compose -f docker-compose.test.yml down -v --remove-orphans
 ```
 
+`docker-compose.test.yml` declares `name: automatizacion-whatsapp-test`, so these
+commands act on the disposable test project only. Never add `-p` or
+`COMPOSE_PROJECT_NAME` to them: overriding the project name can point the teardown
+at the production stack, which runs under `automatizacion-whatsapp`.
+
 Run the real n8n acceptance gate independently:
 
 ```bash

@@ -1,3 +1,8 @@
+# Pin the Compose project name so it never derives from the checkout directory
+# name. Sharing a project name with docker-compose.test.yml would let a test
+# teardown target this production stack.
+name: automatizacion-whatsapp
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16.13-alpine}
