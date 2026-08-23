@@ -21,7 +21,7 @@ const prepareHandoffClickup = (row, env = {}) => {
   const area = String(row.area || '').trim();
   const configErrors = [];
   if (!configured(env.CLICKUP_API_TOKEN)) configErrors.push('CLICKUP_API_TOKEN_missing');
-  if (!configured(env.CLICKUP_LIST_ID)) configErrors.push('CLICKUP_LIST_ID_missing');
+  if (!configured(env.CLICKUP_HANDOFF_LIST_ID)) configErrors.push('CLICKUP_HANDOFF_LIST_ID_missing');
   const assignment = area === 'sales'
     ? parseAssignees(env.HANDOFF_CLICKUP_ASSIGNEES_JSON, area)
     : { error: `HANDOFF_CLICKUP_AREA_unsupported:${area || 'missing'}`, assignees: [] };
@@ -48,7 +48,7 @@ const prepareHandoffClickup = (row, env = {}) => {
     ...row,
     clickup_config_error: configErrors.length ? configErrors.join(',') : null,
     should_dispatch_clickup: configErrors.length === 0,
-    clickup_url: configErrors.length ? null : `https://api.clickup.com/api/v2/list/${encodeURIComponent(env.CLICKUP_LIST_ID)}/task`,
+    clickup_url: configErrors.length ? null : `https://api.clickup.com/api/v2/list/${encodeURIComponent(env.CLICKUP_HANDOFF_LIST_ID)}/task`,
     clickup_payload: configErrors.length ? null : {
       name: `[HANDOFF #${handoffId}] ${row.area_label || area} - ${row.motivo || 'escalamiento'}`,
       description,

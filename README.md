@@ -114,7 +114,8 @@ Antes de levantar el stack, reemplaza al menos:
 Si vas a probar integraciones reales, tambien completa:
 
 - `CLICKUP_API_TOKEN`
-- `CLICKUP_LIST_ID`
+- `CLICKUP_LEADS_LIST_ID` para las tareas creadas por el flujo comercial
+- `CLICKUP_HANDOFF_LIST_ID` para las notificaciones operativas de handoff
 - `CLICKUP_CF_*`
 - `AI_DIRECT_API_KEY`
 - `AI_DIRECT_API_MODEL`

@@ -86,7 +86,7 @@ for (const name of ['Upsert Escalation Handoff']) {
   assert(/\$1/.test(query));
 }
 const base = { handoff_id: 7, operation_id: 10, claim_token: '00000000-0000-0000-0000-000000000001', area: 'claims', area_label: 'Reclamos', responsable: 'Equipo Reclamos', prioridad: 'urgente', motivo: 'complaint', phone_number: '56912345678', conversation_id: 1, idempotency_key: '1:complaint:x', operation_key: 'handoff-clickup:7' };
-const env = { CLICKUP_API_TOKEN: 'token', CLICKUP_LIST_ID: 'list', HANDOFF_CLICKUP_ASSIGNEES_JSON: '{"claims":[456]}' };
+const env = { CLICKUP_API_TOKEN: 'token', CLICKUP_HANDOFF_LIST_ID: 'list', HANDOFF_CLICKUP_ASSIGNEES_JSON: '{"claims":[456]}' };
 const prepared = prepareHandoffClickup(base, env);
 assert.equal(prepared.should_dispatch_clickup, false);
 assert.equal(prepared.clickup_payload, null);

@@ -443,7 +443,8 @@ Estado:
 - `EVOLUTION_DEFAULT_INSTANCE`
 - `EVOLUTION_WEBHOOK_URL`
 - `CLICKUP_API_TOKEN`
-- `CLICKUP_LIST_ID`
+- `CLICKUP_LEADS_LIST_ID` para `CRM - ClickUp Sync Lead`
+- `CLICKUP_HANDOFF_LIST_ID` para los workflows de handoff
 - `CLICKUP_TEAM_ID`
 
 ### Credenciales/nodos a configurar en n8n

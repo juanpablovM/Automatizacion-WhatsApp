@@ -178,7 +178,8 @@ Ese comentario debe incluir el historial conversacional completo para no sobreca
 
 El proyecto usa variables para los IDs de ClickUp. En `.env.example` quedan placeholders y en `.env` local se mantienen los valores reales:
 
-- `CLICKUP_LIST_ID`
+- `CLICKUP_LEADS_LIST_ID`: lista `Leads Entrantes`, usada por el flujo comercial
+- `CLICKUP_HANDOFF_LIST_ID`: lista `Handoffs WhatsApp`, usada por las notificaciones y cierres de handoff
 - `CLICKUP_TEAM_ID`
 - `CLICKUP_CF_WHATSAPP_NAME_ID`
 - `CLICKUP_CF_PHONE_ID`

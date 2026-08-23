@@ -46,7 +46,7 @@ api_get() { curl -fsS -H "Authorization: $CLICKUP_API_TOKEN" "https://api.clicku
 api_post() { curl -fsS -X POST -H "Authorization: $CLICKUP_API_TOKEN" -H 'Content-Type: application/json' --data "$2" "https://api.clickup.com/api/v2$1"; }
 safe_value() { case "${1:-}" in ''|__PENDIENTE__|change_me) return 1;; *) return 0;; esac; }
 recreate_n8n() {
-  unset CLICKUP_LIST_ID HANDOFF_CLICKUP_ASSIGNEES_JSON
+  unset CLICKUP_LEADS_LIST_ID CLICKUP_HANDOFF_LIST_ID HANDOFF_CLICKUP_ASSIGNEES_JSON
   docker compose --env-file "$ENV_FILE" up -d --no-deps --force-recreate n8n
 }
 if [ "$mode" = recreate-n8n ]; then
@@ -56,7 +56,7 @@ fi
 
 safe_value "${CLICKUP_API_TOKEN:-}" || { echo 'ERROR: ClickUp token is not configured' >&2; exit 1; }
 safe_value "${CLICKUP_TEAM_ID:-}" || { echo 'ERROR: ClickUp team is not configured' >&2; exit 1; }
-safe_value "${CLICKUP_LIST_ID:-}" || { echo 'ERROR: an existing validated ClickUp list is required as the parent anchor' >&2; exit 1; }
+safe_value "${CLICKUP_LEADS_LIST_ID:-}" || { echo 'ERROR: an existing validated ClickUp leads list is required as the parent anchor' >&2; exit 1; }
 
 tmp_dir=$(mktemp -d)
 snapshot="$tmp_dir/env.before"
@@ -77,7 +77,7 @@ owner_id=$(printf '%s' "$members" | jq -er --arg name 'Juan Pablo' '
   [.teams[]?.members[]? | select((.user.username // "") == $name)
    | select((.user.date_joined // "") != "" and (.user.status // "active") == "active") | (.user.id | tostring)]
   | unique | if length == 1 then .[0] else error("owner must be exactly one active joined member") end')
-anchor=$(api_get "/list/$CLICKUP_LIST_ID")
+anchor=$(api_get "/list/$CLICKUP_LEADS_LIST_ID")
 space_id=$(printf '%s' "$anchor" | jq -er '.space.id | tostring')
 lists=$(api_get "/space/$space_id/list?archived=false")
 matches=$(printf '%s' "$lists" | jq --arg name 'Handoffs WhatsApp' '[.lists[]? | select(.name == $name)]')
@@ -112,8 +112,8 @@ try { mapping = JSON.parse(existingAssignees); } catch (_error) { throw new Erro
 if (!mapping || Array.isArray(mapping) || typeof mapping !== 'object') throw new Error('existing handoff assignee mapping is invalid');
 if (!Number.isSafeInteger(Number(ownerId))) throw new Error('validated Sales owner ID is not a safe integer');
 mapping.sales = [Number(ownerId)];
-const next = lines.filter((line) => !/^(CLICKUP_LIST_ID|HANDOFF_CLICKUP_ASSIGNEES_JSON)=/.test(line));
-next.push(`CLICKUP_LIST_ID=${listId}`, `HANDOFF_CLICKUP_ASSIGNEES_JSON=${JSON.stringify(mapping)}`);
+const next = lines.filter((line) => !/^(CLICKUP_HANDOFF_LIST_ID|HANDOFF_CLICKUP_ASSIGNEES_JSON)=/.test(line));
+next.push(`CLICKUP_HANDOFF_LIST_ID=${listId}`, `HANDOFF_CLICKUP_ASSIGNEES_JSON=${JSON.stringify(mapping)}`);
 fs.writeFileSync(`${path}.next`, `${next.filter(Boolean).join('\n')}\n`, { mode: 0o600 });
 fs.renameSync(`${path}.next`, path);
 NODE
@@ -121,7 +121,7 @@ after_hash=$(sha256sum "$ENV_FILE" | cut -d' ' -f1)
 
 node - "$snapshot" "$ENV_FILE" <<'NODE'
 const fs = require('fs');
-const allowed = /^(CLICKUP_LIST_ID|HANDOFF_CLICKUP_ASSIGNEES_JSON)=/;
+const allowed = /^(CLICKUP_HANDOFF_LIST_ID|HANDOFF_CLICKUP_ASSIGNEES_JSON)=/;
 const preserved = (path) => fs.readFileSync(path, 'utf8').split(/\r?\n/).filter((line) => line && !allowed.test(line));
 if (JSON.stringify(preserved(process.argv[2])) !== JSON.stringify(preserved(process.argv[3]))) {
   throw new Error('configuration changed values outside the approved handoff keys');
@@ -130,19 +130,21 @@ NODE
 
 recreate_n8n >/dev/null
 [ "$(docker compose ps --status running --services n8n)" = n8n ] || { echo 'ERROR: n8n did not become running' >&2; exit 1; }
-current=$(docker compose exec -T n8n sh -c 'printf "%s|%s" "$CLICKUP_LIST_ID" "$HANDOFF_CLICKUP_ASSIGNEES_JSON"')
+docker compose exec -T n8n sh -ec '
+  test -n "$CLICKUP_LEADS_LIST_ID"
+  test -n "$CLICKUP_HANDOFF_LIST_ID"
+  test -n "$HANDOFF_CLICKUP_ASSIGNEES_JSON"
+' || { echo 'ERROR: n8n configuration values are missing' >&2; exit 1; }
+current=$(docker compose exec -T n8n sh -c 'printf "%s|%s|%s" "$CLICKUP_LEADS_LIST_ID" "$CLICKUP_HANDOFF_LIST_ID" "$HANDOFF_CLICKUP_ASSIGNEES_JSON"')
 expected=$(node - "$ENV_FILE" <<'NODE'
 const fs = require('fs');
 const values = Object.fromEntries(fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(Boolean).map((line) => {
   const index = line.indexOf('=');
   return [line.slice(0, index), line.slice(index + 1)];
 }));
-process.stdout.write(`${values.CLICKUP_LIST_ID || ''}|${values.HANDOFF_CLICKUP_ASSIGNEES_JSON || ''}`);
+process.stdout.write(`${values.CLICKUP_LEADS_LIST_ID || ''}|${values.CLICKUP_HANDOFF_LIST_ID || ''}|${values.HANDOFF_CLICKUP_ASSIGNEES_JSON || ''}`);
 NODE
 )
-case "$current" in
-  '|'|*'|') echo 'ERROR: n8n configuration values are missing' >&2; exit 1 ;;
-esac
 runtime_hash=$(printf '%s' "$current" | sha256sum | cut -d' ' -f1)
 expected_hash=$(printf '%s' "$expected" | sha256sum | cut -d' ' -f1)
 [ "$runtime_hash" = "$expected_hash" ] || { echo 'ERROR: n8n configuration hashes do not match' >&2; exit 1; }

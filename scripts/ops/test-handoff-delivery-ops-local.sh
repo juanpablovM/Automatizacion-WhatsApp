@@ -6,20 +6,30 @@ cd "$ROOT_DIR"
 
 CONFIG_SCRIPT=scripts/ops/configure-handoff-clickup.sh
 DEPLOY_SCRIPT=scripts/ops/deploy-handoff-scheduler.sh
+LEAD_WORKFLOW=n8n/workflows/crm-clickup-sync-lead.json
+HANDOFF_WORKFLOW=n8n/workflows/ops-handoff-notification-scheduler.json
 
 [ -x "$CONFIG_SCRIPT" ] || { echo 'missing guarded ClickUp configuration script' >&2; exit 1; }
 [ -x "$DEPLOY_SCRIPT" ] || { echo 'missing scheduler-only deployment script' >&2; exit 1; }
 sh -n "$CONFIG_SCRIPT"
 sh -n "$DEPLOY_SCRIPT"
 
-node - "$CONFIG_SCRIPT" "$DEPLOY_SCRIPT" <<'NODE'
+node - "$CONFIG_SCRIPT" "$DEPLOY_SCRIPT" "$LEAD_WORKFLOW" "$HANDOFF_WORKFLOW" <<'NODE'
 const assert = require('assert');
 const childProcess = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const [configPath, deployPath] = process.argv.slice(2);
+const [configPath, deployPath, leadWorkflowPath, handoffWorkflowPath] = process.argv.slice(2);
 const [config, deploy] = [configPath, deployPath].map((path) => fs.readFileSync(path, 'utf8'));
+const [leadWorkflow, handoffWorkflow] = [leadWorkflowPath, handoffWorkflowPath].map((path) => fs.readFileSync(path, 'utf8'));
+const genericListKey = 'CLICKUP_' + 'LIST_ID';
+assert(leadWorkflow.includes('CLICKUP_LEADS_LIST_ID'), 'CRM lead workflow must use the dedicated leads list');
+assert(!leadWorkflow.includes('CLICKUP_HANDOFF_LIST_ID'), 'CRM lead workflow must not use the handoff list');
+assert(!leadWorkflow.includes(genericListKey), 'CRM lead workflow must not use the generic list key');
+assert(handoffWorkflow.includes('CLICKUP_HANDOFF_LIST_ID'), 'handoff workflow must use the dedicated handoff list');
+assert(!handoffWorkflow.includes('CLICKUP_LEADS_LIST_ID'), 'handoff workflow must not use the leads list');
+assert(!handoffWorkflow.includes(genericListKey), 'handoff workflow must not use the generic list key');
 const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-config-cli-'));
 const isolatedConfig = path.join(cliDir, 'scripts', 'ops', 'configure-handoff-clickup.sh');
 const isolatedBin = path.join(cliDir, 'bin');
@@ -131,7 +141,10 @@ assert(config.includes('JSON.parse(existingAssignees)'), 'configuration must par
 assert(config.includes('mapping.sales = [Number(ownerId)]'), 'configuration must update only the Sales assignee mapping');
 assert(config.includes('runtime_hash='), 'configuration must hash the runtime configuration without disclosing IDs');
 assert(config.includes('expected_hash='), 'configuration must hash the expected configuration without disclosing IDs');
-assert(config.includes('recreate_n8n() {\n  unset CLICKUP_LIST_ID HANDOFF_CLICKUP_ASSIGNEES_JSON\n  docker compose --env-file "$ENV_FILE" up -d --no-deps --force-recreate n8n'), 'every n8n recreation must clear sourced handoff overrides immediately before compose');
+assert(config.includes('recreate_n8n() {\n  unset CLICKUP_LEADS_LIST_ID CLICKUP_HANDOFF_LIST_ID HANDOFF_CLICKUP_ASSIGNEES_JSON\n  docker compose --env-file "$ENV_FILE" up -d --no-deps --force-recreate n8n'), 'every n8n recreation must clear sourced ClickUp overrides immediately before compose');
+assert(config.includes('anchor=$(api_get "/list/$CLICKUP_LEADS_LIST_ID")'), 'handoff configuration must discover the parent Space from the preserved leads list');
+assert(config.includes('next.push(`CLICKUP_HANDOFF_LIST_ID=${listId}`'), 'handoff configuration must write only the dedicated handoff list ID');
+assert(!config.includes('CLICKUP_' + 'LIST_ID'), 'generic ClickUp list configuration must not remain');
 assert.strictEqual((config.match(/--force-recreate n8n/g) || []).length, 1, 'success and rollback must share the sole override-clearing n8n recreation helper');
 assert(config.includes('recreate_n8n >/dev/null 2>&1 || true'), 'rollback must recreate through the override-clearing helper');
 assert(config.includes('recreate_n8n >/dev/null'), 'success must recreate through the override-clearing helper');

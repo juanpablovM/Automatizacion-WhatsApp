@@ -23,7 +23,7 @@ describe('Prepare Handoff ClickUp Task — real n8n Code node wrapper ($json con
       prioridad: 'alta',
     }, {
       CLICKUP_API_TOKEN: 'token-123',
-      CLICKUP_LIST_ID: '999',
+      CLICKUP_HANDOFF_LIST_ID: '999',
       HANDOFF_CLICKUP_ASSIGNEES_JSON: JSON.stringify({ sales: [111, 222] }),
     });
 
@@ -45,6 +45,7 @@ describe('Prepare Handoff ClickUp Task — real n8n Code node wrapper ($json con
     expect(output.json.should_dispatch_clickup).toBe(false);
     expect(output.json.clickup_payload).toBeNull();
     expect(output.json.clickup_config_error).toContain('CLICKUP_API_TOKEN_missing');
+    expect(output.json.clickup_config_error).toContain('CLICKUP_HANDOFF_LIST_ID_missing');
     expect(output.json.clickup_config_error).toContain('HANDOFF_CLICKUP_AREA_unsupported:finance');
   });
 });
