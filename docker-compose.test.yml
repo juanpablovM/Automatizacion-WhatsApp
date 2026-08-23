@@ -55,6 +55,9 @@ services:
       EVOLUTION_API_BASE_URL: http://mock-evolution:8080
       EVOLUTION_API_KEY: test-key
       EVOLUTION_DEFAULT_INSTANCE: test-instance
+      CLICKUP_WEBHOOK_SECRET: ${TEST_CLICKUP_WEBHOOK_SECRET:-test-clickup-webhook-secret}
+      CLICKUP_STATUS_ACKNOWLEDGED: ${TEST_CLICKUP_STATUS_ACKNOWLEDGED:-in progress,en progreso,en curso}
+      CLICKUP_STATUS_RESOLVED: ${TEST_CLICKUP_STATUS_RESOLVED:-complete,completed,closed,done,cerrado,resuelto}
       AI_LEAD_ASSISTANT_ENABLED: "false"
       FOLLOW_UP_FIRST_DELAY_HOURS: 24
       OUTBOUND_CLAIM_STALE_SECONDS: 300

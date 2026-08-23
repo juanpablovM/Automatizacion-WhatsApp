@@ -1,0 +1,260 @@
+{
+  "name": "OPS - Handoff ClickUp Closure",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clickup-handoff-closure",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "clickup-closure-webhook",
+      "name": "ClickUpClosureWebhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        300
+      ],
+      "webhookId": "clickup-handoff-closure"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// OPS - Handoff ClickUp Closure — Normalize ClickUp Closure\n// -----------------------------------------------------------------------------\n// Turns an inbound ClickUp webhook into the two values the closure query needs:\n// the task id and the requested handoff state.\n//\n// This is the project's first inbound integration, so the node is deliberately\n// strict about what it accepts:\n//   - the HMAC signature must verify before any payload field is read\n//   - only task status changes are actionable; every other ClickUp event is\n//     acknowledged and ignored rather than treated as an error\n//   - an unmapped status is ignored too, so renaming a column in ClickUp can\n//     never silently advance a handoff\n//\n// Authentication follows ClickUp's documented webhook contract: every delivery\n// carries an X-Signature header holding the hex HMAC-SHA256 digest of the raw\n// request body, keyed by the webhook's own secret. ClickUp never sends a bearer\n// token or a shared secret in the clear, so there is no plaintext path to\n// accept — offering one would reject every genuine delivery while widening the\n// attack surface.\n//\n// Status mapping is configuration, not code. CLICKUP_STATUS_ACKNOWLEDGED and\n// CLICKUP_STATUS_RESOLVED hold comma-separated ClickUp status names; matching\n// is case-insensitive and whitespace-tolerant because ClickUp status names are\n// user-editable labels.\n//\n// Output (always exactly one item):\n//   { authorized, actionable, clickup_task_id, estado, reason }\n// =============================================================================\n\nconst DEFAULT_ACKNOWLEDGED_STATUSES = 'in progress,en progreso,en curso';\nconst DEFAULT_RESOLVED_STATUSES = 'complete,completed,closed,done,cerrado,resuelto';\n\nconst parseStatusList = (raw, fallback) => String(raw || fallback)\n  .split(',')\n  .map((entry) => entry.trim().toLowerCase())\n  .filter(Boolean);\n\nconst reject = (reason) => [{\n  json: {\n    authorized: false,\n    actionable: false,\n    clickup_task_id: null,\n    estado: null,\n    reason,\n  },\n}];\n\nconst ignore = (reason, clickupTaskId = null) => [{\n  json: {\n    authorized: true,\n    actionable: false,\n    clickup_task_id: clickupTaskId,\n    estado: null,\n    reason,\n  },\n}];\n\nconst input = items[0] ? items[0].json || {} : {};\nconst body = input.body || {};\nconst headers = input.headers || {};\n// The query string is deliberately unused: a signed body is the only accepted\n// proof of origin, and a token in the URL would leak through logs and referrers.\n\n// --- Authentication ---------------------------------------------------------\n// The secret is required. An unset secret must never mean \"allow everyone\":\n// this endpoint can advance operational state, so it fails closed.\nconst crypto = require('crypto');\n\nconst webhookSecret = String($env.CLICKUP_WEBHOOK_SECRET || '');\nif (!webhookSecret) {\n  return reject('clickup_webhook_secret_not_configured');\n}\n\nconst presentedSignature = String(\n  headers['x-signature'] || headers['X-Signature'] || '',\n).trim();\n\nif (!presentedSignature) {\n  return reject('missing_signature');\n}\n\n// ClickUp signs the exact bytes it sent. n8n has already parsed the JSON, so\n// prefer a raw body when the webhook node provides one and fall back to a\n// separator-free re-serialization, which is the reconstruction ClickUp\n// documents for clients that auto-parse. JSON.parse preserves key insertion\n// order, so the round trip reproduces the original bytes for ClickUp payloads.\nconst rawBody = typeof input.rawBody === 'string'\n  ? input.rawBody\n  : JSON.stringify(body);\n\nconst expectedSignature = crypto\n  .createHmac('sha256', webhookSecret)\n  .update(rawBody, 'utf8')\n  .digest('hex');\n\n// Compare in constant time. Buffers of unequal length make timingSafeEqual\n// throw, so the length check comes first and leaks only the length.\nconst presentedDigest = Buffer.from(presentedSignature, 'utf8');\nconst expectedDigest = Buffer.from(expectedSignature, 'utf8');\nconst signatureMatches = presentedDigest.length === expectedDigest.length\n  && crypto.timingSafeEqual(presentedDigest, expectedDigest);\n\nif (!signatureMatches) {\n  return reject('invalid_signature');\n}\n\n// --- Event shape ------------------------------------------------------------\nconst eventName = String(body.event || '').trim();\nif (eventName !== 'taskStatusUpdated') {\n  return ignore(`unsupported_event:${eventName || 'missing'}`);\n}\n\nconst clickupTaskId = String(body.task_id || '').trim();\nif (!clickupTaskId) {\n  return ignore('missing_task_id');\n}\n\n// ClickUp reports the transition inside history_items; the last entry carries\n// the status the task ended up in.\nconst historyItems = Array.isArray(body.history_items) ? body.history_items : [];\nconst statusChange = historyItems\n  .filter((entry) => entry && entry.field === 'status' && entry.after)\n  .pop();\n\nconst afterStatus = statusChange && statusChange.after\n  ? String(statusChange.after.status || '').trim().toLowerCase()\n  : '';\n\nif (!afterStatus) {\n  return ignore('missing_status_change', clickupTaskId);\n}\n\n// --- Status mapping ---------------------------------------------------------\nconst acknowledgedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_ACKNOWLEDGED,\n  DEFAULT_ACKNOWLEDGED_STATUSES,\n);\nconst resolvedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_RESOLVED,\n  DEFAULT_RESOLVED_STATUSES,\n);\n\n// Resolved wins when a status appears in both lists: closing is the stronger\n// claim, and an operator who lists a status twice most likely means \"done\".\nlet estado = null;\nif (resolvedStatuses.includes(afterStatus)) {\n  estado = 'resolved';\n} else if (acknowledgedStatuses.includes(afterStatus)) {\n  estado = 'acknowledged';\n}\n\nif (!estado) {\n  return ignore(`unmapped_status:${afterStatus}`, clickupTaskId);\n}\n\nreturn [{\n  json: {\n    authorized: true,\n    actionable: true,\n    clickup_task_id: clickupTaskId,\n    estado,\n    reason: `status:${afterStatus}`,\n  },\n}];\n"
+      },
+      "id": "normalize-clickup-closure",
+      "name": "Normalize ClickUp Closure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closure-authorized",
+              "leftValue": "={{ Boolean($json.authorized) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-authorized",
+      "name": "Is Authorized",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closure-actionable",
+              "leftValue": "={{ Boolean($json.actionable) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-actionable",
+      "name": "Is Actionable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 05_close_handoff_from_clickup.sql — Cierre del handoff desde ClickUp.\n-- -----------------------------------------------------------------------------\n-- Consume el cambio de estado de la tarea de ClickUp y avanza el ciclo de vida\n-- que 04_advance_handoff_state.sql define, resolviendo el handoff por el id\n-- externo en vez de por su clave primaria. El vinculo vive en\n-- external_operations: operation_type = 'handoff_clickup_notification',\n-- entity_type = 'handoff', external_id = id de la tarea de ClickUp.\n--\n-- Transiciones validas (identicas a 04):\n--   notified -> acknowledged\n--   notified|acknowledged -> resolved\n--\n-- Es idempotente por contrato: un webhook reintenta, y repetir el mismo estado\n-- destino devuelve 'already_applied' sin volver a escribir ni auditar un falso\n-- rechazo. Una tarea que no mapea a ningun handoff devuelve 'unknown_task', que\n-- el llamador debe tratar como entrada invalida, no como error de servidor.\n--\n-- Al pasar a 'resolved' tambien cierra la conversacion asociada si sigue en\n-- 'escalation_required': sin eso el handoff se cierra pero la conversacion\n-- queda abierta para siempre, que es exactamente el sintoma que este cierre\n-- viene a resolver.\n--\n-- Params:\n--   $1 clickup_task_id (text), $2 estado ('acknowledged' | 'resolved')\n-- =============================================================================\nWITH input AS (\n  SELECT\n    NULLIF($1::text, '') AS clickup_task_id,\n    $2::text AS requested_estado\n),\n-- Resuelve el handoff y lo bloquea en el mismo paso. El FOR UPDATE no es\n-- decorativo: dos eventos de ClickUp para la misma tarea pueden llegar a la vez\n-- (un operador mueve la tarea a una columna de cierre mientras una automatizacion\n-- la marca en curso). Sin el bloqueo ambas transacciones leen 'notified', ambas\n-- se clasifican como validas y la ultima en escribir gana, dejando el handoff en\n-- 'acknowledged' con resolved_at ya escrito: un estado que ninguna transicion\n-- legal produce. Con el bloqueo, la segunda transaccion espera, vuelve a leer el\n-- estado ya confirmado y se clasifica como 'invalid_transition'.\nlocked_target AS (\n  SELECT h.id, h.estado, h.conversation_id\n  FROM external_operations eo\n  JOIN input i ON i.clickup_task_id = eo.external_id\n  JOIN handoffs h\n    ON h.id = eo.entity_id\n   AND h.deleted_at IS NULL\n  WHERE eo.operation_type = 'handoff_clickup_notification'\n    AND eo.entity_type = 'handoff'\n    AND eo.status = 'succeeded'\n  ORDER BY eo.id DESC\n  LIMIT 1\n  FOR UPDATE OF h\n),\ntarget AS (\n  SELECT id, estado, conversation_id FROM locked_target\n),\nclassified AS (\n  SELECT\n    t.id,\n    t.conversation_id,\n    t.estado AS before_estado,\n    CASE\n      WHEN t.estado = i.requested_estado THEN 'already_applied'\n      WHEN i.requested_estado = 'acknowledged' AND t.estado = 'notified' THEN 'advanced'\n      WHEN i.requested_estado = 'resolved' AND t.estado IN ('notified', 'acknowledged') THEN 'advanced'\n      ELSE 'invalid_transition'\n    END AS outcome\n  FROM target t\n  CROSS JOIN input i\n),\napply AS (\n  UPDATE handoffs h\n  SET\n    estado = (SELECT requested_estado FROM input),\n    acknowledged_at = CASE\n      WHEN (SELECT requested_estado FROM input) = 'acknowledged' AND h.acknowledged_at IS NULL\n        THEN NOW()\n      ELSE h.acknowledged_at\n    END,\n    resolved_at = CASE\n      WHEN (SELECT requested_estado FROM input) = 'resolved' AND h.resolved_at IS NULL\n        THEN NOW()\n      ELSE h.resolved_at\n    END,\n    updated_at = NOW()\n  FROM classified c\n  WHERE h.id = c.id AND c.outcome = 'advanced'\n  RETURNING h.id, h.estado\n),\nclosed_conversation AS (\n  UPDATE conversations conversation\n  SET\n    conversation_status_id = (\n      SELECT id FROM conversation_statuses WHERE code = 'closed'\n    ),\n    closed_at = COALESCE(conversation.closed_at, NOW()),\n    updated_at = NOW()\n  FROM classified c\n  WHERE conversation.id = c.conversation_id\n    AND conversation.deleted_at IS NULL\n    AND c.outcome = 'advanced'\n    AND (SELECT requested_estado FROM input) = 'resolved'\n    AND conversation.conversation_status_id = (\n      SELECT id FROM conversation_statuses WHERE code = 'escalation_required'\n    )\n  RETURNING conversation.id\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'handoff_transition',\n    'handoff',\n    c.id,\n    'system',\n    'handoff-clickup-closure',\n    c.outcome,\n    jsonb_build_object('estado', c.before_estado),\n    jsonb_build_object('estado', COALESCE(a.estado, c.before_estado)),\n    jsonb_build_object(\n      'requested', (SELECT requested_estado FROM input),\n      'clickup_task_id', (SELECT clickup_task_id FROM input),\n      'conversation_closed', EXISTS (SELECT 1 FROM closed_conversation)\n    )\n  FROM classified c\n  LEFT JOIN apply a ON a.id = c.id\n  WHERE c.outcome <> 'already_applied'\n  RETURNING 1\n)\nSELECT\n  c.id AS handoff_id,\n  COALESCE(a.estado, c.before_estado) AS handoff_estado,\n  c.outcome,\n  EXISTS (SELECT 1 FROM closed_conversation) AS conversation_closed\nFROM classified c\nLEFT JOIN apply a ON a.id = c.id\n\nUNION ALL\n\nSELECT\n  NULL::bigint AS handoff_id,\n  NULL::text AS handoff_estado,\n  'unknown_task' AS outcome,\n  FALSE AS conversation_closed\nWHERE NOT EXISTS (SELECT 1 FROM classified);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.clickup_task_id, $json.estado] }}"
+        }
+      },
+      "id": "close-handoff",
+      "name": "Close Handoff From ClickUp",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        140
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'applied', handoff_id: $json.handoff_id || null, handoff_estado: $json.handoff_estado || null, outcome: $json.outcome, conversation_closed: Boolean($json.conversation_closed) } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-applied",
+      "name": "Respond Applied",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        940,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ignored', reason: $json.reason } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ignored",
+      "name": "Respond Ignored",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'unauthorized', reason: $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "respond-unauthorized",
+      "name": "Respond Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        440
+      ]
+    }
+  ],
+  "connections": {
+    "ClickUpClosureWebhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize ClickUp Closure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize ClickUp Closure": {
+      "main": [
+        [
+          {
+            "node": "Is Authorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Authorized": {
+      "main": [
+        [
+          {
+            "node": "Is Actionable",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Actionable": {
+      "main": [
+        [
+          {
+            "node": "Close Handoff From ClickUp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Ignored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Close Handoff From ClickUp": {
+      "main": [
+        [
+          {
+            "node": "Respond Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "versioned-source-of-truth"
+  },
+  "tags": [],
+  "versionId": "handoff-clickup-closure-v1"
+}

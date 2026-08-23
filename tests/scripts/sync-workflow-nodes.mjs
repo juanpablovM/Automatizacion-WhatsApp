@@ -98,6 +98,18 @@ const NODES = [
     parameter: 'query',
   },
   {
+    workflow: 'n8n/workflows/ops-handoff-clickup-closure.json',
+    node: 'Normalize ClickUp Closure',
+    fixture: 'ops-handoff-clickup-closure/normalize-clickup-closure.js',
+  },
+  {
+    workflow: 'n8n/workflows/ops-handoff-clickup-closure.json',
+    node: 'Close Handoff From ClickUp',
+    fixture: 'db/queries/n8n/handoff-routing/05_close_handoff_from_clickup.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
+  {
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
     node: 'Apply Inbound Follow-Up Policy',
     fixture: 'db/queries/n8n/follow-up-pipeline/05_cancel_pending_follow_ups.sql',
