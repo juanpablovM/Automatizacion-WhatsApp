@@ -123,6 +123,28 @@ jobs:
           test "$prod_project" = "automatizacion-whatsapp"
           test "$test_project" != "$prod_project"
 
+      - name: Verify test and production Compose publish disjoint host ports
+        shell: bash
+        run: |
+          # A shared project name is not the only way the test stack can reach
+          # production: publishing the same host port makes the test stack fail
+          # to bind, or bind to whatever already answers there.
+          ports_of() {
+            docker compose -f "$1" config --format json \
+              | jq -r '.services[].ports // [] | .[] | .published | select(. != null) | tostring' \
+              | sort -u
+          }
+          test_ports="$(ports_of docker-compose.test.yml)"
+          prod_ports="$(ports_of docker-compose.yml)"
+          echo "test host ports: $(echo "$test_ports" | tr '\n' ' ')"
+          echo "prod host ports: $(echo "$prod_ports" | tr '\n' ' ')"
+          overlap="$(comm -12 <(echo "$test_ports") <(echo "$prod_ports"))"
+          if [ -n "$overlap" ]; then
+            echo "ERROR: test and production Compose publish the same host port(s):" >&2
+            echo "$overlap" >&2
+            exit 1
+          fi
+
       - name: Verify n8n image matches production default
         shell: bash
         run: |

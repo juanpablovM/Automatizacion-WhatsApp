@@ -6,7 +6,7 @@ const enabled = process.env.TEST_PG_INTEGRATION === '1';
 const describeIntegration = enabled ? describe : describe.skip;
 const connection = {
   host: process.env.TEST_PGHOST || '127.0.0.1',
-  port: Number(process.env.TEST_PGPORT || 5433),
+  port: Number(process.env.TEST_PGPORT || 55433),
   database: process.env.TEST_PGDATABASE || 'testdb',
   user: process.env.TEST_PGUSER || 'test',
   password: process.env.TEST_PGPASSWORD || 'test',
