@@ -2,6 +2,29 @@ const asObject = (value) => value && typeof value === 'object' && !Array.isArray
 const asArray = (value) => Array.isArray(value) ? value : [];
 const safe = (value, fallback = '') => String(value ?? fallback).trim();
 const error = (code, path, detail = null) => ({ code, path, detail });
+const AI_RESULT_FIELDS = [
+  'ai_skipped', 'ai_skip_reason', 'ai_provider', 'ai_model', 'ai_api_mode',
+  'ai_status_code', 'ai_retry_attempts', 'ai_retry_exhausted', 'ai_parse_error',
+  'ai_request_error', 'ai_fallback_reason', 'ai_proposal', 'reply_text',
+];
+
+const normalizeSemanticMergeRow = (row = {}) => {
+  const entries = Object.entries(asObject(row));
+  const normalized = Object.fromEntries(entries.filter(([key]) => !/_[12]$/.test(key)));
+  const assistantMetadata = row.metadata_json ?? row.metadata_json_2 ?? null;
+
+  for (const [key, value] of entries) {
+    if (key.endsWith('_1')) normalized[key.slice(0, -2)] = value;
+  }
+  for (const field of AI_RESULT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(row, field)) normalized[field] = row[field];
+    else if (Object.prototype.hasOwnProperty.call(row, `${field}_2`)) normalized[field] = row[`${field}_2`];
+  }
+  if (assistantMetadata !== null && assistantMetadata !== undefined) {
+    normalized.semantic_ai_metadata_json = assistantMetadata;
+  }
+  return normalized;
+};
 
 const utf8Slice = (text, start, end) => {
   const bytes = typeof Buffer !== 'undefined'
@@ -102,7 +125,8 @@ const validatePrdRules = (text, catalogMatches, priceContext, ctx, enabledRuleId
 };
 // </generated:prd-validators>
 
-const validateAiProposal = (row = {}) => {
+const validateAiProposal = (input = {}) => {
+  const row = normalizeSemanticMergeRow(input);
   const policy = asObject(row.turn_policy);
   const proposal = asObject(row.ai_proposal);
   const errors = [];
@@ -231,9 +255,12 @@ const validateAiProposal = (row = {}) => {
 };
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { validateAiProposal, utf8Slice, validatePrdRules, PRD_VALIDATORS };
+  module.exports = { validateAiProposal, normalizeSemanticMergeRow, utf8Slice, validatePrdRules, PRD_VALIDATORS };
 }
 
 if (typeof items !== 'undefined') {
-  return items.map((item) => ({ json: { ...item.json, ai_validation: validateAiProposal(item.json) } }));
+  return items.map((item) => {
+    const normalized = normalizeSemanticMergeRow(item?.json ?? {});
+    return { json: { ...normalized, ai_validation: validateAiProposal(normalized) } };
+  });
 }

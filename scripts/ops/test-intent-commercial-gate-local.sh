@@ -674,6 +674,7 @@ node <<'NODE'
       compile: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/compile-turn-policy.js',
       validate: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-ai-proposal.js',
       authorize: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/authorize-ai-turn.js',
+      contingency: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/build-contingency-handoff.js',
     };
     for (const [name, fixturePath] of Object.entries(fixturePaths)) {
       assert(fs.existsSync(fixturePath), `v2 requiere fixture ${name}: ${fixturePath}`);
@@ -681,12 +682,15 @@ node <<'NODE'
 
     if (Object.values(fixturePaths).every((fixturePath) => fs.existsSync(fixturePath))) {
       const { compileTurnPolicy } = require(`${process.cwd()}/${fixturePaths.compile}`);
-      const { validateAiProposal, validatePrdRules } = require(`${process.cwd()}/${fixturePaths.validate}`);
+      const { validateAiProposal, validatePrdRules, normalizeSemanticMergeRow } = require(`${process.cwd()}/${fixturePaths.validate}`);
       const { authorizeAiTurn } = require(`${process.cwd()}/${fixturePaths.authorize}`);
+      const { buildContingencyHandoff } = require(`${process.cwd()}/${fixturePaths.contingency}`);
       assert(typeof compileTurnPolicy === 'function', 'compileTurnPolicy debe ser funcion pura');
       assert(typeof validateAiProposal === 'function', 'validateAiProposal debe ser funcion pura');
       assert(typeof validatePrdRules === 'function', 'validatePrdRules compartido debe ser funcion pura');
+      assert(typeof normalizeSemanticMergeRow === 'function', 'validate debe normalizar la forma real de Merge n8n');
       assert(typeof authorizeAiTurn === 'function', 'authorizeAiTurn debe ser funcion pura');
+      assert(typeof buildContingencyHandoff === 'function', 'contingency debe ser funcion pura');
       assert(
         !fs.readFileSync(fixturePaths.validate, 'utf8').includes('FORBIDDEN_CLAIM_PATTERNS'),
         'semantic v2 no debe conservar una segunda tabla manual de claim guards'
@@ -807,6 +811,64 @@ node <<'NODE'
         validatePrdRules('El valor es $19.990.', [], { type: 'fixed', amount: 19990 }, {}).passed,
         true,
         'PRD_VALIDATORS conserva autorizacion legacy con price_context oficial'
+      );
+
+      const mergeText = '6 ml';
+      const mergeCompiled = compile(mergeText, 'quantity', {
+        metadata_json: JSON.stringify({ legacy_marker: 'kept' }),
+      });
+      const mergeObservation = amountObservation(
+        mergeText,
+        mergeText,
+        { kind: 'length', value: 6, unit: 'linear_meter' }
+      );
+      const mergeProposal = proposal(
+        mergeCompiled,
+        mergeText,
+        [mergeObservation],
+        [{ field: 'measurements', observation_id: mergeObservation.id }]
+      );
+      const runtimeMergeShape = {
+        ...Object.fromEntries(Object.entries(mergeCompiled).map(([key, value]) => [`${key}_1`, value])),
+        ai_proposal: mergeProposal,
+        ai_proposal_2: mergeProposal,
+        metadata_json: JSON.stringify({ contract: 'ai_semantic_proposal/v2' }),
+        metadata_json_2: JSON.stringify({ contract: 'ai_semantic_proposal/v2' }),
+      };
+      const normalizedMerge = normalizeSemanticMergeRow(runtimeMergeShape);
+      expectEqual(normalizedMerge.turn_policy.mode, 'enforce', 'Merge runtime debe restaurar policy canonica desde _1');
+      expectEqual(
+        JSON.parse(normalizedMerge.metadata_json).legacy_marker,
+        'kept',
+        'Merge runtime debe conservar metadata determinista como verdad persistente'
+      );
+      expectEqual(
+        JSON.parse(normalizedMerge.semantic_ai_metadata_json).contract,
+        'ai_semantic_proposal/v2',
+        'Merge runtime debe separar metadata transitoria del asistente'
+      );
+      assert(!Object.keys(normalizedMerge).some((key) => /_[12]$/.test(key)), 'normalizacion debe eliminar representaciones con sufijo');
+      const runtimeMergeValidation = validateAiProposal(runtimeMergeShape);
+      expectEqual(runtimeMergeValidation.valid, true, 'validator debe aceptar la forma real de Merge n8n');
+      const runtimeMergeAuthorized = authorizeAiTurn({
+        ...normalizedMerge,
+        ai_validation: runtimeMergeValidation,
+      });
+      expectEqual(
+        runtimeMergeAuthorized.qualification_context.measurements,
+        '6 ml',
+        'la forma real de Merge debe llegar completa hasta autorizacion'
+      );
+      const contingencyFromRuntimeMerge = buildContingencyHandoff({
+        pre_turn_snapshot_1: mergeCompiled.pre_turn_snapshot,
+        turn_policy_1: mergeCompiled.turn_policy,
+        inbound_event_id_1: mergeCompiled.inbound_event_id,
+        ai_failure_kind: 'provider_unavailable',
+      });
+      expectEqual(
+        contingencyFromRuntimeMerge.authorized_effects[0].idempotency_key,
+        `semantic-handoff:${mergeCompiled.turn_policy.turn_id}`,
+        'contingency debe resolver policy con sufijo cuando no existe propuesta'
       );
 
       for (const [text, quote, normalized, field, expectedValue] of [
