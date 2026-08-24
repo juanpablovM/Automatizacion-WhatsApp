@@ -1,79 +1,98 @@
-# Design: AI-Led Conversation with Executable PRD Authority
+# Design: AI-Led Conversation with Extensible Semantic Authority
 
 ## Technical Approach
 
-Refine the existing two workflows into proposal/validation/authorization. `WA - Conversation Orchestrator` compiles one immutable `ai_prd_turn_policy/v1`; `AI - Lead Qualification Assistant` returns an evidenced proposal. Deterministic nodes validate it, execute only authorized effects, and deliver valid `reply_text` byte-for-byte. One invalid proposal gets exactly one repair with the same contract. Provider outage or a second invalid proposal emits a brief contingency and immediately requests the existing durable handoff, without accepting facts, confirming, or creating a lead. U7/U8 remain excluded.
+Refine the existing workflows into `policy -> proposal -> validation -> projection -> authorization`. `WA - Conversation Orchestrator` compiles immutable `ai_prd_turn_policy/v2`; `AI - Lead Qualification Assistant` returns `ai_semantic_proposal/v2`. The outer envelope is strict, while `observations[]` preserves extensible customer meaning. Deterministic nodes verify evidence, allowlisted state mappings, PRD invariants, and effects without extracting a competing meaning from raw text. One invalid proposal gets one repair; provider outage or second failure triggers durable handoff with pre-turn commercial state unchanged.
 
 ## Architecture Decisions
 
 | Decision | Choice | Alternatives / rationale |
 |---|---|---|
-| Conversational authority | AI authors every normal reply; code validates and authorizes | Reject prompt-only and deterministic paraphrasing: neither removes split authority. |
-| Canonical policy | One versioned, canonical-JSON contract plus SHA-256 digest per turn | Avoid duplicated PRD prose/state across prompt and validators; repair receives identical bytes. |
-| Repair bound | Initial proposal + exactly one repair; no provider retry counts as conversational repair | Prevent unbounded latency/cost while allowing one natural correction. |
-| Evidence-first grounding | Evidence quote/offset/message ID plus active catalog ID or audited alias; explicit modality synonym IDs | Preserves B06: `service` never satisfies `product`; ambiguity persists nothing and requires clarification. |
-| Anti-loop | Track consecutive no-progress by objective, not wording: count 2 permits only contextual clarification; count 3 requires handoff | Preserves the current three-turn escalation tolerance while catching commercial questions. |
-| Compatibility | Store control metadata in `qualification_context._conversation_control`; absent metadata initializes from accepted legacy state | Avoid schema migration and never infer effect permission from missing metadata. |
+| Semantic authority | AI owns normal reply, interpretation, objective answer, and next dialogue action | Reject split authorship and regex-first interpretation: production evidence showed they discard correct model understanding. |
+| Contract shape | Strict versioned envelope plus extensible `observations[]` | Reject a fixed `understood_fields` map: it couples comprehension to today's persistence schema. Reject unstructured output: it cannot be validated safely. |
+| Persistence boundary | `state_patch[]` references observations and targets only allowlisted fields | The AI proposes meaning and mapping; deterministic code validates provenance and invariants, then persists. Unknown observations may guide dialogue but cannot authorize effects. |
+| Commercial amount | Observation normalization distinguishes count, length, area, volume, weight, and unknown while retaining `raw_value` | Avoid blindly merging `quantity` and `measurements`; a compatibility adapter projects accepted mappings into legacy fields. |
+| Evidence | Quote, byte offsets, message ID, confidence, and optional grounding | Validation checks source identity and consistency; regex may validate syntax or normalize known units but never decide whether the client answered. |
+| Repair and anti-loop | One repair; progress counted by objective and accepted observations | Prevent unbounded latency and repeated questions with different wording. |
+| Compatibility | Add control metadata under `qualification_context._conversation_control`; run `legacy|shadow|enforce` | Avoid DB migration and protect downstream CRM, ClickUp, handoff, and WhatsApp contracts. |
 
 ## Data Flow
 
 ```text
-Inbound -> Load state -> Compile policy -> AI initial -> Validate
-                                                   | valid -> Authorize -> Persist/send
-                                                   ` invalid -> AI repair -> Validate
-                                                                     | valid -> Authorize
-                                                                     ` invalid -> Contingency + durable handoff
-Provider outage ----------------------------------------------------> Contingency + durable handoff
+Inbound -> Load state -> Compile v2 policy -> AI proposal
+                                              |
+                          +-------------------+-------------------+
+                          v                                       v
+                    Validate invalid                        Validate valid
+                          |                                       |
+                    One AI repair                    Project state_patch
+                          |                                       |
+             invalid/outage -> Contingency              Authorize effects
+                          |                                       |
+                  Durable handoff                   Persist + send AI bytes
 ```
 
-The contingency path may change operational status to `escalation_required`, but copies pre-turn commercial facts and confirmation unchanged. Existing downstream idempotency creates one `handoffs` record.
+Shadow mode executes validation and records differences but sends and persists through the legacy path. Enforce mode uses the authorized v2 result. Contingency may set `escalation_required` but copies pre-turn facts and confirmation unchanged.
 
 ## Interfaces / Contracts
 
-`turn_policy`: `{version, turn_id, accepted_facts[{field,value,provenance}], unresolved_fields, objective:{key,no_progress_count,mode}, catalog:{active_items,aliases}, modality_synonyms, allowed_dialogue_actions, forbidden_rule_ids, effect_permissions}`.
+```text
+turn_policy/v2 = {
+  version, turn_id, accepted_facts[], unresolved_objectives[], objective,
+  catalog, modality_synonyms, allowed_state_fields, allowed_dialogue_actions,
+  forbidden_rule_ids, effect_permissions
+}
 
-`ai_proposal`: `{contract_digest, reply_text, dialogue_action, understood_fields:{field:{value,evidence:{quote,start,end,message_id},grounding:{kind,id},confidence}}, requested_effects[]}`.
+ai_semantic_proposal/v2 = {
+  version, contract_digest, reply_text, dialogue_action,
+  observations[{id, concept, raw_value, normalized?, answers_objective?,
+                evidence:{quote,start,end,message_id}, grounding?, confidence}],
+  state_patch[{field, observation_id}], requested_effects[]
+}
 
-Validation returns `{valid, rule_errors[{rule_id,path,code}], accepted_fields, authorized_effects, outcome}`. Outcomes are `accepted_initial`, `accepted_repair`, `contingency_provider`, or `contingency_invalid`.
+validation = {
+  valid, rule_errors[], accepted_observations[], authorized_state_patch[],
+  authorized_effects[], outcome
+}
+```
+
+For `6 ml`, the proposal may emit `concept=commercial_amount`, `normalized={kind:length,value:6,unit:linear_meter}`, and `answers_objective=quantity`. The state mapping can target legacy `measurements`; authorization checks the referenced evidence and allowed target, not a unit-extraction regex.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
-| `tests/fixtures/workflow-nodes/wa-conversation-orchestrator/{compile-turn-policy,validate-ai-proposal,authorize-ai-turn,build-contingency-handoff}.js` | Create | Canonical policy, validator, authorization, and immutable contingency logic. |
-| `tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/{build-ai-request,normalize-ai-result}.js` | Modify | Initial/repair input and evidenced proposal schema; syntax normalization only. |
-| `n8n/workflows/{wa-conversation-orchestrator,ai-lead-qualification-assistant}.json` | Modify | Add bounded repair branches and synchronized Code nodes. |
-| `tests/scripts/sync-workflow-nodes.mjs` | Modify | Map every new canonical fixture to embedded workflow nodes. |
-| `scripts/ops/test-{ai-assistant,conversation-regression,intent-commercial-gate}-local.sh` | Modify | RED/contract/regression coverage. |
-| `n8n/samples/conversation_regression_cases.sample.json`, `docs/matriz-pruebas-conversacionales.md` | Modify | MINVU/supply and policy outcomes. |
+| `tests/fixtures/workflow-nodes/wa-conversation-orchestrator/{compile-turn-policy,validate-ai-proposal,authorize-ai-turn,build-contingency-handoff}.js` | Create | Policy v2, validation, projection, authorization, and immutable contingency. |
+| `tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/{build-ai-request,normalize-ai-result}.js` | Modify | Initial/repair request and semantic proposal normalization only. |
+| `n8n/workflows/{wa-conversation-orchestrator,ai-lead-qualification-assistant}.json` | Modify | Add bounded repair, shadow/enforce, and authorization branches. |
+| `tests/scripts/sync-workflow-nodes.mjs` | Modify | Map canonical fixtures to embedded workflow nodes. |
+| `scripts/ops/test-{ai-assistant,conversation-regression,intent-commercial-gate,handoff-routing}-local.sh` | Modify | Contract, safety, repair, anti-loop, and rollout regressions. |
+| `n8n/samples/conversation_regression_cases.sample.json`, `docs/matriz-pruebas-conversacionales.md` | Modify | Real-language cases and operating runbook. |
 
 ## Testing Strategy
 
 | Layer | Approach |
 |---|---|
-| Contract | Strict schema, digest immutability, evidence offsets, alias ambiguity, forbidden claims/effects, unchanged valid text. |
-| Workflow | Assert one repair edge only; provider failure/second invalid creates immediate idempotent handoff and preserves commercial state. |
-| Regression | Replay “Baldosa MINVU”, “MINVU 0”, “Suministro”; objective count 2 clarifies, count 3 hands off; legacy rows resume; B06 and lead prerequisites remain green. |
-
-Strict TDD runs the configured AI and conversation suites plus the commercial-gate suite and workflow-node sync check.
-
-## Observability
-
-Reuse `advisor_decisions` and audit metadata for policy version/digest, attempt, outcome, rule IDs, accepted provenance, objective count, effect decisions, latency, and contingency reason. Never log hidden reasoning; retain evidence already present in customer messages.
+| Contract | Strict envelope, extensible concepts, evidence offsets, observation references, forbidden mappings/effects, unchanged AI bytes. |
+| Conversation | `6 ml`, `son 6ml`, linear meters, counts, multiple facts, unknown units, ambiguity, and no regex override. |
+| Workflow | One repair, provider failure, immutable contingency, idempotent effects, objective counts 2/3, and legacy resume. |
+| Rollout | Shadow comparison records legacy/v2 divergence without v2 persistence; enforce and legacy rollback are deterministic. |
 
 ## Threat Matrix
 
-| Boundary | Applicability |
-|---|---|
-| Documentation-like paths | N/A — no executable-file classification. |
-| Git repository selection | N/A — no Git execution. |
-| Commit state | N/A — no commit automation. |
-| Push state | N/A — no push automation. |
-| PR commands | N/A — no PR automation. |
+| Boundary | Applicability | Reason |
+|---|---|---|
+| Documentation-like paths | N/A | No executable-file classification changes. |
+| Git repository selection | N/A | No Git command or repository selection. |
+| Commit state | N/A | No commit automation. |
+| Push state | N/A | No push automation. |
+| PR commands | N/A | No PR command composition. |
+
+Workflow routing threats are covered by contract, repair-bound, state-immutability, effect-idempotency, and shadow-mode RED tests.
 
 ## Migration / Rollout
 
-No database migration. Add `AI_PRD_CONVERSATION_MODE=legacy|shadow|enforce`: deploy in `shadow`, compare validation/loop telemetry, then enable `enforce` for a controlled number before full rollout. Roll back by switching to `legacy` and restoring workflow snapshots; JSONB metadata remains backward-compatible.
+No database migration. Deploy `AI_PRD_CONVERSATION_MODE=shadow`, compare outcomes and accepted evidence, then enable `enforce` for controlled conversations before full rollout. Roll back to `legacy`; additive JSONB metadata remains backward-compatible.
 
 ## Open Questions
 

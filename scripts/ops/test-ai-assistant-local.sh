@@ -301,6 +301,120 @@ node <<'NODE'
     expectEqual(normalized.ai_circuit_open, true, 'Normalize debe conservar estado del circuito');
   };
 
+  const validateSemanticV2Contract = async () => {
+    const failures = [];
+    const check = (condition, message) => {
+      if (!condition) failures.push(message);
+    };
+    const digest = 'a'.repeat(64);
+    const message = 'Son 6 ml y solo material';
+    const request = await runCode('Build AI Request', {
+      ...readSample('ai_greeting.sample.json'),
+      external_message_id: 'wamid-semantic-v2',
+      text_body: message,
+      message_current: message,
+      pending_question_key: 'quantity',
+      turn_policy: {
+        version: 'ai_prd_turn_policy/v2',
+        objective: { key: 'quantity', mode: 'ask' },
+        allowed_state_fields: ['measurements', 'modality'],
+        allowed_dialogue_actions: ['confirm'],
+        effect_permissions: { create_lead: false, handoff: false },
+      },
+      turn_policy_digest: digest,
+    }, {}, { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' });
+
+    const schema = request.response_schema || {};
+    const properties = schema.properties || {};
+    const expectedTopLevel = [
+      'contract_digest', 'dialogue_action', 'observations', 'reply_text',
+      'requested_effects', 'state_patch', 'version',
+    ].sort();
+    check(
+      JSON.stringify(Object.keys(properties).sort()) === JSON.stringify(expectedTopLevel),
+      'el schema debe exponer solo el sobre semantico v2'
+    );
+    check(
+      JSON.stringify([...(schema.required || [])].sort()) === JSON.stringify(expectedTopLevel),
+      'el sobre semantico v2 debe exigir todas sus propiedades'
+    );
+    check(properties.version?.const === 'ai_semantic_proposal/v2', 'la propuesta debe transportar version v2');
+    check(properties.observations?.type === 'array', 'observations debe ser una coleccion extensible');
+    check(
+      properties.observations?.items?.properties?.concept?.type === 'string'
+        && !properties.observations?.items?.properties?.concept?.enum,
+      'concept debe aceptar conceptos nuevos sin enum cerrado'
+    );
+    for (const key of ['quote', 'start', 'end', 'message_id']) {
+      check(
+        properties.observations?.items?.properties?.evidence?.required?.includes(key),
+        `la evidencia debe exigir ${key}`
+      );
+    }
+    check(
+      properties.state_patch?.items?.properties?.field?.enum?.includes('measurements'),
+      'state_patch debe permitir measurements'
+    );
+    check(
+      !properties.state_patch?.items?.properties?.field?.enum?.includes('price'),
+      'state_patch no debe permitir campos de precio'
+    );
+    check(
+      !properties.requested_effects?.items?.properties?.type?.enum?.includes('write_database'),
+      'requested_effects debe mantener efectos allowlisted'
+    );
+    check(request.ai_context?.turn_policy_digest === digest, 'el request debe conservar el digest autoritativo');
+
+    const exactReply = '  Entendí 6 ml y solo material. ¿Confirmas?  ';
+    const normalized = await runCode('Normalize AI Result', {
+      ...request,
+      ai_status_code: 200,
+      ai_response: makeProviderBody({
+        ...baseResponse,
+        version: 'ai_semantic_proposal/v2',
+        contract_digest: digest,
+        reply_text: exactReply,
+        dialogue_action: 'confirm',
+        observations: [
+          {
+            id: 'obs-amount',
+            concept: 'commercial_amount',
+            raw_value: '6 ml',
+            normalized: { kind: 'length', value: 6, unit: 'linear_meter' },
+            answers_objective: 'quantity',
+            evidence: { quote: '6 ml', start: 4, end: 8, message_id: 'wamid-semantic-v2' },
+            grounding: null,
+            confidence: 0.97,
+          },
+          {
+            id: 'obs-note',
+            concept: 'customer_installation_note',
+            raw_value: 'solo material',
+            normalized: null,
+            answers_objective: null,
+            evidence: { quote: 'solo material', start: 11, end: 24, message_id: 'wamid-semantic-v2' },
+            grounding: null,
+            confidence: 0.94,
+          },
+        ],
+        state_patch: [{ field: 'measurements', observation_id: 'obs-amount' }],
+        requested_effects: [],
+      }),
+    }, {}, { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' });
+    const proposal = normalized.ai_proposal || {};
+    check(proposal.version === 'ai_semantic_proposal/v2', 'Normalize debe conservar version v2');
+    check(proposal.contract_digest === digest, 'Normalize debe conservar contract_digest');
+    check(proposal.reply_text === exactReply, 'Normalize debe preservar los bytes de reply_text');
+    check(proposal.observations?.length === 2, 'Normalize debe preservar observaciones conocidas y extensibles');
+    check(proposal.observations?.[0]?.evidence?.start === 4, 'Normalize debe preservar offsets de evidencia');
+    check(proposal.observations?.[1]?.concept === 'customer_installation_note', 'concepto nuevo no debe descartarse');
+    check(proposal.state_patch?.[0]?.observation_id === 'obs-amount', 'state_patch debe conservar la referencia');
+
+    if (failures.length > 0) {
+      throw new Error(`Contrato semantico v2 incompleto:\n- ${failures.join('\n- ')}`);
+    }
+  };
+
   const runSimulatedScenario = async (scenario) => {
     const input = scenario.input || readSample(scenario.sample);
     const request = await runCode('Build AI Request', input, {}, env);
@@ -328,6 +442,7 @@ node <<'NODE'
   await validateRequestContract();
   await validateConfigFallback();
   await validateRateLimitHandling();
+  await validateSemanticV2Contract();
 
   await runSimulatedScenario({
     name: 'rechaza saludo incoherente ante consulta de precio',

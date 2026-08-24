@@ -174,6 +174,49 @@ if (responseOk) {
   }
 }
 
+const semanticResponseExpected = row.response_schema?.properties?.version?.const === 'ai_semantic_proposal/v2';
+if (semanticResponseExpected || parsed.version === 'ai_semantic_proposal/v2') {
+  const proposal = !parseError && parsed.version === 'ai_semantic_proposal/v2'
+    ? {
+        version: parsed.version,
+        contract_digest: typeof parsed.contract_digest === 'string' ? parsed.contract_digest : '',
+        reply_text: typeof parsed.reply_text === 'string' ? parsed.reply_text : '',
+        dialogue_action: typeof parsed.dialogue_action === 'string' ? parsed.dialogue_action : '',
+        observations: Array.isArray(parsed.observations) ? parsed.observations : [],
+        state_patch: Array.isArray(parsed.state_patch) ? parsed.state_patch : [],
+        requested_effects: Array.isArray(parsed.requested_effects) ? parsed.requested_effects : [],
+      }
+    : null;
+  const fallbackReason = row.ai_request_error
+    || (row.ai_skipped ? row.ai_skip_reason || 'skipped' : null)
+    || (!responseOk ? statusCode === 429 ? 'rate_limited' : 'provider_error' : null)
+    || (parseError ? 'invalid_json' : null);
+  return [{
+    json: {
+      ai_skipped: Boolean(row.ai_skipped),
+      ai_skip_reason: row.ai_skip_reason || null,
+      ai_provider: safe(row.ai_provider, 'google'),
+      ai_model: row.ai_model || null,
+      ai_api_mode: safe(row.ai_api_mode, 'openai_responses'),
+      ai_status_code: row.ai_status_code || null,
+      ai_retry_attempts: row.ai_retry_attempts || 0,
+      ai_retry_exhausted: Boolean(row.ai_retry_exhausted),
+      ai_parse_error: parseError,
+      ai_request_error: row.ai_request_error || null,
+      ai_fallback_reason: fallbackReason,
+      ai_proposal: proposal,
+      reply_text: proposal?.reply_text ?? '',
+      metadata_json: JSON.stringify({
+        contract: 'ai_semantic_proposal/v2',
+        turn_policy_digest: row.ai_context?.turn_policy_digest || null,
+        raw_output_length: outputText.length,
+        parse_error: parseError,
+        fallback_reason: fallbackReason,
+      }),
+    },
+  }];
+}
+
 const modelCEnabled = String($env.AI_MODEL_C_ENABLED || 'true').toLowerCase() === 'true';
 const FIELD_ACCEPT_MIN = modelCEnabled
   ? Number($env.AI_FIELD_ACCEPT_MIN_CONFIDENCE || 0.55)
@@ -482,4 +525,3 @@ return [
     },
   },
 ];
-

@@ -871,6 +871,67 @@
         ],
         "audit_required": true
       }
+    },
+    {
+      "id": "SA-01",
+      "title": "La IA acepta 6 ml como medida comercial",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "6 ml"
+        ],
+        "conversation_state": {
+          "pending_question_key": "quantity"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "observation": {
+          "concept": "commercial_amount",
+          "kind": "length",
+          "value": 6,
+          "unit": "linear_meter"
+        },
+        "state_field": "measurements",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-08",
+      "title": "Comprension valida progresa aunque no exista regex",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "media docena"
+        ],
+        "conversation_state": {
+          "pending_question_key": "quantity"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "observation": {
+          "concept": "commercial_amount",
+          "kind": "count",
+          "value": 6,
+          "unit": "unit"
+        },
+        "state_field": "quantity",
+        "regex_match_required": false,
+        "audit_required": true
+      }
     }
   ]
 }

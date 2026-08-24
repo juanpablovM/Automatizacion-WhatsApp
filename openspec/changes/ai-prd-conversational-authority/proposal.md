@@ -1,63 +1,63 @@
-# Proposal: AI-Led Conversation with Executable PRD Authority
+# Proposal: AI-Led Conversation with Extensible Semantic Authority
 
 ## Intent
 
-Eliminate competing authorship and qualification loops. The AI is the sole normal customer-facing voice; deterministic policy enforces the PRD, validates evidence, and authorizes effects without replacing valid AI copy.
+Make the AI the sole normal conversational voice and semantic interpreter. Deterministic policy validates evidence, projects approved observations into state, and authorizes effects without re-interpreting customer language through field-specific regexes.
 
 ## Scope
 
 ### In Scope
-- Compile a turn contract from accepted evidence, catalog, unresolved fields, objective, constraints, and effect permissions.
-- Require AI proposals with evidenced fields, natural `reply_text`, dialogue action, and requested effects.
-- Validate deterministically, preserve B06 evidence-first, and permit exactly one repair using immutable errors.
-- After a second invalid proposal or provider outage, send brief contingency, immediately create durable human handoff, and leave commercial state unchanged.
-- Track progress/anti-loop using `pending_question_key`, with audited product aliases and modality synonyms.
-- Add regressions for the MINVU/supply loop, PRD violations, repair bounds, state immutability, and effects.
+- Compile an immutable turn contract from accepted facts, unresolved objectives, grounding, constraints, and effect permissions.
+- Require a versioned proposal with extensible evidenced observations, `reply_text`, dialogue action, state mappings, and requested effects.
+- Preserve observations without persistable targets for dialogue and audit; only allowlisted mappings may change state.
+- Permit one repair; a second failure or provider outage creates durable handoff without commercial state advancement.
+- Track progress by objective and support `legacy|shadow|enforce` rollout.
 
 ### Out of Scope
-- U7, U8, multi-agent conversation, pricing/catalog redesign, or weakening `service != product` evidence rules.
+- U7, U8, multi-agent conversation, pricing/catalog redesign, database migration, or weakening `service != product`.
+- Direct AI writes or effect execution.
 - Templates as a normal conversational path.
 
 ## Capabilities
 
 ### New Capabilities
-- `ai-prd-conversation-control`: AI dialogue governed by executable policy, evidence validation, one repair, authorized effects, anti-loop, and fail-safe handoff.
+- `ai-prd-conversation-control`: Extensible AI understanding governed by evidence validation, authorized effects, anti-loop, repair, and fail-safe handoff.
 
 ### Modified Capabilities
 None.
 
 ## Approach
 
-Refine the existing flow instead of adding another agent. The orchestrator compiles an immutable turn policy; the assistant proposes understanding, copy, and effects; validation accepts it unchanged or returns machine-readable errors for one repair. Only validated fields/effects persist. A second failure or outage triggers contingency and handoff without advancing qualification.
+Refine the two workflows into proposal, validation, projection, and authorization. The assistant returns a strict envelope with flexible `observations[]` carrying raw meaning, optional normalization, objective relationship, confidence, and message evidence. `state_patch[]` references observations and proposes allowlisted persistence targets. Code validates provenance and business invariants but never extracts a competing meaning. Valid AI copy is delivered unchanged.
 
 ## Affected Areas
 
 | Area | Impact | Description |
 |------|--------|-------------|
-| `n8n/workflows/{wa-conversation-orchestrator,ai-lead-qualification-assistant}.json` | Modified | Add policy, repair, authorization, and contingency routing. |
-| `tests/fixtures/workflow-nodes/` | Modified | Canonicalize request, normalization, validation, and orchestration. |
-| `scripts/ops/test-{ai-assistant,conversation-regression,intent-commercial-gate}-local.sh` | Modified | Prove B06, repair, anti-loop, and handoff. |
-| `n8n/samples/`, `docs/` | Modified | Record regressions and executable PRD mapping. |
+| `n8n/workflows/{wa-conversation-orchestrator,ai-lead-qualification-assistant}.json` | Modified | Policy, proposal, repair, projection, and authorization routing. |
+| `tests/fixtures/workflow-nodes/` | Modified | Canonical request, validation, authorization, and contingency nodes. |
+| `scripts/ops/test-*-local.sh` | Modified | Contract, conversation, safety, anti-loop, and handoff coverage. |
+| `n8n/samples/`, `docs/` | Modified | Regressions, outcomes, rollout, and rollback. |
 
 ## Risks
 
 | Risk | Likelihood | Mitigation |
 |------|------------|------------|
-| Colloquial evidence rejected | Medium | Catalog aliases, audited normalization, clarification tests. |
-| Repair adds latency/cost | Medium | One-repair hard limit and outcome telemetry. |
-| Legacy regressions | Medium | Compatible defaults and replay tests. |
+| Semantic drift | Medium | Versioned envelope, provenance, confidence, and allowlisted projection. |
+| Colloquial evidence rejected | Medium | Preserve raw observations; repair structure or unsafe effects, not unfamiliar wording. |
+| Legacy regression | Medium | Compatible adapters, shadow comparison, and replay tests. |
 
 ## Rollback Plan
 
-Restore prior workflows and fixtures through the existing n8n sync/rollback process; disable policy/repair routing and retain existing persisted fields.
+Switch `AI_PRD_CONVERSATION_MODE` to `legacy` and restore workflow snapshots through existing tooling. Additive JSONB control metadata requires no database rollback.
 
 ## Dependencies
 
-- PRD, catalog, B06 gate, durable handoff, Gemini.
+- PRD, catalog aliases, B06 evidence gate, durable handoff, Gemini, workflow fixture sync.
 
 ## Success Criteria
 
-- [ ] Customer responses are AI-authored and PRD-valid.
-- [ ] MINVU and supply variants progress without repeated product questions or premature leads.
-- [ ] Invalid output receives at most one repair; second failure/outage sends contingency, hands off immediately, and does not advance commercial state.
-- [ ] All relevant local contract and regression suites pass without absorbing U7/U8.
+- [ ] `6 ml`, `son 6ml`, and equivalent answers advance from grounded AI understanding.
+- [ ] Regexes cannot override accepted observations or valid AI copy.
+- [ ] Only evidenced mappings persist and authorized effects execute once.
+- [ ] Repair, anti-loop, handoff, compatibility, shadow, and rollback regressions pass.

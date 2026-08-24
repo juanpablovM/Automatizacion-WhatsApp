@@ -645,6 +645,181 @@ node <<'NODE'
   }
 
   // ---------------------------------------------------------------------------
+  // 7. AUTORIDAD SEMANTICA V2: la IA interpreta; policy valida y proyecta.
+  // ---------------------------------------------------------------------------
+  console.log('[7] Autoridad semantica v2: observaciones, evidencia y proyeccion');
+  {
+    const fixturePaths = {
+      compile: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/compile-turn-policy.js',
+      validate: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-ai-proposal.js',
+      authorize: 'tests/fixtures/workflow-nodes/wa-conversation-orchestrator/authorize-ai-turn.js',
+    };
+    for (const [name, fixturePath] of Object.entries(fixturePaths)) {
+      assert(fs.existsSync(fixturePath), `v2 requiere fixture ${name}: ${fixturePath}`);
+    }
+
+    if (Object.values(fixturePaths).every((fixturePath) => fs.existsSync(fixturePath))) {
+      const { compileTurnPolicy } = require(`${process.cwd()}/${fixturePaths.compile}`);
+      const { validateAiProposal } = require(`${process.cwd()}/${fixturePaths.validate}`);
+      const { authorizeAiTurn } = require(`${process.cwd()}/${fixturePaths.authorize}`);
+      assert(typeof compileTurnPolicy === 'function', 'compileTurnPolicy debe ser funcion pura');
+      assert(typeof validateAiProposal === 'function', 'validateAiProposal debe ser funcion pura');
+      assert(typeof authorizeAiTurn === 'function', 'authorizeAiTurn debe ser funcion pura');
+
+      const policyEnv = { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' };
+      const compile = (text, objective = 'quantity', overrides = {}) => compileTurnPolicy({
+        conversation_id: 153,
+        inbound_event_id: 588,
+        external_message_id: 'wamid-semantic-gate',
+        text_body: text,
+        pending_question_key: objective,
+        service: 'Placas',
+        city: 'Santiago',
+        requirement: 'Cotizar placas',
+        qualification_context: { product: 'Placas', commune: 'Santiago' },
+        commercial_missing_fields: [objective],
+        ...overrides,
+      }, policyEnv);
+      const evidence = (text, quote, messageId = 'wamid-semantic-gate') => ({
+        quote,
+        start: text.indexOf(quote),
+        end: text.indexOf(quote) + quote.length,
+        message_id: messageId,
+      });
+      const proposal = (compiled, text, observations, statePatch, overrides = {}) => ({
+        version: 'ai_semantic_proposal/v2',
+        contract_digest: compiled.turn_policy_digest,
+        reply_text: 'Entendido. ¿Confirmas los datos?',
+        dialogue_action: 'confirm',
+        observations,
+        state_patch: statePatch,
+        requested_effects: [],
+        ...overrides,
+      });
+      const amountObservation = (text, quote, normalized, id = 'obs-amount') => ({
+        id,
+        concept: 'commercial_amount',
+        raw_value: quote,
+        normalized,
+        answers_objective: 'quantity',
+        evidence: evidence(text, quote),
+        grounding: null,
+        confidence: 0.97,
+      });
+      const validate = (compiled, aiProposal) => validateAiProposal({
+        ...compiled,
+        ai_attempt: 'initial',
+        ai_proposal: aiProposal,
+      });
+
+      expectEqual(compile('6 ml').turn_policy.version, 'ai_prd_turn_policy/v2', 'policy debe usar v2');
+      expectEqual(compile('6 ml').turn_policy_digest.length, 64, 'policy debe exponer digest SHA-256');
+      expectIncludes(compile('6 ml').turn_policy.allowed_state_fields, 'measurements', 'policy permite measurements');
+      assert(
+        compile('6 ml').turn_policy_digest !== compile('7 ml').turn_policy_digest,
+        'policy digest debe cambiar cuando cambia el mensaje inmutable'
+      );
+      assert(
+        compile('6 ml').turn_policy.accepted_facts.some((fact) => fact.field === 'product' && fact.value === 'Placas'),
+        'policy debe conservar hechos comerciales ya aceptados'
+      );
+
+      for (const [text, quote, normalized, field, expectedValue] of [
+        ['6 ml', '6 ml', { kind: 'length', value: 6, unit: 'linear_meter' }, 'measurements', '6 ml'],
+        ['son 6ml', '6ml', { kind: 'length', value: 6, unit: 'linear_meter' }, 'measurements', '6ml'],
+        ['6 metros lineales', '6 metros lineales', { kind: 'length', value: 6, unit: 'linear_meter' }, 'measurements', '6 metros lineales'],
+        ['40 unidades', '40 unidades', { kind: 'count', value: 40, unit: 'unit' }, 'quantity', '40 unidades'],
+      ]) {
+        const compiled = compile(text);
+        const observation = amountObservation(text, quote, normalized);
+        const validation = validate(compiled, proposal(compiled, text, [observation], [{ field, observation_id: observation.id }]));
+        expectEqual(validation.valid, true, `${text}: comprension AI evidenciada debe validarse`);
+        expectEqual(validation.authorized_state_patch[0].field, field, `${text}: mapping autorizado`);
+        const authorized = authorizeAiTurn({ ...compiled, ai_proposal: proposal(compiled, text, [observation], [{ field, observation_id: observation.id }]), ai_validation: validation });
+        expectEqual(authorized.qualification_context[field], expectedValue, `${text}: compatibilidad persiste valor crudo`);
+      }
+
+      const multiText = '6 ml en Santiago, solo material';
+      const multiCompiled = compile(multiText, 'quantity', {
+        qualification_context: { product: 'Placas' },
+        commercial_missing_fields: ['quantity', 'commune', 'modality'],
+      });
+      const multiObservations = [
+        amountObservation(multiText, '6 ml', { kind: 'length', value: 6, unit: 'linear_meter' }),
+        { id: 'obs-commune', concept: 'commune', raw_value: 'Santiago', normalized: 'Santiago', answers_objective: null, evidence: evidence(multiText, 'Santiago'), grounding: null, confidence: 0.96 },
+        { id: 'obs-modality', concept: 'modality', raw_value: 'solo material', normalized: 'material', answers_objective: null, evidence: evidence(multiText, 'solo material'), grounding: { kind: 'modality_synonym', id: 'material:solo-material' }, confidence: 0.96 },
+      ];
+      const multiPatch = [
+        { field: 'measurements', observation_id: 'obs-amount' },
+        { field: 'commune', observation_id: 'obs-commune' },
+        { field: 'modality', observation_id: 'obs-modality' },
+      ];
+      const multiValidation = validate(multiCompiled, proposal(multiCompiled, multiText, multiObservations, multiPatch));
+      expectEqual(multiValidation.valid, true, 'un mensaje puede aportar multiples hechos evidenciados');
+      expectEqual(multiValidation.authorized_state_patch.length, 3, 'todos los mappings validos progresan juntos');
+
+      const unknownText = 'La entrada es por un pasaje interior';
+      const unknownCompiled = compile(unknownText, 'quantity');
+      const unknownObservation = {
+        id: 'obs-access-note', concept: 'site_access_note', raw_value: unknownText,
+        normalized: null, answers_objective: null, evidence: evidence(unknownText, unknownText),
+        grounding: null, confidence: 0.9,
+      };
+      const unknownValidation = validate(unknownCompiled, proposal(
+        unknownCompiled, unknownText, [unknownObservation], [], { dialogue_action: 'ask_clarification' }
+      ));
+      expectEqual(unknownValidation.valid, true, 'concepto extensible puede guiar dialogo sin persistencia');
+      expectEqual(unknownValidation.authorized_state_patch.length, 0, 'concepto extensible no autoriza estado');
+
+      const ambiguousText = 'Necesito MINVU';
+      const ambiguousCompiled = compile(ambiguousText, 'product', {
+        qualification_context: { commune: 'Santiago' },
+        commercial_missing_fields: ['product'],
+        commercial_context: { catalog_items: [
+          { id: 12, sku: 'minvu-0', name: 'Baldosa MINVU 0', service_keywords: ['MINVU'], is_active: true },
+          { id: 13, sku: 'minvu-1', name: 'Baldosa MINVU 1', service_keywords: ['MINVU'], is_active: true },
+        ] },
+      });
+      const ambiguousObservation = {
+        id: 'obs-product', concept: 'product', raw_value: 'MINVU',
+        normalized: { kind: 'unknown', candidates: ['minvu-0', 'minvu-1'] },
+        answers_objective: 'product', evidence: evidence(ambiguousText, 'MINVU'),
+        grounding: null, confidence: 0.7,
+      };
+      const ambiguousValidation = validate(ambiguousCompiled, proposal(
+        ambiguousCompiled, ambiguousText, [ambiguousObservation], [], { dialogue_action: 'ask_clarification' }
+      ));
+      expectEqual(ambiguousValidation.valid, true, 'ambiguedad explicita permite aclaracion contextual');
+      expectEqual(ambiguousValidation.authorized_state_patch.length, 0, 'ambiguedad no persiste producto');
+
+      const invalidText = '6 ml';
+      const invalidCompiled = compile(invalidText);
+      const invalidObservation = amountObservation(invalidText, '6 ml', { kind: 'length', value: 6, unit: 'linear_meter' });
+      const invalidOffset = validate(invalidCompiled, proposal(invalidCompiled, invalidText, [{
+        ...invalidObservation, evidence: { ...invalidObservation.evidence, start: 1 },
+      }], [{ field: 'measurements', observation_id: invalidObservation.id }]));
+      assert(invalidOffset.rule_errors.some((error) => error.code === 'invalid_evidence_offsets'), 'offset invalido debe rechazarse');
+      const missingReference = validate(invalidCompiled, proposal(invalidCompiled, invalidText, [invalidObservation], [{ field: 'measurements', observation_id: 'missing' }]));
+      assert(missingReference.rule_errors.some((error) => error.code === 'observation_reference_not_found'), 'state_patch exige observacion existente');
+      const forbiddenField = validate(invalidCompiled, proposal(invalidCompiled, invalidText, [invalidObservation], [{ field: 'price', observation_id: invalidObservation.id }]));
+      assert(forbiddenField.rule_errors.some((error) => error.code === 'state_field_not_allowed'), 'campo no allowlisted debe rechazarse');
+
+      const utf8Text = 'Ñuñoa: 6 ml';
+      const utf8Compiled = compile(utf8Text);
+      const utf8Start = Buffer.byteLength('Ñuñoa: ', 'utf8');
+      const utf8Observation = {
+        ...amountObservation(utf8Text, '6 ml', { kind: 'length', value: 6, unit: 'linear_meter' }),
+        evidence: { quote: '6 ml', start: utf8Start, end: utf8Start + 4, message_id: 'wamid-semantic-gate' },
+      };
+      expectEqual(
+        validate(utf8Compiled, proposal(utf8Compiled, utf8Text, [utf8Observation], [{ field: 'measurements', observation_id: utf8Observation.id }])).valid,
+        true,
+        'evidencia debe validar offsets UTF-8 en bytes y no indices UTF-16'
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   console.log(`\nGate comercial PRD: ${passed} PASS / ${failed} FAIL`);
   if (failed > 0) process.exit(1);
 })().catch((error) => {

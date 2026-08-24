@@ -46,6 +46,21 @@ const NODES = [
   },
   {
     workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Compile Turn Policy',
+    fixture: 'wa-conversation-orchestrator/compile-turn-policy.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Validate AI Initial Proposal',
+    fixture: 'wa-conversation-orchestrator/validate-ai-proposal.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Authorize AI Initial Turn',
+    fixture: 'wa-conversation-orchestrator/authorize-ai-turn.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
     node: 'Evaluate Conversation Step',
     fixture: 'wa-conversation-orchestrator/evaluate-conversation-step.js',
     transform: 'n8n-explicit-return',

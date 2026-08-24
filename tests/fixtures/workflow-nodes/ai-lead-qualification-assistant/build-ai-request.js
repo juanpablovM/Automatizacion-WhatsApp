@@ -126,6 +126,8 @@ const currentContext = {
   recent_messages: parseRecentMessages(pickMerged(row.recent_messages, row.recent_messages_1)),
   commercial_context: commercialContext,
   commercial_context_counts: commercialContextCounts,
+  turn_policy: compactObject(pickMerged(row.turn_policy, row.turn_policy_1)),
+  turn_policy_digest: safe(pickMerged(row.turn_policy_digest, row.turn_policy_digest_1)),
 };
 
 const responseSchema = {
@@ -419,6 +421,89 @@ const responseSchema = {
   },
 };
 
+const semanticStateFields = [
+  'name', 'product', 'commune', 'quantity', 'measurements', 'use_case', 'modality',
+  'urgency', 'desired_date', 'photos', 'terrain', 'truck_access', 'debris_removal',
+  'customer_type', 'company', 'company_rut', 'contact_name', 'contact_role', 'email',
+  'purchase_order', 'invoice_required', 'address', 'access_restrictions',
+  'reception_contact', 'sale_number', 'purchase_date', 'issue_description',
+  'payment_amount', 'payment_method', 'quote_number', 'service', 'city', 'requirement',
+];
+const semanticResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    version: { type: 'string', const: 'ai_semantic_proposal/v2' },
+    contract_digest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    reply_text: { type: 'string' },
+    dialogue_action: { type: 'string', enum: ['answer', 'ask', 'ask_clarification', 'confirm', 'handoff'] },
+    observations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          concept: { type: 'string' },
+          raw_value: { type: 'string' },
+          normalized: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            required: ['kind', 'value', 'unit', 'candidates'],
+            properties: {
+              kind: { type: ['string', 'null'] },
+              value: { type: ['string', 'number', 'boolean', 'null'] },
+              unit: { type: ['string', 'null'] },
+              candidates: { type: ['array', 'null'], items: { type: 'string' } },
+            },
+          },
+          answers_objective: { type: ['string', 'null'] },
+          evidence: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              quote: { type: 'string' },
+              start: { type: 'integer', minimum: 0 },
+              end: { type: 'integer', minimum: 0 },
+              message_id: { type: 'string' },
+            },
+          },
+          grounding: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            required: ['kind', 'id'],
+            properties: { kind: { type: ['string', 'null'] }, id: { type: ['string', 'null'] } },
+          },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+      },
+    },
+    state_patch: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          field: { type: 'string', enum: semanticStateFields },
+          observation_id: { type: 'string' },
+        },
+      },
+    },
+    requested_effects: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['create_lead', 'handoff'] },
+          idempotency_key: { type: ['string', 'null'] },
+          reason: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+};
+
 // OpenAI strict JSON Schema requires required[] to match every properties key.
 const alignStrictSchema = (schema) => {
   if (!schema || typeof schema !== 'object') return;
@@ -429,6 +514,12 @@ const alignStrictSchema = (schema) => {
   if (schema.items) alignStrictSchema(schema.items);
 };
 alignStrictSchema(responseSchema);
+alignStrictSchema(semanticResponseSchema);
+
+const conversationMode = safe($env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();
+const semanticMode = ['shadow', 'enforce'].includes(conversationMode)
+  && currentContext.turn_policy.version === 'ai_prd_turn_policy/v2';
+const selectedResponseSchema = semanticMode ? semanticResponseSchema : responseSchema;
 
 const basePayload = {
   ai_provider: provider,
@@ -436,7 +527,7 @@ const basePayload = {
   ai_base_url: baseUrl,
   ai_api_mode: apiMode,
   ai_context: currentContext,
-  response_schema: responseSchema,
+  response_schema: selectedResponseSchema,
   commercial_context: commercialContext,
   commercial_context_counts: commercialContextCounts,
 };
@@ -696,7 +787,17 @@ const systemPrompt = [
   'Comentario: [resumen breve]',
 ].join('\n');
 
-const systemPromptText = systemPrompt;
+const semanticSystemPrompt = [
+  'Eres Hormi Atencion y eres la unica autoridad semantica y voz conversacional normal del turno.',
+  'Devuelve exactamente ai_semantic_proposal/v2 conforme al JSON Schema solicitado.',
+  'La politica inmutable current_context.turn_policy gobierna hechos aceptados, objetivo, acciones, mappings y efectos.',
+  'Interpreta el mensaje actual en observations extensibles. Cada observacion debe citar bytes exactos del mensaje mediante quote, start, end y message_id.',
+  'state_patch solo propone persistencia allowlisted y siempre referencia una observacion. No ejecutes efectos ni describas procesos internos.',
+  'Los conceptos nuevos pueden permanecer sin state_patch y guiar una respuesta valida.',
+  'Si existe ambiguedad, usa ask_clarification y no propongas persistencia para el hecho ambiguo.',
+  'reply_text es la respuesta completa al cliente y se enviara sin reescritura cuando la propuesta sea autorizada.',
+].join('\n');
+const systemPromptText = semanticMode ? semanticSystemPrompt : systemPrompt;
 
 const chatContractPrompt = [
   'Contrato JSON obligatorio para Chat Completions:',
@@ -719,6 +820,13 @@ const chatContractPrompt = [
   '- prd_validated debe ser true si reply_text no viola reglas PRD.',
   '- enhancement_type debe indicar el tipo de enhancement: greeting, objection, b2b_redirect, price_redirect, data_collection, confirmation, handoff o none.',
 ].join('\n');
+const semanticChatContractPrompt = [
+  'Contrato JSON obligatorio ai_semantic_proposal/v2:',
+  '- Devuelve solo JSON valido y exactamente las claves version, contract_digest, reply_text, dialogue_action, observations, state_patch y requested_effects.',
+  '- Copia contract_digest desde current_context.turn_policy_digest.',
+  '- concept es extensible; no descartes significado solo porque no tenga campo persistible.',
+  '- Cada state_patch debe referenciar una observacion y usar un field permitido por la politica.',
+].join('\n');
 
 const userPromptPayload = {
   current_context: currentContext,
@@ -732,13 +840,13 @@ const userPromptPayload = {
     policy: 'Usar solo informacion presente en commercial_context. Si falta una fuente, no inventar y derivar o pedir validacion.'
   },
 };
-if (!usesChatCompletions) userPromptPayload.required_json_schema = responseSchema;
+if (!usesChatCompletions) userPromptPayload.required_json_schema = selectedResponseSchema;
 const userPrompt = JSON.stringify(userPromptPayload);
 const aiRequest = usesChatCompletions
   ? {
       model,
       messages: [
-        { role: 'system', content: systemPromptText + '\n' + chatContractPrompt + '\nDevuelve solo JSON valido. No uses Markdown.' },
+        { role: 'system', content: systemPromptText + '\n' + (semanticMode ? semanticChatContractPrompt : chatContractPrompt) + '\nDevuelve solo JSON valido. No uses Markdown.' },
         { role: 'user', content: userPrompt },
       ],
       temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
@@ -754,8 +862,8 @@ const aiRequest = usesChatCompletions
       text: {
         format: {
           type: 'json_schema',
-          name: 'hormi_lead_qualification_decision',
-          schema: responseSchema,
+          name: semanticMode ? 'ai_semantic_proposal_v2' : 'hormi_lead_qualification_decision',
+          schema: selectedResponseSchema,
           strict: true,
         },
       },
@@ -775,4 +883,3 @@ return [
     },
   },
 ];
-

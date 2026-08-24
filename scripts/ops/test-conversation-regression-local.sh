@@ -31,6 +31,7 @@ const requiredBaseCases = Array.from({ length: 12 }, (_, index) =>
   `CP-${String(index + 1).padStart(2, '0')}`
 );
 const requiredAiCases = ['AI-01', 'AI-02', 'AI-03', 'AI-04', 'AI-05', 'AI-06'];
+const requiredSemanticCases = ['SA-01', 'SA-08'];
 const requiredGate = ['servicio', 'ciudad', 'requerimiento', 'confirmacion'];
 
 const fail = (message) => {
@@ -60,6 +61,9 @@ const ids = new Set(suite.cases.map((testCase) => testCase.id));
 for (const id of [...requiredBaseCases, ...requiredAiCases]) {
   if (!ids.has(id)) fail(`Falta caso en fixture: ${id}`);
   if (!matrix.includes(id)) fail(`Falta caso en matriz: ${id}`);
+}
+for (const id of requiredSemanticCases) {
+  if (!ids.has(id)) fail(`Falta caso semantico en fixture: ${id}`);
 }
 
 for (const testCase of suite.cases) {
@@ -111,6 +115,14 @@ for (const testCase of suite.cases) {
     }
     if (expected.ai_creates_lead_directly !== true) {
       fail('AI-06 debe dejar explicita la autonomia confirmada de Hormi Atencion');
+    }
+  }
+  if (testCase.id.startsWith('SA-')) {
+    if (testCase.ai_mode !== 'semantic_v2' || expected.semantic_authority !== true) {
+      fail(`${testCase.id}: debe declarar autoridad semantica v2`);
+    }
+    if (expected.lead_created || expected.clickup_task_created || expected.confirmed_by_user) {
+      fail(`${testCase.id}: comprender un turno no debe ejecutar efectos prematuros`);
     }
   }
 }
@@ -166,6 +178,12 @@ if (!aiLinkNode || aiLinkNode.type !== 'n8n-nodes-base.executeWorkflow') {
   fail('Falta nodo Execute AI Lead Qualification como executeWorkflow');
 }
 
+for (const nodeName of ['Compile Turn Policy', 'Validate AI Initial Proposal', 'Authorize AI Initial Turn']) {
+  if (!orchestrator.nodes.some((node) => node.name === nodeName)) {
+    fail(`Autoridad semantica v2 requiere nodo ${nodeName}`);
+  }
+}
+
 const persistNode = orchestrator.nodes.find((node) => node.name === 'Persist Conversation State');
 if (!persistNode) fail('Falta nodo Persist Conversation State en orquestador');
 if (!persistNode.parameters.query.includes('advisor_decision_insert')) {
@@ -211,6 +229,27 @@ const assertStrictSchema = (schema, path = 'root') => {
 assertStrictSchema(builtAi.response_schema);
 if (!builtAi.response_schema.properties.field_updates || !builtAi.response_schema.properties.per_field_confidence) {
   fail('Schema AI debe exponer field_updates y per_field_confidence como objetos de primer nivel');
+}
+const semanticBuiltAi = (await buildAiFn([{ json: {
+  text_body: '6 ml', message_type: 'text', current_step: 'quantity', pending_question_key: 'quantity',
+  external_message_id: 'wamid-semantic-regression', service: 'Placas', city: 'Santiago',
+  requirement: 'Cotizar placas', recent_messages: [], qualification_context: {},
+  turn_policy: {
+    version: 'ai_prd_turn_policy/v2', objective: { key: 'quantity', mode: 'ask' },
+    allowed_state_fields: ['measurements'], allowed_dialogue_actions: ['confirm'],
+    effect_permissions: { create_lead: false, handoff: false },
+  },
+  turn_policy_digest: 'a'.repeat(64),
+} }], {
+  AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
+  AI_PRD_CONVERSATION_MODE: 'enforce',
+}))[0].json;
+assertStrictSchema(semanticBuiltAi.response_schema);
+if (semanticBuiltAi.response_schema.properties.version?.const !== 'ai_semantic_proposal/v2') {
+  fail('Schema AI v2 debe transportar version ai_semantic_proposal/v2');
+}
+if (!semanticBuiltAi.response_schema.properties.observations || !semanticBuiltAi.response_schema.properties.state_patch) {
+  fail('Schema AI v2 debe separar observations[] de state_patch[]');
 }
 const runApplyAi = async (row, env = {}) => {
   const fn = new AsyncFunction('items', '$env', applyNode.parameters.jsCode);

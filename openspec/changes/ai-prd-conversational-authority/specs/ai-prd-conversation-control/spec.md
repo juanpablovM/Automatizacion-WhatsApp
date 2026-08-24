@@ -2,112 +2,122 @@
 
 ## Purpose
 
-Govern AI dialogue through executable PRD policy. Preserve B06; exclude U7/U8.
+Control safely.
 
 ## Requirements
 
-### Requirement: Single Normal Conversational Voice
+### Requirement: Single Semantic Authority
 
-The AI **MUST** author customer replies. The system **MUST** deliver validated copy unchanged. Static text **MAY** appear only as contingency.
+The AI **MUST** interpret messages and author replies. Valid `reply_text` **MUST** ship unchanged. Code **MUST NOT** replace accepted meaning; static copy **MAY** serve contingencies.
 
-#### Scenario: Valid AI reply is delivered unchanged
+#### Scenario: Understanding is preserved
 
-- GIVEN an AI proposal satisfies the contract
-- WHEN policy authorizes the turn
-- THEN its `reply_text` is sent unchanged
+- GIVEN an evidenced proposal satisfies policy
+- WHEN the turn is authorized
+- THEN its meaning drives progress and its reply ships unchanged
 
-### Requirement: Executable Per-Turn PRD Contract
+### Requirement: Extensible Semantic Envelope
 
-Each proposal **MUST** receive an immutable contract containing accepted evidence, unresolved fields, pending objective, catalog grounding, allowed actions, forbidden claims, and effect permissions.
+Proposals **MUST** contain versioned `observations[]`, action, mappings, and effects. Observations **MAY** exceed persistence; mappings **MUST** reference accepted observations and allowlisted fields.
 
-#### Scenario: Contract constrains the current turn
+#### Scenario: Colloquial amount answers
 
-- GIVEN product and commune are accepted but quantity is missing
-- WHEN the turn contract is produced
-- THEN quantity is pending and accepted fields cannot be re-requested
-- AND unauthorized PRD claims are forbidden
+- GIVEN quantity is pending and the client writes `6 ml`
+- WHEN the AI evidences six linear meters
+- THEN it answers the objective and may map without extraction
 
-### Requirement: Evidenced Commercial Understanding
+#### Scenario: Unknown concept remains
 
-Product and modality proposals **MUST** have client evidence. Products **MUST** resolve to an active catalog entry or audited alias; modality synonyms **MUST** use an audited mapping. Service **MUST NOT** satisfy product.
+- GIVEN an observation has no allowlisted target
+- WHEN the AI uses it in valid dialogue
+- THEN it may guide dialogue but authorizes no state or effect
 
-#### Scenario: Catalog aliases progress qualification
+### Requirement: Executable Turn Policy
 
-- GIVEN the client writes “Baldosa MINVU” or “MINVU 0”
-- WHEN evidence matches one active-catalog alias
-- THEN product is accepted and is no longer pending
+Proposals **MUST** receive immutable policy containing facts, objectives, grounding, allowed fields/actions, forbidden claims, and effect permissions.
 
-#### Scenario: Modality synonym progresses qualification
+#### Scenario: Policy constrains turns
 
-- GIVEN the client writes “Suministro”
-- WHEN an audited synonym maps it to material-only modality
-- THEN modality is accepted and audited
+- GIVEN product and commune are accepted but amount is unresolved
+- WHEN policy is compiled
+- THEN facts stay accepted and unauthorized mappings, claims, and effects are forbidden
 
-#### Scenario: Ambiguous evidence is clarified
+### Requirement: Evidenced Commercial Grounding
 
-- GIVEN evidence matches multiple products or modalities
-- WHEN no value is grounded unambiguously
-- THEN nothing is persisted and the AI asks a contextual clarification
+Observations **MUST** cite current-message evidence. Products **MUST** resolve to active items or aliases; modality synonyms **MUST** be audited. Service **MUST NOT** satisfy product. Ambiguity **MUST** persist nothing.
 
-### Requirement: Deterministic State and Effect Authorization
+#### Scenario: Facts progress together
 
-Only deterministic policy **MAY** persist facts or execute effects. It **MUST** reject unevidenced fields and effects lacking prerequisites or permission.
+- GIVEN one message evidences product, amount, modality, and commune
+- WHEN the AI proposes separate observations
+- THEN valid mappings progress together
 
-#### Scenario: Authorized effect executes
+#### Scenario: Ambiguity is clarified
 
-- GIVEN a valid proposal requests a permitted effect with all prerequisites
+- GIVEN evidence supports multiple meanings
+- WHEN grounding cannot select safely
+- THEN nothing ambiguous persists and the AI clarifies
+
+### Requirement: Deterministic Authorization
+
+Policy **MAY** persist mappings or execute effects. It **MUST** validate references, targets, prerequisites, permissions, and idempotency without competing interpretation.
+
+#### Scenario: Effect executes once
+
+- GIVEN an effect has evidence, permission, and prerequisites
 - WHEN authorization completes
-- THEN valid fields persist and the effect executes once
+- THEN accepted mappings persist and the effect executes once
 
-#### Scenario: Premature lead is denied
+#### Scenario: Premature lead denied
 
-- GIVEN required fields or confirmation are missing
-- WHEN the AI proposes lead creation
-- THEN no lead is created and commercial state does not advance
+- GIVEN required facts or confirmation are missing
+- WHEN the AI requests lead creation
+- THEN no lead is created and state does not advance
 
 ### Requirement: One Repair and Fail-Safe Handoff
 
-An invalid proposal **MUST** receive exactly one repair with the unchanged contract and machine-readable errors. A second failure or provider outage **MUST** send brief contingency, create durable handoff immediately, and **MUST NOT** advance commercial state.
+An invalid proposal **MUST** receive one repair with unchanged policy and machine errors. A second failure or outage **MUST** create contingency and durable handoff while preserving pre-turn state.
 
-#### Scenario: First invalid proposal is repaired
+#### Scenario: First failure repaired
 
-- GIVEN the initial proposal violates a PRD rule
+- GIVEN the initial proposal violates policy
 - WHEN validation rejects it
-- THEN one repair uses the unchanged contract and errors
-- AND a valid repair proceeds normally
+- THEN one repair receives the same policy and a valid repair proceeds
 
-#### Scenario: Repair also fails
+#### Scenario: Repair fails
 
-- GIVEN the single repair is invalid
+- GIVEN the repair is invalid
 - WHEN validation rejects it
-- THEN no further AI attempt occurs
-- AND contingency and durable handoff occur without state advancement
+- THEN attempts stop and one handoff occurs without state advancement
 
-#### Scenario: Provider is unavailable
+#### Scenario: Provider unavailable
 
-- GIVEN the AI provider times out or returns invalid output
-- WHEN no valid initial proposal exists
-- THEN contingency and durable handoff occur immediately
-- AND commercial state remains unchanged
+- GIVEN provider failure leaves no valid proposal
+- WHEN the turn cannot proceed
+- THEN contingency and one handoff occur while state remains unchanged
 
 ### Requirement: Objective-Based Anti-Loop
 
-The system **MUST** detect no-progress repetition by `pending_question_key`, regardless of wording. At threshold it **MUST** require AI clarification or handoff, not another generic question.
+The system **MUST** count no-progress turns by objective. Count two **MUST** allow only contextual clarification; count three **MUST** require handoff.
 
-#### Scenario: Reworded repeated objective is detected
+#### Scenario: Repetition detected
 
-- GIVEN turns retain `pending_question_key=product` without progress
-- WHEN differently worded replies reach the repetition threshold
-- THEN the no-progress policy activates
-- AND the next action is clarification or handoff
+- GIVEN an objective remains unresolved
+- WHEN different wording reaches counts two and three
+- THEN clarification occurs at two and handoff at three
 
-### Requirement: Legacy Conversation Compatibility
+### Requirement: Shadow and Legacy Compatibility
 
-Legacy conversations **MUST** resume safely, preserve accepted facts, and **MUST NOT** trigger effects because metadata is absent.
+Shadow **MUST** audit v2 without v2 effects. Legacy turns **MUST** preserve facts; missing metadata **MUST NOT** authorize effects. Enforce **MUST** roll back without database migration.
 
-#### Scenario: Legacy conversation resumes safely
+#### Scenario: Shadow has no effects
 
-- GIVEN a legacy conversation has `current_step` and facts
-- WHEN its next message is processed
-- THEN a compatible contract preserves those facts
-- AND missing metadata alone authorizes no lead or handoff
+- GIVEN shadow mode is active
+- WHEN legacy and v2 differ
+- THEN divergence is audited and only legacy produces effects
+
+#### Scenario: Legacy resumes safely
+
+- GIVEN legacy facts exist without v2 metadata
+- WHEN the next turn starts
+- THEN facts persist and absent metadata authorizes no effect
