@@ -32,7 +32,7 @@ const authorizeAiTurn = (row = {}) => {
       ai_authorization_outcome: 'legacy_passthrough',
     };
   }
-  if (validation.valid !== true) {
+  if (validation.valid !== true && mode !== 'shadow') {
     return {
       ...row,
       qualification_context: qualificationContext,
@@ -64,13 +64,21 @@ const authorizeAiTurn = (row = {}) => {
 
   const observations = new Map(asArray(validation.accepted_observations)
     .map((observation) => [safe(observation?.id), observation]));
+  const acceptedFields = new Set(asArray(policy.accepted_facts)
+    .map((fact) => safe(fact?.field))
+    .filter(Boolean));
+  const allowedMappings = new Set(asArray(policy.allowed_state_mappings)
+    .map((mapping) => `${safe(mapping?.concept)}:${safe(mapping?.field)}`));
   const topLevelState = {};
+  const appliedStatePatch = [];
   for (const patch of asArray(validation.authorized_state_patch)) {
     const observation = observations.get(safe(patch?.observation_id));
-    if (!observation) continue;
+    const mappingKey = `${safe(observation?.concept)}:${safe(patch?.field)}`;
+    if (!observation || acceptedFields.has(safe(patch?.field)) || !allowedMappings.has(mappingKey)) continue;
     const value = projectedValue(patch.field, observation);
     qualificationContext[patch.field] = value;
     if (['service', 'city', 'requirement'].includes(patch.field)) topLevelState[patch.field] = value;
+    appliedStatePatch.push(patch);
   }
 
   const control = cloneObject(qualificationContext._conversation_control);
@@ -116,7 +124,7 @@ const authorizeAiTurn = (row = {}) => {
     reply_text: String(proposal.reply_text ?? ''),
     dialogue_action: dialogueAction,
     accepted_observations: asArray(validation.accepted_observations),
-    authorized_state_patch: asArray(validation.authorized_state_patch),
+    authorized_state_patch: appliedStatePatch,
     authorized_effects: authorizedEffects,
     ai_authorization_outcome: 'authorized',
   };

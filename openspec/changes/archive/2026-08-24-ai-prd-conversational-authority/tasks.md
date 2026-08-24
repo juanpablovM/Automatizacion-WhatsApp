@@ -51,6 +51,6 @@ Chain strategy: feature-branch-chain
 
 ## Phase 5: Refactor and Verification
 
-- [ ] 5.1 Remove superseded regex-first/split-authorship branches and centralize syntax normalization without changing accepted behavior.
-- [ ] 5.2 Update `docs/matriz-pruebas-conversacionales.md` with contracts, outcomes, telemetry, rollout, and rollback.
-- [ ] 5.3 Run fixture parity plus all four focused suites; preserve U7/U8 exclusions and record runtime harness evidence per work unit.
+- [x] 5.1 Remove superseded regex-first/split-authorship branches and centralize syntax normalization without changing accepted behavior; remediate executable concept-to-field, accepted-fact, and canonical forbidden-claim authorization gaps found by independent verification.
+- [x] 5.2 Update `docs/matriz-pruebas-conversacionales.md` with contracts, outcomes, telemetry, rollout, and rollback.
+- [x] 5.3 Re-run fixture-region parity, workflow parity, unit guardrails, and all four focused suites after verifier-blocker remediation; preserve U7/U8 exclusions and record cumulative runtime harness evidence per work unit.

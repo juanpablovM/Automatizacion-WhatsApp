@@ -63,6 +63,27 @@ node <<'NODE'
     assert(Array.isArray(actual) && actual.includes(expected), `${message}: ${expected} no esta en ${JSON.stringify(actual)}`);
   };
 
+  const sharedValidatorPath = 'tests/fixtures/workflow-nodes/shared/prd-validators.js';
+  assert(fs.existsSync(sharedValidatorPath), 'PRD_VALIDATORS requiere una unica fuente canonica compartida');
+  if (fs.existsSync(sharedValidatorPath)) {
+    const canonicalValidators = fs.readFileSync(sharedValidatorPath, 'utf8').trim();
+    const generatedBody = (fixturePath) => {
+      const source = fs.readFileSync(fixturePath, 'utf8');
+      const match = source.match(/\/\/ <generated:prd-validators>\n([\s\S]*?)\n\/\/ <\/generated:prd-validators>/);
+      return match?.[1]?.trim() || '';
+    };
+    expectEqual(
+      generatedBody('tests/fixtures/workflow-nodes/wa-conversation-orchestrator/apply-ai-assistance.js'),
+      canonicalValidators,
+      'Apply AI Assistance debe usar la region PRD_VALIDATORS generada'
+    );
+    expectEqual(
+      generatedBody('tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-ai-proposal.js'),
+      canonicalValidators,
+      'Validate AI Proposal debe usar la misma region PRD_VALIDATORS generada'
+    );
+  }
+
   const env = {
     AI_LEAD_ASSISTANT_ENABLED: 'true',
     AI_MODEL_C_ENABLED: 'true',
@@ -660,11 +681,16 @@ node <<'NODE'
 
     if (Object.values(fixturePaths).every((fixturePath) => fs.existsSync(fixturePath))) {
       const { compileTurnPolicy } = require(`${process.cwd()}/${fixturePaths.compile}`);
-      const { validateAiProposal } = require(`${process.cwd()}/${fixturePaths.validate}`);
+      const { validateAiProposal, validatePrdRules } = require(`${process.cwd()}/${fixturePaths.validate}`);
       const { authorizeAiTurn } = require(`${process.cwd()}/${fixturePaths.authorize}`);
       assert(typeof compileTurnPolicy === 'function', 'compileTurnPolicy debe ser funcion pura');
       assert(typeof validateAiProposal === 'function', 'validateAiProposal debe ser funcion pura');
+      assert(typeof validatePrdRules === 'function', 'validatePrdRules compartido debe ser funcion pura');
       assert(typeof authorizeAiTurn === 'function', 'authorizeAiTurn debe ser funcion pura');
+      assert(
+        !fs.readFileSync(fixturePaths.validate, 'utf8').includes('FORBIDDEN_CLAIM_PATTERNS'),
+        'semantic v2 no debe conservar una segunda tabla manual de claim guards'
+      );
 
       const policyEnv = { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' };
       const compile = (text, objective = 'quantity', overrides = {}) => compileTurnPolicy({
@@ -716,12 +742,32 @@ node <<'NODE'
       expectEqual(compile('6 ml').turn_policy_digest.length, 64, 'policy debe exponer digest SHA-256');
       expectIncludes(compile('6 ml').turn_policy.allowed_state_fields, 'measurements', 'policy permite measurements');
       assert(
+        compile('6 ml').turn_policy.allowed_state_mappings.some((mapping) => (
+          mapping.concept === 'commercial_amount' && mapping.field === 'measurements'
+        )),
+        'policy debe compilar mapping commercial_amount→measurements para el objetivo pendiente'
+      );
+      assert(
+        !compile('6 ml').turn_policy.allowed_state_mappings.some((mapping) => mapping.field === 'commune'),
+        'policy no debe exponer accepted facts como targets ejecutables'
+      );
+      assert(
         compile('6 ml').turn_policy_digest !== compile('7 ml').turn_policy_digest,
         'policy digest debe cambiar cuando cambia el mensaje inmutable'
       );
       assert(
         compile('6 ml').turn_policy.accepted_facts.some((fact) => fact.field === 'product' && fact.value === 'Placas'),
         'policy debe conservar hechos comerciales ya aceptados'
+      );
+      expectEqual(
+        validatePrdRules('El valor es $19.990.', [], {}, {}).rule,
+        'NO_INVENT_PRICE',
+        'PRD_VALIDATORS conserva bloqueo legacy sin price_context oficial'
+      );
+      expectEqual(
+        validatePrdRules('El valor es $19.990.', [], { type: 'fixed', amount: 19990 }, {}).passed,
+        true,
+        'PRD_VALIDATORS conserva autorizacion legacy con price_context oficial'
       );
 
       for (const [text, quote, normalized, field, expectedValue] of [
@@ -803,6 +849,207 @@ node <<'NODE'
       assert(missingReference.rule_errors.some((error) => error.code === 'observation_reference_not_found'), 'state_patch exige observacion existente');
       const forbiddenField = validate(invalidCompiled, proposal(invalidCompiled, invalidText, [invalidObservation], [{ field: 'price', observation_id: invalidObservation.id }]));
       assert(forbiddenField.rule_errors.some((error) => error.code === 'state_field_not_allowed'), 'campo no allowlisted debe rechazarse');
+
+      const crossFieldCompiled = compile('6 ml', 'quantity', {
+        city: '',
+        qualification_context: { product: 'Placas' },
+        commercial_missing_fields: ['quantity', 'commune'],
+      });
+      const crossFieldAmount = amountObservation('6 ml', '6 ml', { kind: 'length', value: 6, unit: 'linear_meter' });
+      const amountAsCommune = validate(crossFieldCompiled, proposal(
+        crossFieldCompiled,
+        '6 ml',
+        [crossFieldAmount],
+        [{ field: 'commune', observation_id: crossFieldAmount.id }]
+      ));
+      assert(
+        amountAsCommune.rule_errors.some((error) => error.code === 'state_mapping_not_allowed'),
+        'commercial_amount no puede autorizar commune aunque ambos campos esten pendientes'
+      );
+      const forgedCrossFieldProposal = proposal(
+        crossFieldCompiled,
+        '6 ml',
+        [crossFieldAmount],
+        [{ field: 'commune', observation_id: crossFieldAmount.id }]
+      );
+      const forgedCrossFieldAuthorization = authorizeAiTurn({
+        ...crossFieldCompiled,
+        ai_proposal: forgedCrossFieldProposal,
+        ai_validation: {
+          valid: true,
+          accepted_observations: [crossFieldAmount],
+          authorized_state_patch: [{ field: 'commune', observation_id: crossFieldAmount.id }],
+          authorized_effects: [],
+        },
+      });
+      expectEqual(
+        forgedCrossFieldAuthorization.qualification_context.commune,
+        undefined,
+        'authorizer aplica defensa en profundidad a concept→field aunque reciba validation forjada'
+      );
+
+      const overwriteText = 'Ahora en Valparaíso';
+      const overwriteCompiled = compile(overwriteText);
+      const overwriteObservation = {
+        id: 'obs-overwrite-commune', concept: 'commune', raw_value: 'Valparaíso',
+        normalized: 'Valparaíso', answers_objective: null,
+        evidence: evidence(overwriteText, 'Valparaíso'), grounding: null, confidence: 0.98,
+      };
+      const overwriteValidation = validate(overwriteCompiled, proposal(
+        overwriteCompiled,
+        overwriteText,
+        [overwriteObservation],
+        [{ field: 'commune', observation_id: overwriteObservation.id }]
+      ));
+      assert(
+        overwriteValidation.rule_errors.some((error) => error.code === 'accepted_fact_immutable'),
+        'un state_patch no puede sobrescribir un hecho aceptado del turno'
+      );
+      const forgedOverwriteProposal = proposal(
+        overwriteCompiled,
+        overwriteText,
+        [overwriteObservation],
+        [{ field: 'commune', observation_id: overwriteObservation.id }]
+      );
+      const forgedOverwriteAuthorization = authorizeAiTurn({
+        ...overwriteCompiled,
+        ai_proposal: forgedOverwriteProposal,
+        ai_validation: {
+          valid: true,
+          accepted_observations: [overwriteObservation],
+          authorized_state_patch: [{ field: 'commune', observation_id: overwriteObservation.id }],
+          authorized_effects: [],
+        },
+      });
+      expectEqual(
+        forgedOverwriteAuthorization.qualification_context.commune,
+        'Santiago',
+        'authorizer aplica defensa en profundidad y preserva accepted facts aunque reciba validation forjada'
+      );
+
+      const mismatchText = 'Santiago';
+      const mismatchCompiled = compile(mismatchText, 'quantity', {
+        city: '',
+        qualification_context: { product: 'Placas' },
+        commercial_missing_fields: ['quantity', 'commune'],
+      });
+      const communeObservation = {
+        id: 'obs-mismatch-commune', concept: 'commune', raw_value: 'Santiago',
+        normalized: 'Santiago', answers_objective: 'commune',
+        evidence: evidence(mismatchText, 'Santiago'), grounding: null, confidence: 0.98,
+      };
+      const communeAsAmount = validate(mismatchCompiled, proposal(
+        mismatchCompiled,
+        mismatchText,
+        [communeObservation],
+        [{ field: 'measurements', observation_id: communeObservation.id }]
+      ));
+      assert(
+        communeAsAmount.rule_errors.some((error) => error.code === 'state_mapping_not_allowed'),
+        'un concepto commune no puede autorizar un campo de commercial_amount'
+      );
+
+      const stockClaim = validate(invalidCompiled, proposal(
+        invalidCompiled,
+        invalidText,
+        [invalidObservation],
+        [{ field: 'measurements', observation_id: invalidObservation.id }],
+        { reply_text: 'Sí, tenemos stock disponible.' }
+      ));
+      assert(
+        stockClaim.rule_errors.some((error) => error.code === 'forbidden_claim' && error.detail === 'NO_CONFIRM_STOCK'),
+        'reply_text no puede confirmar stock cuando la policy lo prohibe'
+      );
+
+      for (const [ruleId, replyText] of [
+        ['NO_INVENT_PRICE', 'El precio es $12.990.'],
+        ['NO_CONFIRM_PAYMENT', 'Tu pago fue confirmado.'],
+        ['NO_DISCOUNT', 'Te ofrezco un descuento del 10%.'],
+        ['NO_PROMISE_DELIVERY', 'Te llegará mañana.'],
+        ['NO_PROMISE_INSTALLATION', 'Instalaremos las placas.'],
+      ]) {
+        const forbiddenReply = validate(invalidCompiled, proposal(
+          invalidCompiled,
+          invalidText,
+          [invalidObservation],
+          [{ field: 'measurements', observation_id: invalidObservation.id }],
+          { reply_text: replyText }
+        ));
+        assert(
+          forbiddenReply.rule_errors.some((entry) => entry.code === 'forbidden_claim' && entry.detail === ruleId),
+          `${ruleId}: forbidden_rule_ids debe activar una guarda deterministica de salida`
+        );
+      }
+
+      for (const [ruleId, replyText] of [
+        ['NO_CONFIRM_STOCK', 'Hay disponibilidad de placas.'],
+        ['NO_CONFIRM_PAYMENT', 'Ya puedes retirar.'],
+        ['NO_DISCOUNT', 'Tenemos descuento.'],
+        ['NO_PROMISE_DELIVERY', 'Despacho el viernes.'],
+        ['NO_PROMISE_INSTALLATION', 'La instalación es gratis.'],
+      ]) {
+        const canonicalForbiddenReply = validate(invalidCompiled, proposal(
+          invalidCompiled,
+          invalidText,
+          [invalidObservation],
+          [{ field: 'measurements', observation_id: invalidObservation.id }],
+          { reply_text: replyText }
+        ));
+        assert(
+          canonicalForbiddenReply.rule_errors.some((entry) => entry.code === 'forbidden_claim' && entry.detail === ruleId),
+          `${ruleId}: semantic v2 debe preservar el vector canonico PRD`
+        );
+      }
+
+      for (const replyText of [
+        'Necesito verificar el despacho del viernes antes de confirmarte.',
+        'La instalación es una opción sujeta a cotizar.',
+      ]) {
+        const prudentReply = validate(invalidCompiled, proposal(
+          invalidCompiled,
+          invalidText,
+          [invalidObservation],
+          [{ field: 'measurements', observation_id: invalidObservation.id }],
+          { reply_text: replyText }
+        ));
+        expectEqual(prudentReply.valid, true, `respuesta prudente no debe bloquearse: ${replyText}`);
+      }
+
+      const customerStockText = '¿Tienen stock?';
+      const customerStockCompiled = compile(customerStockText, 'none', { commercial_missing_fields: [] });
+      const safeStockReply = validate(customerStockCompiled, proposal(
+        customerStockCompiled,
+        customerStockText,
+        [],
+        [],
+        { reply_text: 'Voy a verificar disponibilidad antes de confirmarte.' }
+      ));
+      expectEqual(
+        safeStockReply.valid,
+        true,
+        'la guarda de claims solo inspecciona salida generada y no interpreta el mensaje del cliente'
+      );
+
+      const filteredPolicy = {
+        ...invalidCompiled.turn_policy,
+        forbidden_rule_ids: ['NO_CONFIRM_STOCK'],
+      };
+      const filteredDiscountReply = validateAiProposal({
+        ...invalidCompiled,
+        turn_policy: filteredPolicy,
+        ai_proposal: proposal(
+          invalidCompiled,
+          invalidText,
+          [invalidObservation],
+          [{ field: 'measurements', observation_id: invalidObservation.id }],
+          { reply_text: 'Tenemos descuento.' }
+        ),
+      });
+      expectEqual(
+        filteredDiscountReply.valid,
+        true,
+        'semantic v2 solo ejecuta los forbidden_rule_ids seleccionados por la policy'
+      );
 
       const utf8Text = 'Ñuñoa: 6 ml';
       const utf8Compiled = compile(utf8Text);

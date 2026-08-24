@@ -793,7 +793,7 @@ const semanticSystemPrompt = [
   'Devuelve exactamente ai_semantic_proposal/v2 conforme al JSON Schema solicitado.',
   'La politica inmutable current_context.turn_policy gobierna hechos aceptados, objetivo, acciones, mappings y efectos.',
   'Interpreta el mensaje actual en observations extensibles. Cada observacion debe citar bytes exactos del mensaje mediante quote, start, end y message_id.',
-  'state_patch solo propone persistencia allowlisted y siempre referencia una observacion. No ejecutes efectos ni describas procesos internos.',
+  'state_patch solo propone persistencia cuando coincide exactamente con allowed_state_mappings, siempre referencia una observacion y nunca sobrescribe accepted_facts. No ejecutes efectos ni describas procesos internos.',
   'Los conceptos nuevos pueden permanecer sin state_patch y guiar una respuesta valida.',
   'Si existe ambiguedad, usa ask_clarification y no propongas persistencia para el hecho ambiguo.',
   'Si current_context.repair_context.attempt es 1, corrige solo los rule_errors informados y conserva exactamente el mismo contract_digest; no solicites otro intento.',
@@ -827,7 +827,7 @@ const semanticChatContractPrompt = [
   '- Devuelve solo JSON valido y exactamente las claves version, contract_digest, reply_text, dialogue_action, observations, state_patch y requested_effects.',
   '- Copia contract_digest desde current_context.turn_policy_digest.',
   '- concept es extensible; no descartes significado solo porque no tenga campo persistible.',
-  '- Cada state_patch debe referenciar una observacion y usar un field permitido por la politica.',
+  '- Cada state_patch debe referenciar una observacion y coincidir exactamente con un par concept→field de allowed_state_mappings; nunca propongas sobrescribir accepted_facts.',
 ].join('\n');
 
 const userPromptPayload = {

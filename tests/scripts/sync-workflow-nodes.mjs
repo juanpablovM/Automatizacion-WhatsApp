@@ -183,6 +183,68 @@ const mode = process.argv.includes('--check') ? 'check' : process.argv.includes(
 const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(repoRoot, rel), 'utf8'));
 const loadFixture = (fixture) => fs.readFileSync(path.join(fixturesRoot, fixture), 'utf8');
 
+const PRD_REGION_START = '// <generated:prd-validators>';
+const PRD_REGION_END = '// </generated:prd-validators>';
+const canonicalPrdValidators = loadFixture('shared/prd-validators.js').trim();
+const generatedPrdRegion = `${PRD_REGION_START}\n${canonicalPrdValidators}\n${PRD_REGION_END}`;
+const PRD_REGION_TARGETS = [
+  {
+    fixture: 'wa-conversation-orchestrator/apply-ai-assistance.js',
+    bootstrapStart: '// Model C: PRD Validation Rules',
+    bootstrapEnd: '// AG5: Heuristica para detectar si el usuario menciono un campo explicitamente',
+  },
+  {
+    fixture: 'wa-conversation-orchestrator/validate-ai-proposal.js',
+    bootstrapStart: 'const normalizeGeneratedReply',
+    bootstrapEnd: 'const validateAiProposal',
+  },
+];
+
+const replaceGeneratedRegion = (source, target) => {
+  const generatedStart = source.indexOf(PRD_REGION_START);
+  const generatedEnd = source.indexOf(PRD_REGION_END);
+  if (generatedStart >= 0 && generatedEnd > generatedStart) {
+    return source.slice(0, generatedStart)
+      + generatedPrdRegion
+      + source.slice(generatedEnd + PRD_REGION_END.length);
+  }
+
+  const bootstrapStart = source.indexOf(target.bootstrapStart);
+  const bootstrapEnd = source.indexOf(target.bootstrapEnd);
+  if (bootstrapStart < 0 || bootstrapEnd <= bootstrapStart) {
+    throw new Error(`No se pudo localizar la region PRD en ${target.fixture}`);
+  }
+  return source.slice(0, bootstrapStart)
+    + generatedPrdRegion
+    + '\n\n'
+    + source.slice(bootstrapEnd);
+};
+
+const syncGeneratedRegions = () => {
+  let drift = false;
+  for (const target of PRD_REGION_TARGETS) {
+    const fixturePath = path.join(fixturesRoot, target.fixture);
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const generatedSource = replaceGeneratedRegion(source, target);
+    if (source === generatedSource) {
+      if (mode === 'check') console.log(`[REGION OK] ${target.fixture} :: PRD_VALIDATORS`);
+      continue;
+    }
+    if (mode === 'check') {
+      drift = true;
+      console.error(`[REGION DRIFT] ${target.fixture} :: PRD_VALIDATORS`);
+      continue;
+    }
+    fs.writeFileSync(fixturePath, generatedSource, 'utf8');
+    console.log(`[REGION PATCH] ${target.fixture} :: PRD_VALIDATORS`);
+  }
+  return !drift;
+};
+
+// Region drift must fail before fixture-to-workflow parity can hide the source
+// of the mismatch behind generated workflow JSON.
+if (!syncGeneratedRegions()) process.exit(1);
+
 let patchedCount = 0;
 let checkedCount = 0;
 

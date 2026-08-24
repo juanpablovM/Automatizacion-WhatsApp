@@ -81,13 +81,24 @@ const reachable = (source, target) => {
 
   await check('initial repair is wired exactly once', async () => {
     for (const name of [
+      'Execute AI Proposal', 'Merge AI Proposal', 'PRD Enforce Mode?', 'PRD Shadow Mode?',
       'Execute AI Repair', 'Validate AI Repair Proposal',
       'Authorize AI Repair Turn', 'Build Contingency Handoff',
     ]) {
       assert(nodeNames.has(name), `missing workflow node ${name}`);
     }
-    assert(reachable('Compile Turn Policy', 'Execute AI Lead Qualification'));
-    assert(reachable('Validate AI Initial Proposal', 'Execute AI Repair'));
+    for (const removed of [
+      'Semantic Mode Enabled?', 'Execute AI Lead Qualification Legacy', 'Merge AI Assistance',
+    ]) {
+      assert.equal(nodeNames.has(removed), false, `superseded split-authority node remains: ${removed}`);
+    }
+    assert(reachable('Compile Turn Policy', 'Execute AI Proposal'));
+    assert(reachable('Execute AI Proposal', 'Validate AI Initial Proposal'));
+    assert(reachable('Validate AI Initial Proposal', 'PRD Enforce Mode?'));
+    assert(reachable('PRD Enforce Mode?', 'PRD Shadow Mode?'));
+    assert(reachable('PRD Shadow Mode?', 'Apply AI Assistance'));
+    assert(reachable('PRD Shadow Mode?', 'Authorize AI Initial Turn'));
+    assert(reachable('PRD Enforce Mode?', 'Execute AI Repair'));
     assert(reachable('Execute AI Repair', 'Validate AI Repair Proposal'));
     assert(reachable('Validate AI Repair Proposal', 'Authorize AI Repair Turn'));
     assert(reachable('Validate AI Repair Proposal', 'Build Contingency Handoff'));
@@ -171,6 +182,28 @@ const reachable = (source, target) => {
     assert.equal(result.response_text, 'Respuesta legacy');
     assert.deepEqual(result.authorized_effects, []);
     assert.equal(result.ai_authorization_outcome, 'shadow_audited');
+  });
+
+  await check('invalid shadow proposal is audited without persistence or contingency', async () => {
+    const originalContext = { product: 'Placas', commune: 'Maipu' };
+    const result = authorizeAiTurn({
+      turn_policy: { version: 'ai_prd_turn_policy/v2', mode: 'shadow' },
+      turn_policy_digest: 'e'.repeat(64),
+      qualification_context: originalContext,
+      response_text: 'Respuesta compatible',
+      ai_proposal: null,
+      ai_validation: {
+        valid: false,
+        outcome: 'rejected',
+        rule_errors: [{ code: 'provider_unavailable', path: 'ai_proposal' }],
+        accepted_observations: [], authorized_state_patch: [], authorized_effects: [],
+      },
+    });
+    assert.deepEqual(result.qualification_context, originalContext);
+    assert.equal(result.response_text, 'Respuesta compatible');
+    assert.deepEqual(result.authorized_effects, []);
+    assert.equal(result.ai_authorization_outcome, 'shadow_audited');
+    assert.equal(JSON.parse(result.metadata_json).semantic_shadow.validation_outcome, 'rejected');
   });
 
   await check('handoff remains idempotent across turn retries', async () => {

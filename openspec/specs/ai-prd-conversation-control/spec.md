@@ -34,13 +34,13 @@ Proposals **MUST** contain versioned `observations[]`, action, mappings, and eff
 
 ### Requirement: Executable Turn Policy
 
-Proposals **MUST** receive immutable policy containing facts, objectives, grounding, allowed fields/actions, forbidden claims, and effect permissions.
+Proposals **MUST** receive immutable policy containing facts, objectives, grounding, allowed fields/actions, explicit turn-scoped `concept -> field` mappings, forbidden claims, and effect permissions. Accepted facts **MUST NOT** appear as executable patch targets. Deterministic claim guards **MUST** inspect generated reply output only and **MUST NOT** reinterpret the customer's message.
 
 #### Scenario: Policy constrains turns
 
 - GIVEN product and commune are accepted but amount is unresolved
 - WHEN policy is compiled
-- THEN facts stay accepted and unauthorized mappings, claims, and effects are forbidden
+- THEN facts stay accepted and unauthorized concept-to-field mappings, generated claims, and effects are forbidden
 
 ### Requirement: Evidenced Commercial Grounding
 
@@ -60,7 +60,7 @@ Observations **MUST** cite current-message evidence. Products **MUST** resolve t
 
 ### Requirement: Deterministic Authorization
 
-Policy **MAY** persist mappings or execute effects. It **MUST** validate references, targets, prerequisites, permissions, and idempotency without competing interpretation.
+Policy **MAY** persist mappings or execute effects. It **MUST** validate references, exact concept-to-field targets, accepted-fact immutability, prerequisites, permissions, and idempotency without competing interpretation.
 
 #### Scenario: Effect executes once
 

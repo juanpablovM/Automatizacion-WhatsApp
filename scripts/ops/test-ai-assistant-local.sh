@@ -318,6 +318,10 @@ node <<'NODE'
         version: 'ai_prd_turn_policy/v2',
         objective: { key: 'quantity', mode: 'ask' },
         allowed_state_fields: ['measurements', 'modality'],
+        allowed_state_mappings: [
+          { concept: 'commercial_amount', field: 'measurements' },
+          { concept: 'modality', field: 'modality' },
+        ],
         allowed_dialogue_actions: ['confirm'],
         effect_permissions: { create_lead: false, handoff: false },
       },
@@ -364,6 +368,10 @@ node <<'NODE'
       'requested_effects debe mantener efectos allowlisted'
     );
     check(request.ai_context?.turn_policy_digest === digest, 'el request debe conservar el digest autoritativo');
+    check(
+      request.ai_request.input[0].content.includes('allowed_state_mappings'),
+      'el prompt debe exigir pares concept→field explícitos de la policy'
+    );
 
     const exactReply = '  Entendí 6 ml y solo material. ¿Confirmas?  ';
     const normalized = await runCode('Normalize AI Result', {

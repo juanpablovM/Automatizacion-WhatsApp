@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-Refine the existing workflows into `policy -> proposal -> validation -> projection -> authorization`. `WA - Conversation Orchestrator` compiles immutable `ai_prd_turn_policy/v2`; `AI - Lead Qualification Assistant` returns `ai_semantic_proposal/v2`. The outer envelope is strict, while `observations[]` preserves extensible customer meaning. Deterministic nodes verify evidence, allowlisted state mappings, PRD invariants, and effects without extracting a competing meaning from raw text. One invalid proposal gets one repair; provider outage or second failure triggers durable handoff with pre-turn commercial state unchanged.
+Refine the existing workflows into `policy -> proposal -> validation -> projection -> authorization`. `WA - Conversation Orchestrator` compiles immutable `ai_prd_turn_policy/v2`; `AI - Lead Qualification Assistant` returns `ai_semantic_proposal/v2`. The outer envelope is strict, while `observations[]` preserves extensible customer meaning. Deterministic nodes verify evidence, exact turn-scoped `concept -> field` mappings, accepted-fact immutability, generated-reply claim guards, PRD invariants, and effects without extracting a competing meaning from raw customer text. One invalid proposal gets one repair; provider outage or second failure triggers durable handoff with pre-turn commercial state unchanged.
 
 ## Architecture Decisions
 
@@ -10,7 +10,8 @@ Refine the existing workflows into `policy -> proposal -> validation -> projecti
 |---|---|---|
 | Semantic authority | AI owns normal reply, interpretation, objective answer, and next dialogue action | Reject split authorship and regex-first interpretation: production evidence showed they discard correct model understanding. |
 | Contract shape | Strict versioned envelope plus extensible `observations[]` | Reject a fixed `understood_fields` map: it couples comprehension to today's persistence schema. Reject unstructured output: it cannot be validated safely. |
-| Persistence boundary | `state_patch[]` references observations and targets only allowlisted fields | The AI proposes meaning and mapping; deterministic code validates provenance and invariants, then persists. Unknown observations may guide dialogue but cannot authorize effects. |
+| Persistence boundary | `state_patch[]` references observations and must match an exact turn-scoped pair in `allowed_state_mappings[]` | A global field allowlist only constrains schema shape; executable pairs constrain semantic projection and exclude already accepted fields. Unknown observations may guide dialogue but cannot authorize effects. |
+| Forbidden claims | One canonical `PRD_VALIDATORS` region is generated into legacy and semantic Code nodes; `forbidden_rule_ids[]` filters it for v2 | Legacy preserves all rules, official `price_context`, and `NO_FALSE_DERIVATION_PROMISE`; semantic mode selects policy IDs and may use stricter output-only variants without reinterpreting the customer's inbound message. Region parity runs before fixture-to-workflow parity. |
 | Commercial amount | Observation normalization distinguishes count, length, area, volume, weight, and unknown while retaining `raw_value` | Avoid blindly merging `quantity` and `measurements`; a compatibility adapter projects accepted mappings into legacy fields. |
 | Evidence | Quote, byte offsets, message ID, confidence, and optional grounding | Validation checks source identity and consistency; regex may validate syntax or normalize known units but never decide whether the client answered. |
 | Repair and anti-loop | One repair; progress counted by objective and accepted observations | Prevent unbounded latency and repeated questions with different wording. |
@@ -39,7 +40,8 @@ Shadow mode executes validation and records differences but sends and persists t
 ```text
 turn_policy/v2 = {
   version, turn_id, accepted_facts[], unresolved_objectives[], objective,
-  catalog, modality_synonyms, allowed_state_fields, allowed_dialogue_actions,
+  catalog, modality_synonyms, allowed_state_fields,
+  allowed_state_mappings[{concept, field}], allowed_dialogue_actions,
   forbidden_rule_ids, effect_permissions
 }
 
@@ -56,16 +58,17 @@ validation = {
 }
 ```
 
-For `6 ml`, the proposal may emit `concept=commercial_amount`, `normalized={kind:length,value:6,unit:linear_meter}`, and `answers_objective=quantity`. The state mapping can target legacy `measurements`; authorization checks the referenced evidence and allowed target, not a unit-extraction regex.
+For `6 ml`, the proposal may emit `concept=commercial_amount`, `normalized={kind:length,value:6,unit:linear_meter}`, and `answers_objective=quantity`. When amount is unresolved, policy may expose `{concept:commercial_amount, field:measurements}`; authorization checks that exact pair and referenced evidence, not a unit-extraction regex. A field already present in `accepted_facts[]` is omitted from executable mappings and rejected if patched.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
 | `tests/fixtures/workflow-nodes/wa-conversation-orchestrator/{compile-turn-policy,validate-ai-proposal,authorize-ai-turn,build-contingency-handoff}.js` | Create | Policy v2, validation, projection, authorization, and immutable contingency. |
+| `tests/fixtures/workflow-nodes/shared/prd-validators.js` | Create | Canonical PRD claim validators injected into self-contained n8n Code nodes. |
 | `tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/{build-ai-request,normalize-ai-result}.js` | Modify | Initial/repair request and semantic proposal normalization only. |
 | `n8n/workflows/{wa-conversation-orchestrator,ai-lead-qualification-assistant}.json` | Modify | Add bounded repair, shadow/enforce, and authorization branches. |
-| `tests/scripts/sync-workflow-nodes.mjs` | Modify | Map canonical fixtures to embedded workflow nodes. |
+| `tests/scripts/sync-workflow-nodes.mjs` | Modify | Generate and verify canonical PRD regions before mapping fixtures to embedded workflow nodes. |
 | `scripts/ops/test-{ai-assistant,conversation-regression,intent-commercial-gate,handoff-routing}-local.sh` | Modify | Contract, safety, repair, anti-loop, and rollout regressions. |
 | `n8n/samples/conversation_regression_cases.sample.json`, `docs/matriz-pruebas-conversacionales.md` | Modify | Real-language cases and operating runbook. |
 
@@ -73,7 +76,7 @@ For `6 ml`, the proposal may emit `concept=commercial_amount`, `normalized={kind
 
 | Layer | Approach |
 |---|---|
-| Contract | Strict envelope, extensible concepts, evidence offsets, observation references, forbidden mappings/effects, unchanged AI bytes. |
+| Contract | Strict envelope, extensible concepts, evidence offsets, observation references, exact mapping pairs, immutable accepted facts, canonical generated-reply claim guards, generated-region drift, forbidden effects, unchanged valid AI bytes. |
 | Conversation | `6 ml`, `son 6ml`, linear meters, counts, multiple facts, unknown units, ambiguity, and no regex override. |
 | Workflow | One repair, provider failure, immutable contingency, idempotent effects, objective counts 2/3, and legacy resume. |
 | Rollout | Shadow comparison records legacy/v2 divergence without v2 persistence; enforce and legacy rollback are deterministic. |

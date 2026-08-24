@@ -66,6 +66,37 @@ const ALLOWED_STATE_FIELDS = [
 ];
 const ALLOWED_DIALOGUE_ACTIONS = ['answer', 'ask', 'ask_clarification', 'confirm', 'handoff'];
 
+const CONCEPT_BY_FIELD = {
+  quantity: 'commercial_amount',
+  measurements: 'commercial_amount',
+  commune: 'commune',
+  city: 'commune',
+  product: 'product',
+  modality: 'modality',
+};
+
+const stateTargetsForObjective = (objective) => {
+  if (objective === 'quantity' || objective === 'measurements') return ['quantity', 'measurements'];
+  return [objective];
+};
+
+const allowedStateMappings = (unresolvedObjectives, facts) => {
+  const acceptedFields = new Set(facts.map((fact) => fact.field));
+  const mappings = [];
+  const seen = new Set();
+  for (const objective of unresolvedObjectives) {
+    for (const field of stateTargetsForObjective(objective)) {
+      if (!ALLOWED_STATE_FIELDS.includes(field) || acceptedFields.has(field)) continue;
+      const concept = CONCEPT_BY_FIELD[field] || field;
+      const key = `${concept}:${field}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      mappings.push({ concept, field });
+    }
+  }
+  return mappings;
+};
+
 const acceptedFacts = (row, qualificationContext) => Object.entries({
   service: row.service,
   city: row.city,
@@ -85,6 +116,8 @@ const compileTurnPolicy = (row = {}, env = {}) => {
   const catalogItems = asArray(asObject(row.commercial_context).catalog_items)
     .filter((item) => item?.is_active !== false)
     .map((item) => ({ id: item?.id ?? null, sku: safe(item?.sku), name: safe(item?.name), aliases: asArray(item?.service_keywords) }));
+  const facts = acceptedFacts(row, qualificationContext);
+  const unresolvedObjectives = [...new Set(missing.length ? missing : objectiveKey === 'none' ? [] : [objectiveKey])];
   const turnPolicy = {
     version: 'ai_prd_turn_policy/v2',
     turn_id: safe(row.inbound_event_id || row.external_message_id || row.conversation_id || 'unknown'),
@@ -93,12 +126,13 @@ const compileTurnPolicy = (row = {}, env = {}) => {
       id: safe(row.external_message_id || row.inbound_event_id || 'unknown'),
       text: String(row.text_body ?? row.message_current ?? ''),
     },
-    accepted_facts: acceptedFacts(row, qualificationContext),
-    unresolved_objectives: [...new Set(missing.length ? missing : objectiveKey === 'none' ? [] : [objectiveKey])],
+    accepted_facts: facts,
+    unresolved_objectives: unresolvedObjectives,
     objective: { key: objectiveKey, mode: objectiveKey === 'none' ? 'respond' : 'ask', no_progress_count: noProgressCount },
     catalog: catalogItems,
     modality_synonyms: { material: ['solo material', 'solo el material', 'suministro'] },
     allowed_state_fields: [...ALLOWED_STATE_FIELDS],
+    allowed_state_mappings: allowedStateMappings(unresolvedObjectives, facts),
     allowed_dialogue_actions: [...ALLOWED_DIALOGUE_ACTIONS],
     forbidden_rule_ids: ['NO_INVENT_PRICE', 'NO_CONFIRM_STOCK', 'NO_CONFIRM_PAYMENT', 'NO_DISCOUNT', 'NO_PROMISE_DELIVERY', 'NO_PROMISE_INSTALLATION'],
     effect_permissions: { create_lead: false, handoff: noProgressCount >= 2 },
@@ -120,7 +154,14 @@ const compileTurnPolicy = (row = {}, env = {}) => {
 };
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { compileTurnPolicy, canonicalJson, sha256, ALLOWED_STATE_FIELDS, ALLOWED_DIALOGUE_ACTIONS };
+  module.exports = {
+    compileTurnPolicy,
+    canonicalJson,
+    sha256,
+    allowedStateMappings,
+    ALLOWED_STATE_FIELDS,
+    ALLOWED_DIALOGUE_ACTIONS,
+  };
 }
 
 if (typeof items !== 'undefined') {

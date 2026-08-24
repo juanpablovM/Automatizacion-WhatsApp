@@ -41,6 +41,22 @@ const fail = (message) => {
   throw new Error(message);
 };
 
+for (const requiredSection of [
+  '## Contrato operativo de autoridad semántica v2',
+  '## Outcomes y telemetría',
+  '## Rollout `legacy`, `shadow` y `enforce`',
+  '## Rollback de autoridad semántica',
+  '`ai_prd_turn_policy/v2`',
+  '`ai_semantic_proposal/v2`',
+  '`semantic_shadow`',
+  '`authorized`', '`repair_required`', '`shadow_audited`', '`rejected`', '`contingency`',
+  'SA-01', 'SA-08', 'U7', 'U8',
+]) {
+  if (!matrix.includes(requiredSection)) {
+    fail(`Matriz sin documentación operativa requerida: ${requiredSection}`);
+  }
+}
+
 if (!Array.isArray(suite.cases)) fail('El fixture no define cases[]');
 if (!Array.isArray(suite.required_evidence)) fail('El fixture no define required_evidence[]');
 if (!Array.isArray(suite.lead_creation_gate)) fail('El fixture no define lead_creation_gate[]');
@@ -203,9 +219,9 @@ if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(buildAiNode.parameters.jsCod
   fail('Los nodos AI no deben contener caracteres de control corruptos');
 }
 
-const aiLinkNode = orchestrator.nodes.find((node) => node.name === 'Execute AI Lead Qualification');
+const aiLinkNode = orchestrator.nodes.find((node) => node.name === 'Execute AI Proposal');
 if (!aiLinkNode || aiLinkNode.type !== 'n8n-nodes-base.executeWorkflow') {
-  fail('Falta nodo Execute AI Lead Qualification como executeWorkflow');
+  fail('Falta nodo Execute AI Proposal como executeWorkflow compartido');
 }
 
 for (const nodeName of ['Compile Turn Policy', 'Validate AI Initial Proposal', 'Authorize AI Initial Turn']) {
@@ -301,6 +317,12 @@ const semanticPolicy = ({ message, objective, fields, handoff = false, catalog =
   message: { id: 'wamid-semantic-safety', text: message },
   objective: { key: objective, mode: 'ask' },
   allowed_state_fields: fields,
+  allowed_state_mappings: fields.map((field) => ({
+    concept: ['quantity', 'measurements'].includes(field) ? 'commercial_amount' : field,
+    field,
+  })),
+  accepted_facts: [],
+  forbidden_rule_ids: [],
   allowed_dialogue_actions: ['ask', 'ask_clarification', 'confirm', 'handoff'],
   effect_permissions: { create_lead: false, handoff },
   catalog,

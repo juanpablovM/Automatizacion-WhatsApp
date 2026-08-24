@@ -209,6 +209,80 @@ docker compose --env-file .env ps
 - execution id de n8n
 - estado del proveedor AI, modelo y razon de fallback si aplica
 
+## Contrato operativo de autoridad semántica v2
+
+La IA es la única voz normal y la autoridad que interpreta el mensaje. El sistema compila política, valida evidencia, proyecta únicamente campos permitidos y autoriza efectos; no vuelve a interpretar el texto con regex de negocio.
+
+| Límite | Contrato | Regla operativa |
+| --- | --- | --- |
+| Política | `ai_prd_turn_policy/v2` + digest SHA-256 | Congela hechos aceptados, objetivo, catálogo, campos/acciones permitidos y permisos de efecto para el turno. |
+| Propuesta | `ai_semantic_proposal/v2` | Conserva `reply_text`, `observations[]`, `state_patch[]` y `requested_effects[]`; cada observación cita el mensaje actual mediante quote, offsets UTF-8 y message ID. |
+| Validación | `ai_validation` | Acepta conceptos extensibles, pero solo autoriza mappings con referencia válida, grounding y campo allowlisted. Una observación sin destino puede guiar el diálogo, nunca persistir ni ejecutar efectos. |
+| Autorización | `ai_authorization_outcome` | En `enforce`, entrega los bytes válidos de la IA, proyecta estado y deduplica efectos por `idempotency_key`. En `shadow`, conserva respuesta/estado compatible y autoriza cero efectos v2. |
+| Falla | Repair acotado o contingencia | Una propuesta inválida recibe una reparación con el mismo contrato. Segundo fallo o proveedor no disponible produce handoff durable y preserva el snapshot comercial pre-turn. |
+
+La normalización determinista se limita a sintaxis conocida —por ejemplo, la proyección auditada de `Suministro` a `material`— y ocurre después de aceptar evidencia. Nunca decide si el cliente respondió ni reemplaza una comprensión válida como `6 ml` o `media docena`.
+
+### Casos semánticos obligatorios
+
+| ID | Riesgo protegido | Resultado esperado |
+| --- | --- | --- |
+| SA-01 | `6 ml` rechazado por no coincidir con regex | Observación de longitud evidenciada y mapping a `measurements`. |
+| SA-02 | Segunda pregunta equivalente sin progreso | Una aclaración contextual con contador de objetivo 2. |
+| SA-03 | Loop en el tercer turno | Handoff durable e idempotente con contador 3. |
+| SA-04 | Reanudación legacy sin metadata v2 | Conserva hechos y no autoriza efectos implícitos. |
+| SA-05 | `MINVU` confundido con producto | Conserva contexto; producto requiere grounding de catálogo activo. |
+| SA-06 | Sinónimo de modalidad | Proyecta `Suministro` a `material` con auditoría. |
+| SA-07 | Cantidad flexible | `6 metros y medio` progresa y reinicia el contador del objetivo. |
+| SA-08 | Concepto válido sin regex | `media docena` progresa como count=6 sin extracción competidora. |
+
+## Outcomes y telemetría
+
+Los outcomes se leen por capa; no deben mezclarse al investigar un turno.
+
+| Capa | Outcome | Significado / acción |
+| --- | --- | --- |
+| Validator | `authorized` | Propuesta y mappings cumplen la política; puede pasar al autorizador. |
+| Validator | `repair_required` | `rule_errors[]` explica el contrato, evidencia, mapping o efecto rechazado; en `enforce` habilita una sola reparación. |
+| Authorizer | `authorized` | Respuesta, estado y efectos permitidos quedaron listos para persistencia y entrega. |
+| Authorizer | `shadow_audited` | Comparación registrada; estado, respuesta y efectos v2 no se aplican. |
+| Authorizer | `legacy_passthrough` | El flujo compatible sigue gobernando el turno. |
+| Authorizer | `rejected` | No existe autorización válida en modo enforce; no se debe avanzar estado. |
+| Contingencia | `contingency` | Se preserva el snapshot y se solicita handoff durable por segundo fallo o indisponibilidad. |
+
+Para cada conversación controlada registrar como mínimo:
+
+- `turn_policy_digest`, versión, modo, objetivo y contador de no-progreso;
+- `ai_validation.outcome`, `rule_errors[]`, observaciones aceptadas y mappings/efectos autorizados;
+- `ai_authorization_outcome`, clave idempotente y razón de contingencia/handoff cuando aplique;
+- `metadata_json.semantic_shadow` —también identificable como `semantic_shadow`— con digest, diferencia de reply, conteo de patches/efectos propuestos y outcome de validación;
+- latencia/error del proveedor, `conversation_id`, execution ID de n8n y auditorías necesarias para reconstruir el turno.
+
+Shadow se considera seguro únicamente si la evidencia confirma estado y respuesta compatibles, cero efectos v2 y telemetría presente tanto para propuestas válidas como inválidas.
+
+## Rollout `legacy`, `shadow` y `enforce`
+
+| Modo | Respuesta/estado efectivo | Validación v2 | Repair/contingencia v2 | Efectos v2 |
+| --- | --- | --- | --- | --- |
+| `legacy` | Flujo compatible existente | Se puede calcular, pero no gobierna | No | No |
+| `shadow` | Flujo compatible existente | Sí, solo auditoría | No | No |
+| `enforce` | Propuesta v2 autorizada | Sí | Una reparación; después contingencia | Solo allowlisted, con prerrequisitos e idempotencia |
+
+1. Comenzar en `AI_PRD_CONVERSATION_MODE=legacy` y guardar la salida de las cuatro suites focalizadas y paridad de fixtures.
+2. Cambiar a `shadow` en conversaciones controladas SA-01 a SA-08. Comparar digest, observaciones, divergencia de reply, estado y efectos; no avanzar si falta telemetría o aparece un efecto v2.
+3. Activar `enforce` únicamente para conversaciones controladas. Confirmar comprensión, repair único, contingencia, anti-loop y handoff durable antes de ampliar alcance.
+4. Mantener el cambio de modo como kill switch operativo; cualquier regresión de evidencia, persistencia, entrega o efectos vuelve inmediatamente a `legacy`.
+
+U7 y U8 permanecen pendientes y fuera del alcance de este rollout. No se consideran aprobados, implementados ni reinterpretados por la autoridad semántica v2.
+
+## Rollback de autoridad semántica
+
+1. Establecer `AI_PRD_CONVERSATION_MODE=legacy` y reiniciar solo los procesos que necesiten recargar la variable.
+2. Confirmar en una conversación controlada `legacy_passthrough`, ausencia de repair/contingencia v2 y cero efectos autorizados por metadata ausente.
+3. Si también se requiere rollback de workflow, restaurar el snapshot/preflight de n8n o revertir únicamente la Unidad 3: lane compartido, routing de modo, telemetría shadow y esta documentación.
+4. Ejecutar paridad y `test-ai-assistant-local.sh`, `test-conversation-regression-local.sh`, `test-intent-commercial-gate-local.sh`, `test-handoff-routing-local.sh`.
+5. Conservar `qualification_context._conversation_control` y metadata shadow para auditoría; son aditivos y no requieren migración ni rollback de base de datos.
+
 ## Registro de ejecucion
 
 | Fecha | ID caso | AI | Numero | conversation_id | lead_id | clickup_task_id | Vendedor | Resultado | Observaciones |
