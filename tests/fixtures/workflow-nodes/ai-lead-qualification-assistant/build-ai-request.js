@@ -517,7 +517,9 @@ const alignStrictSchema = (schema) => {
 alignStrictSchema(responseSchema);
 alignStrictSchema(semanticResponseSchema);
 
-const conversationMode = safe($env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();
+// The orchestrator resolves rollout scope once. This subworkflow must consume
+// that immutable decision instead of re-reading a global environment switch.
+const conversationMode = safe(currentContext.turn_policy.mode, 'legacy').toLowerCase();
 const semanticMode = ['shadow', 'enforce'].includes(conversationMode)
   && currentContext.turn_policy.version === 'ai_prd_turn_policy/v2';
 const selectedResponseSchema = semanticMode ? semanticResponseSchema : responseSchema;

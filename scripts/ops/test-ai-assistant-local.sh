@@ -308,6 +308,20 @@ node <<'NODE'
     };
     const digest = 'a'.repeat(64);
     const message = 'Son 6 ml y solo material';
+    const composeSource = fs.readFileSync('docker-compose.yml', 'utf8');
+    const envExampleSource = fs.readFileSync('.env.example', 'utf8');
+    check(
+      composeSource.includes('AI_PRD_CONVERSATION_MODE: ${AI_PRD_CONVERSATION_MODE:-legacy}'),
+      'Compose debe propagar el modo conversacional con default legacy'
+    );
+    check(
+      composeSource.includes('AI_PRD_CONTROLLED_PHONE_NUMBER: ${CONTROLLED_TEST_PHONE_NUMBER:-}'),
+      'Compose debe propagar la allowlist privada al Code node'
+    );
+    check(
+      envExampleSource.includes('AI_PRD_CONVERSATION_MODE=legacy'),
+      '.env.example debe documentar el kill switch en legacy'
+    );
     const request = await runCode('Build AI Request', {
       ...readSample('ai_greeting.sample.json'),
       external_message_id: 'wamid-semantic-v2',
@@ -316,6 +330,7 @@ node <<'NODE'
       pending_question_key: 'quantity',
       turn_policy: {
         version: 'ai_prd_turn_policy/v2',
+        mode: 'enforce',
         objective: { key: 'quantity', mode: 'ask' },
         allowed_state_fields: ['measurements', 'modality'],
         allowed_state_mappings: [
@@ -326,7 +341,7 @@ node <<'NODE'
         effect_permissions: { create_lead: false, handoff: false },
       },
       turn_policy_digest: digest,
-    }, {}, { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' });
+    }, {}, { ...env, AI_PRD_CONVERSATION_MODE: 'legacy' });
 
     const schema = request.response_schema || {};
     const properties = schema.properties || {};
@@ -371,6 +386,18 @@ node <<'NODE'
     check(
       request.ai_request.input[0].content.includes('allowed_state_mappings'),
       'el prompt debe exigir pares concept→field explícitos de la policy'
+    );
+    const legacyRequest = await runCode('Build AI Request', {
+      ...readSample('ai_greeting.sample.json'),
+      turn_policy: {
+        ...request.ai_context.turn_policy,
+        mode: 'legacy',
+      },
+      turn_policy_digest: digest,
+    }, {}, { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' });
+    check(
+      legacyRequest.response_schema?.properties?.confirmation_status,
+      'Build debe obedecer policy.mode=legacy aunque el env solicite enforce'
     );
 
     const exactReply = '  Entendí 6 ml y solo material. ¿Confirmas?  ';

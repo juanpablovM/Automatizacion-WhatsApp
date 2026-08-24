@@ -1,6 +1,16 @@
 const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const asArray = (value) => Array.isArray(value) ? value : [];
 const safe = (value, fallback = '') => String(value ?? fallback).trim();
+const normalizePhone = (value) => safe(value).replace(/\D/g, '');
+
+const resolveConversationMode = (row = {}, env = {}) => {
+  const requestedMode = safe(env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();
+  if (!['shadow', 'enforce'].includes(requestedMode)) return 'legacy';
+  const controlledPhone = normalizePhone(env.AI_PRD_CONTROLLED_PHONE_NUMBER);
+  const conversationPhone = normalizePhone(row.phone_number);
+  if (!controlledPhone || !conversationPhone || conversationPhone !== controlledPhone) return 'legacy';
+  return requestedMode;
+};
 
 const canonicalize = (value) => {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -111,8 +121,7 @@ const compileTurnPolicy = (row = {}, env = {}) => {
   const objectiveState = asObject(asObject(asObject(qualificationContext._conversation_control).objectives)[objectiveKey]);
   const noProgressCount = Math.max(0, Number(objectiveState.no_progress_count) || 0);
   const missing = asArray(row.commercial_missing_fields).map((field) => safe(field)).filter(Boolean);
-  const modeCandidate = safe(env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();
-  const mode = ['legacy', 'shadow', 'enforce'].includes(modeCandidate) ? modeCandidate : 'legacy';
+  const mode = resolveConversationMode(row, env);
   const catalogItems = asArray(asObject(row.commercial_context).catalog_items)
     .filter((item) => item?.is_active !== false)
     .map((item) => ({ id: item?.id ?? null, sku: safe(item?.sku), name: safe(item?.name), aliases: asArray(item?.service_keywords) }));
@@ -159,6 +168,8 @@ if (typeof module !== 'undefined' && module.exports) {
     canonicalJson,
     sha256,
     allowedStateMappings,
+    resolveConversationMode,
+    normalizePhone,
     ALLOWED_STATE_FIELDS,
     ALLOWED_DIALOGUE_ACTIONS,
   };

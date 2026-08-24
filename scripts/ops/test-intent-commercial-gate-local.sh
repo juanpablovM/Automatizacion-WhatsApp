@@ -692,10 +692,16 @@ node <<'NODE'
         'semantic v2 no debe conservar una segunda tabla manual de claim guards'
       );
 
-      const policyEnv = { ...env, AI_PRD_CONVERSATION_MODE: 'enforce' };
+      const controlledPhone = '56900000000';
+      const policyEnv = {
+        ...env,
+        AI_PRD_CONVERSATION_MODE: 'enforce',
+        AI_PRD_CONTROLLED_PHONE_NUMBER: controlledPhone,
+      };
       const compile = (text, objective = 'quantity', overrides = {}) => compileTurnPolicy({
         conversation_id: 153,
         inbound_event_id: 588,
+        phone_number: controlledPhone,
         external_message_id: 'wamid-semantic-gate',
         text_body: text,
         pending_question_key: objective,
@@ -739,6 +745,39 @@ node <<'NODE'
       });
 
       expectEqual(compile('6 ml').turn_policy.version, 'ai_prd_turn_policy/v2', 'policy debe usar v2');
+      expectEqual(compile('6 ml').turn_policy.mode, 'enforce', 'telefono controlado habilita enforce');
+      expectEqual(
+        compile('6 ml', 'quantity', { phone_number: '56911111111' }).turn_policy.mode,
+        'legacy',
+        'telefono fuera de allowlist debe permanecer en legacy'
+      );
+      expectEqual(
+        compileTurnPolicy({
+          phone_number: controlledPhone,
+          external_message_id: 'wamid-no-scope',
+          text_body: '6 ml',
+          pending_question_key: 'quantity',
+          qualification_context: {},
+          commercial_missing_fields: ['quantity'],
+        }, { AI_PRD_CONVERSATION_MODE: 'enforce' }).turn_policy.mode,
+        'legacy',
+        'modo no legacy sin allowlist debe fallar cerrado'
+      );
+      expectEqual(
+        compileTurnPolicy({
+          phone_number: `+56 9 0000 0000`,
+          external_message_id: 'wamid-normalized-phone',
+          text_body: '6 ml',
+          pending_question_key: 'quantity',
+          qualification_context: {},
+          commercial_missing_fields: ['quantity'],
+        }, {
+          AI_PRD_CONVERSATION_MODE: 'shadow',
+          AI_PRD_CONTROLLED_PHONE_NUMBER: controlledPhone,
+        }).turn_policy.mode,
+        'shadow',
+        'telefono controlado debe compararse normalizado'
+      );
       expectEqual(compile('6 ml').turn_policy_digest.length, 64, 'policy debe exponer digest SHA-256');
       expectIncludes(compile('6 ml').turn_policy.allowed_state_fields, 'measurements', 'policy permite measurements');
       assert(

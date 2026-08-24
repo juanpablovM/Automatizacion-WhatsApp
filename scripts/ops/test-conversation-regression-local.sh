@@ -281,14 +281,14 @@ const semanticBuiltAi = (await buildAiFn([{ json: {
   external_message_id: 'wamid-semantic-regression', service: 'Placas', city: 'Santiago',
   requirement: 'Cotizar placas', recent_messages: [], qualification_context: {},
   turn_policy: {
-    version: 'ai_prd_turn_policy/v2', objective: { key: 'quantity', mode: 'ask' },
+    version: 'ai_prd_turn_policy/v2', mode: 'enforce', objective: { key: 'quantity', mode: 'ask' },
     allowed_state_fields: ['measurements'], allowed_dialogue_actions: ['confirm'],
     effect_permissions: { create_lead: false, handoff: false },
   },
   turn_policy_digest: 'a'.repeat(64),
 } }], {
   AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
-  AI_PRD_CONVERSATION_MODE: 'enforce',
+  AI_PRD_CONVERSATION_MODE: 'legacy',
 }))[0].json;
 assertStrictSchema(semanticBuiltAi.response_schema);
 if (semanticBuiltAi.response_schema.properties.version?.const !== 'ai_semantic_proposal/v2') {

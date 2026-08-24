@@ -20,7 +20,12 @@
     },
     {
       "sourceWorkflow": "WA - Conversation Orchestrator",
-      "node": "Execute AI Lead Qualification",
+      "node": "Execute AI Proposal",
+      "targetWorkflow": "AI - Lead Qualification Assistant"
+    },
+    {
+      "sourceWorkflow": "WA - Conversation Orchestrator",
+      "node": "Execute AI Repair",
       "targetWorkflow": "AI - Lead Qualification Assistant"
     },
     {
