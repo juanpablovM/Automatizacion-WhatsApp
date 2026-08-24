@@ -77,6 +77,8 @@ const acceptedFacts = (row, qualificationContext) => Object.entries({
 const compileTurnPolicy = (row = {}, env = {}) => {
   const qualificationContext = asObject(row.qualification_context);
   const objectiveKey = safe(row.pending_question_key, 'none');
+  const objectiveState = asObject(asObject(asObject(qualificationContext._conversation_control).objectives)[objectiveKey]);
+  const noProgressCount = Math.max(0, Number(objectiveState.no_progress_count) || 0);
   const missing = asArray(row.commercial_missing_fields).map((field) => safe(field)).filter(Boolean);
   const modeCandidate = safe(env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();
   const mode = ['legacy', 'shadow', 'enforce'].includes(modeCandidate) ? modeCandidate : 'legacy';
@@ -93,17 +95,24 @@ const compileTurnPolicy = (row = {}, env = {}) => {
     },
     accepted_facts: acceptedFacts(row, qualificationContext),
     unresolved_objectives: [...new Set(missing.length ? missing : objectiveKey === 'none' ? [] : [objectiveKey])],
-    objective: { key: objectiveKey, mode: objectiveKey === 'none' ? 'respond' : 'ask' },
+    objective: { key: objectiveKey, mode: objectiveKey === 'none' ? 'respond' : 'ask', no_progress_count: noProgressCount },
     catalog: catalogItems,
     modality_synonyms: { material: ['solo material', 'solo el material', 'suministro'] },
     allowed_state_fields: [...ALLOWED_STATE_FIELDS],
     allowed_dialogue_actions: [...ALLOWED_DIALOGUE_ACTIONS],
     forbidden_rule_ids: ['NO_INVENT_PRICE', 'NO_CONFIRM_STOCK', 'NO_CONFIRM_PAYMENT', 'NO_DISCOUNT', 'NO_PROMISE_DELIVERY', 'NO_PROMISE_INSTALLATION'],
-    effect_permissions: { create_lead: false, handoff: false },
+    effect_permissions: { create_lead: false, handoff: noProgressCount >= 2 },
   };
   const turnPolicyCanonicalJson = canonicalJson(turnPolicy);
   return {
     ...row,
+    pre_turn_snapshot: row.pre_turn_snapshot || {
+      service: row.service ?? null,
+      city: row.city ?? null,
+      requirement: row.requirement ?? null,
+      confirmation_status: row.confirmation_status ?? 'none',
+      qualification_context: JSON.parse(JSON.stringify(qualificationContext)),
+    },
     turn_policy: turnPolicy,
     turn_policy_canonical_json: turnPolicyCanonicalJson,
     turn_policy_digest: sha256(turnPolicyCanonicalJson),

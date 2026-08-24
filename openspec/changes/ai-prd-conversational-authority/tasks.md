@@ -39,15 +39,15 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3: Workflow Safety RED
 
-- [ ] 3.1 Add failing initial-repair, second-failure, provider-outage, immutable-state, shadow-side-effect, and idempotent-handoff cases to `test-handoff-routing-local.sh`.
-- [ ] 3.2 Add failing objective-count 2/3, legacy-resume, MINVU, Suministro, and flexible-amount cases to regression samples and harness.
-- [ ] 3.3 Run both suites and record expected RED failures before workflow wiring.
+- [x] 3.1 Add failing initial-repair, second-failure, provider-outage, immutable-state, shadow-side-effect, and idempotent-handoff cases to `test-handoff-routing-local.sh`.
+- [x] 3.2 Add failing objective-count 2/3, legacy-resume, MINVU, Suministro, and flexible-amount cases to regression samples and harness.
+- [x] 3.3 Run both suites and record expected RED failures before workflow wiring.
 
 ## Phase 4: Workflow Integration
 
-- [ ] 4.1 Create `build-contingency-handoff.js` preserving pre-turn facts while requesting durable `escalation_required` handoff.
-- [ ] 4.2 Wire one repair, provider contingency, projection, authorization, objective counts, and `legacy|shadow|enforce` in both workflow JSON files.
-- [ ] 4.3 Make Phase 3 suites green and prove shadow mode performs no v2 persistence, delivery, or effects.
+- [x] 4.1 Create `build-contingency-handoff.js` preserving pre-turn facts while requesting durable `escalation_required` handoff.
+- [x] 4.2 Wire one repair, provider contingency, projection, authorization, objective counts, and `legacy|shadow|enforce` in both workflow JSON files.
+- [x] 4.3 Make Phase 3 suites green and prove shadow mode performs no v2 persistence, delivery, or effects.
 
 ## Phase 5: Refactor and Verification
 

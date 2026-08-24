@@ -128,6 +128,7 @@ const currentContext = {
   commercial_context_counts: commercialContextCounts,
   turn_policy: compactObject(pickMerged(row.turn_policy, row.turn_policy_1)),
   turn_policy_digest: safe(pickMerged(row.turn_policy_digest, row.turn_policy_digest_1)),
+  repair_context: compactObject(pickMerged(row.repair_context, row.repair_context_1)),
 };
 
 const responseSchema = {
@@ -795,6 +796,7 @@ const semanticSystemPrompt = [
   'state_patch solo propone persistencia allowlisted y siempre referencia una observacion. No ejecutes efectos ni describas procesos internos.',
   'Los conceptos nuevos pueden permanecer sin state_patch y guiar una respuesta valida.',
   'Si existe ambiguedad, usa ask_clarification y no propongas persistencia para el hecho ambiguo.',
+  'Si current_context.repair_context.attempt es 1, corrige solo los rule_errors informados y conserva exactamente el mismo contract_digest; no solicites otro intento.',
   'reply_text es la respuesta completa al cliente y se enviara sin reescritura cuando la propuesta sea autorizada.',
 ].join('\n');
 const systemPromptText = semanticMode ? semanticSystemPrompt : systemPrompt;

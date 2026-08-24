@@ -70,8 +70,8 @@
         }
       },
       "position": [
-        2080,
-        300
+        4180,
+        40
       ]
     },
     {
@@ -92,8 +92,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        2340,
-        300
+        4620,
+        100
       ]
     },
     {
@@ -106,8 +106,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2600,
-        300
+        4840,
+        100
       ]
     },
     {
@@ -129,8 +129,8 @@
       "typeVersion": 1.1,
       "continueOnFail": true,
       "position": [
-        1040,
-        160
+        1540,
+        -100
       ]
     },
     {
@@ -151,8 +151,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1300,
-        260
+        1760,
+        300
       ]
     },
     {
@@ -165,8 +165,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1560,
-        260
+        1980,
+        300
       ]
     },
     {
@@ -175,8 +175,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2340,
-        120
+        4400,
+        40
       ],
       "parameters": {
         "jsCode": "const item = items[0]?.json ?? {};\nconst shouldCreateLead = Boolean(item.should_create_lead);\nif (!shouldCreateLead) {\n  return [{ json: { ...item, quotation_data: null } }];\n}\nconst service = item.service || '';\nconst city = item.city || '';\nconst requirement = item.requirement || '';\nconst modality = item.modality || 'unknown';\nconst custType = item.customer_type || '';\nconst leadQ = item.lead_quality || '';\nconst modalNames = {\n  material: 'Solo material',\n  pickup: 'Retiro en tienda',\n  delivery: 'Despacho a domicilio',\n  installation: 'Instalacion completa',\n  post_sale: 'Postventa',\n  claim: 'Reclamo',\n};\nconst quoteLines = [\n  '*** COTIZACION HORMIGLASS ***',\n  '',\n  'Producto/Servicio: ' + (service || 'Por definir'),\n  'Ciudad: ' + (city || 'Por definir'),\n  'Requerimiento: ' + (requirement || 'Por definir'),\n  'Modalidad: ' + (modalNames[modality] || modality),\n  '',\n  '---',\n  'Esta cotizacion esta siendo preparada por una ejecutiva.',\n  'Te contactaremos pronto con los detalles y precios.',\n  '',\n  'Hormiglass - Soluciones en hormigon',\n].join('\\n');\nconst quotationData = {\n  quotation_text: quoteLines,\n  service, city, requirement, modality,\n  customer_type: custType,\n  lead_quality: leadQ,\n  conv_status_code: item.conversation_status_code || '',\n};\nreturn [{ json: { ...item, quotation_data: quotationData } }];"
@@ -192,14 +192,14 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1460,
-        380
+        3960,
+        100
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\n\nconst canonicalize = (value) => {\n  if (Array.isArray(value)) return value.map(canonicalize);\n  if (!value || typeof value !== 'object') return value;\n  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));\n};\nconst canonicalJson = (value) => JSON.stringify(canonicalize(value));\n\n// Synchronous SHA-256 keeps the policy compiler portable inside n8n Code nodes.\nconst sha256 = (value) => {\n  let bytes = unescape(encodeURIComponent(String(value)));\n  const bitLength = bytes.length * 8;\n  const hash = [];\n  const constants = [];\n  const isComposite = {};\n  const rotate = (number, bits) => (number >>> bits) | (number << (32 - bits));\n  for (let candidate = 2; constants.length < 64; candidate += 1) {\n    if (isComposite[candidate]) continue;\n    for (let multiple = candidate; multiple < 313; multiple += candidate) isComposite[multiple] = true;\n    if (hash.length < 8) hash.push((Math.sqrt(candidate) * 0x100000000) | 0);\n    constants.push((Math.cbrt(candidate) * 0x100000000) | 0);\n  }\n  bytes += '\\x80';\n  while (bytes.length % 64 !== 56) bytes += '\\x00';\n  const words = [];\n  for (let index = 0; index < bytes.length; index += 1) {\n    words[index >> 2] |= bytes.charCodeAt(index) << ((3 - index) % 4) * 8;\n  }\n  words.push((bitLength / 0x100000000) | 0, bitLength);\n  for (let offset = 0; offset < words.length; offset += 16) {\n    const schedule = words.slice(offset, offset + 16);\n    const previous = hash.slice(0, 8);\n    let working = hash.slice(0, 8);\n    for (let round = 0; round < 64; round += 1) {\n      const w15 = schedule[round - 15];\n      const w2 = schedule[round - 2];\n      const word = round < 16 ? schedule[round] : schedule[round] = (\n        schedule[round - 16]\n        + (rotate(w15, 7) ^ rotate(w15, 18) ^ (w15 >>> 3))\n        + schedule[round - 7]\n        + (rotate(w2, 17) ^ rotate(w2, 19) ^ (w2 >>> 10))\n      ) | 0;\n      const a = working[0];\n      const e = working[4];\n      const temp1 = (working[7] + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25))\n        + ((e & working[5]) ^ (~e & working[6])) + constants[round] + word) | 0;\n      const temp2 = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22))\n        + ((a & working[1]) ^ (a & working[2]) ^ (working[1] & working[2]))) | 0;\n      working = [(temp1 + temp2) | 0, working[0], working[1], working[2], (working[3] + temp1) | 0, working[4], working[5], working[6]];\n    }\n    for (let index = 0; index < 8; index += 1) hash[index] = (previous[index] + working[index]) | 0;\n  }\n  return hash.map((word) => (word >>> 0).toString(16).padStart(8, '0')).join('');\n};\n\nconst ALLOWED_STATE_FIELDS = [\n  'name', 'product', 'commune', 'quantity', 'measurements', 'use_case', 'modality',\n  'urgency', 'desired_date', 'photos', 'terrain', 'truck_access', 'debris_removal',\n  'customer_type', 'company', 'company_rut', 'contact_name', 'contact_role', 'email',\n  'purchase_order', 'invoice_required', 'address', 'access_restrictions',\n  'reception_contact', 'sale_number', 'purchase_date', 'issue_description',\n  'payment_amount', 'payment_method', 'quote_number', 'service', 'city', 'requirement',\n];\nconst ALLOWED_DIALOGUE_ACTIONS = ['answer', 'ask', 'ask_clarification', 'confirm', 'handoff'];\n\nconst acceptedFacts = (row, qualificationContext) => Object.entries({\n  service: row.service,\n  city: row.city,\n  requirement: row.requirement,\n  ...qualificationContext,\n}).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')\n  .map(([field, value]) => ({ field, value }));\n\nconst compileTurnPolicy = (row = {}, env = {}) => {\n  const qualificationContext = asObject(row.qualification_context);\n  const objectiveKey = safe(row.pending_question_key, 'none');\n  const missing = asArray(row.commercial_missing_fields).map((field) => safe(field)).filter(Boolean);\n  const modeCandidate = safe(env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();\n  const mode = ['legacy', 'shadow', 'enforce'].includes(modeCandidate) ? modeCandidate : 'legacy';\n  const catalogItems = asArray(asObject(row.commercial_context).catalog_items)\n    .filter((item) => item?.is_active !== false)\n    .map((item) => ({ id: item?.id ?? null, sku: safe(item?.sku), name: safe(item?.name), aliases: asArray(item?.service_keywords) }));\n  const turnPolicy = {\n    version: 'ai_prd_turn_policy/v2',\n    turn_id: safe(row.inbound_event_id || row.external_message_id || row.conversation_id || 'unknown'),\n    mode,\n    message: {\n      id: safe(row.external_message_id || row.inbound_event_id || 'unknown'),\n      text: String(row.text_body ?? row.message_current ?? ''),\n    },\n    accepted_facts: acceptedFacts(row, qualificationContext),\n    unresolved_objectives: [...new Set(missing.length ? missing : objectiveKey === 'none' ? [] : [objectiveKey])],\n    objective: { key: objectiveKey, mode: objectiveKey === 'none' ? 'respond' : 'ask' },\n    catalog: catalogItems,\n    modality_synonyms: { material: ['solo material', 'solo el material', 'suministro'] },\n    allowed_state_fields: [...ALLOWED_STATE_FIELDS],\n    allowed_dialogue_actions: [...ALLOWED_DIALOGUE_ACTIONS],\n    forbidden_rule_ids: ['NO_INVENT_PRICE', 'NO_CONFIRM_STOCK', 'NO_CONFIRM_PAYMENT', 'NO_DISCOUNT', 'NO_PROMISE_DELIVERY', 'NO_PROMISE_INSTALLATION'],\n    effect_permissions: { create_lead: false, handoff: false },\n  };\n  const turnPolicyCanonicalJson = canonicalJson(turnPolicy);\n  return {\n    ...row,\n    turn_policy: turnPolicy,\n    turn_policy_canonical_json: turnPolicyCanonicalJson,\n    turn_policy_digest: sha256(turnPolicyCanonicalJson),\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { compileTurnPolicy, canonicalJson, sha256, ALLOWED_STATE_FIELDS, ALLOWED_DIALOGUE_ACTIONS };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: compileTurnPolicy(item?.json ?? {}, typeof $env === 'undefined' ? {} : $env) }));\n}\n"
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\n\nconst canonicalize = (value) => {\n  if (Array.isArray(value)) return value.map(canonicalize);\n  if (!value || typeof value !== 'object') return value;\n  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));\n};\nconst canonicalJson = (value) => JSON.stringify(canonicalize(value));\n\n// Synchronous SHA-256 keeps the policy compiler portable inside n8n Code nodes.\nconst sha256 = (value) => {\n  let bytes = unescape(encodeURIComponent(String(value)));\n  const bitLength = bytes.length * 8;\n  const hash = [];\n  const constants = [];\n  const isComposite = {};\n  const rotate = (number, bits) => (number >>> bits) | (number << (32 - bits));\n  for (let candidate = 2; constants.length < 64; candidate += 1) {\n    if (isComposite[candidate]) continue;\n    for (let multiple = candidate; multiple < 313; multiple += candidate) isComposite[multiple] = true;\n    if (hash.length < 8) hash.push((Math.sqrt(candidate) * 0x100000000) | 0);\n    constants.push((Math.cbrt(candidate) * 0x100000000) | 0);\n  }\n  bytes += '\\x80';\n  while (bytes.length % 64 !== 56) bytes += '\\x00';\n  const words = [];\n  for (let index = 0; index < bytes.length; index += 1) {\n    words[index >> 2] |= bytes.charCodeAt(index) << ((3 - index) % 4) * 8;\n  }\n  words.push((bitLength / 0x100000000) | 0, bitLength);\n  for (let offset = 0; offset < words.length; offset += 16) {\n    const schedule = words.slice(offset, offset + 16);\n    const previous = hash.slice(0, 8);\n    let working = hash.slice(0, 8);\n    for (let round = 0; round < 64; round += 1) {\n      const w15 = schedule[round - 15];\n      const w2 = schedule[round - 2];\n      const word = round < 16 ? schedule[round] : schedule[round] = (\n        schedule[round - 16]\n        + (rotate(w15, 7) ^ rotate(w15, 18) ^ (w15 >>> 3))\n        + schedule[round - 7]\n        + (rotate(w2, 17) ^ rotate(w2, 19) ^ (w2 >>> 10))\n      ) | 0;\n      const a = working[0];\n      const e = working[4];\n      const temp1 = (working[7] + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25))\n        + ((e & working[5]) ^ (~e & working[6])) + constants[round] + word) | 0;\n      const temp2 = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22))\n        + ((a & working[1]) ^ (a & working[2]) ^ (working[1] & working[2]))) | 0;\n      working = [(temp1 + temp2) | 0, working[0], working[1], working[2], (working[3] + temp1) | 0, working[4], working[5], working[6]];\n    }\n    for (let index = 0; index < 8; index += 1) hash[index] = (previous[index] + working[index]) | 0;\n  }\n  return hash.map((word) => (word >>> 0).toString(16).padStart(8, '0')).join('');\n};\n\nconst ALLOWED_STATE_FIELDS = [\n  'name', 'product', 'commune', 'quantity', 'measurements', 'use_case', 'modality',\n  'urgency', 'desired_date', 'photos', 'terrain', 'truck_access', 'debris_removal',\n  'customer_type', 'company', 'company_rut', 'contact_name', 'contact_role', 'email',\n  'purchase_order', 'invoice_required', 'address', 'access_restrictions',\n  'reception_contact', 'sale_number', 'purchase_date', 'issue_description',\n  'payment_amount', 'payment_method', 'quote_number', 'service', 'city', 'requirement',\n];\nconst ALLOWED_DIALOGUE_ACTIONS = ['answer', 'ask', 'ask_clarification', 'confirm', 'handoff'];\n\nconst acceptedFacts = (row, qualificationContext) => Object.entries({\n  service: row.service,\n  city: row.city,\n  requirement: row.requirement,\n  ...qualificationContext,\n}).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')\n  .map(([field, value]) => ({ field, value }));\n\nconst compileTurnPolicy = (row = {}, env = {}) => {\n  const qualificationContext = asObject(row.qualification_context);\n  const objectiveKey = safe(row.pending_question_key, 'none');\n  const objectiveState = asObject(asObject(asObject(qualificationContext._conversation_control).objectives)[objectiveKey]);\n  const noProgressCount = Math.max(0, Number(objectiveState.no_progress_count) || 0);\n  const missing = asArray(row.commercial_missing_fields).map((field) => safe(field)).filter(Boolean);\n  const modeCandidate = safe(env.AI_PRD_CONVERSATION_MODE, 'legacy').toLowerCase();\n  const mode = ['legacy', 'shadow', 'enforce'].includes(modeCandidate) ? modeCandidate : 'legacy';\n  const catalogItems = asArray(asObject(row.commercial_context).catalog_items)\n    .filter((item) => item?.is_active !== false)\n    .map((item) => ({ id: item?.id ?? null, sku: safe(item?.sku), name: safe(item?.name), aliases: asArray(item?.service_keywords) }));\n  const turnPolicy = {\n    version: 'ai_prd_turn_policy/v2',\n    turn_id: safe(row.inbound_event_id || row.external_message_id || row.conversation_id || 'unknown'),\n    mode,\n    message: {\n      id: safe(row.external_message_id || row.inbound_event_id || 'unknown'),\n      text: String(row.text_body ?? row.message_current ?? ''),\n    },\n    accepted_facts: acceptedFacts(row, qualificationContext),\n    unresolved_objectives: [...new Set(missing.length ? missing : objectiveKey === 'none' ? [] : [objectiveKey])],\n    objective: { key: objectiveKey, mode: objectiveKey === 'none' ? 'respond' : 'ask', no_progress_count: noProgressCount },\n    catalog: catalogItems,\n    modality_synonyms: { material: ['solo material', 'solo el material', 'suministro'] },\n    allowed_state_fields: [...ALLOWED_STATE_FIELDS],\n    allowed_dialogue_actions: [...ALLOWED_DIALOGUE_ACTIONS],\n    forbidden_rule_ids: ['NO_INVENT_PRICE', 'NO_CONFIRM_STOCK', 'NO_CONFIRM_PAYMENT', 'NO_DISCOUNT', 'NO_PROMISE_DELIVERY', 'NO_PROMISE_INSTALLATION'],\n    effect_permissions: { create_lead: false, handoff: noProgressCount >= 2 },\n  };\n  const turnPolicyCanonicalJson = canonicalJson(turnPolicy);\n  return {\n    ...row,\n    pre_turn_snapshot: row.pre_turn_snapshot || {\n      service: row.service ?? null,\n      city: row.city ?? null,\n      requirement: row.requirement ?? null,\n      confirmation_status: row.confirmation_status ?? 'none',\n      qualification_context: JSON.parse(JSON.stringify(qualificationContext)),\n    },\n    turn_policy: turnPolicy,\n    turn_policy_canonical_json: turnPolicyCanonicalJson,\n    turn_policy_digest: sha256(turnPolicyCanonicalJson),\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { compileTurnPolicy, canonicalJson, sha256, ALLOWED_STATE_FIELDS, ALLOWED_DIALOGUE_ACTIONS };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: compileTurnPolicy(item?.json ?? {}, typeof $env === 'undefined' ? {} : $env) }));\n}\n"
       },
       "id": "d1111111-1111-4111-8111-111111111111",
       "name": "Compile Turn Policy",
@@ -213,29 +213,345 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst error = (code, path, detail = null) => ({ code, path, detail });\n\nconst utf8Slice = (text, start, end) => {\n  const bytes = typeof Buffer !== 'undefined'\n    ? Buffer.from(String(text), 'utf8')\n    : new TextEncoder().encode(String(text));\n  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > bytes.length) return null;\n  if (typeof Buffer !== 'undefined') return bytes.subarray(start, end).toString('utf8');\n  return new TextDecoder().decode(bytes.slice(start, end));\n};\n\nconst validateAiProposal = (row = {}) => {\n  const policy = asObject(row.turn_policy);\n  const proposal = asObject(row.ai_proposal);\n  const errors = [];\n  if (policy.version !== 'ai_prd_turn_policy/v2') errors.push(error('unsupported_policy_version', 'turn_policy.version'));\n  if (proposal.version !== 'ai_semantic_proposal/v2') errors.push(error('unsupported_proposal_version', 'ai_proposal.version'));\n  if (proposal.contract_digest !== row.turn_policy_digest) errors.push(error('contract_digest_mismatch', 'ai_proposal.contract_digest'));\n  if (typeof proposal.reply_text !== 'string') errors.push(error('reply_text_required', 'ai_proposal.reply_text'));\n  if (!asArray(policy.allowed_dialogue_actions).includes(proposal.dialogue_action)) {\n    errors.push(error('dialogue_action_not_allowed', 'ai_proposal.dialogue_action'));\n  }\n\n  const sourceMessage = asObject(policy.message);\n  const seenIds = new Set();\n  const acceptedObservations = [];\n  for (const [index, candidate] of asArray(proposal.observations).entries()) {\n    const observation = asObject(candidate);\n    const id = safe(observation.id);\n    const evidence = asObject(observation.evidence);\n    const path = `ai_proposal.observations[${index}]`;\n    let accepted = true;\n    if (!id || seenIds.has(id)) {\n      errors.push(error(id ? 'duplicate_observation_id' : 'observation_id_required', `${path}.id`));\n      accepted = false;\n    }\n    seenIds.add(id);\n    if (!safe(observation.concept)) {\n      errors.push(error('observation_concept_required', `${path}.concept`));\n      accepted = false;\n    }\n    const quotedBytes = utf8Slice(sourceMessage.text, evidence.start, evidence.end);\n    if (safe(evidence.message_id) !== safe(sourceMessage.id)) {\n      errors.push(error('evidence_message_mismatch', `${path}.evidence.message_id`));\n      accepted = false;\n    }\n    if (quotedBytes === null || quotedBytes !== String(evidence.quote ?? '')) {\n      errors.push(error('invalid_evidence_offsets', `${path}.evidence`));\n      accepted = false;\n    }\n    const confidence = Number(observation.confidence);\n    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {\n      errors.push(error('invalid_observation_confidence', `${path}.confidence`));\n      accepted = false;\n    }\n    if (accepted) acceptedObservations.push(observation);\n  }\n\n  const observationById = new Map(acceptedObservations.map((observation) => [safe(observation.id), observation]));\n  const allowedFields = new Set(asArray(policy.allowed_state_fields));\n  const authorizedStatePatch = [];\n  for (const [index, candidate] of asArray(proposal.state_patch).entries()) {\n    const patch = asObject(candidate);\n    const path = `ai_proposal.state_patch[${index}]`;\n    let accepted = true;\n    if (!allowedFields.has(patch.field)) {\n      errors.push(error('state_field_not_allowed', `${path}.field`, patch.field));\n      accepted = false;\n    }\n    if (!observationById.has(safe(patch.observation_id))) {\n      errors.push(error('observation_reference_not_found', `${path}.observation_id`, patch.observation_id));\n      accepted = false;\n    }\n    if (accepted) authorizedStatePatch.push({ field: patch.field, observation_id: patch.observation_id });\n  }\n\n  const permissions = asObject(policy.effect_permissions);\n  const authorizedEffects = [];\n  const effectKeys = new Set();\n  for (const [index, candidate] of asArray(proposal.requested_effects).entries()) {\n    const effect = asObject(candidate);\n    const type = safe(effect.type);\n    const path = `ai_proposal.requested_effects[${index}]`;\n    if (!['create_lead', 'handoff'].includes(type) || permissions[type] !== true) {\n      errors.push(error('effect_not_allowed', `${path}.type`, type));\n      continue;\n    }\n    const key = safe(effect.idempotency_key, `${type}:${row.turn_policy_digest}`);\n    if (effectKeys.has(key)) continue;\n    effectKeys.add(key);\n    authorizedEffects.push({ ...effect, type, idempotency_key: key });\n  }\n\n  return {\n    valid: errors.length === 0,\n    rule_errors: errors,\n    accepted_observations: acceptedObservations,\n    authorized_state_patch: errors.length === 0 ? authorizedStatePatch : [],\n    authorized_effects: errors.length === 0 ? authorizedEffects : [],\n    outcome: errors.length === 0 ? 'authorized' : 'repair_required',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { validateAiProposal, utf8Slice };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: { ...item.json, ai_validation: validateAiProposal(item.json) } }));\n}\n"
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst error = (code, path, detail = null) => ({ code, path, detail });\n\nconst utf8Slice = (text, start, end) => {\n  const bytes = typeof Buffer !== 'undefined'\n    ? Buffer.from(String(text), 'utf8')\n    : new TextEncoder().encode(String(text));\n  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > bytes.length) return null;\n  if (typeof Buffer !== 'undefined') return bytes.subarray(start, end).toString('utf8');\n  return new TextDecoder().decode(bytes.slice(start, end));\n};\n\nconst validateAiProposal = (row = {}) => {\n  const policy = asObject(row.turn_policy);\n  const proposal = asObject(row.ai_proposal);\n  const errors = [];\n  if (policy.version !== 'ai_prd_turn_policy/v2') errors.push(error('unsupported_policy_version', 'turn_policy.version'));\n  if (proposal.version !== 'ai_semantic_proposal/v2') errors.push(error('unsupported_proposal_version', 'ai_proposal.version'));\n  if (proposal.contract_digest !== row.turn_policy_digest) errors.push(error('contract_digest_mismatch', 'ai_proposal.contract_digest'));\n  if (typeof proposal.reply_text !== 'string') errors.push(error('reply_text_required', 'ai_proposal.reply_text'));\n  if (!asArray(policy.allowed_dialogue_actions).includes(proposal.dialogue_action)) {\n    errors.push(error('dialogue_action_not_allowed', 'ai_proposal.dialogue_action'));\n  }\n\n  const sourceMessage = asObject(policy.message);\n  const activeCatalogIds = new Set(asArray(policy.catalog)\n    .filter((item) => item?.is_active !== false)\n    .map((item) => safe(item?.id))\n    .filter(Boolean));\n  const seenIds = new Set();\n  const acceptedObservations = [];\n  for (const [index, candidate] of asArray(proposal.observations).entries()) {\n    const observation = asObject(candidate);\n    const id = safe(observation.id);\n    const evidence = asObject(observation.evidence);\n    const path = `ai_proposal.observations[${index}]`;\n    let accepted = true;\n    if (!id || seenIds.has(id)) {\n      errors.push(error(id ? 'duplicate_observation_id' : 'observation_id_required', `${path}.id`));\n      accepted = false;\n    }\n    seenIds.add(id);\n    if (!safe(observation.concept)) {\n      errors.push(error('observation_concept_required', `${path}.concept`));\n      accepted = false;\n    }\n    const quotedBytes = utf8Slice(sourceMessage.text, evidence.start, evidence.end);\n    if (safe(evidence.message_id) !== safe(sourceMessage.id)) {\n      errors.push(error('evidence_message_mismatch', `${path}.evidence.message_id`));\n      accepted = false;\n    }\n    if (quotedBytes === null || quotedBytes !== String(evidence.quote ?? '')) {\n      errors.push(error('invalid_evidence_offsets', `${path}.evidence`));\n      accepted = false;\n    }\n    const confidence = Number(observation.confidence);\n    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {\n      errors.push(error('invalid_observation_confidence', `${path}.confidence`));\n      accepted = false;\n    }\n    if (accepted) acceptedObservations.push(observation);\n  }\n\n  const observationById = new Map(acceptedObservations.map((observation) => [safe(observation.id), observation]));\n  const allowedFields = new Set(asArray(policy.allowed_state_fields));\n  const authorizedStatePatch = [];\n  for (const [index, candidate] of asArray(proposal.state_patch).entries()) {\n    const patch = asObject(candidate);\n    const path = `ai_proposal.state_patch[${index}]`;\n    let accepted = true;\n    if (!allowedFields.has(patch.field)) {\n      errors.push(error('state_field_not_allowed', `${path}.field`, patch.field));\n      accepted = false;\n    }\n    if (!observationById.has(safe(patch.observation_id))) {\n      errors.push(error('observation_reference_not_found', `${path}.observation_id`, patch.observation_id));\n      accepted = false;\n    }\n    if (patch.field === 'product' && observationById.has(safe(patch.observation_id))) {\n      const grounding = asObject(observationById.get(safe(patch.observation_id)).grounding);\n      if (safe(grounding.kind) !== 'catalog_item' || !activeCatalogIds.has(safe(grounding.id))) {\n        errors.push(error('product_grounding_invalid', `${path}.observation_id`, grounding.id ?? null));\n        accepted = false;\n      }\n    }\n    if (accepted) authorizedStatePatch.push({ field: patch.field, observation_id: patch.observation_id });\n  }\n\n  const permissions = asObject(policy.effect_permissions);\n  const authorizedEffects = [];\n  const effectKeys = new Set();\n  for (const [index, candidate] of asArray(proposal.requested_effects).entries()) {\n    const effect = asObject(candidate);\n    const type = safe(effect.type);\n    const path = `ai_proposal.requested_effects[${index}]`;\n    if (!['create_lead', 'handoff'].includes(type) || permissions[type] !== true) {\n      errors.push(error('effect_not_allowed', `${path}.type`, type));\n      continue;\n    }\n    const key = safe(effect.idempotency_key, `${type}:${row.turn_policy_digest}`);\n    if (effectKeys.has(key)) continue;\n    effectKeys.add(key);\n    authorizedEffects.push({ ...effect, type, idempotency_key: key });\n  }\n\n  return {\n    valid: errors.length === 0,\n    rule_errors: errors,\n    accepted_observations: acceptedObservations,\n    authorized_state_patch: errors.length === 0 ? authorizedStatePatch : [],\n    authorized_effects: errors.length === 0 ? authorizedEffects : [],\n    outcome: errors.length === 0 ? 'authorized' : 'repair_required',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { validateAiProposal, utf8Slice };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: { ...item.json, ai_validation: validateAiProposal(item.json) } }));\n}\n"
       },
       "id": "d2222222-2222-4222-8222-222222222222",
       "name": "Validate AI Initial Proposal",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1560,
-        20
+        2160,
+        -80
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\n\nconst authorizeAiTurn = (row = {}) => {\n  const proposal = asObject(row.ai_proposal);\n  const validation = asObject(row.ai_validation);\n  const qualificationContext = { ...asObject(row.qualification_context) };\n  if (validation.valid !== true) {\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      ai_authorization_outcome: 'rejected',\n      authorized_effects: [],\n    };\n  }\n\n  const observations = new Map(asArray(validation.accepted_observations)\n    .map((observation) => [safe(observation?.id), observation]));\n  for (const patch of asArray(validation.authorized_state_patch)) {\n    const observation = observations.get(safe(patch?.observation_id));\n    if (!observation) continue;\n    qualificationContext[patch.field] = observation.raw_value;\n  }\n\n  const authorizedEffects = [];\n  const consumed = new Set();\n  for (const effect of asArray(validation.authorized_effects)) {\n    const key = safe(effect?.idempotency_key, `${safe(effect?.type)}:${row.turn_policy_digest}`);\n    if (!key || consumed.has(key)) continue;\n    consumed.add(key);\n    authorizedEffects.push({ ...effect, idempotency_key: key });\n  }\n\n  return {\n    ...row,\n    qualification_context: qualificationContext,\n    qualification_context_json: JSON.stringify(qualificationContext),\n    response_text: String(proposal.reply_text ?? ''),\n    reply_text: String(proposal.reply_text ?? ''),\n    dialogue_action: proposal.dialogue_action,\n    accepted_observations: asArray(validation.accepted_observations),\n    authorized_state_patch: asArray(validation.authorized_state_patch),\n    authorized_effects: authorizedEffects,\n    ai_authorization_outcome: 'authorized',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { authorizeAiTurn };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: authorizeAiTurn(item?.json ?? {}) }));\n}\n"
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst cloneObject = (value) => JSON.parse(JSON.stringify(asObject(value)));\nconst parseObject = (value) => {\n  if (typeof value !== 'string') return cloneObject(value);\n  try { return cloneObject(JSON.parse(value)); } catch (_error) { return {}; }\n};\n\nconst projectedValue = (field, observation) => {\n  if (field !== 'modality') return observation.raw_value;\n  const normalized = observation.normalized;\n  const candidate = typeof normalized === 'string' ? normalized : asObject(normalized).value;\n  return ['material', 'pickup', 'delivery', 'installation', 'post_sale', 'claim'].includes(candidate)\n    ? candidate\n    : observation.raw_value;\n};\n\nconst authorizeAiTurn = (row = {}) => {\n  const policy = asObject(row.turn_policy);\n  const proposal = asObject(row.ai_proposal);\n  const validation = asObject(row.ai_validation);\n  const qualificationContext = cloneObject(row.qualification_context);\n  const mode = safe(policy.mode, 'legacy');\n\n  if (policy.version !== 'ai_prd_turn_policy/v2' || mode === 'legacy') {\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      authorized_effects: [],\n      ai_authorization_outcome: 'legacy_passthrough',\n    };\n  }\n  if (validation.valid !== true) {\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      ai_authorization_outcome: 'rejected',\n      authorized_effects: [],\n    };\n  }\n  if (mode === 'shadow') {\n    const metadata = parseObject(row.metadata_json);\n    metadata.semantic_shadow = {\n      contract_digest: row.turn_policy_digest || null,\n      proposal_reply_differs: String(proposal.reply_text ?? '') !== String(row.response_text ?? ''),\n      proposed_patch_count: asArray(validation.authorized_state_patch).length,\n      proposed_effect_count: asArray(validation.authorized_effects).length,\n      validation_outcome: validation.outcome || 'authorized',\n    };\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      authorized_effects: [],\n      shadow_ai_proposal: proposal,\n      shadow_ai_validation: validation,\n      metadata_json: JSON.stringify(metadata),\n      ai_authorization_outcome: 'shadow_audited',\n    };\n  }\n\n  const observations = new Map(asArray(validation.accepted_observations)\n    .map((observation) => [safe(observation?.id), observation]));\n  const topLevelState = {};\n  for (const patch of asArray(validation.authorized_state_patch)) {\n    const observation = observations.get(safe(patch?.observation_id));\n    if (!observation) continue;\n    const value = projectedValue(patch.field, observation);\n    qualificationContext[patch.field] = value;\n    if (['service', 'city', 'requirement'].includes(patch.field)) topLevelState[patch.field] = value;\n  }\n\n  const control = cloneObject(qualificationContext._conversation_control);\n  control.objectives = cloneObject(control.objectives);\n  const objectiveKey = safe(asObject(policy.objective).key, 'none');\n  let dialogueAction = proposal.dialogue_action;\n  if (objectiveKey !== 'none') {\n    const previousObjective = asObject(control.objectives[objectiveKey]);\n    const answered = asArray(validation.accepted_observations)\n      .some((observation) => safe(observation?.answers_objective) === objectiveKey);\n    const noProgressCount = answered ? 0 : Math.max(0, Number(previousObjective.no_progress_count) || 0) + 1;\n    control.objectives[objectiveKey] = { ...previousObjective, no_progress_count: noProgressCount };\n    if (noProgressCount >= 3) dialogueAction = 'handoff';\n    else if (noProgressCount === 2) dialogueAction = 'ask_clarification';\n  }\n  qualificationContext._conversation_control = control;\n\n  const executedKeys = new Set(asArray(control.executed_effect_keys).map((key) => safe(key)).filter(Boolean));\n  const emittedKeys = new Set();\n  const authorizedEffects = [];\n  const addEffect = (effect) => {\n    const type = safe(effect?.type);\n    const key = safe(effect?.idempotency_key, `${type}:${row.turn_policy_digest}`);\n    if (!key || executedKeys.has(key) || emittedKeys.has(key)) return;\n    emittedKeys.add(key);\n    authorizedEffects.push({ ...effect, type, idempotency_key: key });\n  };\n  for (const effect of asArray(validation.authorized_effects)) addEffect(effect);\n  if (dialogueAction === 'handoff' && asObject(policy.effect_permissions).handoff === true) {\n    addEffect({\n      type: 'handoff',\n      idempotency_key: `semantic-handoff:${safe(policy.turn_id, row.turn_policy_digest)}`,\n      reason: 'objective_no_progress_limit',\n    });\n  }\n\n  return {\n    ...row,\n    ...topLevelState,\n    qualification_context: qualificationContext,\n    qualification_context_json: JSON.stringify(qualificationContext),\n    response_text: String(proposal.reply_text ?? ''),\n    reply_text: String(proposal.reply_text ?? ''),\n    dialogue_action: dialogueAction,\n    accepted_observations: asArray(validation.accepted_observations),\n    authorized_state_patch: asArray(validation.authorized_state_patch),\n    authorized_effects: authorizedEffects,\n    ai_authorization_outcome: 'authorized',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { authorizeAiTurn, projectedValue };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: authorizeAiTurn(item?.json ?? {}) }));\n}\n"
       },
       "id": "d3333333-3333-4333-8333-333333333333",
       "name": "Authorize AI Initial Turn",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1780,
+        2540,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000001-condition",
+              "leftValue": "={{ ['shadow', 'enforce'].includes(String($json.turn_policy?.mode || 'legacy')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000001",
+      "name": "Semantic Mode Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
         20
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "xkCWU5wQO4jPqnfW",
+          "mode": "list",
+          "cachedResultName": "AI - Lead Qualification Assistant"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000002",
+      "name": "Execute AI Lead Qualification Legacy",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        1500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000003",
+      "name": "Merge AI Initial Proposal",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1760,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000004-condition",
+              "leftValue": "={{ Boolean($json.ai_proposal) && !String($json.ai_fallback_reason || '').trim() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000004",
+      "name": "AI Initial Proposal Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000005-condition",
+              "leftValue": "={{ $json.ai_validation?.valid === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000005",
+      "name": "AI Initial Proposal Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2340,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\n\nconst prepareAiRepair = (row = {}) => {\n  const {\n    ai_proposal: _initialProposal,\n    ai_validation: initialValidation,\n    ai_fallback_reason: _initialFallback,\n    ai_parse_error: _initialParseError,\n    ai_request_error: _initialRequestError,\n    ...base\n  } = row;\n  return {\n    ...base,\n    repair_context: {\n      attempt: 1,\n      original_contract_digest: row.turn_policy_digest,\n      rule_errors: asArray(asObject(initialValidation).rule_errors),\n    },\n    ai_attempt: 'repair',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { prepareAiRepair };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: prepareAiRepair(item?.json ?? {}) }));\n}\n"
+      },
+      "id": "e1000000-0000-4000-8000-000000000006",
+      "name": "Prepare AI Repair",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2540,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "xkCWU5wQO4jPqnfW",
+          "mode": "list",
+          "cachedResultName": "AI - Lead Qualification Assistant"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000007",
+      "name": "Execute AI Repair",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        2740,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000008",
+      "name": "Merge AI Repair Proposal",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2940,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000009-condition",
+              "leftValue": "={{ Boolean($json.ai_proposal) && !String($json.ai_fallback_reason || '').trim() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000009",
+      "name": "AI Repair Proposal Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3140,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst error = (code, path, detail = null) => ({ code, path, detail });\n\nconst utf8Slice = (text, start, end) => {\n  const bytes = typeof Buffer !== 'undefined'\n    ? Buffer.from(String(text), 'utf8')\n    : new TextEncoder().encode(String(text));\n  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > bytes.length) return null;\n  if (typeof Buffer !== 'undefined') return bytes.subarray(start, end).toString('utf8');\n  return new TextDecoder().decode(bytes.slice(start, end));\n};\n\nconst validateAiProposal = (row = {}) => {\n  const policy = asObject(row.turn_policy);\n  const proposal = asObject(row.ai_proposal);\n  const errors = [];\n  if (policy.version !== 'ai_prd_turn_policy/v2') errors.push(error('unsupported_policy_version', 'turn_policy.version'));\n  if (proposal.version !== 'ai_semantic_proposal/v2') errors.push(error('unsupported_proposal_version', 'ai_proposal.version'));\n  if (proposal.contract_digest !== row.turn_policy_digest) errors.push(error('contract_digest_mismatch', 'ai_proposal.contract_digest'));\n  if (typeof proposal.reply_text !== 'string') errors.push(error('reply_text_required', 'ai_proposal.reply_text'));\n  if (!asArray(policy.allowed_dialogue_actions).includes(proposal.dialogue_action)) {\n    errors.push(error('dialogue_action_not_allowed', 'ai_proposal.dialogue_action'));\n  }\n\n  const sourceMessage = asObject(policy.message);\n  const activeCatalogIds = new Set(asArray(policy.catalog)\n    .filter((item) => item?.is_active !== false)\n    .map((item) => safe(item?.id))\n    .filter(Boolean));\n  const seenIds = new Set();\n  const acceptedObservations = [];\n  for (const [index, candidate] of asArray(proposal.observations).entries()) {\n    const observation = asObject(candidate);\n    const id = safe(observation.id);\n    const evidence = asObject(observation.evidence);\n    const path = `ai_proposal.observations[${index}]`;\n    let accepted = true;\n    if (!id || seenIds.has(id)) {\n      errors.push(error(id ? 'duplicate_observation_id' : 'observation_id_required', `${path}.id`));\n      accepted = false;\n    }\n    seenIds.add(id);\n    if (!safe(observation.concept)) {\n      errors.push(error('observation_concept_required', `${path}.concept`));\n      accepted = false;\n    }\n    const quotedBytes = utf8Slice(sourceMessage.text, evidence.start, evidence.end);\n    if (safe(evidence.message_id) !== safe(sourceMessage.id)) {\n      errors.push(error('evidence_message_mismatch', `${path}.evidence.message_id`));\n      accepted = false;\n    }\n    if (quotedBytes === null || quotedBytes !== String(evidence.quote ?? '')) {\n      errors.push(error('invalid_evidence_offsets', `${path}.evidence`));\n      accepted = false;\n    }\n    const confidence = Number(observation.confidence);\n    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {\n      errors.push(error('invalid_observation_confidence', `${path}.confidence`));\n      accepted = false;\n    }\n    if (accepted) acceptedObservations.push(observation);\n  }\n\n  const observationById = new Map(acceptedObservations.map((observation) => [safe(observation.id), observation]));\n  const allowedFields = new Set(asArray(policy.allowed_state_fields));\n  const authorizedStatePatch = [];\n  for (const [index, candidate] of asArray(proposal.state_patch).entries()) {\n    const patch = asObject(candidate);\n    const path = `ai_proposal.state_patch[${index}]`;\n    let accepted = true;\n    if (!allowedFields.has(patch.field)) {\n      errors.push(error('state_field_not_allowed', `${path}.field`, patch.field));\n      accepted = false;\n    }\n    if (!observationById.has(safe(patch.observation_id))) {\n      errors.push(error('observation_reference_not_found', `${path}.observation_id`, patch.observation_id));\n      accepted = false;\n    }\n    if (patch.field === 'product' && observationById.has(safe(patch.observation_id))) {\n      const grounding = asObject(observationById.get(safe(patch.observation_id)).grounding);\n      if (safe(grounding.kind) !== 'catalog_item' || !activeCatalogIds.has(safe(grounding.id))) {\n        errors.push(error('product_grounding_invalid', `${path}.observation_id`, grounding.id ?? null));\n        accepted = false;\n      }\n    }\n    if (accepted) authorizedStatePatch.push({ field: patch.field, observation_id: patch.observation_id });\n  }\n\n  const permissions = asObject(policy.effect_permissions);\n  const authorizedEffects = [];\n  const effectKeys = new Set();\n  for (const [index, candidate] of asArray(proposal.requested_effects).entries()) {\n    const effect = asObject(candidate);\n    const type = safe(effect.type);\n    const path = `ai_proposal.requested_effects[${index}]`;\n    if (!['create_lead', 'handoff'].includes(type) || permissions[type] !== true) {\n      errors.push(error('effect_not_allowed', `${path}.type`, type));\n      continue;\n    }\n    const key = safe(effect.idempotency_key, `${type}:${row.turn_policy_digest}`);\n    if (effectKeys.has(key)) continue;\n    effectKeys.add(key);\n    authorizedEffects.push({ ...effect, type, idempotency_key: key });\n  }\n\n  return {\n    valid: errors.length === 0,\n    rule_errors: errors,\n    accepted_observations: acceptedObservations,\n    authorized_state_patch: errors.length === 0 ? authorizedStatePatch : [],\n    authorized_effects: errors.length === 0 ? authorizedEffects : [],\n    outcome: errors.length === 0 ? 'authorized' : 'repair_required',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { validateAiProposal, utf8Slice };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: { ...item.json, ai_validation: validateAiProposal(item.json) } }));\n}\n"
+      },
+      "id": "e1000000-0000-4000-8000-000000000010",
+      "name": "Validate AI Repair Proposal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3340,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000011-condition",
+              "leftValue": "={{ $json.ai_validation?.valid === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000011",
+      "name": "AI Repair Proposal Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3540,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst asArray = (value) => Array.isArray(value) ? value : [];\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst cloneObject = (value) => JSON.parse(JSON.stringify(asObject(value)));\nconst parseObject = (value) => {\n  if (typeof value !== 'string') return cloneObject(value);\n  try { return cloneObject(JSON.parse(value)); } catch (_error) { return {}; }\n};\n\nconst projectedValue = (field, observation) => {\n  if (field !== 'modality') return observation.raw_value;\n  const normalized = observation.normalized;\n  const candidate = typeof normalized === 'string' ? normalized : asObject(normalized).value;\n  return ['material', 'pickup', 'delivery', 'installation', 'post_sale', 'claim'].includes(candidate)\n    ? candidate\n    : observation.raw_value;\n};\n\nconst authorizeAiTurn = (row = {}) => {\n  const policy = asObject(row.turn_policy);\n  const proposal = asObject(row.ai_proposal);\n  const validation = asObject(row.ai_validation);\n  const qualificationContext = cloneObject(row.qualification_context);\n  const mode = safe(policy.mode, 'legacy');\n\n  if (policy.version !== 'ai_prd_turn_policy/v2' || mode === 'legacy') {\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      authorized_effects: [],\n      ai_authorization_outcome: 'legacy_passthrough',\n    };\n  }\n  if (validation.valid !== true) {\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      ai_authorization_outcome: 'rejected',\n      authorized_effects: [],\n    };\n  }\n  if (mode === 'shadow') {\n    const metadata = parseObject(row.metadata_json);\n    metadata.semantic_shadow = {\n      contract_digest: row.turn_policy_digest || null,\n      proposal_reply_differs: String(proposal.reply_text ?? '') !== String(row.response_text ?? ''),\n      proposed_patch_count: asArray(validation.authorized_state_patch).length,\n      proposed_effect_count: asArray(validation.authorized_effects).length,\n      validation_outcome: validation.outcome || 'authorized',\n    };\n    return {\n      ...row,\n      qualification_context: qualificationContext,\n      qualification_context_json: JSON.stringify(qualificationContext),\n      authorized_effects: [],\n      shadow_ai_proposal: proposal,\n      shadow_ai_validation: validation,\n      metadata_json: JSON.stringify(metadata),\n      ai_authorization_outcome: 'shadow_audited',\n    };\n  }\n\n  const observations = new Map(asArray(validation.accepted_observations)\n    .map((observation) => [safe(observation?.id), observation]));\n  const topLevelState = {};\n  for (const patch of asArray(validation.authorized_state_patch)) {\n    const observation = observations.get(safe(patch?.observation_id));\n    if (!observation) continue;\n    const value = projectedValue(patch.field, observation);\n    qualificationContext[patch.field] = value;\n    if (['service', 'city', 'requirement'].includes(patch.field)) topLevelState[patch.field] = value;\n  }\n\n  const control = cloneObject(qualificationContext._conversation_control);\n  control.objectives = cloneObject(control.objectives);\n  const objectiveKey = safe(asObject(policy.objective).key, 'none');\n  let dialogueAction = proposal.dialogue_action;\n  if (objectiveKey !== 'none') {\n    const previousObjective = asObject(control.objectives[objectiveKey]);\n    const answered = asArray(validation.accepted_observations)\n      .some((observation) => safe(observation?.answers_objective) === objectiveKey);\n    const noProgressCount = answered ? 0 : Math.max(0, Number(previousObjective.no_progress_count) || 0) + 1;\n    control.objectives[objectiveKey] = { ...previousObjective, no_progress_count: noProgressCount };\n    if (noProgressCount >= 3) dialogueAction = 'handoff';\n    else if (noProgressCount === 2) dialogueAction = 'ask_clarification';\n  }\n  qualificationContext._conversation_control = control;\n\n  const executedKeys = new Set(asArray(control.executed_effect_keys).map((key) => safe(key)).filter(Boolean));\n  const emittedKeys = new Set();\n  const authorizedEffects = [];\n  const addEffect = (effect) => {\n    const type = safe(effect?.type);\n    const key = safe(effect?.idempotency_key, `${type}:${row.turn_policy_digest}`);\n    if (!key || executedKeys.has(key) || emittedKeys.has(key)) return;\n    emittedKeys.add(key);\n    authorizedEffects.push({ ...effect, type, idempotency_key: key });\n  };\n  for (const effect of asArray(validation.authorized_effects)) addEffect(effect);\n  if (dialogueAction === 'handoff' && asObject(policy.effect_permissions).handoff === true) {\n    addEffect({\n      type: 'handoff',\n      idempotency_key: `semantic-handoff:${safe(policy.turn_id, row.turn_policy_digest)}`,\n      reason: 'objective_no_progress_limit',\n    });\n  }\n\n  return {\n    ...row,\n    ...topLevelState,\n    qualification_context: qualificationContext,\n    qualification_context_json: JSON.stringify(qualificationContext),\n    response_text: String(proposal.reply_text ?? ''),\n    reply_text: String(proposal.reply_text ?? ''),\n    dialogue_action: dialogueAction,\n    accepted_observations: asArray(validation.accepted_observations),\n    authorized_state_patch: asArray(validation.authorized_state_patch),\n    authorized_effects: authorizedEffects,\n    ai_authorization_outcome: 'authorized',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) module.exports = { authorizeAiTurn, projectedValue };\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: authorizeAiTurn(item?.json ?? {}) }));\n}\n"
+      },
+      "id": "e1000000-0000-4000-8000-000000000012",
+      "name": "Authorize AI Repair Turn",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst cloneObject = (value) => JSON.parse(JSON.stringify(asObject(value)));\n\nconst failureReason = (kind) => kind === 'provider_unavailable'\n  ? 'ai_provider_unavailable'\n  : 'ai_semantic_repair_failed';\n\nconst buildContingencyHandoff = (row = {}) => {\n  const snapshot = cloneObject(row.pre_turn_snapshot);\n  const policy = asObject(row.turn_policy);\n  const turnId = safe(policy.turn_id, row.inbound_event_id || row.conversation_id || 'unknown');\n  const idempotencyKey = `semantic-handoff:${turnId}`;\n  const failureKind = safe(row.ai_failure_kind)\n    || (safe(row.ai_fallback_reason) ? 'provider_unavailable' : 'repair_invalid');\n  const reason = failureReason(failureKind);\n  const qualificationContext = cloneObject(snapshot.qualification_context);\n\n  return {\n    ...row,\n    service: snapshot.service ?? row.service ?? null,\n    city: snapshot.city ?? row.city ?? null,\n    requirement: snapshot.requirement ?? row.requirement ?? null,\n    confirmation_status: snapshot.confirmation_status ?? row.confirmation_status ?? 'none',\n    qualification_context: qualificationContext,\n    qualification_context_json: JSON.stringify(qualificationContext),\n    response_text: 'No pude completar este paso de forma segura. Voy a derivar tu conversación al equipo para que pueda ayudarte.',\n    reply_text: 'No pude completar este paso de forma segura. Voy a derivar tu conversación al equipo para que pueda ayudarte.',\n    conversation_status_code: 'escalation_required',\n    should_escalate: true,\n    escalation_required: true,\n    escalation_reason: reason,\n    escalation_area: 'sales',\n    dialogue_action: 'handoff',\n    authorized_state_patch: [],\n    authorized_effects: [{ type: 'handoff', idempotency_key: idempotencyKey, reason }],\n    ai_authorization_outcome: 'contingency',\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { buildContingencyHandoff, failureReason };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: buildContingencyHandoff(item?.json ?? {}) }));\n}\n"
+      },
+      "id": "e1000000-0000-4000-8000-000000000013",
+      "name": "Build Contingency Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        180
       ]
     }
   ],
@@ -267,7 +583,7 @@
       "main": [
         [
           {
-            "node": "Execute AI Lead Qualification",
+            "node": "Compile Turn Policy",
             "type": "main",
             "index": 0
           },
@@ -279,11 +595,56 @@
         ]
       ]
     },
-    "Execute AI Lead Qualification": {
+    "Compile Turn Policy": {
+      "main": [
+        [
+          {
+            "node": "Semantic Mode Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Semantic Mode Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Execute AI Lead Qualification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge AI Initial Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute AI Lead Qualification Legacy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute AI Lead Qualification Legacy": {
       "main": [
         [
           {
             "node": "Merge AI Assistance",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Execute AI Lead Qualification": {
+      "main": [
+        [
+          {
+            "node": "Merge AI Initial Proposal",
             "type": "main",
             "index": 1
           }
@@ -312,22 +673,203 @@
         ]
       ]
     },
-    "Persist Conversation State": {
+    "Merge AI Initial Proposal": {
       "main": [
         [
           {
-            "node": "Build Quotation",
+            "node": "AI Initial Proposal Available?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Merge Conversation Output": {
+    "AI Initial Proposal Available?": {
       "main": [
         [
           {
-            "node": "Prepare Conversation Output",
+            "node": "Validate AI Initial Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Contingency Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate AI Initial Proposal": {
+      "main": [
+        [
+          {
+            "node": "AI Initial Proposal Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Initial Proposal Valid?": {
+      "main": [
+        [
+          {
+            "node": "Authorize AI Initial Turn",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare AI Repair",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorize AI Initial Turn": {
+      "main": [
+        [
+          {
+            "node": "Prepare Durable Turn Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Repair": {
+      "main": [
+        [
+          {
+            "node": "Execute AI Repair",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge AI Repair Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute AI Repair": {
+      "main": [
+        [
+          {
+            "node": "Merge AI Repair Proposal",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge AI Repair Proposal": {
+      "main": [
+        [
+          {
+            "node": "AI Repair Proposal Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Repair Proposal Available?": {
+      "main": [
+        [
+          {
+            "node": "Validate AI Repair Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Contingency Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate AI Repair Proposal": {
+      "main": [
+        [
+          {
+            "node": "AI Repair Proposal Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Repair Proposal Valid?": {
+      "main": [
+        [
+          {
+            "node": "Authorize AI Repair Turn",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Contingency Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorize AI Repair Turn": {
+      "main": [
+        [
+          {
+            "node": "Prepare Durable Turn Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Contingency Handoff": {
+      "main": [
+        [
+          {
+            "node": "Prepare Durable Turn Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Durable Turn Result": {
+      "main": [
+        [
+          {
+            "node": "Persist Conversation State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Conversation Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Conversation State": {
+      "main": [
+        [
+          {
+            "node": "Build Quotation",
             "type": "main",
             "index": 0
           }
@@ -345,16 +887,11 @@
         ]
       ]
     },
-    "Prepare Durable Turn Result": {
+    "Merge Conversation Output": {
       "main": [
         [
           {
-            "node": "Persist Conversation State",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge Conversation Output",
+            "node": "Prepare Conversation Output",
             "type": "main",
             "index": 0
           }

@@ -7,6 +7,206 @@ cd "$ROOT_DIR"
 node tests/scripts/sync-workflow-nodes.mjs --check >/dev/null
 jq empty n8n/workflows/wa-inbound-downstream-dispatcher.json
 jq empty n8n/workflows/ops-handoff-notification-scheduler.json
+jq empty n8n/workflows/wa-conversation-orchestrator.json
+jq empty n8n/workflows/ai-lead-qualification-assistant.json
+
+node <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const orchestrator = JSON.parse(fs.readFileSync('n8n/workflows/wa-conversation-orchestrator.json', 'utf8'));
+const buildRequestCode = fs.readFileSync(
+  'tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js',
+  'utf8',
+);
+const { authorizeAiTurn } = require(
+  './tests/fixtures/workflow-nodes/wa-conversation-orchestrator/authorize-ai-turn.js'
+);
+const failures = [];
+const check = async (name, callback) => {
+  try {
+    await callback();
+  } catch (error) {
+    failures.push(`${name}: ${error.message}`);
+  }
+};
+const nodeNames = new Set(orchestrator.nodes.map((node) => node.name));
+const reachable = (source, target) => {
+  const pending = [source];
+  const visited = new Set();
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (current === target) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const outputs = orchestrator.connections[current]?.main || [];
+    for (const lane of outputs) {
+      for (const edge of lane || []) pending.push(edge.node);
+    }
+  }
+  return false;
+};
+
+(async () => {
+  await check('initial repair keeps policy and machine errors', async () => {
+    const digest = 'a'.repeat(64);
+    const policy = {
+      version: 'ai_prd_turn_policy/v2', mode: 'enforce',
+      message: { id: 'wamid-repair', text: '6 ml' },
+      objective: { key: 'quantity', mode: 'ask' },
+      allowed_state_fields: ['measurements'],
+      allowed_dialogue_actions: ['ask', 'confirm'],
+      effect_permissions: { create_lead: false, handoff: false },
+    };
+    const repairContext = {
+      attempt: 1,
+      original_contract_digest: digest,
+      rule_errors: [{ code: 'invalid_evidence_offsets', path: 'ai_proposal.observations[0].evidence' }],
+    };
+    const buildRequest = new AsyncFunction('items', '$env', buildRequestCode);
+    const result = (await buildRequest([{ json: {
+      text_body: '6 ml', external_message_id: 'wamid-repair',
+      turn_policy: policy, turn_policy_digest: digest, repair_context: repairContext,
+    } }], {
+      AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key',
+      AI_DIRECT_API_MODEL: 'test-model', AI_PRD_CONVERSATION_MODE: 'enforce',
+    }))[0].json;
+    const userMessage = result.ai_request.messages.find((message) => message.role === 'user');
+    const requestPayload = JSON.parse(userMessage.content);
+    assert.deepEqual(requestPayload.current_context.turn_policy, policy);
+    assert.equal(requestPayload.current_context.turn_policy_digest, digest);
+    assert.deepEqual(requestPayload.current_context.repair_context, repairContext);
+    assert.equal(requestPayload.current_context.repair_context.attempt, 1);
+  });
+
+  await check('initial repair is wired exactly once', async () => {
+    for (const name of [
+      'Execute AI Repair', 'Validate AI Repair Proposal',
+      'Authorize AI Repair Turn', 'Build Contingency Handoff',
+    ]) {
+      assert(nodeNames.has(name), `missing workflow node ${name}`);
+    }
+    assert(reachable('Compile Turn Policy', 'Execute AI Lead Qualification'));
+    assert(reachable('Validate AI Initial Proposal', 'Execute AI Repair'));
+    assert(reachable('Execute AI Repair', 'Validate AI Repair Proposal'));
+    assert(reachable('Validate AI Repair Proposal', 'Authorize AI Repair Turn'));
+    assert(reachable('Validate AI Repair Proposal', 'Build Contingency Handoff'));
+    assert.equal(reachable('Validate AI Repair Proposal', 'Execute AI Repair'), false);
+  });
+
+  let buildContingencyHandoff = null;
+  try {
+    ({ buildContingencyHandoff } = require(
+      './tests/fixtures/workflow-nodes/wa-conversation-orchestrator/build-contingency-handoff.js'
+    ));
+  } catch (_error) {
+    // Each behavior below reports its own RED contract while the fixture is absent.
+  }
+  const preTurn = {
+    service: 'Placas', city: 'Maipu', requirement: 'Cierre perimetral',
+    confirmation_status: 'requested',
+    qualification_context: {
+      product: 'Placas', commune: 'Maipu', measurements: '12 ml',
+      _conversation_control: { objectives: { quantity: { no_progress_count: 1 } } },
+    },
+  };
+  const contingencyInput = (failureKind) => ({
+    conversation_id: 481, inbound_event_id: 991, phone_number: '56911111111',
+    turn_policy: { version: 'ai_prd_turn_policy/v2', turn_id: '991', mode: 'enforce' },
+    turn_policy_digest: 'b'.repeat(64),
+    ai_failure_kind: failureKind,
+    pre_turn_snapshot: JSON.parse(JSON.stringify(preTurn)),
+  });
+
+  await check('second proposal failure creates one contingency handoff', async () => {
+    assert.equal(typeof buildContingencyHandoff, 'function', 'missing buildContingencyHandoff');
+    const result = buildContingencyHandoff(contingencyInput('repair_invalid'));
+    assert.equal(result.conversation_status_code, 'escalation_required');
+    assert.equal(result.should_escalate, true);
+    assert.equal(result.escalation_reason, 'ai_semantic_repair_failed');
+    assert.equal(result.authorized_effects.filter((effect) => effect.type === 'handoff').length, 1);
+  });
+
+  await check('provider outage creates one contingency handoff', async () => {
+    assert.equal(typeof buildContingencyHandoff, 'function', 'missing buildContingencyHandoff');
+    const result = buildContingencyHandoff(contingencyInput('provider_unavailable'));
+    assert.equal(result.conversation_status_code, 'escalation_required');
+    assert.equal(result.escalation_reason, 'ai_provider_unavailable');
+    assert.equal(result.authorized_effects.filter((effect) => effect.type === 'handoff').length, 1);
+    assert(result.response_text.length > 0, 'provider contingency copy must be deliverable');
+  });
+
+  await check('contingency preserves immutable pre-turn commercial state', async () => {
+    assert.equal(typeof buildContingencyHandoff, 'function', 'missing buildContingencyHandoff');
+    const input = contingencyInput('repair_invalid');
+    const snapshotBefore = JSON.stringify(input.pre_turn_snapshot);
+    const result = buildContingencyHandoff(input);
+    assert.equal(JSON.stringify(input.pre_turn_snapshot), snapshotBefore);
+    assert.deepEqual(result.qualification_context, preTurn.qualification_context);
+    assert.equal(result.service, preTurn.service);
+    assert.equal(result.city, preTurn.city);
+    assert.equal(result.requirement, preTurn.requirement);
+    assert.equal(result.confirmation_status, preTurn.confirmation_status);
+    assert.deepEqual(result.authorized_state_patch, []);
+  });
+
+  await check('shadow proposal produces audit only and no side effect', async () => {
+    const originalContext = { product: 'Placas', commune: 'Maipu' };
+    const result = authorizeAiTurn({
+      turn_policy: { version: 'ai_prd_turn_policy/v2', mode: 'shadow' },
+      turn_policy_digest: 'c'.repeat(64),
+      qualification_context: originalContext,
+      response_text: 'Respuesta legacy',
+      ai_proposal: {
+        reply_text: 'Respuesta v2', dialogue_action: 'handoff',
+      },
+      ai_validation: {
+        valid: true,
+        accepted_observations: [{ id: 'amount', raw_value: '40 unidades' }],
+        authorized_state_patch: [{ field: 'quantity', observation_id: 'amount' }],
+        authorized_effects: [{ type: 'handoff', idempotency_key: 'shadow-handoff' }],
+      },
+    });
+    assert.deepEqual(result.qualification_context, originalContext);
+    assert.equal(result.response_text, 'Respuesta legacy');
+    assert.deepEqual(result.authorized_effects, []);
+    assert.equal(result.ai_authorization_outcome, 'shadow_audited');
+  });
+
+  await check('handoff remains idempotent across turn retries', async () => {
+    const result = authorizeAiTurn({
+      turn_policy: { version: 'ai_prd_turn_policy/v2', mode: 'enforce' },
+      turn_policy_digest: 'd'.repeat(64),
+      qualification_context: {
+        _conversation_control: { executed_effect_keys: ['semantic-handoff:991'] },
+      },
+      ai_proposal: { reply_text: 'Te derivare con el equipo.', dialogue_action: 'handoff' },
+      ai_validation: {
+        valid: true, accepted_observations: [], authorized_state_patch: [],
+        authorized_effects: [{ type: 'handoff', idempotency_key: 'semantic-handoff:991' }],
+      },
+    });
+    assert.deepEqual(result.authorized_effects, []);
+    assert.deepEqual(result.qualification_context._conversation_control.executed_effect_keys, ['semantic-handoff:991']);
+  });
+
+  await check('contingency handoff key is deterministic', async () => {
+    assert.equal(typeof buildContingencyHandoff, 'function', 'missing buildContingencyHandoff');
+    const first = buildContingencyHandoff(contingencyInput('provider_unavailable'));
+    const second = buildContingencyHandoff(contingencyInput('provider_unavailable'));
+    assert.equal(first.authorized_effects.length, 1);
+    assert.equal(second.authorized_effects.length, 1);
+    assert.equal(first.authorized_effects[0].idempotency_key, second.authorized_effects[0].idempotency_key);
+  });
+
+  if (failures.length > 0) {
+    throw new Error(`Semantic repair/effects RED (${failures.length}):\n- ${failures.join('\n- ')}`);
+  }
+})().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+NODE
 
 node <<'NODE'
 const assert = require('assert');

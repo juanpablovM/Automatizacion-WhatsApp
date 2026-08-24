@@ -903,6 +903,174 @@
       }
     },
     {
+      "id": "SA-02",
+      "title": "Segundo turno sin progreso permite una aclaracion contextual",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "No entendi, me refiero al total"
+        ],
+        "conversation_state": {
+          "pending_question_key": "quantity",
+          "objective_no_progress_count": 1
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "objective_no_progress_count": 2,
+        "dialogue_action": "ask_clarification",
+        "handoff_requested": false,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-03",
+      "title": "Tercer turno sin progreso exige handoff",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "Te lo dije de otra forma y sigues preguntando"
+        ],
+        "conversation_state": {
+          "pending_question_key": "quantity",
+          "objective_no_progress_count": 2
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "objective_no_progress_count": 3,
+        "dialogue_action": "handoff",
+        "handoff_requested": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-04",
+      "title": "Un contexto legacy se reanuda sin autorizar efectos v2",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "Sigamos con la cotizacion"
+        ],
+        "conversation_state": {
+          "service": "Placas",
+          "city": "Maipu",
+          "requirement": "Cierre perimetral",
+          "qualification_context": {
+            "product": "Placas",
+            "commune": "Maipu"
+          }
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "legacy_facts_preserved": true,
+        "v2_effects_authorized": false,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-05",
+      "title": "MINVU conserva contexto sin convertirse en producto",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "Es para un proyecto MINVU con placas"
+        ],
+        "conversation_state": {
+          "pending_question_key": "product"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "product": "Placas",
+        "context_observation": "MINVU",
+        "invalid_product_mapping_rejected": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-06",
+      "title": "Suministro se proyecta como modalidad material",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "Necesito solo suministro"
+        ],
+        "conversation_state": {
+          "pending_question_key": "modality"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "modality": "material",
+        "audit_required": true
+      }
+    },
+    {
+      "id": "SA-07",
+      "title": "Una cantidad flexible progresa por observacion evidenciada",
+      "status": "red",
+      "ai_mode": "semantic_v2",
+      "input": {
+        "messages": [
+          "Serian aproximadamente 6 metros y medio"
+        ],
+        "conversation_state": {
+          "pending_question_key": "quantity",
+          "objective_no_progress_count": 2
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "semantic_authority": true,
+        "observation": {
+          "concept": "commercial_amount",
+          "kind": "length",
+          "value": 6.5,
+          "unit": "linear_meter"
+        },
+        "state_field": "measurements",
+        "objective_no_progress_count": 0,
+        "regex_match_required": false,
+        "audit_required": true
+      }
+    },
+    {
       "id": "SA-08",
       "title": "Comprension valida progresa aunque no exista regex",
       "status": "red",

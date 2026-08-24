@@ -61,6 +61,26 @@ const NODES = [
   },
   {
     workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Prepare AI Repair',
+    fixture: 'wa-conversation-orchestrator/prepare-ai-repair.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Validate AI Repair Proposal',
+    fixture: 'wa-conversation-orchestrator/validate-ai-proposal.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Authorize AI Repair Turn',
+    fixture: 'wa-conversation-orchestrator/authorize-ai-turn.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Build Contingency Handoff',
+    fixture: 'wa-conversation-orchestrator/build-contingency-handoff.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
     node: 'Evaluate Conversation Step',
     fixture: 'wa-conversation-orchestrator/evaluate-conversation-step.js',
     transform: 'n8n-explicit-return',

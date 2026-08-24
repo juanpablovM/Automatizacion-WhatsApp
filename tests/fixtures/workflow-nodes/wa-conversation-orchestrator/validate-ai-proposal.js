@@ -25,6 +25,10 @@ const validateAiProposal = (row = {}) => {
   }
 
   const sourceMessage = asObject(policy.message);
+  const activeCatalogIds = new Set(asArray(policy.catalog)
+    .filter((item) => item?.is_active !== false)
+    .map((item) => safe(item?.id))
+    .filter(Boolean));
   const seenIds = new Set();
   const acceptedObservations = [];
   for (const [index, candidate] of asArray(proposal.observations).entries()) {
@@ -73,6 +77,13 @@ const validateAiProposal = (row = {}) => {
     if (!observationById.has(safe(patch.observation_id))) {
       errors.push(error('observation_reference_not_found', `${path}.observation_id`, patch.observation_id));
       accepted = false;
+    }
+    if (patch.field === 'product' && observationById.has(safe(patch.observation_id))) {
+      const grounding = asObject(observationById.get(safe(patch.observation_id)).grounding);
+      if (safe(grounding.kind) !== 'catalog_item' || !activeCatalogIds.has(safe(grounding.id))) {
+        errors.push(error('product_grounding_invalid', `${path}.observation_id`, grounding.id ?? null));
+        accepted = false;
+      }
     }
     if (accepted) authorizedStatePatch.push({ field: patch.field, observation_id: patch.observation_id });
   }

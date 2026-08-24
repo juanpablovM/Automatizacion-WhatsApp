@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 node <<'NODE'
 const fs = require('fs');
+const assert = require('assert');
 
 (async () => {
 const samplePath = 'n8n/samples/conversation_regression_cases.sample.json';
@@ -31,7 +32,9 @@ const requiredBaseCases = Array.from({ length: 12 }, (_, index) =>
   `CP-${String(index + 1).padStart(2, '0')}`
 );
 const requiredAiCases = ['AI-01', 'AI-02', 'AI-03', 'AI-04', 'AI-05', 'AI-06'];
-const requiredSemanticCases = ['SA-01', 'SA-08'];
+const requiredSemanticCases = Array.from({ length: 8 }, (_, index) =>
+  `SA-${String(index + 1).padStart(2, '0')}`
+);
 const requiredGate = ['servicio', 'ciudad', 'requerimiento', 'confirmacion'];
 
 const fail = (message) => {
@@ -125,6 +128,33 @@ for (const testCase of suite.cases) {
       fail(`${testCase.id}: comprender un turno no debe ejecutar efectos prematuros`);
     }
   }
+}
+
+const semanticFixtureById = Object.fromEntries(
+  suite.cases.filter((testCase) => testCase.id.startsWith('SA-')).map((testCase) => [testCase.id, testCase])
+);
+if (semanticFixtureById['SA-02'].expected.objective_no_progress_count !== 2
+  || semanticFixtureById['SA-02'].expected.dialogue_action !== 'ask_clarification') {
+  fail('SA-02 debe modelar la unica aclaracion contextual permitida');
+}
+if (semanticFixtureById['SA-03'].expected.objective_no_progress_count !== 3
+  || semanticFixtureById['SA-03'].expected.handoff_requested !== true) {
+  fail('SA-03 debe exigir handoff al tercer turno sin progreso');
+}
+if (semanticFixtureById['SA-04'].expected.legacy_facts_preserved !== true
+  || semanticFixtureById['SA-04'].expected.v2_effects_authorized !== false) {
+  fail('SA-04 debe reanudar hechos legacy sin efectos v2 implicitos');
+}
+if (semanticFixtureById['SA-05'].expected.product !== 'Placas'
+  || semanticFixtureById['SA-05'].expected.context_observation !== 'MINVU') {
+  fail('SA-05 debe separar contexto MINVU del producto evidenciado');
+}
+if (semanticFixtureById['SA-06'].expected.modality !== 'material') {
+  fail('SA-06 debe proyectar Suministro a la modalidad canonica material');
+}
+if (semanticFixtureById['SA-07'].expected.observation.value !== 6.5
+  || semanticFixtureById['SA-07'].expected.objective_no_progress_count !== 0) {
+  fail('SA-07 debe aceptar una cantidad flexible y reiniciar progreso del objetivo');
 }
 
 const applyNode = orchestrator.nodes.find((node) => node.name === 'Apply AI Assistance');
@@ -250,6 +280,179 @@ if (semanticBuiltAi.response_schema.properties.version?.const !== 'ai_semantic_p
 }
 if (!semanticBuiltAi.response_schema.properties.observations || !semanticBuiltAi.response_schema.properties.state_patch) {
   fail('Schema AI v2 debe separar observations[] de state_patch[]');
+}
+const { validateAiProposal } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-ai-proposal.js');
+const { authorizeAiTurn } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/authorize-ai-turn.js');
+const semanticFailures = [];
+const semanticCheck = (name, callback) => {
+  try {
+    callback();
+  } catch (error) {
+    semanticFailures.push(`${name}: ${error.message}`);
+  }
+};
+const evidenceFor = (message, quote, messageId = 'wamid-semantic-safety') => {
+  const start = Buffer.byteLength(message.slice(0, message.indexOf(quote)), 'utf8');
+  return { quote, start, end: start + Buffer.byteLength(quote, 'utf8'), message_id: messageId };
+};
+const semanticPolicy = ({ message, objective, fields, handoff = false, catalog = [] }) => ({
+  version: 'ai_prd_turn_policy/v2',
+  mode: 'enforce',
+  message: { id: 'wamid-semantic-safety', text: message },
+  objective: { key: objective, mode: 'ask' },
+  allowed_state_fields: fields,
+  allowed_dialogue_actions: ['ask', 'ask_clarification', 'confirm', 'handoff'],
+  effect_permissions: { create_lead: false, handoff },
+  catalog,
+});
+const emptyProposal = (digest, dialogueAction = 'ask') => ({
+  version: 'ai_semantic_proposal/v2', contract_digest: digest,
+  reply_text: 'Contame ese dato con un poco mas de contexto.', dialogue_action: dialogueAction,
+  observations: [], state_patch: [], requested_effects: [],
+});
+
+semanticCheck('SA-02 objective count two', () => {
+  const digest = '2'.repeat(64);
+  const authorization = authorizeAiTurn({
+    turn_policy: semanticPolicy({ message: 'No entendi, me refiero al total', objective: 'quantity', fields: ['measurements'] }),
+    turn_policy_digest: digest,
+    qualification_context: { _conversation_control: { objectives: { quantity: { no_progress_count: 1 } } } },
+    ai_proposal: emptyProposal(digest),
+    ai_validation: { valid: true, accepted_observations: [], authorized_state_patch: [], authorized_effects: [] },
+  });
+  assert.equal(authorization.dialogue_action, 'ask_clarification');
+  assert.equal(authorization.qualification_context._conversation_control.objectives.quantity.no_progress_count, 2);
+  assert.deepEqual(authorization.authorized_effects, []);
+});
+
+semanticCheck('SA-03 objective count three', () => {
+  const digest = '3'.repeat(64);
+  const authorization = authorizeAiTurn({
+    turn_policy: semanticPolicy({ message: 'Te lo dije de otra forma', objective: 'quantity', fields: ['measurements'], handoff: true }),
+    turn_policy_digest: digest,
+    qualification_context: { _conversation_control: { objectives: { quantity: { no_progress_count: 2 } } } },
+    ai_proposal: emptyProposal(digest),
+    ai_validation: { valid: true, accepted_observations: [], authorized_state_patch: [], authorized_effects: [] },
+  });
+  assert.equal(authorization.dialogue_action, 'handoff');
+  assert.equal(authorization.qualification_context._conversation_control.objectives.quantity.no_progress_count, 3);
+  assert.equal(authorization.authorized_effects.filter((effect) => effect.type === 'handoff').length, 1);
+});
+
+semanticCheck('SA-04 legacy resume', () => {
+  const authorization = authorizeAiTurn({
+    service: 'Placas', city: 'Maipu', requirement: 'Cierre perimetral',
+    qualification_context: { product: 'Placas', commune: 'Maipu' },
+    ai_proposal: { ...emptyProposal('4'.repeat(64)), observations: [{ id: 'new', raw_value: 'Adoquines' }] },
+    ai_validation: {
+      valid: true,
+      accepted_observations: [{ id: 'new', raw_value: 'Adoquines' }],
+      authorized_state_patch: [{ field: 'product', observation_id: 'new' }],
+      authorized_effects: [{ type: 'handoff', idempotency_key: 'legacy-missing-policy' }],
+    },
+  });
+  assert.equal(authorization.qualification_context.product, 'Placas');
+  assert.equal(authorization.qualification_context.commune, 'Maipu');
+  assert.deepEqual(authorization.authorized_effects, []);
+});
+
+semanticCheck('SA-05 MINVU cannot satisfy product', () => {
+  const message = 'Es para un proyecto MINVU con placas';
+  const digest = '5'.repeat(64);
+  const policy = semanticPolicy({
+    message, objective: 'product', fields: ['product'],
+    catalog: [{ id: 'catalog-placas', name: 'Placas', aliases: ['placas'] }],
+  });
+  const validation = validateAiProposal({
+    turn_policy: policy,
+    turn_policy_digest: digest,
+    ai_proposal: {
+      ...emptyProposal(digest), dialogue_action: 'confirm',
+      observations: [{
+        id: 'wrong-product', concept: 'product', raw_value: 'MINVU', normalized: null,
+        answers_objective: 'product', evidence: evidenceFor(message, 'MINVU'),
+        grounding: { kind: 'catalog_item', id: 'catalog-inexistente' }, confidence: 0.98,
+      }],
+      state_patch: [{ field: 'product', observation_id: 'wrong-product' }],
+    },
+  });
+  assert.equal(validation.valid, false);
+  assert.equal(validation.authorized_state_patch.length, 0);
+  assert(validation.rule_errors.some((entry) => entry.code === 'product_grounding_invalid'));
+});
+
+semanticCheck('SA-05 grounded product remains valid', () => {
+  const message = 'Es para un proyecto MINVU con placas';
+  const digest = '6'.repeat(64);
+  const policy = semanticPolicy({
+    message, objective: 'product', fields: ['product'],
+    catalog: [{ id: 'catalog-placas', name: 'Placas', aliases: ['placas'] }],
+  });
+  const validation = validateAiProposal({
+    turn_policy: policy,
+    turn_policy_digest: digest,
+    ai_proposal: {
+      ...emptyProposal(digest), dialogue_action: 'confirm',
+      observations: [{
+        id: 'grounded-product', concept: 'product', raw_value: 'placas', normalized: null,
+        answers_objective: 'product', evidence: evidenceFor(message, 'placas'),
+        grounding: { kind: 'catalog_item', id: 'catalog-placas' }, confidence: 0.98,
+      }],
+      state_patch: [{ field: 'product', observation_id: 'grounded-product' }],
+    },
+  });
+  assert.equal(validation.valid, true);
+  assert.deepEqual(validation.authorized_state_patch, [{ field: 'product', observation_id: 'grounded-product' }]);
+});
+
+semanticCheck('SA-06 Suministro canonical modality', () => {
+  const message = 'Necesito solo Suministro';
+  const digest = '7'.repeat(64);
+  const policy = semanticPolicy({ message, objective: 'modality', fields: ['modality'] });
+  const proposal = {
+    ...emptyProposal(digest), dialogue_action: 'confirm',
+    observations: [{
+      id: 'modality', concept: 'modality', raw_value: 'Suministro',
+      normalized: { kind: 'modality', value: 'material', unit: null },
+      answers_objective: 'modality', evidence: evidenceFor(message, 'Suministro'),
+      grounding: null, confidence: 0.99,
+    }],
+    state_patch: [{ field: 'modality', observation_id: 'modality' }],
+  };
+  const validation = validateAiProposal({ turn_policy: policy, turn_policy_digest: digest, ai_proposal: proposal });
+  const authorization = authorizeAiTurn({
+    turn_policy: policy, turn_policy_digest: digest, qualification_context: {},
+    ai_proposal: proposal, ai_validation: validation,
+  });
+  assert.equal(authorization.qualification_context.modality, 'material');
+});
+
+semanticCheck('SA-07 flexible amount resets objective progress', () => {
+  const message = 'Serian aproximadamente 6 metros y medio';
+  const digest = '8'.repeat(64);
+  const policy = semanticPolicy({ message, objective: 'quantity', fields: ['measurements'] });
+  const proposal = {
+    ...emptyProposal(digest), dialogue_action: 'confirm',
+    observations: [{
+      id: 'amount', concept: 'commercial_amount', raw_value: message,
+      normalized: { kind: 'length', value: 6.5, unit: 'linear_meter' },
+      answers_objective: 'quantity', evidence: evidenceFor(message, message),
+      grounding: null, confidence: 0.97,
+    }],
+    state_patch: [{ field: 'measurements', observation_id: 'amount' }],
+  };
+  const validation = validateAiProposal({ turn_policy: policy, turn_policy_digest: digest, ai_proposal: proposal });
+  const authorization = authorizeAiTurn({
+    turn_policy: policy, turn_policy_digest: digest,
+    qualification_context: { _conversation_control: { objectives: { quantity: { no_progress_count: 2 } } } },
+    ai_proposal: proposal, ai_validation: validation,
+  });
+  assert.equal(authorization.qualification_context.measurements, message);
+  assert.equal(authorization.qualification_context._conversation_control.objectives.quantity.no_progress_count, 0);
+});
+
+if (semanticFailures.length > 0) {
+  fail(`Workflow semantic safety RED (${semanticFailures.length}):\n- ${semanticFailures.join('\n- ')}`);
 }
 const runApplyAi = async (row, env = {}) => {
   const fn = new AsyncFunction('items', '$env', applyNode.parameters.jsCode);
