@@ -16,6 +16,30 @@
 // =============================================================================
 
 const FIXTURE_VERSION = "2026-08-20-v4";
+
+// Evidencia de medida o cantidad ("50 metros", "100 m2", "3 palets"). Es la
+// respuesta mas precisa que un cliente puede dar en el paso de requerimiento,
+// pero ocupa dos o tres palabras y no superaba el umbral de verbosidad de
+// isConcreteRequirement, de modo que el bot volvia a preguntar lo ya contestado
+// y a partir del tercer turno escalaba como loop_detected (memoria #668).
+//
+// Definicion canonica del nodo: cualquier otro chequeo de medida en este
+// archivo debe reusar MEASURE_EVIDENCE_RE en lugar de declarar su propio patron.
+// Se evalua sobre texto ya normalizado por normalizeText, que elimina los
+// simbolos: "100 m²" llega como "100 m" y "1.000 m2" llega como "1 000 m2".
+const MEASURE_UNITS = [
+  'm2', 'mts', 'mt', 'ml', 'metros', 'metro',
+  'centimetros', 'centimetro', 'milimetros', 'milimetro',
+  'cm', 'mm', 'km', 'kg', 'lt',
+  'litros', 'litro', 'toneladas', 'tonelada', 'kilos', 'kilo',
+  'unidades', 'unidad', 'piezas', 'pieza',
+  'sacos', 'saco', 'pallets', 'pallet', 'palets', 'palet',
+  'bolsas', 'bolsa', 'cajas', 'caja', 'rollos', 'rollo',
+  'm',
+];
+const MEASURE_EVIDENCE_RE = new RegExp('\\b\\d+(?:\\s*\\d{3})*\\s*(?:' + MEASURE_UNITS.join('|') + ')\\b');
+const hasMeasureEvidence = (normalized) => MEASURE_EVIDENCE_RE.test(normalized);
+
 function evaluateConversationStep(row) {
   // row is the input item (items[0]?.json in n8n context)
 
@@ -408,7 +432,12 @@ function evaluateConversationStep(row) {
 
   const isConcreteRequirement = (text) => {
     const normalized = normalizeText(text);
-    if (!normalized || wordCount(normalized) < 2) return false;
+    if (!normalized) return false;
+    // La medida se evalua antes del umbral de palabras: "50m2" es una sola
+    // palabra y sigue siendo la respuesta correcta. Un numero sin unidad ("50")
+    // no llega aca y se sigue repreguntando, que es lo que corresponde.
+    if (hasMeasureEvidence(normalized)) return true;
+    if (wordCount(normalized) < 2) return false;
     if (detectActionIntent(normalized) && !isGenericIntentOnly(normalized)) return true;
     if (wordCount(normalized) >= 4 && !isVagueAnswer(normalized)) return true;
     return false;

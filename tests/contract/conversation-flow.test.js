@@ -288,4 +288,56 @@ describe('Fixture contract — Conversation Flow (memoria #686)', () => {
     expect(meta.reengagement_decision).toBe('previous_context_choice');
     expect(meta.reengagement_elapsed_hours).toBe(72);
   });
+
+  // ===========================================================================
+  // Concrete requirement answers (memoria #668)
+  // ---------------------------------------------------------------------------
+  // A measurement or a quantity is the most precise answer a customer can give
+  // at the requirement step, yet it is only two or three words long. Rejecting
+  // it re-asks a question the customer already answered and, from the third
+  // turn on, escalates the conversation as `loop_detected`.
+  // ===========================================================================
+  const requirementTurn = (textBody, step = 'requirement') => ({
+    ...baseInput,
+    has_active_conversation: true,
+    conversation_id: 1,
+    conversation_status_code: 'waiting_user',
+    current_step: step,
+    state_current_step: step,
+    city: 'Santiago',
+    state_city: 'Santiago',
+    service: 'Pastelones',
+    state_service: 'Pastelones',
+    pending_question_key: 'requirement',
+    text_body: textBody,
+  });
+
+  test.each([
+    '50 metros',
+    '100 m2',
+    '100 m²',
+    '200 unidades',
+    '80 metros lineales',
+    '3 palets',
+    '50m2',
+    '1.000 m2',
+    'necesito 50 metros',
+  ])('measurement answer "%s" satisfies the requirement step', (textBody) => {
+    const result = evaluateConversationStep(requirementTurn(textBody));
+    expect(result.json.requirement).toBe(textBody);
+    expect(result.json.current_step).toContain('confirm');
+    expect(result.json.should_escalate).toBe(false);
+  });
+
+  test('a valid measurement never escalates as loop_detected', () => {
+    const result = evaluateConversationStep(requirementTurn('80 metros lineales', 'requirement_retry_2'));
+    expect(result.json.escalation_reason).not.toBe('loop_detected');
+    expect(result.json.conversation_status_code).not.toBe('escalation_required');
+  });
+
+  test('a bare number without a unit keeps asking for the requirement', () => {
+    const result = evaluateConversationStep(requirementTurn('50'));
+    expect(result.json.requirement).toBeNull();
+    expect(result.json.current_step).toContain('requirement');
+  });
 });
