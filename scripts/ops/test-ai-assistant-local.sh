@@ -9,6 +9,8 @@ node <<'NODE'
   const fs = require('fs');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const workflow = JSON.parse(fs.readFileSync('n8n/workflows/ai-lead-qualification-assistant.json', 'utf8'));
+  const orchestratorWorkflow = JSON.parse(fs.readFileSync('n8n/workflows/wa-conversation-orchestrator.json', 'utf8'));
+  const workflowLinks = JSON.parse(fs.readFileSync('n8n/workflow-links.json', 'utf8'));
 
   const nodeCode = (name) => {
     const node = workflow.nodes.find((entry) => entry.name === name);
@@ -19,6 +21,14 @@ node <<'NODE'
   const runCode = async (name, item, helpers = {}, env = {}) => {
     const fn = new AsyncFunction('items', 'helpers', '$env', nodeCode(name));
     const result = await fn([{ json: item }], helpers, env);
+    return result[0].json;
+  };
+
+  const runOrchestratorCode = async (name, item, env = {}) => {
+    const node = orchestratorWorkflow.nodes.find((entry) => entry.name === name);
+    if (!node) throw new Error(`No existe nodo ${name}`);
+    const fn = new AsyncFunction('items', '$env', node.parameters.jsCode);
+    const result = await fn([{ json: item }], env);
     return result[0].json;
   };
 
@@ -322,6 +332,45 @@ node <<'NODE'
       envExampleSource.includes('AI_PRD_CONVERSATION_MODE=legacy'),
       '.env.example debe documentar el kill switch en legacy'
     );
+    const shadowLegacyNodes = [
+      'Authorized Shadow Mode?',
+      'Prepare Shadow Legacy Request',
+      'Execute Shadow Legacy AI',
+      'Merge Shadow Legacy AI',
+    ];
+    for (const name of shadowLegacyNodes) {
+      check(
+        orchestratorWorkflow.nodes.some((node) => node.name === name),
+        `shadow debe declarar el nodo ${name}`
+      );
+    }
+    const branchTargets = (name, branch = 0) => (
+      orchestratorWorkflow.connections[name]?.main?.[branch] || []
+    ).map((edge) => edge.node);
+    check(
+      branchTargets('Authorize AI Initial Turn').includes('Authorized Shadow Mode?'),
+      'la autorizacion inicial debe separar shadow antes de producir efectos'
+    );
+    check(
+      branchTargets('Authorized Shadow Mode?', 0).includes('Prepare Shadow Legacy Request')
+        && branchTargets('Authorized Shadow Mode?', 1).includes('Prepare Durable Turn Result'),
+      'solo shadow debe entrar al segundo carril legacy'
+    );
+    check(
+      branchTargets('Prepare Shadow Legacy Request').includes('Execute Shadow Legacy AI')
+        && branchTargets('Prepare Shadow Legacy Request').includes('Merge Shadow Legacy AI')
+        && branchTargets('Execute Shadow Legacy AI').includes('Merge Shadow Legacy AI')
+        && branchTargets('Merge Shadow Legacy AI').includes('Apply AI Assistance'),
+      'el carril shadow debe fusionar la evaluacion legacy antes de aplicar efectos'
+    );
+    check(
+      workflowLinks.links.some((link) => (
+        link.sourceWorkflow === 'WA - Conversation Orchestrator'
+        && link.node === 'Execute Shadow Legacy AI'
+        && link.targetWorkflow === 'AI - Lead Qualification Assistant'
+      )),
+      'shadow debe enlazar su segunda evaluacion con el asistente legacy'
+    );
     const request = await runCode('Build AI Request', {
       ...readSample('ai_greeting.sample.json'),
       external_message_id: 'wamid-semantic-v2',
@@ -398,6 +447,27 @@ node <<'NODE'
     check(
       legacyRequest.response_schema?.properties?.confirmation_status,
       'Build debe obedecer policy.mode=legacy aunque el env solicite enforce'
+    );
+    const preparedShadowLegacy = await runOrchestratorCode('Prepare Shadow Legacy Request', {
+      ...request.ai_context,
+      turn_policy: { ...request.ai_context.turn_policy, mode: 'shadow' },
+      metadata_json: JSON.stringify({ semantic_shadow: { validation_outcome: 'authorized' } }),
+    });
+    check(
+      preparedShadowLegacy.turn_policy?.mode === 'legacy',
+      'shadow debe ejecutar una segunda evaluacion legacy para preservar efectos visibles'
+    );
+    check(
+      JSON.parse(preparedShadowLegacy.metadata_json).semantic_shadow?.validation_outcome === 'authorized',
+      'la segunda evaluacion legacy debe conservar la auditoria semantica shadow'
+    );
+    const shadowLegacyRequest = await runCode('Build AI Request', preparedShadowLegacy, {}, {
+      ...env,
+      AI_PRD_CONVERSATION_MODE: 'shadow',
+    });
+    check(
+      shadowLegacyRequest.response_schema?.properties?.confirmation_status,
+      'la segunda evaluacion shadow debe usar el contrato legacy'
     );
 
     const exactReply = '  Entendí 6 ml y solo material. ¿Confirmas?  ';

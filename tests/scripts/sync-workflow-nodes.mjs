@@ -61,6 +61,11 @@ const NODES = [
   },
   {
     workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Prepare Shadow Legacy Request',
+    fixture: 'wa-conversation-orchestrator/prepare-shadow-legacy-request.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
     node: 'Prepare AI Repair',
     fixture: 'wa-conversation-orchestrator/prepare-ai-repair.js',
   },

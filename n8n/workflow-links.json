@@ -29,6 +29,11 @@
       "targetWorkflow": "AI - Lead Qualification Assistant"
     },
     {
+      "sourceWorkflow": "WA - Conversation Orchestrator",
+      "node": "Execute Shadow Legacy AI",
+      "targetWorkflow": "AI - Lead Qualification Assistant"
+    },
+    {
       "sourceWorkflow": "WA - Inbound Entry",
       "node": "Execute Durable Downstream Dispatcher",
       "targetWorkflow": "WA - Inbound Downstream Dispatcher"

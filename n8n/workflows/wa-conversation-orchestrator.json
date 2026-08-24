@@ -143,7 +143,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2640,
+        3740,
         300
       ]
     },
@@ -542,6 +542,99 @@
         2420,
         180
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1000000-0000-4000-8000-000000000015-condition",
+              "leftValue": "={{ String($json.turn_policy?.mode || 'legacy') === 'shadow' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000015",
+      "name": "Authorized Shadow Mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\n\nconst prepareShadowLegacyRequest = (row = {}) => {\n  const semanticPolicy = asObject(row.turn_policy);\n  return {\n    ...row,\n    shadow_turn_policy: semanticPolicy,\n    turn_policy: {\n      ...semanticPolicy,\n      mode: 'legacy',\n    },\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { prepareShadowLegacyRequest };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: prepareShadowLegacyRequest(item?.json ?? {}) }));\n}\n"
+      },
+      "id": "e1000000-0000-4000-8000-000000000016",
+      "name": "Prepare Shadow Legacy Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "xkCWU5wQO4jPqnfW",
+          "mode": "list",
+          "cachedResultName": "AI - Lead Qualification Assistant"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000017",
+      "name": "Execute Shadow Legacy AI",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "continueOnFail": true,
+      "position": [
+        3300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "addSuffix"
+            }
+          }
+        }
+      },
+      "id": "e1000000-0000-4000-8000-000000000018",
+      "name": "Merge Shadow Legacy AI",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3520,
+        300
+      ]
     }
   ],
   "pinData": {},
@@ -657,7 +750,7 @@
       "main": [
         [
           {
-            "node": "Prepare Durable Turn Result",
+            "node": "Authorized Shadow Mode?",
             "type": "main",
             "index": 0
           }
@@ -869,6 +962,62 @@
             "index": 0
           }
         ],
+        [
+          {
+            "node": "Apply AI Assistance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized Shadow Mode?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Shadow Legacy Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Durable Turn Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Shadow Legacy Request": {
+      "main": [
+        [
+          {
+            "node": "Execute Shadow Legacy AI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Shadow Legacy AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Shadow Legacy AI": {
+      "main": [
+        [
+          {
+            "node": "Merge Shadow Legacy AI",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Shadow Legacy AI": {
+      "main": [
         [
           {
             "node": "Apply AI Assistance",
