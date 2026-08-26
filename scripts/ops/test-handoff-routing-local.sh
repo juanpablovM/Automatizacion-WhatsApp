@@ -20,6 +20,7 @@ const safety = require('./tests/fixtures/workflow-nodes/ops-handoff-notification
 const scheduler = JSON.parse(fs.readFileSync('n8n/workflows/ops-handoff-notification-scheduler.json'));
 const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json'));
 const escalationPolicy = require('./tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js');
+const saga = require('./tests/fixtures/workflow-nodes/shared/v3-saga-runtime.js');
 const schedulerId = '99999999-0000-0000-0000-000000000003';
 assert.equal(scheduler.id, schedulerId);
 assert.equal(scheduler.active, true);
@@ -120,6 +121,83 @@ const authorization = { operation_key: 'handoff-clickup:7', list_id: 'list', sea
 assert.equal(safety.consumeNoEffectAuthorization(authorization, {...authorization, evidence_revision: 'r0'}).allow_post, false);
 assert.equal(safety.consumeNoEffectAuthorization({...authorization, consumed: true}, authorization).allow_post, false);
 assert.equal(safety.consumeNoEffectAuthorization(authorization, authorization).allow_post, true);
+const policy = {
+  version: 'ai_prd_turn_policy/v3',
+  policy_digest: 'policy-v3-recovery',
+  turn: { id: 'turn-v3-recovery', conversation_id: 44, inbound_event_id: 88 },
+  state_authority: { expected_snapshot_digest: 'snapshot-before-v3' },
+  failure_policy: { max_complete_repairs: 1 },
+};
+const rejected = {
+  schema: 'conversation_validation_result/v3',
+  valid: false,
+  errors: [{ code: 'unsupported_claim', path: '/reply_text', disposition: 'repair' }],
+};
+const repair = saga.buildV3RepairRequest({ policy, validation: rejected, repairAttempt: 0 });
+assert.equal(repair.schema, 'ai_conversation_repair_request/v3');
+assert.equal(repair.policy_digest, policy.policy_digest);
+assert.equal(repair.complete_repair, true);
+assert.deepEqual(repair.errors, rejected.errors);
+assert.throws(
+  () => saga.buildV3RepairRequest({ policy, validation: rejected, repairAttempt: 1 }),
+  /repair_limit_exhausted/,
+);
+const assistantPolicy = { ...policy, policy_digest: 'a'.repeat(64) };
+const assistantRepair = saga.buildV3RepairRequest({
+  policy: assistantPolicy, validation: rejected, repairAttempt: 0,
+});
+const runBuildAi = new Function(
+  'items', '$env',
+  fs.readFileSync('./tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js', 'utf8'),
+);
+const repairAi = runBuildAi([{ json: {
+  contract_version: 'v3', turn_policy: assistantPolicy,
+  ai_repair_request: assistantRepair,
+} }], {
+  AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key',
+  AI_DIRECT_API_MODEL: 'test-model', AI_DIRECT_API_PATH: '/chat/completions',
+});
+const repairPrompt = JSON.parse(repairAi[0].json.ai_request.messages[1].content);
+assert.deepEqual(repairPrompt.repair_request.errors, rejected.errors);
+assert.equal(repairPrompt.repair_request.policy_digest, assistantPolicy.policy_digest);
+assert.equal(repairPrompt.repair_request.repair_attempt, 1);
+const preTurnState = { city: 'Santiago', service: 'installation', budget: 'pending' };
+const outage = saga.planV3Recovery({
+  policy, validation: null, repairAttempt: 0, providerOutcome: 'outage',
+  preTurnState, expectedSnapshotDigest: 'snapshot-before-v3',
+});
+assert.equal(outage.action, 'contingency');
+assert.deepEqual(outage.decision.mutations, []);
+assert.deepEqual(outage.preserved_state, preTurnState);
+assert.equal(outage.decision.effect_commands[0].type, 'internal_handoff');
+const unreleased = saga.releaseV3Contingency({ decision: outage.decision, handoffReceipt: null });
+assert.equal(unreleased.release_delivery, false);
+assert.equal(unreleased.reply_text, null);
+const handoffReceipt = {
+  operation_key: outage.decision.effect_commands[0].operation_key,
+  handoff_id: 701,
+  status: 'succeeded',
+};
+const released = saga.releaseV3Contingency({ decision: outage.decision, handoffReceipt });
+assert.equal(released.release_delivery, true);
+assert.equal(released.reply_text, outage.decision.reply.text);
+assert.equal(released.handoff_receipt.handoff_id, 701);
+const replayedOutage = saga.planV3Recovery({
+  policy, validation: null, repairAttempt: 0, providerOutcome: 'outage',
+  preTurnState, expectedSnapshotDigest: 'snapshot-before-v3',
+});
+assert.equal(replayedOutage.decision.decision_id, outage.decision.decision_id);
+assert.equal(
+  replayedOutage.decision.effect_commands[0].operation_key,
+  outage.decision.effect_commands[0].operation_key,
+);
+assert.equal(replayedOutage.decision.reply.delivery_key, outage.decision.reply.delivery_key);
+const afterFailedRepair = saga.planV3Recovery({
+  policy, validation: rejected, repairAttempt: 1, providerOutcome: 'accepted',
+  preTurnState, expectedSnapshotDigest: 'snapshot-before-v3',
+});
+assert.equal(afterFailedRepair.action, 'contingency');
+assert.deepEqual(afterFailedRepair.preserved_state, preTurnState);
 const runPreparePerItem = new Function('$json', '$env', fs.readFileSync(prepareFixturePath, 'utf8'));
   const deferredItem = runPreparePerItem(salesBase, {...salesEnv, HANDOFF_CLICKUP_ASSIGNEES_JSON: '{}'});
 assert(deferredItem && !Array.isArray(deferredItem));

@@ -205,6 +205,19 @@ if (usesV3Contract) {
   if (v3ConfigError) {
     return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: v3ConfigError, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
   }
+  const repairRequest = parseJsonObject(row.ai_repair_request);
+  const hasRepairRequest = Object.keys(repairRequest).length > 0;
+  const repairRequestValid = !hasRepairRequest || (
+    repairRequest.schema === 'ai_conversation_repair_request/v3'
+      && repairRequest.policy_digest === turnPolicy.policy_digest
+      && repairRequest.complete_repair === true
+      && repairRequest.repair_attempt === 1
+      && Array.isArray(repairRequest.errors)
+      && repairRequest.errors.length > 0
+  );
+  if (!repairRequestValid) {
+    return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: 'invalid_repair_request', ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
+  }
   const v3SystemPrompt = [
     'Sos la única voz normal de la conversación. Respondé al cliente de forma natural dentro de la policy recibida.',
     'Devolvé exactamente un ai_conversation_proposal/v3 completo y sin propiedades adicionales.',
@@ -215,8 +228,14 @@ if (usesV3Contract) {
     'No uses confidence para autorizar datos. No inventes precios, stock, descuentos, garantías, plazos ni efectos.',
     'Un servicio nunca satisface product y un producto nunca satisface service.',
     'Los objetivos orientan el progreso pero no fijan el orden ni la redacción de tus solicitudes.',
-  ].join('\n');
-  const v3UserPrompt = JSON.stringify({ turn_policy: turnPolicy });
+    hasRepairRequest
+      ? 'Esta es la única reparación permitida: devolvé una propuesta completa corregida usando la misma policy y los errores estructurados.'
+      : null,
+  ].filter(Boolean).join('\n');
+  const v3UserPrompt = JSON.stringify({
+    turn_policy: turnPolicy,
+    ...(hasRepairRequest ? { repair_request: repairRequest } : {}),
+  });
   const v3Request = usesChatCompletions
     ? {
         model,
