@@ -19,6 +19,9 @@ const query = (name) => fs.readFileSync(
 describeIntegration('v3 conversation turn execution saga', () => {
   const client = new pg.Client(connection);
   const routeSql = query('07_route_v3_turn');
+  const prepareSql = query('08_prepare_v3_decision');
+  const commitSql = query('09_commit_v3_turn');
+  const transitionSql = query('10_transition_v3_execution');
   let sourceNumberId;
   let activeStatusId;
   let sequence = 0;
@@ -91,6 +94,80 @@ describeIntegration('v3 conversation turn execution saga', () => {
     return rows[0];
   };
 
+  const seedTurn = async ({
+    qualification = { city: 'Santiago' },
+    mutations = [{ operation: 'set', field: 'service', value: 'installation' }],
+    effectCommands = [],
+    replyText = 'Sí, puedo ayudarte exactamente.\n¿En qué comuna sería?',
+    contingency = false,
+  } = {}) => {
+    const conversation = await seedConversation(qualification);
+    const suffix = `turn-${sequence}`;
+    const event = await seedEvent(conversation.id, suffix);
+    const decisionId = `decision-${suffix}`;
+    const deliveryKey = `delivery-${suffix}`;
+    const snapshotDigest = `snapshot-${suffix}`;
+    const outputPayload = contingency ? {
+      schema: 'system_contingency_decision/v3',
+      decision_id: decisionId,
+      expected_snapshot_digest: snapshotDigest,
+      reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
+      mutations: [],
+      effect_commands: [{
+        type: 'internal_handoff',
+        operation_key: `handoff-${suffix}`,
+        payload_digest: `handoff-payload-${suffix}`,
+        required_before_reply: true,
+        payload: {
+          motive: 'v3_recovery', area: 'sales', area_label: 'Ventas',
+          priority: 'alta', owner: 'Equipo Ventas', trigger: suffix,
+        },
+      }],
+    } : {
+      schema: 'validated_conversation_decision/v3',
+      decision_id: decisionId,
+      expected_snapshot_digest: snapshotDigest,
+      reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
+      mutations,
+      effect_commands: effectCommands,
+    };
+    const advisor = await client.query(`
+      INSERT INTO advisor_decisions (
+        conversation_id, decision_type, input_payload, output_payload,
+        validation_result
+      ) VALUES ($1, 'v3_conversation_decision', $2::jsonb, $3::jsonb, 'accepted')
+      RETURNING id
+    `, [conversation.id, { policy_digest: `policy-${suffix}` }, outputPayload]);
+
+    const routed = await client.query(routeSql, [
+      event.inboundEventId, conversation.id, 'enforce', 'test-rule', 1,
+      snapshotDigest, qualification,
+    ]);
+    expect(routed.rows).toHaveLength(1);
+    expect(routed.rows[0].route_acquired).toBe(true);
+
+    const initialState = contingency
+      ? 'prepared'
+      : effectCommands.length > 0 ? 'effects_pending' : 'ready_to_commit';
+    const prepared = await client.query(prepareSql, [
+      event.inboundEventId, advisor.rows[0].id, decisionId, initialState,
+      `policy-${suffix}`, `proposal-${suffix}`, `decision-digest-${suffix}`, deliveryKey,
+    ]);
+    expect(prepared.rows[0].decision_matches).toBe(true);
+
+    return {
+      conversationId: conversation.id,
+      inboundEventId: event.inboundEventId,
+      token: event.token,
+      advisorDecisionId: advisor.rows[0].id,
+      decisionId,
+      deliveryKey,
+      snapshotDigest,
+      qualification,
+      replyText,
+    };
+  };
+
   beforeAll(async () => {
     await client.connect();
     await cleanupFixtureNamespace();
@@ -110,6 +187,95 @@ describeIntegration('v3 conversation turn execution saga', () => {
   afterAll(async () => {
     await cleanupFixtureNamespace();
     await client.end();
+  });
+
+  test('keeps preparation and the authorized decision immutable on replay', async () => {
+    const turn = await seedTurn();
+    const replay = await client.query(prepareSql, [
+      turn.inboundEventId, turn.advisorDecisionId, turn.decisionId,
+      'ready_to_commit', 'policy-turn-' + sequence, 'proposal-turn-' + sequence,
+      'decision-digest-turn-' + sequence, turn.deliveryKey,
+    ]);
+    expect(replay.rows[0].decision_matches).toBe(true);
+
+    const conflict = await client.query(prepareSql, [
+      turn.inboundEventId, turn.advisorDecisionId, `${turn.decisionId}-changed`,
+      'ready_to_commit', 'changed', 'changed', 'changed', `${turn.deliveryKey}-changed`,
+    ]);
+    expect(conflict.rows[0].decision_matches).toBe(false);
+    await expect(client.query(
+      "UPDATE advisor_decisions SET output_payload = '{\"changed\":true}' WHERE id = $1",
+      [turn.advisorDecisionId],
+    )).rejects.toThrow(/immutable/i);
+  });
+
+  test('rejects stale token and snapshot without mutating state or creating delivery', async () => {
+    const staleToken = await seedTurn();
+    expect((await client.query(commitSql, [
+      staleToken.decisionId, 'stale-token', staleToken.snapshotDigest,
+    ])).rows).toHaveLength(0);
+
+    const staleSnapshot = await seedTurn();
+    await client.query(
+      "UPDATE conversations SET qualification_context = qualification_context || '{\"city\":\"Valparaiso\"}' WHERE id = $1",
+      [staleSnapshot.conversationId],
+    );
+    expect((await client.query(commitSql, [
+      staleSnapshot.decisionId, staleSnapshot.token, staleSnapshot.snapshotDigest,
+    ])).rows).toHaveLength(0);
+
+    const counts = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM messages WHERE direction = 'outgoing'
+          AND idempotency_key IN ($1, $2)) AS messages,
+        (SELECT COUNT(*)::int FROM conversation_turn_executions
+          WHERE decision_id IN ($3, $4) AND state = 'ready_to_commit') AS untouched
+    `, [staleToken.deliveryKey, staleSnapshot.deliveryKey,
+      staleToken.decisionId, staleSnapshot.decisionId]);
+    expect(counts.rows[0]).toEqual({ messages: 0, untouched: 2 });
+  });
+
+  test('commits once under concurrency and replays the exact delivery intent', async () => {
+    const turn = await seedTurn();
+    const other = new pg.Client(connection);
+    await other.connect();
+    try {
+      const [left, right] = await Promise.all([
+        client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]),
+        other.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]),
+      ]);
+      const concurrentRows = [left, right].flatMap((result) => result.rows);
+      expect([1, 2]).toContain(concurrentRows.length);
+      const winners = concurrentRows.filter((row) => row.replayed === false);
+      expect(winners).toHaveLength(1);
+      for (const row of concurrentRows) {
+        expect(row.delivery_message_id).toBe(winners[0].delivery_message_id);
+      }
+      const replay = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(replay.rows).toHaveLength(1);
+      expect(replay.rows[0].replayed).toBe(true);
+      expect(replay.rows[0].delivery_message_id).toBe(winners[0].delivery_message_id);
+      expect(replay.rows[0].text_body).toBe(turn.replyText);
+
+      const persisted = await client.query(`
+        SELECT c.qualification_context, e.state, e.state_receipt,
+          COUNT(m.id)::int AS message_count,
+          COUNT(a.id) FILTER (WHERE a.event_name = 'v3_turn_committed')::int AS audit_count
+        FROM conversations c
+        JOIN conversation_turn_executions e ON e.conversation_id = c.id
+        LEFT JOIN messages m ON m.idempotency_key = e.delivery_key
+        LEFT JOIN audit_logs a ON a.entity_type = 'conversation_turn_execution' AND a.entity_id = e.id
+        WHERE e.decision_id = $1
+        GROUP BY c.id, e.id
+      `, [turn.decisionId]);
+      expect(persisted.rows[0].qualification_context).toEqual({ city: 'Santiago', service: 'installation' });
+      expect(persisted.rows[0].state).toBe('delivery_pending');
+      expect(persisted.rows[0].state_receipt.decision_id).toBe(turn.decisionId);
+      expect(persisted.rows[0].message_count).toBe(1);
+      expect(persisted.rows[0].audit_count).toBe(1);
+    } finally {
+      await other.end();
+    }
   });
 
   test('serializes different active turns for one conversation', async () => {
@@ -139,5 +305,19 @@ describeIntegration('v3 conversation turn execution saga', () => {
     } finally {
       await other.end();
     }
+  });
+  test('stores one delivery receipt through the legal terminal transition', async () => {
+    const turn = await seedTurn({ mutations: [] });
+    const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    const receipt = { provider_message_id: 'wamid.v3.1', delivered_bytes_sha256: `reply-turn-${sequence}` };
+    const delivered = await client.query(transitionSql, [
+      turn.decisionId, 'delivery_pending', 'delivered', false, null,
+      committed.rows[0].delivery_message_id, receipt, null,
+    ]);
+    expect(delivered.rows[0].delivery_receipt_ref).toEqual(receipt);
+    expect((await client.query(transitionSql, [
+      turn.decisionId, 'delivery_pending', 'delivered', false, null,
+      committed.rows[0].delivery_message_id, receipt, null,
+    ])).rows).toHaveLength(0);
   });
 });

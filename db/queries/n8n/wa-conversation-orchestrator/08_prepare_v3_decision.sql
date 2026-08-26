@@ -22,12 +22,20 @@ WITH locked AS (
     AND execution.decision_id IS NULL
     AND $4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')
   RETURNING execution.*
+), fixed AS (
+  SELECT prepared.* FROM prepared
+  UNION ALL
+  SELECT execution.*
+  FROM conversation_turn_executions execution
+  WHERE execution.inbound_event_id = $1::BIGINT
+    AND NOT EXISTS (SELECT 1 FROM prepared)
 )
 SELECT execution.*,
-  execution.decision_id = $3::TEXT
+  execution.advisor_decision_id = $2::BIGINT
+    AND execution.decision_id = $3::TEXT
+    AND execution.state = $4::TEXT
     AND execution.policy_digest = $5::TEXT
     AND execution.proposal_digest = $6::TEXT
     AND execution.decision_digest = $7::TEXT
     AND execution.delivery_key = $8::TEXT AS decision_matches
-FROM conversation_turn_executions execution
-WHERE execution.inbound_event_id = $1::BIGINT;
+FROM fixed execution;

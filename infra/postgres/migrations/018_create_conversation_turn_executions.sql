@@ -56,3 +56,61 @@ DROP TRIGGER IF EXISTS set_conversation_turn_executions_updated_at ON conversati
 CREATE TRIGGER set_conversation_turn_executions_updated_at
 BEFORE UPDATE ON conversation_turn_executions
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE OR REPLACE FUNCTION reject_authorized_v3_decision_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM conversation_turn_executions execution
+    WHERE execution.advisor_decision_id = OLD.id
+      AND execution.contract_version = 'v3'
+  ) THEN
+    RAISE EXCEPTION 'authorized v3 advisor decision is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS reject_authorized_v3_decision_update ON advisor_decisions;
+CREATE TRIGGER reject_authorized_v3_decision_update
+BEFORE UPDATE ON advisor_decisions
+FOR EACH ROW EXECUTE FUNCTION reject_authorized_v3_decision_mutation();
+
+-- Apply only the mutation vocabulary authorized by validated_conversation_decision/v3.
+-- Unknown operations fail the whole state-plus-outbox transaction.
+CREATE OR REPLACE FUNCTION apply_v3_state_mutations(
+  p_snapshot JSONB,
+  p_mutations JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  v_result JSONB := COALESCE(p_snapshot, '{}'::JSONB);
+  v_mutation JSONB;
+  v_field TEXT;
+BEGIN
+  IF jsonb_typeof(COALESCE(p_mutations, '[]'::JSONB)) <> 'array' THEN
+    RAISE EXCEPTION 'v3 mutations must be an array';
+  END IF;
+
+  FOR v_mutation IN SELECT value FROM jsonb_array_elements(COALESCE(p_mutations, '[]'::JSONB))
+  LOOP
+    v_field := NULLIF(v_mutation->>'field', '');
+    IF v_field IS NULL OR v_field LIKE '\_%' ESCAPE '\' THEN
+      RAISE EXCEPTION 'invalid v3 mutation field';
+    END IF;
+    IF v_mutation->>'operation' = 'set' AND v_mutation ? 'value' THEN
+      v_result := jsonb_set(v_result, ARRAY[v_field], v_mutation->'value', TRUE);
+    ELSIF v_mutation->>'operation' = 'remove' THEN
+      v_result := v_result - v_field;
+    ELSE
+      RAISE EXCEPTION 'unsupported v3 mutation operation';
+    END IF;
+  END LOOP;
+  RETURN v_result;
+END;
+$$;
