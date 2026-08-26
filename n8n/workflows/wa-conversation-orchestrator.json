@@ -709,6 +709,118 @@
         1480,
         180
       ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Fix one v3 route per inbound event and serialize active turns per conversation.\nWITH conversation_lock AS MATERIALIZED (\n  SELECT pg_advisory_xact_lock(hashtextextended('v3-turn:' || $2::TEXT, 0))\n), existing AS MATERIALIZED (\n  SELECT execution.*\n  FROM conversation_turn_executions execution\n  CROSS JOIN conversation_lock\n  WHERE execution.inbound_event_id = $1::BIGINT\n), inserted AS (\n  INSERT INTO conversation_turn_executions (\n    inbound_event_id,\n    conversation_id,\n    contract_version,\n    route_mode,\n    route_rule_id,\n    conversation_revision_expected,\n    expected_snapshot_digest,\n    expected_snapshot\n  )\n  SELECT $1::BIGINT, $2::BIGINT, 'v3', $3::TEXT, $4::TEXT, $5::BIGINT,\n         $6::TEXT, $7::JSONB\n  FROM conversation_lock\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n    AND NOT EXISTS (\n      SELECT 1 FROM conversation_turn_executions active\n      WHERE active.conversation_id = $2::BIGINT\n        AND active.state NOT IN ('delivered', 'aborted')\n    )\n  ON CONFLICT (conversation_id)\n    WHERE state NOT IN ('delivered', 'aborted')\n  DO NOTHING\n  RETURNING *\n), fixed AS (\n  SELECT inserted.*, TRUE AS route_acquired, FALSE AS replayed FROM inserted\n  UNION ALL\n  SELECT existing.*, FALSE AS route_acquired, TRUE AS replayed FROM existing\n)\nSELECT fixed.*,\n  fixed.contract_version = 'v3'\n    AND fixed.route_mode = $3::TEXT\n    AND fixed.route_rule_id = $4::TEXT\n    AND fixed.conversation_id = $2::BIGINT\n    AND fixed.expected_snapshot_digest = $6::TEXT\n    AND fixed.expected_snapshot = $7::JSONB AS route_matches\nFROM fixed;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "inbound_event_id,conversation_id,contract_mode,route_rule_id,conversation_revision,expected_snapshot_digest,expected_snapshot"
+        }
+      },
+      "id": "v3-route-05",
+      "name": "Fix V3 Route",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1860,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PENDIENTE__",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "v3-route-06",
+      "name": "Merge V3 Route Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2060,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-route-07-condition",
+              "leftValue": "={{ $json.route_matches === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-route-07",
+      "name": "V3 Route Fixed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2260,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Persist only the structural turn anchor, inbound evidence and immutable v3\n-- decision. Commercial state remains untouched until the saga commit.\nWITH authority_lock AS MATERIALIZED (\n  SELECT pg_advisory_xact_lock(hashtextextended('v3-authority:' || $1::TEXT, 0))\n), valid_claim AS MATERIALIZED (\n  SELECT inbound.id\n  FROM inbound_events inbound\n  CROSS JOIN authority_lock\n  WHERE inbound.id = $1::BIGINT\n    AND inbound.processing_status = 'processing'\n    AND inbound.processing_token = $2::TEXT\n), existing_conversation AS MATERIALIZED (\n  SELECT conversation.id\n  FROM conversations conversation\n  CROSS JOIN valid_claim\n  WHERE conversation.id = NULLIF($3::TEXT, '')::BIGINT\n    AND conversation.deleted_at IS NULL\n), created_conversation AS (\n  INSERT INTO conversations (\n    source_number_id,\n    phone_number,\n    conversation_status_id,\n    current_step,\n    qualification_context,\n    started_at,\n    last_message_at\n  )\n  SELECT\n    $4::BIGINT,\n    $5::TEXT,\n    status.id,\n    COALESCE(NULLIF($10::TEXT, ''), 'service'),\n    '{}'::JSONB,\n    NOW(),\n    NOW()\n  FROM conversation_statuses status\n  CROSS JOIN valid_claim\n  WHERE status.code = 'active'\n    AND NOT EXISTS (SELECT 1 FROM existing_conversation)\n  RETURNING id\n), resolved_conversation AS MATERIALIZED (\n  SELECT id FROM existing_conversation\n  UNION ALL\n  SELECT id FROM created_conversation\n), inserted_incoming_message AS (\n  INSERT INTO messages (\n    conversation_id,\n    direction,\n    message_type,\n    external_message_id,\n    text_body,\n    raw_payload,\n    inbound_event_id\n  )\n  SELECT\n    conversation.id,\n    'incoming',\n    COALESCE(NULLIF($6::TEXT, ''), 'unknown'),\n    NULLIF($7::TEXT, ''),\n    NULLIF($8::TEXT, ''),\n    COALESCE(NULLIF($9::TEXT, '')::JSONB, '{}'::JSONB),\n    $1::BIGINT\n  FROM resolved_conversation conversation\n  ON CONFLICT DO NOTHING\n  RETURNING id, conversation_id\n), incoming_message AS MATERIALIZED (\n  SELECT id, conversation_id FROM inserted_incoming_message\n  UNION ALL\n  SELECT message.id, message.conversation_id\n  FROM messages message\n  JOIN resolved_conversation conversation ON conversation.id = message.conversation_id\n  WHERE message.inbound_event_id = $1::BIGINT\n    AND message.direction = 'incoming'\n    AND message.deleted_at IS NULL\n    AND NOT EXISTS (SELECT 1 FROM inserted_incoming_message)\n), existing_advisor_decision AS MATERIALIZED (\n  SELECT decision.id\n  FROM advisor_decisions decision\n  JOIN resolved_conversation conversation ON conversation.id = decision.conversation_id\n  WHERE decision.decision_type = 'conversation_v3_authorized'\n    AND decision.output_payload->>'decision_id' = $11::TEXT\n  ORDER BY decision.id DESC\n  LIMIT 1\n), inserted_advisor_decision AS (\n  INSERT INTO advisor_decisions (\n    conversation_id,\n    message_id,\n    decision_type,\n    ai_provider,\n    ai_model,\n    input_payload,\n    output_payload,\n    validation_result,\n    validation_errors\n  )\n  SELECT\n    conversation.id,\n    message.id,\n    'conversation_v3_authorized',\n    NULLIF($16::TEXT, ''),\n    NULLIF($17::TEXT, ''),\n    jsonb_build_object(\n      'policy', COALESCE(NULLIF($12::TEXT, '')::JSONB, '{}'::JSONB),\n      'proposal', COALESCE(NULLIF($13::TEXT, '')::JSONB, '{}'::JSONB)\n    ),\n    COALESCE(NULLIF($15::TEXT, '')::JSONB, '{}'::JSONB),\n    'accepted',\n    '[]'::JSONB\n  FROM resolved_conversation conversation\n  JOIN incoming_message message ON message.conversation_id = conversation.id\n  CROSS JOIN valid_claim\n  WHERE NOT EXISTS (SELECT 1 FROM existing_advisor_decision)\n    AND COALESCE(NULLIF($14::TEXT, '')::JSONB->>'valid', 'false')::BOOLEAN\n  RETURNING id\n), advisor_decision AS MATERIALIZED (\n  SELECT id FROM existing_advisor_decision\n  UNION ALL\n  SELECT id FROM inserted_advisor_decision\n)\nSELECT\n  conversation.id AS conversation_id,\n  message.id AS incoming_message_id,\n  decision.id AS advisor_decision_id,\n  TRUE AS v3_authority_persisted\nFROM resolved_conversation conversation\nJOIN incoming_message message ON message.conversation_id = conversation.id\nCROSS JOIN advisor_decision decision;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "inbound_event_id,processing_token,conversation_id,source_number_id,phone_number,message_type,external_message_id,text_body,raw_payload_json,current_step,decision_id,turn_policy,ai_proposal,v3_validation,v3_decision,ai_provider,ai_model"
+        }
+      },
+      "id": "v3-route-08",
+      "name": "Persist V3 Turn Authority",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1840,
+        180
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PENDIENTE__",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "v3-route-09",
+      "name": "Merge V3 Authority Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2040,
+        180
+      ]
     }
   ],
   "pinData": {},
@@ -830,7 +942,18 @@
     },
     "V3 Proposal Valid?": {
       "main": [
-        [],
+        [
+          {
+            "node": "Persist V3 Turn Authority",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge V3 Authority Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Build V3 Repair",
@@ -1090,6 +1213,67 @@
         [
           {
             "node": "V3 Proposal Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fix V3 Route": {
+      "main": [
+        [
+          {
+            "node": "Merge V3 Route Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge V3 Route Context": {
+      "main": [
+        [
+          {
+            "node": "V3 Route Fixed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Route Fixed?": {
+      "main": [
+        [
+          {
+            "node": "Prepare V3 Execution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Persist V3 Turn Authority": {
+      "main": [
+        [
+          {
+            "node": "Merge V3 Authority Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge V3 Authority Context": {
+      "main": [
+        [
+          {
+            "node": "Fix V3 Route",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge V3 Route Context",
             "type": "main",
             "index": 0
           }

@@ -78,6 +78,20 @@ const NODES = [
     fixture: 'wa-conversation-orchestrator/validate-and-authorize-v3.js',
     runtimes: ['shared/v3-contract-runtime.js'],
   },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Fix V3 Route',
+    fixture: 'db/queries/n8n/wa-conversation-orchestrator/07_route_v3_turn.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Persist V3 Turn Authority',
+    fixture: 'db/queries/n8n/wa-conversation-orchestrator/16_persist_v3_turn_authority.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
   ...[
     ['Prepare V3 Execution', '08_prepare_v3_decision.sql'],
     ['Prepare V3 Effect', '11_prepare_v3_effect.sql'],

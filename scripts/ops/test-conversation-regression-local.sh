@@ -151,6 +151,18 @@ if (!groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'pr
 
 const routeNode = orchestrator.nodes.find((node) => node.name === 'Resolve Conversation Contract Route');
 const contractNode = orchestrator.nodes.find((node) => node.name === 'Validate And Authorize V3');
+const persistV3AuthorityNode = orchestrator.nodes.find((node) => node.name === 'Persist V3 Turn Authority');
+if (!routeNode || !contractNode || !persistV3AuthorityNode) fail('Orquestador no cablea routing y autoridad v3');
+const persistV3AuthorityQuery = persistV3AuthorityNode.parameters.query || '';
+if (!persistV3AuthorityQuery.includes('valid_claim')
+  || !persistV3AuthorityQuery.includes('incoming_message')
+  || !persistV3AuthorityQuery.includes('advisor_decision')
+  || !persistV3AuthorityQuery.includes('advisor_decision_id')) {
+  fail('Autoridad v3 debe persistir anchor, inbound y decision antes del ledger');
+}
+if (persistV3AuthorityQuery.includes('SET qualification_context')) {
+  fail('Persistencia de autoridad v3 no debe mutar estado comercial pre-turno');
+}
 const contractBranches = orchestrator.connections['Use V3 Contract?']?.main || [];
 if (contractBranches[0]?.[0]?.node !== 'Validate And Authorize V3'
   || contractBranches[1]?.[0]?.node !== 'Apply AI Assistance') {
