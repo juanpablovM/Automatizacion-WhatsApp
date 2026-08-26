@@ -25,6 +25,9 @@ describeIntegration('v3 conversation turn execution saga', () => {
   const prepareEffectSql = query('11_prepare_v3_effect');
   const recordEffectSql = query('12_record_v3_effect_result');
   const reconcileEffectSql = query('13_reconcile_v3_effect');
+  const contingencySql = query('14_commit_v3_contingency');
+  const prepareContingencySql = query('15_prepare_v3_contingency');
+
   let sourceNumberId;
   let activeStatusId;
   let sequence = 0;
@@ -392,6 +395,74 @@ describeIntegration('v3 conversation turn execution saga', () => {
     ]);
     expect(duplicateClaim.rows[0].should_execute).toBe(false);
   });
+
+  test('creates one receipted contingency handoff before exact copy and preserves state', async () => {
+    const replyText = 'No pude completar la gestión automática. Te derivé al equipo para revisión.';
+    const turn = await seedTurn({
+      qualification: { city: 'Santiago', service: 'installation', budget: 'pending' },
+      mutations: [], replyText, contingency: true,
+    });
+    const first = await client.query(contingencySql, [turn.decisionId, turn.token]);
+    const replay = await client.query(contingencySql, [turn.decisionId, turn.token]);
+    expect(first.rows[0].handoff_id).toBe(replay.rows[0].handoff_id);
+    expect(first.rows[0].delivery_message_id).toBe(replay.rows[0].delivery_message_id);
+    expect(first.rows[0].text_body).toBe(replyText);
+    expect(String(first.rows[0].handoff_receipt.id)).toBe(first.rows[0].handoff_id);
+
+    const persisted = await client.query(`
+      SELECT c.qualification_context,
+        COUNT(DISTINCT h.id)::int AS handoffs,
+        COUNT(DISTINCT m.id)::int AS messages
+      FROM conversations c
+      LEFT JOIN handoffs h ON h.conversation_id = c.id AND h.idempotency_key = $2
+      LEFT JOIN messages m ON m.conversation_id = c.id AND m.idempotency_key = $3
+      WHERE c.id = $1 GROUP BY c.id
+    `, [turn.conversationId, `handoff-turn-${sequence}`, turn.deliveryKey]);
+    expect(persisted.rows[0].qualification_context).toEqual({
+      city: 'Santiago', service: 'installation', budget: 'pending',
+    });
+    expect(persisted.rows[0].handoffs).toBe(1);
+    expect(persisted.rows[0].messages).toBe(1);
+  });
+
+  test('persists a generated contingency decision before releasing its handoff', async () => {
+    const conversation = await seedConversation({ city: 'Santiago', service: 'installation' });
+    const event = await seedEvent(conversation.id, `generated-contingency-${sequence}`);
+    const policy = {
+      version: 'ai_prd_turn_policy/v3', policy_digest: `policy-generated-${sequence}`,
+      turn: { id: `turn-generated-${sequence}` },
+      state_authority: { expected_snapshot_digest: `snapshot-generated-${sequence}` },
+    };
+    const decisionId = `decision-generated-${sequence}`;
+    const operationKey = `handoff-generated-${sequence}`;
+    const deliveryKey = `delivery-generated-${sequence}`;
+    const decision = {
+      schema: 'system_contingency_decision/v3', decision_id: decisionId,
+      decision_digest: `decision-digest-generated-${sequence}`,
+      expected_snapshot_digest: policy.state_authority.expected_snapshot_digest,
+      policy_digest: policy.policy_digest,
+      reply: { text: 'Derivé el caso al equipo para revisión.', sha256: 'reply-generated', delivery_key: deliveryKey },
+      mutations: [],
+      effect_commands: [{
+        type: 'internal_handoff', operation_key: operationKey,
+        payload_digest: `payload-generated-${sequence}`, required_before_reply: true,
+        payload: { motive: 'v3_recovery', area: 'sales', area_label: 'Ventas', priority: 'alta', owner: 'Equipo Ventas', trigger: `generated-${sequence}` },
+      }],
+    };
+    await client.query(routeSql, [
+      event.inboundEventId, conversation.id, 'enforce', 'generated-contingency', 1,
+      policy.state_authority.expected_snapshot_digest, conversation.qualification_context,
+    ]);
+    const prepared = await client.query(prepareContingencySql, [
+      event.inboundEventId, event.token, policy, decision,
+    ]);
+    expect(prepared.rows[0].decision_matches).toBe(true);
+    expect(prepared.rows[0].state).toBe('prepared');
+    const committed = await client.query(contingencySql, [decisionId, event.token]);
+    expect(committed.rows[0].handoff_receipt.operation_key).toBe(operationKey);
+    expect(committed.rows[0].text_body).toBe(decision.reply.text);
+  });
+
   test('stores one delivery receipt through the legal terminal transition', async () => {
     const turn = await seedTurn({ mutations: [] });
     const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
