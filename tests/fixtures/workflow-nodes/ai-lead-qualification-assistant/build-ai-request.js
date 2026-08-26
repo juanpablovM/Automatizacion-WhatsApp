@@ -198,6 +198,15 @@ if (usesV3Contract) {
   if (!v3PolicyValid) {
     return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: 'invalid_turn_policy', ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
   }
+  const shadowPolicyValid = row.shadow_mode !== true || (
+    Array.isArray(turnPolicy.state_authority?.allowed_mutations)
+      && turnPolicy.state_authority.allowed_mutations.length === 0
+      && Array.isArray(turnPolicy.effect_authority?.permissions)
+      && turnPolicy.effect_authority.permissions.length === 0
+  );
+  if (!shadowPolicyValid) {
+    return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: 'shadow_authority_forbidden', ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
+  }
   if (!aiEnabled) {
     return [{ json: { ...v3BasePayload, ai_skipped: true, ai_skip_reason: 'disabled', ai_request: null, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
   }

@@ -77,6 +77,16 @@
       "sourceWorkflow": "OPS - Follow-Up Scheduler",
       "node": "Send Via Outbound Rail",
       "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch AI PRD Shadow",
+      "targetWorkflow": "AI - PRD Shadow Evaluator"
+    },
+    {
+      "sourceWorkflow": "AI - PRD Shadow Evaluator",
+      "node": "Execute Shadow AI Advisor",
+      "targetWorkflow": "AI - Lead Qualification Assistant"
     }
   ]
 }

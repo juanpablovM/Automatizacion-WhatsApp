@@ -134,6 +134,18 @@ const NODES = [
     fixture: 'wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js',
   },
   {
+    workflow: 'n8n/workflows/ai-prd-shadow-evaluator.json',
+    node: 'Prepare Shadow Evaluation',
+    fixture: 'ai-prd-shadow-evaluator/prepare-shadow-evaluation.js',
+    runtimes: ['shared/v3-contract-runtime.js', 'shared/v3-rollout-runtime.js'],
+  },
+  {
+    workflow: 'n8n/workflows/ai-prd-shadow-evaluator.json',
+    node: 'Record Shadow Evaluation',
+    fixture: 'ai-prd-shadow-evaluator/record-shadow-evaluation.js',
+    runtimes: ['shared/v3-rollout-runtime.js'],
+  },
+  {
     workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
     node: 'Prepare Handoff ClickUp Task',
     fixture: 'ops-handoff-notification-scheduler/prepare-handoff-clickup-task.js',

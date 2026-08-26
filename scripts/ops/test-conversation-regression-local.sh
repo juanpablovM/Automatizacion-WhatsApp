@@ -14,10 +14,13 @@ const orchestratorPath = 'n8n/workflows/wa-conversation-orchestrator.json';
 const assistantPath = 'n8n/workflows/ai-lead-qualification-assistant.json';
 const conversationStatusesSeedPath = 'db/seeds/002_conversation_statuses.sql';
 const rolloutRuntimePath = 'tests/fixtures/workflow-nodes/shared/v3-rollout-runtime.js';
+const shadowEvaluatorPath = 'n8n/workflows/ai-prd-shadow-evaluator.json';
+const workflowLinksPath = 'n8n/workflow-links.json';
 const suite = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const matrix = fs.readFileSync(matrixPath, 'utf8');
 const orchestrator = JSON.parse(fs.readFileSync(orchestratorPath, 'utf8'));
 const assistant = JSON.parse(fs.readFileSync(assistantPath, 'utf8'));
+const workflowLinks = JSON.parse(fs.readFileSync(workflowLinksPath, 'utf8'));
 const conversationStatusesSeed = fs.readFileSync(conversationStatusesSeedPath, 'utf8');
 
 const requiredEvidence = [
@@ -63,6 +66,8 @@ for (const id of [...requiredBaseCases, ...requiredAiCases]) {
   if (!matrix.includes(id)) fail(`Falta caso en matriz: ${id}`);
 }
 if (!fs.existsSync(rolloutRuntimePath)) fail('Falta runtime canonico v3 de routing/rollout');
+if (!fs.existsSync(shadowEvaluatorPath)) fail('Falta workflow AI PRD Shadow Evaluator');
+const shadowEvaluator = JSON.parse(fs.readFileSync(shadowEvaluatorPath, 'utf8'));
 const {
   resolveConversationContractRoute,
   planShadowEvaluation,
@@ -173,6 +178,10 @@ if (contractNode.parameters.jsCode.includes('advisorQuestion')
   || contractNode.parameters.jsCode.includes('confirmationText(')) {
   fail('Autoridad v3 no debe contener copy/preguntas deterministas');
 }
+if (!workflowLinks.links.some((link) => link.sourceWorkflow === 'WA - Inbound Downstream Dispatcher'
+  && link.node === 'Dispatch AI PRD Shadow' && link.targetWorkflow === 'AI - PRD Shadow Evaluator')) {
+  fail('workflow-links no declara el dispatch post-delivery a shadow');
+}
 const RouteAsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const runRouteNode = new RouteAsyncFunction('items', '$env', routeNode.parameters.jsCode);
 const routedByWorkflow = (await runRouteNode([{ json: { inbound_event_id: 'workflow-route-1' } }], {
@@ -181,6 +190,22 @@ const routedByWorkflow = (await runRouteNode([{ json: { inbound_event_id: 'workf
 }))[0].json;
 if (routedByWorkflow.contract_version !== 'v3' || routedByWorkflow.contract_mode !== 'enforce') {
   fail('Nodo real de workflow no propaga ruta enforce/v3');
+}
+const prepareShadowNode = shadowEvaluator.nodes.find((node) => node.name === 'Prepare Shadow Evaluation');
+const recordShadowNode = shadowEvaluator.nodes.find((node) => node.name === 'Record Shadow Evaluation');
+if (!prepareShadowNode || !recordShadowNode) fail('Shadow evaluator no expone preparacion y auditoria');
+const runPrepareShadow = new RouteAsyncFunction('items', prepareShadowNode.parameters.jsCode);
+const preparedShadow = (await runPrepareShadow([{ json: {
+  shadow_plan: shadowPlan,
+  shadow_payload: shadowPlan.payload,
+} }]))[0].json;
+const runRecordShadow = new RouteAsyncFunction('items', recordShadowNode.parameters.jsCode);
+const recordedShadow = (await runRecordShadow([{ json: {
+  ...preparedShadow,
+  ai_request_error: 'provider_timeout',
+} }]))[0].json.shadow_audit;
+if (recordedShadow.legacy_delivery_receipt_ref !== 'delivery-1' || recordedShadow.turn_id !== 'turn-shadow') {
+  fail('Shadow evaluator debe conservar ruta y receipt legacy hasta la auditoria');
 }
 
 for (const testCase of suite.cases) {
@@ -322,6 +347,32 @@ const builtAi = (await buildAiFn([{ json: {
 } }], {
   AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
 }))[0].json;
+const validShadowRequest = (await buildAiFn([{ json: {
+  shadow_mode: true,
+  contract_version: 'v3',
+  turn_policy: shadowPolicy,
+} }], {
+  AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
+}))[0].json;
+if (validShadowRequest.ai_request_error || !validShadowRequest.ai_request) {
+  fail('Asistente debe aceptar policy shadow v3 sin autoridad');
+}
+const unsafeShadowPolicy = compileV3TurnPolicy(buildV3PolicyInput({
+  inbound_event_id: 'shadow-turn-unsafe',
+  conversation_id: 'conversation-shadow',
+  external_message_id: 'message-shadow-unsafe',
+  text_body: 'Derivame con ventas',
+}));
+const unsafeShadowRequest = (await buildAiFn([{ json: {
+  shadow_mode: true,
+  contract_version: 'v3',
+  turn_policy: unsafeShadowPolicy,
+} }], {
+  AI_LEAD_ASSISTANT_ENABLED: 'true', AI_DIRECT_API_KEY: 'test-key', AI_DIRECT_API_MODEL: 'test-model',
+}))[0].json;
+if (unsafeShadowRequest.ai_request_error !== 'shadow_authority_forbidden' || unsafeShadowRequest.ai_request !== null) {
+  fail('Asistente debe rechazar policy shadow con mutaciones/efectos');
+}
 const assertStrictSchema = (schema, path = 'root') => {
   if (!schema || typeof schema !== 'object') return;
   if (schema.type === 'object' && schema.properties) {
