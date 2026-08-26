@@ -28,6 +28,8 @@ node <<'NODE'
 (async () => {
   const fs = require('fs');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const { compileV3TurnPolicy } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/compile-v3-turn-policy.js');
+  const { sha256: sha256V3 } = require('./tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js');
 
   const workflow = (file) => JSON.parse(fs.readFileSync(`n8n/workflows/${file}`, 'utf8'));
   const orchestrator = workflow('wa-conversation-orchestrator.json');
@@ -645,7 +647,68 @@ node <<'NODE'
   }
 
   // ---------------------------------------------------------------------------
-  console.log(`\nGate comercial PRD: ${passed} PASS / ${failed} FAIL`);
+  // 7. Contrato conversacional v3: evidencia, atomicidad e identidades.
+  // ---------------------------------------------------------------------------
+  console.log('[7] Contrato v3: policy, evidencia, atomicidad e identidades');
+  {
+    const messageText = 'Necesito 6 m² de baldosas en Ñuñoa, no 4 m².';
+    const policyInput = {
+      turn: {
+        id: 'turn-v3-1',
+        conversation_id: 'conversation-v3-1',
+        conversation_revision: 12,
+        message: { id: 'message-v3-1', text: messageText },
+      },
+      history: { messages: [], truncated: false },
+      facts: [{
+        fact_id: 'fact-measurements-1',
+        field: 'measurements',
+        value: { kind: 'area', value: 4, unit: 'square_meter' },
+        mutability: 'customer_correctable',
+        source: { message_id: 'message-old', evidence_digest: 'old-digest' },
+      }],
+      goals: [
+        { goal_id: 'product', status: 'unresolved', importance: 'required_for_effect', blocks_effects: ['create_lead'] },
+        { goal_id: 'commune', status: 'unresolved', importance: 'required_for_effect', blocks_effects: ['create_lead'] },
+        { goal_id: 'measurements', status: 'unresolved', importance: 'required_for_effect', blocks_effects: ['create_lead'] },
+        { goal_id: 'modality', status: 'unresolved', importance: 'required_for_effect', blocks_effects: ['create_lead'] },
+      ],
+      allowed_mutations: [
+        { operation: 'set', concept: 'product', field: 'product' },
+        { operation: 'set', concept: 'commune', field: 'commune' },
+        { operation: 'replace', concept: 'measurements', field: 'measurements', current_fact_id: 'fact-measurements-1' },
+        { operation: 'set', concept: 'modality', field: 'modality' },
+      ],
+      grounding: {
+        catalog: [
+          { ref: 'product:baldosas', concept: 'product', value: 'Baldosas' },
+          { ref: 'service:baldosas', concept: 'service', value: 'Baldosas' },
+          { ref: 'commune:nunoa', concept: 'commune', value: 'Ñuñoa' },
+        ],
+        modality_synonyms: [{ ref: 'modality:material', value: 'material' }],
+      },
+      claim_rules: [
+        { rule_id: 'no_stock_confirmation', kind: 'forbidden_pattern', pattern: '\\bstock\\s+(confirmado|disponible)\\b', flags: 'iu' },
+        { rule_id: 'no_unreceipted_derivation', kind: 'forbidden_pattern', pattern: '\\b(ya|quedo)\\s+derivad[oa]\\b', flags: 'iu' },
+      ],
+      effect_permissions: [{ type: 'create_lead' }],
+      effect_requirements: [{ effect_type: 'create_lead', required_goal_ids: ['product', 'commune', 'measurements', 'modality'] }],
+    };
+    const policy = compileV3TurnPolicy(policyInput);
+    expectEqual(policy.version, 'ai_prd_turn_policy/v3', 'Policy debe usar envelope v3');
+    expectEqual(sha256V3('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'SHA-256 v3 debe coincidir con vector canonico');
+    assert(/^[a-f0-9]{64}$/.test(policy.policy_digest), 'Policy debe incluir digest SHA-256 canonico');
+    expectEqual(compileV3TurnPolicy(policyInput).policy_digest, policy.policy_digest, 'Policy digest debe ser determinista');
+    expectEqual(policy.conversation_policy.normal_voice, 'ai_only', 'Policy v3 declara una sola voz normal');
+    expectEqual(policy.conversation_policy.max_primary_requests, 1, 'Policy limita una solicitud principal');
+    assert(!Object.hasOwn(policy, 'objective'), 'Policy v3 no debe prescribir objective/mode');
+    assert(!Object.hasOwn(policy, 'pending_question_key'), 'Policy v3 no debe prescribir pending_question_key');
+    assert(!JSON.stringify(policy).includes('advisorQuestion'), 'Policy v3 no debe contener copy advisor');
+
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log(`\nGate comercial PRD + contratos v3: ${passed} PASS / ${failed} FAIL`);
   if (failed > 0) process.exit(1);
 })().catch((error) => {
   console.error(error.stack || error.message);
