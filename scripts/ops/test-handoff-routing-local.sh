@@ -33,13 +33,19 @@ assert(link && link.parameters.workflowId.value === schedulerId);
 assert(!dispatcher.nodes.some(n => ['Prepare Handoff Notification','Dispatch Handoff Notification','Mark Handoff Attempt'].includes(n.name)));
 for (const name of [
   'Prepare V3 Execution', 'Prepare V3 Effects', 'Record V3 Effect Result', 'Reconcile V3 Effect',
-  'Commit V3 State And Outbox', 'Record V3 Delivery',
+  'Commit V3 State And Outbox', 'Record V3 Delivery', 'Build V3 Repair',
+  'Prepare V3 Contingency Decision', 'Commit V3 Contingency',
 ]) {
   assert(orchestrator.nodes.some(node => node.name === name), `missing v3 saga node ${name}`);
 }
 const orchestratorEdge = (source, lane, target) =>
   orchestrator.connections[source]?.main?.[lane]?.some(connection => connection.node === target);
+assert(orchestratorEdge('Build V3 Repair', 0, 'V3 Recovery Is Contingency?'));
+assert(orchestratorEdge('V3 Recovery Is Contingency?', 0, 'Prepare V3 Contingency Decision'));
+assert(orchestratorEdge('V3 Recovery Is Contingency?', 1, 'Execute AI Lead Qualification'));
+assert(orchestratorEdge('Prepare V3 Contingency Decision', 0, 'Commit V3 Contingency'));
 assert(orchestratorEdge('Commit V3 State And Outbox', 0, 'V3 Has Delivery Receipt?'));
+assert(orchestratorEdge('Commit V3 Contingency', 0, 'V3 Has Delivery Receipt?'));
 assert(orchestratorEdge('V3 Has Delivery Receipt?', 0, 'Record V3 Delivery'));
 assert(orchestratorEdge('V3 Has Delivery Receipt?', 1, 'Prepare V3 Saga Result'));
 const edge = (source, lane, target, index = 0) =>

@@ -56,6 +56,27 @@ const NODES = [
     fixture: 'wa-conversation-orchestrator/prepare-conversation-output.js',
   },
   {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Build V3 Repair',
+    fixture: 'wa-conversation-orchestrator/build-v3-repair.js',
+  },
+  ...[
+    ['Prepare V3 Execution', '08_prepare_v3_decision.sql'],
+    ['Prepare V3 Effect', '11_prepare_v3_effect.sql'],
+    ['Reconcile V3 Effect', '13_reconcile_v3_effect.sql'],
+    ['Commit V3 State And Outbox', '09_commit_v3_turn.sql'],
+    ['Record V3 Delivery', '10_transition_v3_execution.sql'],
+    ['Record V3 Effect Result', '12_record_v3_effect_result.sql'],
+    ['Prepare V3 Contingency Decision', '15_prepare_v3_contingency.sql'],
+    ['Commit V3 Contingency', '14_commit_v3_contingency.sql'],
+  ].map(([node, file]) => ({
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node,
+    fixture: `db/queries/n8n/wa-conversation-orchestrator/${file}`,
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  })),
+  {
     workflow: 'n8n/workflows/ai-lead-qualification-assistant.json',
     node: 'Build AI Request',
     fixture: 'ai-lead-qualification-assistant/build-ai-request.js',
