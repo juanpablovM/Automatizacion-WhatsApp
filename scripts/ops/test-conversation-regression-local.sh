@@ -149,6 +149,16 @@ if (!groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'pr
   fail('Compiler v3 debe derivar grounding allowlisted desde contexto comercial');
 }
 
+const routeNode = orchestrator.nodes.find((node) => node.name === 'Resolve Conversation Contract Route');
+const RouteAsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const runRouteNode = new RouteAsyncFunction('items', '$env', routeNode.parameters.jsCode);
+const routedByWorkflow = (await runRouteNode([{ json: { inbound_event_id: 'workflow-route-1' } }], {
+  AI_PRD_CONTRACT_MODE: 'enforce',
+  AI_PRD_CONTRACT_RULE_ID: 'workflow-enforce',
+}))[0].json;
+if (routedByWorkflow.contract_version !== 'v3' || routedByWorkflow.contract_mode !== 'enforce') {
+  fail('Nodo real de workflow no propaga ruta enforce/v3');
+}
 
 for (const testCase of suite.cases) {
   if (!testCase.id || !testCase.title) fail('Cada caso debe tener id y title');
@@ -235,6 +245,11 @@ if (!loadStateQuery.includes("lpi.last_inbound_at >= NOW() - INTERVAL '30 days'"
 }
 if (!loadStateQuery.includes("lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')")) {
   fail('Solo los estados conversacionales elegibles deben cargarse como contexto activo');
+}
+if (!loadStateQuery.includes('active_contract_route')
+  || !loadStateQuery.includes('active_route_mode')
+  || !loadStateQuery.includes('active_route_rule_id')) {
+  fail('Load Conversation State debe recuperar la ruta persistida del turno activo');
 }
 
 const buildAiNode = assistant.nodes.find((node) => node.name === 'Build AI Request');

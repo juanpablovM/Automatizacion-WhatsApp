@@ -34,6 +34,17 @@ valid_claim AS (
     AND ie.source_number_id = ip.source_number_id
     AND ie.phone_number = ip.phone_number
 ),
+active_contract_route AS (
+  SELECT
+    execution.contract_version AS active_contract_version,
+    execution.route_mode AS active_route_mode,
+    execution.route_rule_id AS active_route_rule_id,
+    execution.state AS active_v3_execution_state
+  FROM conversation_turn_executions execution
+  JOIN input_payload ip ON execution.inbound_event_id = ip.inbound_event_id
+  ORDER BY execution.id DESC
+  LIMIT 1
+),
 latest_conversation AS (
   SELECT
     c.id AS conversation_id,
@@ -155,6 +166,10 @@ SELECT
   ip.instance_name,
   ip.inbound_event_id,
   ip.processing_token,
+  acr.active_contract_version,
+  acr.active_route_mode,
+  acr.active_route_rule_id,
+  acr.active_v3_execution_state,
   ip.whatsapp_name AS input_whatsapp_name,
   ip.external_contact_id AS input_external_contact_id,
   ip.external_message_id AS input_external_message_id,
@@ -219,6 +234,7 @@ SELECT
   COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
+LEFT JOIN active_contract_route acr ON TRUE
 LEFT JOIN latest_conversation lc ON TRUE
 LEFT JOIN last_persisted_inbound lpi ON TRUE
 LEFT JOIN latest_conversation_state lcs ON TRUE

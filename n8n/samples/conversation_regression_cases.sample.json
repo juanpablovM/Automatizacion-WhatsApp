@@ -1,6 +1,6 @@
 {
   "suite": "post_ai_conversation_regression",
-  "version": 1,
+  "version": 3,
   "required_evidence": [
     "conversation_id",
     "lead_id",
@@ -870,6 +870,137 @@
           "product"
         ],
         "audit_required": true
+      }
+    },
+    {
+      "id": "V3-ROUTE-01",
+      "title": "Ruta legacy visible",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Ruta legacy visible"
+        ],
+        "processable": true,
+        "mode": "legacy"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "legacy",
+        "contract_version": "legacy"
+      }
+    },
+    {
+      "id": "V3-ROUTE-02",
+      "title": "Ruta shadow conserva respuesta legacy",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Ruta shadow conserva respuesta legacy"
+        ],
+        "processable": true,
+        "mode": "shadow"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "shadow",
+        "contract_version": "legacy",
+        "shadow_async": true
+      }
+    },
+    {
+      "id": "V3-ROUTE-03",
+      "title": "Ruta canary usa recuperacion v3",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Ruta canary usa recuperacion v3"
+        ],
+        "processable": true,
+        "mode": "canary"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "canary",
+        "contract_version": "v3",
+        "legacy_reinterpretation": false
+      }
+    },
+    {
+      "id": "V3-ROUTE-04",
+      "title": "Ruta enforce usa autoridad v3",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Ruta enforce usa autoridad v3"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "enforce",
+        "contract_version": "v3",
+        "legacy_reinterpretation": false
+      }
+    },
+    {
+      "id": "V3-ROUTE-05",
+      "title": "Retry conserva ruta persistida",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Retry conserva ruta persistida"
+        ],
+        "processable": true,
+        "mode": "legacy",
+        "active_route": "canary"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "canary",
+        "route_drift_detected": true
+      }
+    },
+    {
+      "id": "V3-ROUTE-06",
+      "title": "Rollback solo afecta turnos nuevos",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Rollback solo afecta turnos nuevos"
+        ],
+        "processable": true,
+        "mode": "legacy",
+        "active_route": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "route_mode": "enforce",
+        "new_turn_route": "legacy"
       }
     }
   ]

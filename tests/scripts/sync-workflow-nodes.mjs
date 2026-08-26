@@ -60,6 +60,12 @@ const NODES = [
     node: 'Build V3 Repair',
     fixture: 'wa-conversation-orchestrator/build-v3-repair.js',
   },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Resolve Conversation Contract Route',
+    fixture: 'wa-conversation-orchestrator/resolve-conversation-contract-route.js',
+    runtimes: ['shared/v3-rollout-runtime.js'],
+  },
   ...[
     ['Prepare V3 Execution', '08_prepare_v3_decision.sql'],
     ['Prepare V3 Effect', '11_prepare_v3_effect.sql'],
@@ -351,9 +357,13 @@ for (const entry of NODES) {
   const canonicalSource = entry.fixture.startsWith('db/')
     ? fs.readFileSync(path.join(repoRoot, entry.fixture), 'utf8')
     : loadFixture(entry.fixture);
+  const composedSource = [
+    ...(entry.runtimes || []).map((runtime) => loadFixture(runtime)),
+    canonicalSource,
+  ].join('\n\n');
   const source = entry.transform === 'n8n-explicit-return'
-    ? canonicalSource + '\nreturn runN8nCode(items);\n'
-    : canonicalSource;
+    ? composedSource + '\nreturn runN8nCode(items);\n'
+    : composedSource;
   const parameter = entry.parameter || 'jsCode';
   if (mode === 'check') {
     checkedCount += 1;
