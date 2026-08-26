@@ -878,7 +878,11 @@ node <<'NODE'
       assert(source.includes('$1'), `${filename} debe usar parametros posicionales`);
     }
     const routeSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/07_route_v3_turn.sql', 'utf8');
-    assert(/ON CONFLICT\s*\(inbound_event_id\)/i.test(routeSql), 'Route v3 debe ser idempotente por inbound event');
+    assert(
+      routeSql.includes('execution.inbound_event_id = $1::BIGINT')
+        && migration.includes('UNIQUE (inbound_event_id)'),
+      'Route v3 debe ser idempotente por inbound event'
+    );
     const prepareSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/08_prepare_v3_decision.sql', 'utf8');
     assert(
       prepareSql.includes("$4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')"),

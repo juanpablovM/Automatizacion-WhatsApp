@@ -20,6 +20,7 @@ CREATE TABLE conversation_turn_executions (
     )),
   conversation_revision_expected BIGINT,
   expected_snapshot_digest TEXT,
+  expected_snapshot JSONB,
   policy_digest TEXT,
   proposal_digest TEXT,
   decision_digest TEXT,
@@ -42,6 +43,10 @@ CREATE TABLE conversation_turn_executions (
 
 CREATE INDEX idx_conversation_turn_executions_conversation_state
 ON conversation_turn_executions (conversation_id, state, id);
+
+CREATE UNIQUE INDEX uq_conversation_turn_executions_active_conversation
+ON conversation_turn_executions (conversation_id)
+WHERE state NOT IN ('delivered', 'aborted');
 
 CREATE INDEX idx_conversation_turn_executions_reconciliation
 ON conversation_turn_executions (updated_at, id)
