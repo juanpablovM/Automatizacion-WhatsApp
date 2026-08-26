@@ -66,6 +66,12 @@ const NODES = [
     fixture: 'wa-conversation-orchestrator/resolve-conversation-contract-route.js',
     runtimes: ['shared/v3-rollout-runtime.js'],
   },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Compile V3 Turn Policy',
+    fixture: 'wa-conversation-orchestrator/compile-v3-turn.js',
+    runtimes: ['shared/v3-contract-runtime.js', 'shared/v3-rollout-runtime.js'],
+  },
   ...[
     ['Prepare V3 Execution', '08_prepare_v3_decision.sql'],
     ['Prepare V3 Effect', '11_prepare_v3_effect.sql'],
