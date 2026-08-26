@@ -22,6 +22,9 @@ describeIntegration('v3 conversation turn execution saga', () => {
   const prepareSql = query('08_prepare_v3_decision');
   const commitSql = query('09_commit_v3_turn');
   const transitionSql = query('10_transition_v3_execution');
+  const prepareEffectSql = query('11_prepare_v3_effect');
+  const recordEffectSql = query('12_record_v3_effect_result');
+  const reconcileEffectSql = query('13_reconcile_v3_effect');
   let sourceNumberId;
   let activeStatusId;
   let sequence = 0;
@@ -305,6 +308,89 @@ describeIntegration('v3 conversation turn execution saga', () => {
     } finally {
       await other.end();
     }
+  });
+
+  test('records effect receipts and never retries an unknown outcome blindly', async () => {
+    const effect = {
+      type: 'quote_create', operation_key: `effect-${sequence + 1}`,
+      payload: { sku: 'svc-1' }, payload_digest: `payload-${sequence + 1}`,
+      required_before_reply: true,
+    };
+    const turn = await seedTurn({ effectCommands: [effect] });
+    const claimed = await client.query(prepareEffectSql, [
+      turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+    ]);
+    expect(claimed.rows[0].should_execute).toBe(true);
+    const unknown = await client.query(recordEffectSql, [
+      effect.operation_key, effect.payload_digest, claimed.rows[0].claim_token,
+      'unknown', { provider: 'timeout' }, null, 'timeout after dispatch',
+    ]);
+    expect(unknown.rows[0].execution_state).toBe('reconciliation_required');
+
+    const blindRetry = await client.query(prepareEffectSql, [
+      turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+    ]);
+    expect(blindRetry.rows[0].should_execute).toBe(false);
+    expect(blindRetry.rows[0].status).toBe('unknown');
+    expect((await client.query(reconcileEffectSql, [
+      effect.operation_key, 'wrong-digest', 'succeeded', { marker: effect.operation_key },
+    ])).rows).toHaveLength(0);
+  });
+
+  test('requires recovery for inconclusive or duplicate exact-key reconciliation', async () => {
+    for (const resolution of ['inconclusive', 'duplicate']) {
+      const effect = {
+        type: 'quote_create', operation_key: `effect-${resolution}-${sequence + 1}`,
+        payload: { resolution }, payload_digest: `payload-${resolution}-${sequence + 1}`,
+        required_before_reply: true,
+      };
+      const turn = await seedTurn({ effectCommands: [effect] });
+      const claim = await client.query(prepareEffectSql, [
+        turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+      ]);
+      await client.query(recordEffectSql, [
+        effect.operation_key, effect.payload_digest, claim.rows[0].claim_token,
+        'unknown', {}, null, 'ambiguous',
+      ]);
+      const reconciled = await client.query(reconcileEffectSql, [
+        effect.operation_key, effect.payload_digest, resolution,
+        { exact_operation_key: effect.operation_key, matches: resolution === 'duplicate' ? 2 : 0 },
+      ]);
+      expect(reconciled.rows[0].execution_state).toBe('reconciliation_required');
+      expect(reconciled.rows[0].reconciliation_required).toBe(true);
+      if (resolution === 'duplicate') {
+        expect(reconciled.rows[0].last_error.code).toBe('duplicate_effect_incident');
+      }
+    }
+  });
+
+  test('permits one retry only after exact-key proof of no effect', async () => {
+    const effect = {
+      type: 'quote_create', operation_key: `effect-noop-${sequence + 1}`,
+      payload: { sku: 'svc-2' }, payload_digest: `payload-noop-${sequence + 1}`,
+      required_before_reply: true,
+    };
+    const turn = await seedTurn({ effectCommands: [effect] });
+    const first = await client.query(prepareEffectSql, [
+      turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+    ]);
+    await client.query(recordEffectSql, [
+      effect.operation_key, effect.payload_digest, first.rows[0].claim_token,
+      'unknown', {}, null, 'ambiguous',
+    ]);
+    const proof = await client.query(reconcileEffectSql, [
+      effect.operation_key, effect.payload_digest, 'no_effect_proven',
+      { exact_operation_key: effect.operation_key, matches: 0, complete_search: true },
+    ]);
+    expect(proof.rows[0].execution_state).toBe('effects_pending');
+    const authorized = await client.query(prepareEffectSql, [
+      turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+    ]);
+    expect(authorized.rows[0].should_execute).toBe(true);
+    const duplicateClaim = await client.query(prepareEffectSql, [
+      turn.decisionId, effect.operation_key, effect.type, effect.payload, effect.payload_digest,
+    ]);
+    expect(duplicateClaim.rows[0].should_execute).toBe(false);
   });
   test('stores one delivery receipt through the legal terminal transition', async () => {
     const turn = await seedTurn({ mutations: [] });
