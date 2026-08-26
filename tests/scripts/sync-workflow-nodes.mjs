@@ -143,6 +143,24 @@ const NODES = [
   },
 ];
 
+const V3_CONTRACT_WRAPPERS = [
+  {
+    fixture: 'wa-conversation-orchestrator/compile-v3-turn-policy.js',
+    exportName: 'compileV3TurnPolicy',
+  },
+  {
+    fixture: 'wa-conversation-orchestrator/validate-v3-ai-proposal.js',
+    exportName: 'validateV3AiProposal',
+  },
+  {
+    fixture: 'wa-conversation-orchestrator/authorize-v3-conversation-decision.js',
+    exportName: 'authorizeV3ConversationDecision',
+  },
+];
+const V3_CONTRACT_RUNTIME = 'shared/v3-contract-runtime.js';
+const v3WrapperSource = (exportName) =>
+  `const { ${exportName} } = require('../shared/v3-contract-runtime.js');\n\nmodule.exports = { ${exportName} };\n`;
+
 const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--backup-only') ? 'backup' : 'patch';
 
 const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(repoRoot, rel), 'utf8'));
@@ -150,6 +168,54 @@ const loadFixture = (fixture) => fs.readFileSync(path.join(fixturesRoot, fixture
 
 let patchedCount = 0;
 let checkedCount = 0;
+
+const validateV3ContractLibrary = () => {
+  const runtimePath = path.join(fixturesRoot, V3_CONTRACT_RUNTIME);
+  const runtime = fs.readFileSync(runtimePath, 'utf8');
+  const requiredCanonicalSymbols = [
+    'V3_CONTRACTS',
+    'CONCEPT_TO_FIELD',
+    'GROUNDED_CONCEPTS',
+    'canonicalJson',
+    'sha256',
+    'digestObject',
+    'compileV3TurnPolicy',
+    'validateV3AiProposal',
+    'authorizeV3ConversationDecision',
+  ];
+  for (const symbol of requiredCanonicalSymbols) {
+    if (!runtime.includes(symbol)) {
+      console.error(`[ERROR] ${V3_CONTRACT_RUNTIME} no contiene el simbolo canonico ${symbol}`);
+      process.exitCode = 1;
+    }
+  }
+  try {
+    new Function(runtime);
+  } catch (error) {
+    console.error(`[ERROR] ${V3_CONTRACT_RUNTIME} no compila: ${error.message}`);
+    process.exitCode = 1;
+  }
+
+  for (const entry of V3_CONTRACT_WRAPPERS) {
+    const wrapperPath = path.join(fixturesRoot, entry.fixture);
+    const expected = v3WrapperSource(entry.exportName);
+    const actual = fs.existsSync(wrapperPath) ? fs.readFileSync(wrapperPath, 'utf8') : '';
+    checkedCount += 1;
+    if (actual === expected) {
+      console.log(`[OK]    tests/fixtures/workflow-nodes/${entry.fixture}`);
+    } else if (mode === 'check') {
+      console.log(`[DRIFT] tests/fixtures/workflow-nodes/${entry.fixture} difiere del wrapper v3 canonico`);
+      process.exitCode = 1;
+    } else if (mode === 'patch') {
+      fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+      fs.writeFileSync(wrapperPath, expected, 'utf8');
+      patchedCount += 1;
+      console.log(`[PATCH] tests/fixtures/workflow-nodes/${entry.fixture}`);
+    }
+  }
+};
+
+validateV3ContractLibrary();
 
 // =============================================================================
 // Timeout validation helpers (memoria #679, #686)

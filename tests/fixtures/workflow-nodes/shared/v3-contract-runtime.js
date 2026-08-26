@@ -433,6 +433,57 @@ const validateV3AiProposal = (policy, proposal) => {
   };
 };
 
+const authorizeV3ConversationDecision = (policy, proposal, validation) => {
+  if (validation?.version !== V3_CONTRACTS.validation || validation.valid !== true) {
+    throw new Error('validated_proposal_required');
+  }
+  if (validation.policy_digest !== policy?.policy_digest || validation.proposal_digest !== digestObject(proposal)) {
+    throw new Error('validation_digest_mismatch');
+  }
+  const decisionId = sha256(`${V3_CONTRACTS.decision}\u0000${policy.policy_digest}\u0000${validation.proposal_digest}`);
+  const replySha = sha256(proposal.reply_text);
+  const deliveryKey = sha256(`turn_reply/v1\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${replySha}`);
+  const effectCommands = validation.authorized_effect_requests.map((effect) => {
+    const payload = {
+      conversation_id: policy.turn.conversation_id,
+      turn_id: policy.turn.id,
+      reason_observation_ids: jsonClone(effect.reason_observation_ids),
+    };
+    const payloadDigest = digestObject(payload);
+    return {
+      type: effect.type,
+      operation_key: sha256(`effect/v3\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${effect.type}\u0000${payloadDigest}`),
+      payload,
+      payload_digest: payloadDigest,
+      required_before_reply: true,
+    };
+  });
+  return {
+    version: V3_CONTRACTS.decision,
+    decision_id: decisionId,
+    outcome: 'authorized',
+    turn_id: policy.turn.id,
+    conversation_id: policy.turn.conversation_id,
+    conversation_revision_expected: policy.turn.conversation_revision,
+    expected_snapshot_digest: digestObject({
+      conversation_revision: policy.turn.conversation_revision,
+      facts: policy.facts,
+    }),
+    policy_digest: policy.policy_digest,
+    proposal_digest: validation.proposal_digest,
+    reply: {
+      text: proposal.reply_text,
+      sha256: replySha,
+      delivery_key: deliveryKey,
+      primary_request: proposal.primary_request === null ? null : jsonClone(proposal.primary_request),
+    },
+    observations: jsonClone(validation.accepted_observations),
+    state_mutations: jsonClone(validation.authorized_mutations),
+    effect_commands: effectCommands,
+    commit_policy: { mode: 'semantic_all_or_nothing' },
+  };
+};
+
 module.exports = {
   V3_CONTRACTS,
   CONCEPT_TO_FIELD,
@@ -442,4 +493,5 @@ module.exports = {
   digestObject,
   compileV3TurnPolicy,
   validateV3AiProposal,
+  authorizeV3ConversationDecision,
 };

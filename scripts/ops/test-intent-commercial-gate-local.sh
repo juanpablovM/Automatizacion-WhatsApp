@@ -30,6 +30,7 @@ node <<'NODE'
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const { compileV3TurnPolicy } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/compile-v3-turn-policy.js');
   const { validateV3AiProposal } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-v3-ai-proposal.js');
+  const { authorizeV3ConversationDecision } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/authorize-v3-conversation-decision.js');
   const { sha256: sha256V3 } = require('./tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js');
 
   const workflow = (file) => JSON.parse(fs.readFileSync(`n8n/workflows/${file}`, 'utf8'));
@@ -769,6 +770,21 @@ node <<'NODE'
       'evidence_occurrence debe seleccionar la segunda cita y derivar su offset UTF-8'
     );
 
+    const decision = authorizeV3ConversationDecision(policy, proposal, validation);
+    expectEqual(decision.version, 'validated_conversation_decision/v3', 'Decision debe usar envelope v3');
+    expectEqual(decision.reply.text, replyText, 'Decision debe preservar bytes exactos del reply');
+    expectEqual(decision.reply.sha256.length, 64, 'Decision debe derivar digest del reply');
+    expectEqual(
+      authorizeV3ConversationDecision(policy, proposal, validation).decision_id,
+      decision.decision_id,
+      'Decision identity debe ser estable en replay'
+    );
+    expectEqual(
+      authorizeV3ConversationDecision(policy, proposal, validation).reply.delivery_key,
+      decision.reply.delivery_key,
+      'Delivery identity debe ser estable en replay'
+    );
+
     const invalidServiceAsProduct = structuredClone(proposal);
     invalidServiceAsProduct.observations[1].concept = 'service';
     invalidServiceAsProduct.observations[1].grounding_ref = 'service:baldosas';
@@ -801,6 +817,29 @@ node <<'NODE'
     expectEqual(effectValidation.accepted_observations.length, 0, 'Efecto invalido rechaza la propuesta completa');
     expectEqual(effectValidation.authorized_effect_requests.length, 0, 'Efecto invalido no se acepta parcialmente');
 
+    const effectProposal = structuredClone(proposal);
+    effectProposal.observations.push({
+      id: 'obs-modality', concept: 'modality', raw_value: 'material', normalized_value: 'material',
+      evidence_quote: 'material', evidence_occurrence: 1, grounding_ref: 'modality:material', resolves_goal_ids: ['modality'],
+    });
+    effectProposal.state_mutations.push({ operation: 'set', field: 'modality', observation_id: 'obs-modality', replaces_fact_id: null });
+    effectProposal.effect_requests = [{ type: 'create_lead', reason_observation_ids: ['obs-product', 'obs-commune', 'obs-measurements', 'obs-modality'] }];
+    effectProposal.reply_text = 'Perfecto, puedo preparar la solicitud con esos datos.';
+    effectProposal.primary_request = null;
+    const effectPolicy = compileV3TurnPolicy({
+      ...policyInput,
+      turn: {
+        ...policyInput.turn,
+        message: { ...policyInput.turn.message, text: `${messageText} Solo material.` },
+      },
+    });
+    effectProposal.policy_digest = effectPolicy.policy_digest;
+    const effectReady = validateV3AiProposal(effectPolicy, effectProposal);
+    expectEqual(effectReady.valid, true, 'Efecto con todos los prerequisites evidenciados debe autorizarse');
+    const effectDecision = authorizeV3ConversationDecision(effectPolicy, effectProposal, effectReady);
+    expectEqual(effectDecision.effect_commands.length, 1, 'Decision debe derivar un comando de efecto');
+    assert(/^[a-f0-9]{64}$/.test(effectDecision.effect_commands[0].operation_key), 'Operation key debe ser system-derived');
+    assert(!Object.hasOwn(effectProposal.effect_requests[0], 'operation_key'), 'Proveedor no debe suministrar operation_key');
   }
 
   // ---------------------------------------------------------------------------
