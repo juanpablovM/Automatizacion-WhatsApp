@@ -150,6 +150,17 @@ if (!groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'pr
 }
 
 const routeNode = orchestrator.nodes.find((node) => node.name === 'Resolve Conversation Contract Route');
+const contractNode = orchestrator.nodes.find((node) => node.name === 'Validate And Authorize V3');
+const contractBranches = orchestrator.connections['Use V3 Contract?']?.main || [];
+if (contractBranches[0]?.[0]?.node !== 'Validate And Authorize V3'
+  || contractBranches[1]?.[0]?.node !== 'Apply AI Assistance') {
+  fail('V3 debe evitar Apply AI Assistance; legacy/v2 debe conservarlo');
+}
+if (contractNode.parameters.jsCode.includes('advisorQuestion')
+  || contractNode.parameters.jsCode.includes('nextQuestion(')
+  || contractNode.parameters.jsCode.includes('confirmationText(')) {
+  fail('Autoridad v3 no debe contener copy/preguntas deterministas');
+}
 const RouteAsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const runRouteNode = new RouteAsyncFunction('items', '$env', routeNode.parameters.jsCode);
 const routedByWorkflow = (await runRouteNode([{ json: { inbound_event_id: 'workflow-route-1' } }], {
