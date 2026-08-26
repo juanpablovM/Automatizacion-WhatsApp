@@ -843,6 +843,53 @@ node <<'NODE'
   }
 
   // ---------------------------------------------------------------------------
+  // 8. Ledger v3: migracion y SQL canonico se mantienen como assets auditables.
+  // ---------------------------------------------------------------------------
+  console.log('[8] Ledger v3: migracion y SQL canonico');
+  {
+    const migration = fs.readFileSync('infra/postgres/migrations/018_create_conversation_turn_executions.sql', 'utf8');
+    for (const fragment of [
+      'CREATE TABLE conversation_turn_executions',
+      'inbound_event_id',
+      'decision_id',
+      'contract_version',
+      'route_mode',
+      'expected_snapshot_digest',
+      'delivery_key',
+      'effect_receipt_refs',
+      'last_error',
+    ]) assert(migration.includes(fragment), `Migracion 018 debe incluir ${fragment}`);
+    assert(/UNIQUE\s*\(inbound_event_id\)/i.test(migration), 'Ledger debe tener una fila por inbound_event_id');
+    assert(/UNIQUE\s*\(decision_id\)/i.test(migration), 'decision_id no nulo debe ser unico');
+    assert(
+      migration.includes("delivery_message_id IS NULL OR state IN ('delivery_pending', 'delivered', 'reconciliation_required')"),
+      'Ledger debe permitir reconciliar una entrega que ya tiene message_id'
+    );
+
+    const sqlFiles = [
+      '07_route_v3_turn.sql',
+      '08_prepare_v3_decision.sql',
+      '09_commit_v3_turn.sql',
+      '10_transition_v3_execution.sql',
+    ];
+    for (const filename of sqlFiles) {
+      const source = fs.readFileSync(`db/queries/n8n/wa-conversation-orchestrator/${filename}`, 'utf8');
+      assert(source.includes('conversation_turn_executions'), `${filename} debe operar sobre el ledger v3`);
+      assert(source.includes('$1'), `${filename} debe usar parametros posicionales`);
+    }
+    const routeSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/07_route_v3_turn.sql', 'utf8');
+    assert(/ON CONFLICT\s*\(inbound_event_id\)/i.test(routeSql), 'Route v3 debe ser idempotente por inbound event');
+    const prepareSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/08_prepare_v3_decision.sql', 'utf8');
+    assert(
+      prepareSql.includes("$4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')"),
+      'Prepare v3 debe aceptar solo estados iniciales de una decision autorizada'
+    );
+    const commitSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/09_commit_v3_turn.sql', 'utf8');
+    assert(commitSql.includes('processing_token'), 'Commit v3 debe revalidar processing token');
+    assert(commitSql.includes('expected_snapshot_digest'), 'Commit v3 debe revalidar snapshot esperado');
+  }
+
+  // ---------------------------------------------------------------------------
   console.log(`\nGate comercial PRD + contratos v3: ${passed} PASS / ${failed} FAIL`);
   if (failed > 0) process.exit(1);
 })().catch((error) => {
