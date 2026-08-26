@@ -32,7 +32,7 @@ const link = dispatcher.nodes.find(n => n.name === 'Dispatch Handoff Notificatio
 assert(link && link.parameters.workflowId.value === schedulerId);
 assert(!dispatcher.nodes.some(n => ['Prepare Handoff Notification','Dispatch Handoff Notification','Mark Handoff Attempt'].includes(n.name)));
 for (const name of [
-  'Prepare V3 Execution', 'Prepare V3 Effects',
+  'Prepare V3 Execution', 'Prepare V3 Effects', 'Record V3 Effect Result', 'Reconcile V3 Effect',
   'Commit V3 State And Outbox', 'Record V3 Delivery',
 ]) {
   assert(orchestrator.nodes.some(node => node.name === name), `missing v3 saga node ${name}`);
