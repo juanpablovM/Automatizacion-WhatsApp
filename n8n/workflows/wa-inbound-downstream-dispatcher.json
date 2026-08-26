@@ -85,7 +85,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{ json: { outbound_lane_complete: true } }];"
+        "jsCode": "return items.map((item) => ({\n  json: { ...(item.json || {}), outbound_lane_complete: true },\n}));\n"
       },
       "id": "50000000-0000-0000-0000-000000000014",
       "name": "Outbound Lane Complete",
@@ -777,6 +777,89 @@
           "name": "Postgres CRM App Local"
         }
       }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const CONTRACT_MODES = new Set(['legacy', 'shadow', 'canary', 'enforce']);\n\nconst asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst modeVersion = (mode) => ['canary', 'enforce'].includes(mode) ? 'v3' : 'legacy';\nconst normalizeMode = (value) => {\n  const mode = safe(value, 'legacy').toLowerCase();\n  return CONTRACT_MODES.has(mode) ? mode : 'legacy';\n};\n\nconst normalizeActiveRoute = (value) => {\n  const route = asObject(value);\n  const mode = normalizeMode(route.mode ?? route.route_mode);\n  const ruleId = safe(route.rule_id ?? route.route_rule_id);\n  if (!ruleId) return null;\n  return {\n    mode,\n    contract_version: safe(route.contract_version, modeVersion(mode)),\n    rule_id: ruleId,\n  };\n};\n\nconst resolveConversationContractRoute = (turn, configuration = {}) => {\n  const input = asObject(turn);\n  const requestedMode = normalizeMode(configuration.mode);\n  const requestedRuleId = safe(configuration.rule_id, `rollout:${requestedMode}`);\n  const activeRoute = normalizeActiveRoute(input.active_route);\n  const fixed = activeRoute || {\n    mode: requestedMode,\n    contract_version: modeVersion(requestedMode),\n    rule_id: requestedRuleId,\n  };\n  const isV3 = fixed.contract_version === 'v3';\n  return {\n    schema: 'conversation_contract_route/v1',\n    turn_id: safe(input.turn_id ?? input.inbound_event_id),\n    mode: fixed.mode,\n    contract_version: fixed.contract_version,\n    rule_id: fixed.rule_id,\n    route_replayed: Boolean(activeRoute),\n    route_drift_detected: Boolean(activeRoute)\n      && (activeRoute.mode !== requestedMode || activeRoute.rule_id !== requestedRuleId),\n    shadow_requested: fixed.mode === 'shadow',\n    visible_contract: fixed.mode === 'shadow' ? 'legacy' : fixed.contract_version,\n    recovery_contract: isV3 ? 'v3' : 'legacy',\n    legacy_reinterpretation_allowed: !isV3,\n  };\n};\n\nconst planShadowEvaluation = ({ route, legacy_delivery: legacyDelivery, payload }) => {\n  const fixedRoute = asObject(route);\n  const delivery = asObject(legacyDelivery);\n  const source = asObject(payload);\n  const dispatch = fixedRoute.mode === 'shadow' && delivery.delivered === true\n    && Boolean(safe(delivery.receipt_ref));\n  return {\n    schema: 'ai_prd_shadow_dispatch/v1',\n    dispatch,\n    reason: dispatch ? 'post_delivery' : 'not_eligible',\n    turn_id: safe(fixedRoute.turn_id),\n    route_rule_id: safe(fixedRoute.rule_id),\n    legacy_delivery_receipt_ref: safe(delivery.receipt_ref) || null,\n    wait_for_completion: false,\n    visible_latency_ms: 0,\n    allow_mutations: false,\n    allow_effects: false,\n    payload: {\n      ...source,\n      shadow_mode: true,\n      state_mutations: [],\n      effect_requests: [],\n      authorized_mutations: [],\n      authorized_effect_requests: [],\n    },\n  };\n};\n\nconst recordShadowEvaluation = (plan, outcome) => {\n  const dispatch = asObject(plan);\n  const result = asObject(outcome);\n  const ok = result.ok === true;\n  return {\n    schema: 'ai_prd_shadow_audit/v1',\n    turn_id: safe(dispatch.turn_id),\n    route_rule_id: safe(dispatch.route_rule_id),\n    legacy_delivery_receipt_ref: safe(dispatch.legacy_delivery_receipt_ref) || null,\n    status: ok ? 'completed' : 'failed',\n    error: ok ? null : safe(result.error, 'shadow_failed'),\n    duration_ms: Math.max(0, Number(result.duration_ms || 0)),\n    visible_delivery_affected: false,\n    mutations_applied: 0,\n    effects_executed: 0,\n  };\n};\n\nconst POLICY_FIELDS = [\n  'name', 'product', 'service', 'commune', 'quantity', 'measurements', 'use_case',\n  'modality', 'urgency', 'desired_date', 'terrain', 'truck_access',\n  'debris_removal', 'customer_type', 'company', 'company_rut', 'contact_name',\n  'contact_role', 'email', 'purchase_order', 'invoice_required', 'address',\n  'access_restrictions', 'reception_contact', 'issue_description', 'payment_amount',\n  'payment_method', 'quote_number',\n];\n\nconst buildV3PolicyInput = (row, options = {}) => {\n  const input = asObject(row);\n  const context = asObject(input.qualification_context);\n  const shadow = options.shadow === true || input.shadow_mode === true;\n  const explicitGrounding = asObject(input.v3_grounding);\n  const commercialContext = asObject(input.commercial_context);\n  const catalogItems = Array.isArray(commercialContext.catalog_items) ? commercialContext.catalog_items : [];\n  const refPart = (value) => safe(value).normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\n  const derivedCatalog = [];\n  for (const item of catalogItems) {\n    const name = safe(item?.name);\n    if (!name) continue;\n    const concept = safe(item?.item_type).toLowerCase() === 'service' ? 'service' : 'product';\n    derivedCatalog.push({ ref: `${concept}:${refPart(item.id || item.sku || name)}`, concept, value: name });\n    for (const city of Array.isArray(item?.applicable_cities) ? item.applicable_cities : []) {\n      if (safe(city)) derivedCatalog.push({ ref: `commune:${refPart(city)}`, concept: 'commune', value: safe(city) });\n    }\n  }\n  const grounding = {\n    catalog: [\n      ...(Array.isArray(explicitGrounding.catalog) ? explicitGrounding.catalog : []),\n      ...derivedCatalog,\n    ],\n    modality_synonyms: Array.isArray(explicitGrounding.modality_synonyms)\n      ? explicitGrounding.modality_synonyms\n      : [\n          { ref: 'modality:material', concept: 'modality', value: 'material' },\n          { ref: 'modality:delivery', concept: 'modality', value: 'delivery' },\n          { ref: 'modality:installation', concept: 'modality', value: 'installation' },\n          { ref: 'modality:pickup', concept: 'modality', value: 'pickup' },\n        ],\n  };\n  const facts = [];\n  const goals = [];\n  const allowedMutations = [];\n  for (const field of POLICY_FIELDS) {\n    const directValue = input[field];\n    const value = context[field] ?? directValue;\n    const hasValue = value !== undefined && value !== null && safe(value) !== '';\n    const factId = hasValue ? `fact:${field}` : null;\n    if (hasValue) {\n      facts.push({\n        fact_id: factId,\n        field,\n        value,\n        mutability: 'customer_correctable',\n        source: { message_id: safe(input.last_message_id), evidence_digest: safe(input.last_evidence_digest) },\n      });\n    }\n    goals.push({\n      goal_id: field,\n      status: hasValue ? 'resolved' : 'unresolved',\n      importance: ['product', 'commune', 'quantity', 'modality'].includes(field) ? 'required_for_effect' : 'optional',\n      blocks_effects: ['product', 'commune', 'quantity', 'modality'].includes(field) ? ['create_lead'] : [],\n    });\n    if (!shadow) {\n      allowedMutations.push(hasValue\n        ? { operation: 'replace', concept: field, field, current_fact_id: factId }\n        : { operation: 'set', concept: field, field });\n    }\n  }\n  return {\n    turn: {\n      id: safe(input.inbound_event_id ?? input.turn_id),\n      conversation_id: safe(input.conversation_id ?? input.target_conversation_id),\n      conversation_revision: Number(input.conversation_revision || 0),\n      message: {\n        id: safe(input.external_message_id ?? input.inbound_event_id),\n        text: safe(input.text_body ?? input.message_current),\n      },\n    },\n    history: { messages: Array.isArray(input.recent_messages) ? input.recent_messages : [], truncated: false },\n    facts,\n    goals,\n    allowed_mutations: allowedMutations,\n    grounding,\n    claim_rules: [\n      { rule_id: 'no_stock_confirmation', kind: 'forbidden_pattern', pattern: '\\\\bstock\\\\s+(confirmado|disponible)\\\\b', flags: 'iu' },\n      { rule_id: 'no_unreceipted_derivation', kind: 'forbidden_pattern', pattern: '\\\\b(ya|quedo)\\\\s+derivad[oa]\\\\b', flags: 'iu' },\n    ],\n    effect_permissions: shadow ? [] : [{ type: 'create_lead' }, { type: 'handoff' }],\n    effect_requirements: shadow ? [] : [\n      { effect_type: 'create_lead', required_goal_ids: ['product', 'commune', 'quantity', 'modality'] },\n      { effect_type: 'handoff', required_goal_ids: [] },\n    ],\n  };\n};\n\nmodule.exports = {\n  CONTRACT_MODES,\n  resolveConversationContractRoute,\n  planShadowEvaluation,\n  recordShadowEvaluation,\n  buildV3PolicyInput,\n};\n\n\nreturn items.map((item) => {\n  const input = item.json || {};\n  const plan = planShadowEvaluation({\n    route: input.contract_route || {\n      turn_id: input.inbound_event_id,\n      mode: input.contract_mode || input.route_mode,\n      rule_id: input.route_rule_id,\n    },\n    legacy_delivery: {\n      delivered: input.outbound_lane_complete === true\n        && (input.delivery_status === 'sent' || input.outbound_dispatch_status === 'already_sent'),\n      receipt_ref: input.delivery_receipt_ref || input.outbound_message_id || input.external_message_id,\n    },\n    payload: input,\n  });\n  return { json: { ...input, shadow_plan: plan, shadow_dispatch: plan.dispatch, shadow_payload: plan.payload } };\n});\n"
+      },
+      "id": "v3-shadow-01",
+      "name": "Prepare AI PRD Shadow",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-shadow-02-condition",
+              "leftValue": "={{ $json.shadow_dispatch === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-shadow-02",
+      "name": "Should Dispatch AI PRD Shadow?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1460,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "__PENDIENTE_AI_PRD_SHADOW__",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "v3-shadow-03",
+      "name": "Dispatch AI PRD Shadow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "v3-shadow-00",
+      "name": "Merge Outbound Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1060,
+        40
+      ]
     }
   ],
   "connections": {
@@ -823,6 +906,11 @@
             "node": "Ensure Media Attachment",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge Outbound Context",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -849,9 +937,9 @@
       "main": [
         [
           {
-            "node": "Outbound Lane Complete",
+            "node": "Merge Outbound Context",
             "type": "main",
-            "index": 0
+            "index": 1
           }
         ]
       ]
@@ -863,6 +951,11 @@
             "node": "Merge Dispatch Completion",
             "type": "main",
             "index": 1
+          },
+          {
+            "node": "Prepare AI PRD Shadow",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -1235,6 +1328,40 @@
         [
           {
             "node": "Follow-Up Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI PRD Shadow": {
+      "main": [
+        [
+          {
+            "node": "Should Dispatch AI PRD Shadow?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Dispatch AI PRD Shadow?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch AI PRD Shadow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Merge Outbound Context": {
+      "main": [
+        [
+          {
+            "node": "Outbound Lane Complete",
             "type": "main",
             "index": 0
           }

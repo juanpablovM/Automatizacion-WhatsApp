@@ -134,6 +134,17 @@ const NODES = [
     fixture: 'wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js',
   },
   {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Outbound Lane Complete',
+    fixture: 'wa-inbound-downstream-dispatcher/outbound-lane-complete.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Prepare AI PRD Shadow',
+    fixture: 'wa-inbound-downstream-dispatcher/prepare-ai-prd-shadow.js',
+    runtimes: ['shared/v3-rollout-runtime.js'],
+  },
+  {
     workflow: 'n8n/workflows/ai-prd-shadow-evaluator.json',
     node: 'Prepare Shadow Evaluation',
     fixture: 'ai-prd-shadow-evaluator/prepare-shadow-evaluation.js',

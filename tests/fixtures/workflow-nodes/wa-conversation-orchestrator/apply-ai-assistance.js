@@ -314,6 +314,11 @@ const deterministicFields = [
   'metadata_json',
   'qualification_context',
   'pending_question_key',
+  'contract_route',
+  'contract_version',
+  'contract_mode',
+  'route_mode',
+  'route_rule_id',
 ];
 const deterministicValue = (field) => (Object.prototype.hasOwnProperty.call(row, field + '_1') ? row[field + '_1'] : row[field]);
 const deterministic = {};

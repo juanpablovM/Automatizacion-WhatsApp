@@ -1002,6 +1002,74 @@
         "route_mode": "enforce",
         "new_turn_route": "legacy"
       }
+    },
+    {
+      "id": "V3-SHADOW-01",
+      "title": "Falla asincrona shadow no afecta entrega",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Falla asincrona shadow no afecta entrega"
+        ],
+        "processable": true,
+        "mode": "shadow",
+        "legacy_delivered": true,
+        "shadow_outcome": "provider_timeout"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "visible_delivery_affected": false,
+        "shadow_status": "failed"
+      }
+    },
+    {
+      "id": "V3-SHADOW-02",
+      "title": "Shadow no muta ni ejecuta efectos ni agrega latencia",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Shadow no muta ni ejecuta efectos ni agrega latencia"
+        ],
+        "processable": true,
+        "mode": "shadow",
+        "legacy_delivered": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "shadow_mutations": 0,
+        "shadow_effects": 0,
+        "visible_latency_ms": 0
+      }
+    },
+    {
+      "id": "V3-CANARY-01",
+      "title": "Canary nunca reinterpreta una falla bajo legacy",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Canary nunca reinterpreta una falla bajo legacy"
+        ],
+        "processable": true,
+        "mode": "canary",
+        "v3_outcome": "repair_failed"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "recovery_contract": "v3",
+        "legacy_reinterpretation": false
+      }
     }
   ]
 }

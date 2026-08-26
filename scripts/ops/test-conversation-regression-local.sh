@@ -14,12 +14,14 @@ const orchestratorPath = 'n8n/workflows/wa-conversation-orchestrator.json';
 const assistantPath = 'n8n/workflows/ai-lead-qualification-assistant.json';
 const conversationStatusesSeedPath = 'db/seeds/002_conversation_statuses.sql';
 const rolloutRuntimePath = 'tests/fixtures/workflow-nodes/shared/v3-rollout-runtime.js';
+const dispatcherPath = 'n8n/workflows/wa-inbound-downstream-dispatcher.json';
 const shadowEvaluatorPath = 'n8n/workflows/ai-prd-shadow-evaluator.json';
 const workflowLinksPath = 'n8n/workflow-links.json';
 const suite = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const matrix = fs.readFileSync(matrixPath, 'utf8');
 const orchestrator = JSON.parse(fs.readFileSync(orchestratorPath, 'utf8'));
 const assistant = JSON.parse(fs.readFileSync(assistantPath, 'utf8'));
+const dispatcher = JSON.parse(fs.readFileSync(dispatcherPath, 'utf8'));
 const workflowLinks = JSON.parse(fs.readFileSync(workflowLinksPath, 'utf8'));
 const conversationStatusesSeed = fs.readFileSync(conversationStatusesSeedPath, 'utf8');
 
@@ -157,6 +159,9 @@ if (!groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'pr
 const routeNode = orchestrator.nodes.find((node) => node.name === 'Resolve Conversation Contract Route');
 const contractNode = orchestrator.nodes.find((node) => node.name === 'Validate And Authorize V3');
 const persistV3AuthorityNode = orchestrator.nodes.find((node) => node.name === 'Persist V3 Turn Authority');
+const shadowDispatchNode = dispatcher.nodes.find((node) => node.name === 'Dispatch AI PRD Shadow');
+const prepareShadowDispatchNode = dispatcher.nodes.find((node) => node.name === 'Prepare AI PRD Shadow');
+const outboundContextMerge = dispatcher.nodes.find((node) => node.name === 'Merge Outbound Context');
 if (!routeNode || !contractNode || !persistV3AuthorityNode) fail('Orquestador no cablea routing y autoridad v3');
 const persistV3AuthorityQuery = persistV3AuthorityNode.parameters.query || '';
 if (!persistV3AuthorityQuery.includes('valid_claim')
@@ -178,6 +183,15 @@ if (contractNode.parameters.jsCode.includes('advisorQuestion')
   || contractNode.parameters.jsCode.includes('confirmationText(')) {
   fail('Autoridad v3 no debe contener copy/preguntas deterministas');
 }
+if (!shadowDispatchNode || shadowDispatchNode.parameters.options?.waitForSubWorkflow !== false) {
+  fail('Dispatcher debe disparar shadow asincrono');
+}
+if (!prepareShadowDispatchNode) fail('Dispatcher no prepara shadow post-delivery');
+if (!outboundContextMerge
+  || dispatcher.connections['Execute Outbound Response']?.main?.[0]?.[0]?.node !== 'Merge Outbound Context'
+  || !dispatcher.connections['Normalize Durable Dispatch']?.main?.[0]?.some((edge) => edge.node === 'Merge Outbound Context')) {
+  fail('Dispatcher debe recombinar la ruta fija despues de la entrega outbound');
+}
 if (!workflowLinks.links.some((link) => link.sourceWorkflow === 'WA - Inbound Downstream Dispatcher'
   && link.node === 'Dispatch AI PRD Shadow' && link.targetWorkflow === 'AI - PRD Shadow Evaluator')) {
   fail('workflow-links no declara el dispatch post-delivery a shadow');
@@ -191,6 +205,21 @@ const routedByWorkflow = (await runRouteNode([{ json: { inbound_event_id: 'workf
 if (routedByWorkflow.contract_version !== 'v3' || routedByWorkflow.contract_mode !== 'enforce') {
   fail('Nodo real de workflow no propaga ruta enforce/v3');
 }
+const runPrepareShadowDispatch = new RouteAsyncFunction('items', prepareShadowDispatchNode.parameters.jsCode);
+const failedDeliveryShadow = (await runPrepareShadowDispatch([{ json: {
+  contract_route: resolveConversationContractRoute({ turn_id: 'shadow-failed-delivery' }, { mode: 'shadow', rule_id: 'shadow-failed' }),
+  outbound_lane_complete: true,
+  delivery_status: 'failed',
+  external_message_id: 'failed-message',
+} }]))[0].json;
+if (failedDeliveryShadow.shadow_dispatch) fail('Shadow no debe iniciar tras entrega legacy fallida');
+const sentDeliveryShadow = (await runPrepareShadowDispatch([{ json: {
+  contract_route: resolveConversationContractRoute({ turn_id: 'shadow-sent-delivery' }, { mode: 'shadow', rule_id: 'shadow-sent' }),
+  outbound_lane_complete: true,
+  delivery_status: 'sent',
+  external_message_id: 'sent-message',
+} }]))[0].json;
+if (!sentDeliveryShadow.shadow_dispatch) fail('Shadow debe iniciar tras entrega legacy exitosa');
 const prepareShadowNode = shadowEvaluator.nodes.find((node) => node.name === 'Prepare Shadow Evaluation');
 const recordShadowNode = shadowEvaluator.nodes.find((node) => node.name === 'Record Shadow Evaluation');
 if (!prepareShadowNode || !recordShadowNode) fail('Shadow evaluator no expone preparacion y auditoria');
@@ -438,6 +467,22 @@ const baseDeterministic = {
   after_payload_json: JSON.stringify({ city: 'Santiago', current_step: 'service', should_create_lead: false }),
   metadata_json: '{}',
 };
+
+const shadowRouteInput = (await runRouteNode([{ json: {
+  ...baseDeterministic,
+  inbound_event_id: 'shadow-route-through-legacy',
+} }], {
+  AI_PRD_CONTRACT_MODE: 'shadow',
+  AI_PRD_CONTRACT_RULE_ID: 'shadow-through-legacy',
+}))[0].json;
+const shadowRouteAfterLegacy = await runApplyAi(mergedAiShape(shadowRouteInput, {
+  ai_skipped_1: true,
+  ai_skip_reason_1: 'test_shadow_legacy_path',
+}));
+if (shadowRouteAfterLegacy.contract_mode !== 'shadow'
+  || shadowRouteAfterLegacy.contract_route?.rule_id !== 'shadow-through-legacy') {
+  fail('Ruta shadow debe sobrevivir Apply AI Assistance y persistirse en downstream payload');
+}
 
 const communeAndProduct = await runEvaluate({
   phone_number: 'test-contact-regression-012',
