@@ -47,6 +47,44 @@ const parseStructuredOutput = (value) => {
     return JSON.parse(text.slice(start, end + 1));
   }
 };
+
+const usesV3Contract = safe(row.ai_contract_version).toLowerCase() === 'v3'
+  || row.turn_policy?.version === 'ai_prd_turn_policy/v3';
+if (usesV3Contract) {
+  const statusCode = Number(row.ai_status_code || 0);
+  const responseOk = !row.ai_skipped && statusCode >= 200 && statusCode < 300;
+  let proposal = null;
+  let outputText = '';
+  let parseError = null;
+  if (responseOk) {
+    outputText = extractOutputText(row.ai_response);
+    try {
+      proposal = JSON.parse(outputText);
+    } catch (error) {
+      parseError = error.message;
+    }
+  }
+  const fallbackReason = row.ai_request_error
+    ? row.ai_request_error
+    : row.ai_skipped
+      ? row.ai_skip_reason || 'skipped'
+      : !responseOk
+        ? statusCode === 429 ? 'rate_limited' : 'provider_error'
+        : parseError
+          ? 'invalid_json'
+          : null;
+  return [{
+    json: {
+      ...row,
+      ai_contract_version: 'v3',
+      ai_parse_error: parseError,
+      ai_fallback_reason: fallbackReason,
+      ai_raw_output: outputText,
+      ai_proposal: proposal,
+      reply_text: proposal && typeof proposal.reply_text === 'string' ? proposal.reply_text : '',
+    },
+  }];
+}
 const uniqueMissing = (fields) => [...new Set(fields.filter(Boolean))];
 const requiredMissingFromFields = (fields) => ['service', 'city', 'requirement'].filter((field) => !safe(fields[field]));
 
@@ -482,4 +520,3 @@ return [
     },
   },
 ];
-

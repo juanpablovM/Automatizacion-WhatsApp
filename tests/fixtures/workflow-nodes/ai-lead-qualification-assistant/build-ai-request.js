@@ -94,6 +94,168 @@ const apiMode = usesChatCompletions ? 'chat_completions' : 'responses';
 const baseUrl = safe($env.AI_DIRECT_API_BASE_URL, 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/+$/, '');
 const directApiKey = safe($env.AI_DIRECT_API_KEY);
 const timeoutMs = Number($env.AI_DIRECT_API_TIMEOUT_MS || 120000);
+const turnPolicy = parseJsonObject(pickMerged(row.turn_policy, row.turn_policy_1));
+const requestedContractVersion = safe(pickMerged(row.contract_version, row.contract_version_1)).toLowerCase();
+const usesV3Contract = requestedContractVersion === 'v3' || turnPolicy.version === 'ai_prd_turn_policy/v3';
+
+if (usesV3Contract) {
+  const observationSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'id', 'concept', 'raw_value', 'normalized_value', 'evidence_quote',
+      'evidence_occurrence', 'grounding_ref', 'resolves_goal_ids',
+    ],
+    properties: {
+      id: { type: 'string' },
+      concept: { type: 'string' },
+      raw_value: { type: 'string' },
+      normalized_value: {
+        anyOf: [
+          { type: 'string' },
+          { type: 'number' },
+          { type: 'boolean' },
+          { type: 'null' },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'value', 'unit', 'name'],
+            properties: {
+              kind: { type: ['string', 'null'] },
+              value: { type: ['string', 'number', 'boolean', 'null'] },
+              unit: { type: ['string', 'null'] },
+              name: { type: ['string', 'null'] },
+            },
+          },
+        ],
+      },
+      evidence_quote: { type: 'string' },
+      evidence_occurrence: { type: 'integer', minimum: 1 },
+      grounding_ref: { type: ['string', 'null'] },
+      resolves_goal_ids: { type: 'array', items: { type: 'string' } },
+    },
+  };
+  const v3ResponseSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'version', 'policy_digest', 'reply_text', 'primary_request',
+      'observations', 'state_mutations', 'effect_requests',
+    ],
+    properties: {
+      version: { type: 'string', enum: ['ai_conversation_proposal/v3'] },
+      policy_digest: { type: 'string' },
+      reply_text: { type: 'string' },
+      primary_request: {
+        type: ['object', 'null'],
+        additionalProperties: false,
+        required: ['text', 'goal_id'],
+        properties: {
+          text: { type: 'string' },
+          goal_id: { type: 'string' },
+        },
+      },
+      observations: { type: 'array', items: observationSchema },
+      state_mutations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['operation', 'field', 'observation_id', 'replaces_fact_id'],
+          properties: {
+            operation: { type: 'string', enum: ['set', 'replace'] },
+            field: { type: 'string' },
+            observation_id: { type: 'string' },
+            replaces_fact_id: { type: ['string', 'null'] },
+          },
+        },
+      },
+      effect_requests: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'reason_observation_ids'],
+          properties: {
+            type: { type: 'string' },
+            reason_observation_ids: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+  };
+  const v3BasePayload = {
+    ai_contract_version: 'v3',
+    ai_provider: provider,
+    ai_model: model,
+    ai_base_url: baseUrl,
+    ai_api_mode: apiMode,
+    turn_policy: turnPolicy,
+    response_schema: v3ResponseSchema,
+  };
+  const v3PolicyValid = turnPolicy.version === 'ai_prd_turn_policy/v3'
+    && /^[a-f0-9]{64}$/.test(safe(turnPolicy.policy_digest));
+  if (!v3PolicyValid) {
+    return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: 'invalid_turn_policy', ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
+  }
+  if (!aiEnabled) {
+    return [{ json: { ...v3BasePayload, ai_skipped: true, ai_skip_reason: 'disabled', ai_request: null, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
+  }
+  const v3ConfigError = isPlaceholder(directApiKey) || isPlaceholder(model) ? 'missing_api_config' : null;
+  if (v3ConfigError) {
+    return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: v3ConfigError, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
+  }
+  const v3SystemPrompt = [
+    'Sos la única voz normal de la conversación. Respondé al cliente de forma natural dentro de la policy recibida.',
+    'Devolvé exactamente un ai_conversation_proposal/v3 completo y sin propiedades adicionales.',
+    'Conservá policy_digest sin cambios. reply_text contiene los bytes exactos propuestos para entrega.',
+    'Podés declarar cero o una primary_request; su texto debe estar incluido literalmente en reply_text.',
+    'Cada observación debe citar texto exacto y su número de ocurrencia en el mensaje actual.',
+    'No calcules offsets, digests, payloads operacionales ni claves de idempotencia: los deriva el sistema.',
+    'No uses confidence para autorizar datos. No inventes precios, stock, descuentos, garantías, plazos ni efectos.',
+    'Un servicio nunca satisface product y un producto nunca satisface service.',
+    'Los objetivos orientan el progreso pero no fijan el orden ni la redacción de tus solicitudes.',
+  ].join('\n');
+  const v3UserPrompt = JSON.stringify({ turn_policy: turnPolicy });
+  const v3Request = usesChatCompletions
+    ? {
+        model,
+        messages: [
+          { role: 'system', content: `${v3SystemPrompt}\nDevolvé solo JSON válido. No uses Markdown.` },
+          { role: 'user', content: v3UserPrompt },
+        ],
+        temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
+        max_tokens: Number($env.AI_DIRECT_API_MAX_TOKENS || 1600),
+        ...(provider === 'nvidia' ? {} : { response_format: { type: 'json_object' } }),
+      }
+    : {
+        model,
+        input: [
+          { role: 'system', content: v3SystemPrompt },
+          { role: 'user', content: v3UserPrompt },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'ai_conversation_proposal_v3',
+            schema: v3ResponseSchema,
+            strict: true,
+          },
+        },
+        temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
+        store: false,
+      };
+  return [{
+    json: {
+      ...v3BasePayload,
+      ai_skipped: false,
+      ai_request: v3Request,
+      ai_request_chars: JSON.stringify(v3Request).length,
+      ai_request_path: requestPath,
+      ai_timeout_ms: timeoutMs,
+    },
+  }];
+}
 const rawCommercialContext = parseJsonObject(row.commercial_context);
 const commercialContext = compactCommercialContext(rawCommercialContext);
 const commercialContextCounts = {
@@ -775,4 +937,3 @@ return [
     },
   },
 ];
-

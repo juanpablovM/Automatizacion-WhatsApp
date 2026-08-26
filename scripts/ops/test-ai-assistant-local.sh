@@ -301,6 +301,88 @@ node <<'NODE'
     expectEqual(normalized.ai_circuit_open, true, 'Normalize debe conservar estado del circuito');
   };
 
+  const validateV3ContractDispatch = async () => {
+    const policy = {
+      version: 'ai_prd_turn_policy/v3',
+      policy_digest: 'a'.repeat(64),
+      turn: {
+        id: 'turn-v3-1',
+        conversation_id: 'conversation-1',
+        conversation_revision: 7,
+        message: { id: 'message-1', text: 'Necesito 6 m² de baldosas en Ñuñoa.' },
+      },
+      history: { messages: [], truncated: false, sha256: 'b'.repeat(64) },
+      facts: [],
+      goals: [{ goal_id: 'modality', status: 'unresolved', importance: 'required_for_effect', blocks_effects: ['create_lead'] }],
+      conversation_policy: {
+        normal_voice: 'ai_only',
+        max_primary_requests: 1,
+        may_answer_before_progressing: true,
+        may_defer_commercial_goals: true,
+        must_not_request_known_facts: true,
+      },
+      state_authority: { allowed_mutations: [] },
+      grounding: { catalog: [], modality_synonyms: [], snapshot_digest: 'c'.repeat(64) },
+      claim_authority: { rules: [] },
+      effect_authority: { permissions: [], requirements: [], operation_key_strategy: 'system_derived/v1' },
+      commit_policy: { proposal_atomicity: 'all_or_nothing', effects_before_reply: true, delivery_idempotency: 'turn_reply/v1' },
+      failure_policy: { max_repairs: 1, preserve_pre_turn_state: true, static_copy: 'contingency_only', handoff_after_exhaustion: true },
+    };
+    const request = await runCode('Build AI Request', {
+      contract_version: 'v3',
+      turn_policy: policy,
+    }, {}, env);
+    const schema = request.response_schema;
+    expectEqual(request.ai_contract_version, 'v3', 'Dispatch v3 debe conservar la version contractual');
+    expectEqual(schema.additionalProperties, false, 'Schema v3 debe rechazar propiedades extra');
+    for (const key of ['version', 'policy_digest', 'reply_text', 'primary_request', 'observations', 'state_mutations', 'effect_requests']) {
+      expectIncludes(schema.required, key, `Schema v3 debe exigir ${key}`);
+    }
+    assert(!schema.properties.confidence, 'Schema v3 no debe usar confidence para autorizar');
+    assert(!schema.properties.next_question_key, 'Schema v3 no debe prescribir la siguiente pregunta');
+    expectEqual(schema.properties.primary_request.type.includes('null'), true, 'primary_request v3 debe permitir cero solicitudes');
+    const serializedRequest = JSON.stringify(request.ai_request);
+    assert(serializedRequest.includes('ai_conversation_proposal/v3'), 'Prompt v3 debe pedir el contrato versionado');
+    assert(serializedRequest.includes(policy.policy_digest), 'Prompt v3 debe ligar la propuesta a la policy');
+    assert(!serializedRequest.includes('advisorQuestion'), 'Prompt v3 no debe exponer copy determinista');
+
+    const replyText = 'Perfecto 👷, son 6 m² en Ñuñoa.\n¿Buscás solo material o instalación?';
+    const proposal = {
+      version: 'ai_conversation_proposal/v3',
+      policy_digest: policy.policy_digest,
+      reply_text: replyText,
+      primary_request: { text: '¿Buscás solo material o instalación?', goal_id: 'modality' },
+      observations: [],
+      state_mutations: [],
+      effect_requests: [],
+    };
+    const normalized = await runCode('Normalize AI Result', {
+      ...request,
+      ai_status_code: 200,
+      ai_response: makeProviderBody(proposal),
+    }, {}, env);
+    expectEqual(normalized.ai_contract_version, 'v3', 'Normalize debe despachar por v3');
+    expectEqual(normalized.ai_proposal.version, 'ai_conversation_proposal/v3', 'Normalize debe conservar el envelope v3');
+    expectEqual(normalized.ai_proposal.reply_text, replyText, 'Normalize debe preservar bytes del reply v3');
+    expectEqual(normalized.reply_text, replyText, 'Reply visible normalizado debe conservar bytes v3');
+    expectEqual(normalized.ai_parse_error, null, 'Propuesta v3 valida no debe generar parse error');
+
+    const invalidPolicyRequest = await runCode('Build AI Request', {
+      contract_version: 'v3',
+      turn_policy: {},
+    }, {}, env);
+    expectEqual(invalidPolicyRequest.ai_request, null, 'Dispatch v3 debe fallar cerrado sin policy valida');
+    expectEqual(invalidPolicyRequest.ai_request_error, 'invalid_turn_policy', 'Dispatch v3 debe explicar policy invalida');
+
+    const wrapped = await runCode('Normalize AI Result', {
+      ...request,
+      ai_status_code: 200,
+      ai_response: makeProviderBody(`\`\`\`json\n${JSON.stringify(proposal)}\n\`\`\``),
+    }, {}, env);
+    expectEqual(wrapped.ai_proposal, null, 'Normalize v3 no debe reparar Markdown silenciosamente');
+    expectEqual(wrapped.ai_fallback_reason, 'invalid_json', 'Normalize v3 debe rechazar sintaxis no contractual');
+  };
+
   const runSimulatedScenario = async (scenario) => {
     const input = scenario.input || readSample(scenario.sample);
     const request = await runCode('Build AI Request', input, {}, env);
@@ -328,6 +410,7 @@ node <<'NODE'
   await validateRequestContract();
   await validateConfigFallback();
   await validateRateLimitHandling();
+  await validateV3ContractDispatch();
 
   await runSimulatedScenario({
     name: 'rechaza saludo incoherente ante consulta de precio',
@@ -574,7 +657,7 @@ node <<'NODE'
     },
   });
 
-  console.log('AI assistant local contract OK: 9 escenarios simulados + fallback de configuracion');
+  console.log('AI assistant local contract OK: v3 dispatch + 9 escenarios simulados + fallback de configuracion');
 })().catch((error) => {
   console.error(error.stack || error.message);
   process.exit(1);
