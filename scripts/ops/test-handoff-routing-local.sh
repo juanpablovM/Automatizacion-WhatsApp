@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 node tests/scripts/sync-workflow-nodes.mjs --check >/dev/null
 jq empty n8n/workflows/wa-inbound-downstream-dispatcher.json
 jq empty n8n/workflows/ops-handoff-notification-scheduler.json
+jq empty n8n/workflows/wa-conversation-orchestrator.json
 
 node <<'NODE'
 const assert = require('assert');
@@ -22,6 +23,7 @@ const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstre
 const escalationPolicy = require('./tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js');
 const saga = require('./tests/fixtures/workflow-nodes/shared/v3-saga-runtime.js');
 const schedulerId = '99999999-0000-0000-0000-000000000003';
+const orchestrator = JSON.parse(fs.readFileSync('n8n/workflows/wa-conversation-orchestrator.json'));
 assert.equal(scheduler.id, schedulerId);
 assert.equal(scheduler.active, true);
 assert(scheduler.nodes.some(n => n.type === 'n8n-nodes-base.scheduleTrigger'));
@@ -29,6 +31,17 @@ assert(scheduler.nodes.some(n => n.type === 'n8n-nodes-base.executeWorkflowTrigg
 const link = dispatcher.nodes.find(n => n.name === 'Dispatch Handoff Notification Workflow');
 assert(link && link.parameters.workflowId.value === schedulerId);
 assert(!dispatcher.nodes.some(n => ['Prepare Handoff Notification','Dispatch Handoff Notification','Mark Handoff Attempt'].includes(n.name)));
+for (const name of [
+  'Prepare V3 Execution', 'Prepare V3 Effects',
+  'Commit V3 State And Outbox', 'Record V3 Delivery',
+]) {
+  assert(orchestrator.nodes.some(node => node.name === name), `missing v3 saga node ${name}`);
+}
+const orchestratorEdge = (source, lane, target) =>
+  orchestrator.connections[source]?.main?.[lane]?.some(connection => connection.node === target);
+assert(orchestratorEdge('Commit V3 State And Outbox', 0, 'V3 Has Delivery Receipt?'));
+assert(orchestratorEdge('V3 Has Delivery Receipt?', 0, 'Record V3 Delivery'));
+assert(orchestratorEdge('V3 Has Delivery Receipt?', 1, 'Prepare V3 Saga Result'));
 const edge = (source, lane, target, index = 0) =>
   dispatcher.connections[source]?.main?.[lane]?.some(connection => connection.node === target && connection.index === index);
 assert(edge('Ensure Escalation Handoff', 0, 'Handoff Write Required?'));

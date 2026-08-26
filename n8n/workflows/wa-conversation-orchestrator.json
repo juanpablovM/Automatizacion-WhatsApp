@@ -195,6 +195,242 @@
         1460,
         380
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-01-condition",
+              "leftValue": "={{ $json.contract_version === 'v3' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-01",
+      "name": "Use V3 Saga?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-02-condition",
+              "leftValue": "={{ $json.v3_validation?.valid === true && Boolean($json.v3_decision?.decision_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-02",
+      "name": "V3 Proposal Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Attach an immutable authorized decision to the previously fixed route.\n-- Replays with the same identities return the existing row unchanged.\nWITH locked AS (\n  SELECT execution.id\n  FROM conversation_turn_executions execution\n  WHERE execution.inbound_event_id = $1::BIGINT\n  FOR UPDATE\n), prepared AS (\n  UPDATE conversation_turn_executions execution\n  SET advisor_decision_id = $2::BIGINT,\n      decision_id = $3::TEXT,\n      state = $4::TEXT,\n      policy_digest = $5::TEXT,\n      proposal_digest = $6::TEXT,\n      decision_digest = $7::TEXT,\n      delivery_key = $8::TEXT,\n      attempt = GREATEST(execution.attempt, 1),\n      updated_at = NOW()\n  FROM locked\n  WHERE execution.id = locked.id\n    AND execution.state = 'routed'\n    AND execution.decision_id IS NULL\n    AND $4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')\n  RETURNING execution.*\n), fixed AS (\n  SELECT prepared.* FROM prepared\n  UNION ALL\n  SELECT execution.*\n  FROM conversation_turn_executions execution\n  WHERE execution.inbound_event_id = $1::BIGINT\n    AND NOT EXISTS (SELECT 1 FROM prepared)\n)\nSELECT execution.*,\n  execution.advisor_decision_id = $2::BIGINT\n    AND execution.decision_id = $3::TEXT\n    AND execution.state = $4::TEXT\n    AND execution.policy_digest = $5::TEXT\n    AND execution.proposal_digest = $6::TEXT\n    AND execution.decision_digest = $7::TEXT\n    AND execution.delivery_key = $8::TEXT AS decision_matches\nFROM fixed execution;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "inbound_event_id,advisor_decision_id,decision_id,v3_initial_state,policy_digest,proposal_digest,decision_digest,delivery_key"
+        }
+      },
+      "id": "v3-05",
+      "name": "Prepare V3 Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        2220,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\nconst decision = row.v3_decision || row.output_payload || {};\nconst receipts = Array.isArray(row.effect_receipt_refs) ? row.effect_receipt_refs : [];\nconst completed = new Set(receipts.filter(r => r.status === 'succeeded').map(r => r.operation_key));\nconst effect = (Array.isArray(decision.effect_commands) ? decision.effect_commands : []).find(command => command.required_before_reply && !completed.has(command.operation_key)) || null;\nreturn [{ json: { ...row, v3_effect_command: effect, v3_has_pending_effect: Boolean(effect) } }];"
+      },
+      "id": "v3-06",
+      "name": "Prepare V3 Effects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-07-condition",
+              "leftValue": "={{ $json.v3_has_pending_effect === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-07",
+      "name": "V3 Has Pending Effect?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2660,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Atomically apply the immutable decision's state mutations and exact delivery\n-- intent. Replays return the original message without reapplying mutations.\nWITH execution_lock AS MATERIALIZED (\n  SELECT pg_advisory_xact_lock(hashtextextended('v3-decision:' || $1::TEXT, 0))\n), target AS MATERIALIZED (\n  SELECT execution.*, decision.output_payload, event.processing_token,\n         conversation.qualification_context AS state_before,\n         conversation.lead_id, conversation.phone_number, number.instance_name\n  FROM conversation_turn_executions execution\n  JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\n  JOIN inbound_events event ON event.id = execution.inbound_event_id\n  JOIN conversations conversation ON conversation.id = execution.conversation_id\n  LEFT JOIN whatsapp_numbers number ON number.id = conversation.source_number_id\n  CROSS JOIN execution_lock\n  WHERE execution.decision_id = $1::TEXT\n    AND event.processing_token = $2::TEXT\n    AND execution.expected_snapshot_digest = $3::TEXT\n    AND decision.output_payload->>'schema' = 'validated_conversation_decision/v3'\n    AND decision.output_payload->>'decision_id' = execution.decision_id\n    AND decision.output_payload->>'expected_snapshot_digest' = execution.expected_snapshot_digest\n    AND decision.output_payload#>>'{reply,delivery_key}' = execution.delivery_key\n    AND (\n      execution.state <> 'ready_to_commit'\n      OR conversation.qualification_context = execution.expected_snapshot\n    )\n  FOR UPDATE OF execution, decision, event, conversation\n), mutated AS (\n  UPDATE conversations conversation\n  SET qualification_context = apply_v3_state_mutations(\n        target.state_before,\n        COALESCE(target.output_payload->'mutations', '[]'::JSONB)\n      ),\n      updated_at = NOW()\n  FROM target\n  WHERE conversation.id = target.conversation_id\n    AND target.state = 'ready_to_commit'\n  RETURNING conversation.id, target.id AS execution_id,\n            target.state_before, conversation.qualification_context AS state_after\n), outbox AS (\n  INSERT INTO messages (\n    conversation_id, lead_id, direction, message_type, delivery_status,\n    text_body, raw_payload, provider_instance_name, idempotency_key,\n    inbound_event_id, dispatch_phase, dispatch_token, claimed_at\n  )\n  SELECT target.conversation_id, target.lead_id, 'outgoing', 'text', 'queued',\n         target.output_payload#>>'{reply,text}',\n         jsonb_build_object(\n           'number', target.phone_number,\n           'schema', 'validated_conversation_decision/v3',\n           'decision_id', target.decision_id,\n           'reply_sha256', target.output_payload#>>'{reply,sha256}'\n         ),\n         target.instance_name, target.delivery_key, target.inbound_event_id,\n         'claimed', md5(random()::TEXT || clock_timestamp()::TEXT || target.delivery_key), NOW()\n  FROM target\n  JOIN mutated ON mutated.execution_id = target.id\n  ON CONFLICT (idempotency_key)\n    WHERE direction = 'outgoing' AND idempotency_key IS NOT NULL AND deleted_at IS NULL\n  DO NOTHING\n  RETURNING *\n), fixed_message AS MATERIALIZED (\n  SELECT message.* FROM outbox message\n  UNION ALL\n  SELECT message.*\n  FROM messages message\n  JOIN target ON target.delivery_key = message.idempotency_key\n  WHERE message.direction = 'outgoing' AND message.deleted_at IS NULL\n    AND NOT EXISTS (SELECT 1 FROM outbox)\n), committed AS (\n  UPDATE conversation_turn_executions execution\n  SET state = 'delivery_pending',\n      delivery_message_id = fixed_message.id,\n      state_receipt = jsonb_build_object(\n        'schema', 'conversation_state_receipt/v3',\n        'decision_id', target.decision_id,\n        'snapshot_digest', target.expected_snapshot_digest,\n        'state_before', mutated.state_before,\n        'state_after', mutated.state_after\n      ),\n      updated_at = NOW()\n  FROM target\n  JOIN mutated ON mutated.execution_id = target.id\n  CROSS JOIN fixed_message\n  WHERE execution.id = target.id\n  RETURNING execution.*\n), audit_insert AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id, result,\n    before_payload, after_payload, metadata\n  )\n  SELECT 'v3_turn_committed', 'conversation_turn_execution', target.id,\n         'system', 'v3-saga', 'success', mutated.state_before, mutated.state_after,\n         jsonb_build_object(\n           'decision_id', target.decision_id,\n           'delivery_key', target.delivery_key,\n           'delivery_message_id', fixed_message.id\n         )\n  FROM target\n  JOIN mutated ON mutated.execution_id = target.id\n  CROSS JOIN fixed_message\n  RETURNING id\n), result_execution AS MATERIALIZED (\n  SELECT committed.*, FALSE AS replayed FROM committed\n  UNION ALL\n  SELECT execution.*, TRUE AS replayed\n  FROM conversation_turn_executions execution\n  JOIN target ON target.id = execution.id\n  WHERE target.state IN ('delivery_pending', 'delivered')\n)\nSELECT result_execution.*, fixed_message.text_body, fixed_message.raw_payload,\n       fixed_message.dispatch_token\nFROM result_execution\nJOIN fixed_message ON fixed_message.id = result_execution.delivery_message_id;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "decision_id,processing_token,expected_snapshot_digest"
+        }
+      },
+      "id": "v3-11",
+      "name": "Commit V3 State And Outbox",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        2880,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Compare-and-set lifecycle transition. The caller supplies the exact expected\n-- state; invalid or stale transitions affect zero rows and must fail closed.\nWITH transitioned AS (\nUPDATE conversation_turn_executions execution\nSET state = $3::TEXT,\n    attempt = CASE WHEN $4::BOOLEAN THEN execution.attempt + 1 ELSE execution.attempt END,\n    effect_receipt_refs = COALESCE($5::JSONB, execution.effect_receipt_refs),\n    delivery_message_id = COALESCE($6::BIGINT, execution.delivery_message_id),\n    delivery_receipt_ref = COALESCE($7::JSONB, execution.delivery_receipt_ref),\n    last_error = $8::JSONB,\n    updated_at = NOW()\nWHERE execution.decision_id = $1::TEXT\n  AND execution.state = $2::TEXT\n  AND (\n    (execution.state = 'prepared' AND $3::TEXT IN ('effects_pending', 'ready_to_commit', 'aborted'))\n    OR (execution.state = 'effects_pending' AND $3::TEXT IN ('ready_to_commit', 'aborted', 'reconciliation_required'))\n    OR (execution.state = 'reconciliation_required' AND $3::TEXT IN ('effects_pending', 'ready_to_commit', 'aborted'))\n    OR (execution.state = 'ready_to_commit' AND $3::TEXT = 'aborted')\n    OR (execution.state = 'delivery_pending'\n      AND $3::TEXT IN ('delivered', 'reconciliation_required')\n      AND ($3::TEXT <> 'delivered' OR $7::JSONB IS NOT NULL))\n  )\nRETURNING execution.*\n), audit_insert AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id, result, metadata\n  )\n  SELECT 'v3_turn_transitioned', 'conversation_turn_execution', transitioned.id,\n         'system', 'v3-saga', 'success',\n         jsonb_build_object(\n           'decision_id', transitioned.decision_id,\n           'from_state', $2::TEXT,\n           'to_state', $3::TEXT,\n           'delivery_receipt_ref', transitioned.delivery_receipt_ref,\n           'last_error', transitioned.last_error\n         )\n  FROM transitioned\n  RETURNING id\n)\nSELECT transitioned.* FROM transitioned;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "decision_id,v3_delivery_expected_state,v3_delivery_state,v3_increment_attempt,effect_receipt_refs,delivery_message_id,delivery_receipt_ref,last_error"
+        }
+      },
+      "id": "v3-12",
+      "name": "Record V3 Delivery",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "position": [
+        3320,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map(item => ({ json: { ...item.json, v3_saga: true } }));"
+      },
+      "id": "v3-14",
+      "name": "Prepare V3 Saga Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-delivery-receipt-condition",
+              "leftValue": "={{ Boolean($json.delivery_receipt_ref) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-15",
+      "name": "V3 Has Delivery Receipt?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3100,
+        560
+      ]
     }
   ],
   "pinData": {},
@@ -263,7 +499,7 @@
       "main": [
         [
           {
-            "node": "Prepare Durable Turn Result",
+            "node": "Use V3 Saga?",
             "type": "main",
             "index": 0
           }
@@ -313,6 +549,122 @@
           },
           {
             "node": "Merge Conversation Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use V3 Saga?": {
+      "main": [
+        [
+          {
+            "node": "V3 Proposal Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Durable Turn Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Proposal Valid?": {
+      "main": [
+        [
+          {
+            "node": "Prepare V3 Execution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare V3 Saga Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare V3 Execution": {
+      "main": [
+        [
+          {
+            "node": "Prepare V3 Effects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare V3 Effects": {
+      "main": [
+        [
+          {
+            "node": "V3 Has Pending Effect?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Has Pending Effect?": {
+      "main": [
+        [
+          {
+            "node": "Prepare V3 Saga Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Commit V3 State And Outbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit V3 State And Outbox": {
+      "main": [
+        [
+          {
+            "node": "V3 Has Delivery Receipt?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record V3 Delivery": {
+      "main": [
+        [
+          {
+            "node": "Prepare V3 Saga Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Has Delivery Receipt?": {
+      "main": [
+        [
+          {
+            "node": "Record V3 Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare V3 Saga Result",
             "type": "main",
             "index": 0
           }
