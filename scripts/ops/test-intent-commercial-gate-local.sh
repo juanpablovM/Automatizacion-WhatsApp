@@ -29,6 +29,7 @@ node <<'NODE'
   const fs = require('fs');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const { compileV3TurnPolicy } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/compile-v3-turn-policy.js');
+  const { validateV3AiProposal } = require('./tests/fixtures/workflow-nodes/wa-conversation-orchestrator/validate-v3-ai-proposal.js');
   const { sha256: sha256V3 } = require('./tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js');
 
   const workflow = (file) => JSON.parse(fs.readFileSync(`n8n/workflows/${file}`, 'utf8'));
@@ -704,6 +705,101 @@ node <<'NODE'
     assert(!Object.hasOwn(policy, 'objective'), 'Policy v3 no debe prescribir objective/mode');
     assert(!Object.hasOwn(policy, 'pending_question_key'), 'Policy v3 no debe prescribir pending_question_key');
     assert(!JSON.stringify(policy).includes('advisorQuestion'), 'Policy v3 no debe contener copy advisor');
+
+    const replyText = 'Perfecto 👷, corrijo a 6 m² de baldosas en Ñuñoa.\n¿Buscás solo material o instalación?';
+    const proposal = {
+      version: 'ai_conversation_proposal/v3',
+      policy_digest: policy.policy_digest,
+      reply_text: replyText,
+      primary_request: { text: '¿Buscás solo material o instalación?', goal_id: 'modality' },
+      observations: [
+        {
+          id: 'obs-measurements', concept: 'measurements', raw_value: '6 m²',
+          normalized_value: { kind: 'area', value: 6, unit: 'square_meter' },
+          evidence_quote: '6 m²', evidence_occurrence: 1,
+          grounding_ref: null, resolves_goal_ids: ['measurements'],
+        },
+        {
+          id: 'obs-product', concept: 'product', raw_value: 'baldosas',
+          normalized_value: 'Baldosas', evidence_quote: 'baldosas', evidence_occurrence: 1,
+          grounding_ref: 'product:baldosas', resolves_goal_ids: ['product'],
+        },
+        {
+          id: 'obs-commune', concept: 'commune', raw_value: 'Ñuñoa',
+          normalized_value: 'Ñuñoa', evidence_quote: 'Ñuñoa', evidence_occurrence: 1,
+          grounding_ref: 'commune:nunoa', resolves_goal_ids: ['commune'],
+        },
+      ],
+      state_mutations: [
+        { operation: 'replace', field: 'measurements', observation_id: 'obs-measurements', replaces_fact_id: 'fact-measurements-1' },
+        { operation: 'set', field: 'product', observation_id: 'obs-product', replaces_fact_id: null },
+        { operation: 'set', field: 'commune', observation_id: 'obs-commune', replaces_fact_id: null },
+      ],
+      effect_requests: [],
+    };
+    const validation = validateV3AiProposal(policy, proposal);
+    expectEqual(validation.version, 'conversation_validation_result/v3', 'Validation debe usar envelope v3');
+    expectEqual(validation.valid, true, 'Propuesta multi-fact/correction evidenciada debe ser valida');
+    expectEqual(validation.accepted_observations.length, 3, 'Validation debe aceptar varios hechos juntos');
+    expectEqual(validation.authorized_mutations.length, 3, 'Validation debe autorizar la correccion y otros cambios juntos');
+    const communeEvidence = validation.accepted_observations.find((entry) => entry.id === 'obs-commune').evidence;
+    expectEqual(
+      communeEvidence.start_byte,
+      Buffer.byteLength(messageText.slice(0, messageText.indexOf('Ñuñoa')), 'utf8'),
+      'Offset UTF-8 debe derivarse por el sistema'
+    );
+    expectEqual(
+      communeEvidence.end_byte,
+      communeEvidence.start_byte + Buffer.byteLength('Ñuñoa', 'utf8'),
+      'Fin UTF-8 debe ser exclusivo y byte-based'
+    );
+    assert(/^[a-f0-9]{64}$/.test(communeEvidence.sha256), 'Evidencia debe tener digest derivado');
+
+    const occurrenceProposal = structuredClone(proposal);
+    occurrenceProposal.observations = [{
+      id: 'obs-second-unit', concept: 'measurements', raw_value: 'm²', normalized_value: 'm²',
+      evidence_quote: 'm²', evidence_occurrence: 2, grounding_ref: null, resolves_goal_ids: [],
+    }];
+    occurrenceProposal.state_mutations = [];
+    const occurrenceValidation = validateV3AiProposal(policy, occurrenceProposal);
+    expectEqual(occurrenceValidation.valid, true, 'Segunda ocurrencia exacta debe ser evidencia valida');
+    expectEqual(
+      occurrenceValidation.accepted_observations[0].evidence.start_byte,
+      Buffer.byteLength(messageText.slice(0, messageText.lastIndexOf('m²')), 'utf8'),
+      'evidence_occurrence debe seleccionar la segunda cita y derivar su offset UTF-8'
+    );
+
+    const invalidServiceAsProduct = structuredClone(proposal);
+    invalidServiceAsProduct.observations[1].concept = 'service';
+    invalidServiceAsProduct.observations[1].grounding_ref = 'service:baldosas';
+    const serviceValidation = validateV3AiProposal(policy, invalidServiceAsProduct);
+    expectEqual(serviceValidation.valid, false, 'service no puede satisfacer product');
+    expectIncludes(serviceValidation.errors.map((entry) => entry.code), 'mutation_mapping_forbidden', 'Debe reportar mapping service != product');
+    expectEqual(serviceValidation.accepted_observations.length, 0, 'Rechazo debe descartar observaciones aceptadas');
+    expectEqual(serviceValidation.authorized_mutations.length, 0, 'Rechazo debe ser whole-proposal');
+
+    const invalidRequest = structuredClone(proposal);
+    invalidRequest.primary_request = [
+      { text: '¿Cuánto necesitás?', goal_id: 'measurements' },
+      { text: '¿En qué comuna?', goal_id: 'commune' },
+    ];
+    const requestValidation = validateV3AiProposal(policy, invalidRequest);
+    expectEqual(requestValidation.valid, false, 'Solo se permite una primary_request');
+    expectIncludes(requestValidation.errors.map((entry) => entry.code), 'primary_request_invalid', 'Debe reportar solicitud principal invalida');
+
+    const forbiddenClaim = structuredClone(proposal);
+    forbiddenClaim.reply_text = 'Tenemos stock confirmado. ¿Buscás solo material o instalación?';
+    const claimValidation = validateV3AiProposal(policy, forbiddenClaim);
+    expectEqual(claimValidation.valid, false, 'Claim sensible no grounded debe rechazarse');
+    expectIncludes(claimValidation.errors.map((entry) => entry.code), 'forbidden_claim', 'Debe reportar forbidden claim');
+
+    const invalidEffect = structuredClone(proposal);
+    invalidEffect.effect_requests = [{ type: 'create_lead', reason_observation_ids: ['obs-product'] }];
+    const effectValidation = validateV3AiProposal(policy, invalidEffect);
+    expectEqual(effectValidation.valid, false, 'Efecto con goal pendiente debe rechazarse');
+    expectIncludes(effectValidation.errors.map((entry) => entry.code), 'effect_prerequisite_unresolved', 'Debe reportar prerequisite pendiente');
+    expectEqual(effectValidation.accepted_observations.length, 0, 'Efecto invalido rechaza la propuesta completa');
+    expectEqual(effectValidation.authorized_effect_requests.length, 0, 'Efecto invalido no se acepta parcialmente');
 
   }
 

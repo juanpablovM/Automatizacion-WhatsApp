@@ -212,6 +212,227 @@ const compileV3TurnPolicy = (input) => {
   return { ...policy, policy_digest: digestObject(policy) };
 };
 
+const validationError = (code, path, relatedIds = [], allowedValues = []) => ({
+  code,
+  path,
+  disposition: 'repairable',
+  related_ids: relatedIds,
+  allowed_values: allowedValues,
+});
+
+const findOccurrence = (text, quote, occurrence) => {
+  if (!quote || !Number.isInteger(occurrence) || occurrence < 1) return null;
+  let from = 0;
+  let index = -1;
+  for (let count = 0; count < occurrence; count += 1) {
+    index = text.indexOf(quote, from);
+    if (index < 0) return null;
+    from = index + quote.length;
+  }
+  return { index, end: index + quote.length };
+};
+
+const groundingEntries = (policy) => [
+  ...(Array.isArray(policy.grounding?.catalog) ? policy.grounding.catalog : []),
+  ...(Array.isArray(policy.grounding?.modality_synonyms) ? policy.grounding.modality_synonyms : []),
+];
+const groundingValue = (entry) => entry?.value ?? entry?.name ?? null;
+const normalizedComparable = (value) => isObject(value)
+  ? value.value ?? value.name ?? value.kind ?? canonicalJson(value)
+  : value;
+const sameGroundedValue = (left, right) => String(left ?? '').trim().toLocaleLowerCase('es')
+  === String(right ?? '').trim().toLocaleLowerCase('es');
+
+const validateV3AiProposal = (policy, proposal) => {
+  const errors = [];
+  const candidateObservations = [];
+  const candidateMutations = [];
+  const candidateEffects = [];
+  const proposalObject = isObject(proposal) ? proposal : {};
+  const policyDigestValid = policy?.version === V3_CONTRACTS.policy
+    && typeof policy.policy_digest === 'string'
+    && digestPolicy(policy) === policy.policy_digest;
+
+  if (!policyDigestValid) errors.push(validationError('policy_invalid', 'policy'));
+  if (!exactKeys(proposalObject, TOP_LEVEL_PROPOSAL_KEYS)) errors.push(validationError('proposal_shape_invalid', '$'));
+  if (proposalObject.version !== V3_CONTRACTS.proposal) errors.push(validationError('proposal_version_invalid', 'version'));
+  if (proposalObject.policy_digest !== policy?.policy_digest) errors.push(validationError('policy_digest_mismatch', 'policy_digest'));
+  if (typeof proposalObject.reply_text !== 'string' || proposalObject.reply_text.length === 0) {
+    errors.push(validationError('reply_text_invalid', 'reply_text'));
+  }
+
+  const primaryRequest = proposalObject.primary_request;
+  if (primaryRequest !== null) {
+    const requestValid = exactKeys(primaryRequest, PRIMARY_REQUEST_KEYS)
+      && typeof primaryRequest.text === 'string'
+      && primaryRequest.text.length > 0
+      && typeof primaryRequest.goal_id === 'string'
+      && (proposalObject.reply_text || '').includes(primaryRequest.text)
+      && (policy?.goals || []).some((goal) => goal.goal_id === primaryRequest.goal_id);
+    if (!requestValid) errors.push(validationError('primary_request_invalid', 'primary_request'));
+  }
+
+  const observations = Array.isArray(proposalObject.observations) ? proposalObject.observations : [];
+  if (!Array.isArray(proposalObject.observations)) errors.push(validationError('observations_invalid', 'observations'));
+  const observationIds = new Set();
+  const messageText = typeof policy?.turn?.message?.text === 'string' ? policy.turn.message.text : '';
+  const knownGoalIds = new Set((policy?.goals || []).map((goal) => goal.goal_id));
+  for (const [index, observation] of observations.entries()) {
+    const path = `observations[${index}]`;
+    let valid = exactKeys(observation, OBSERVATION_KEYS)
+      && typeof observation.id === 'string'
+      && observation.id.length > 0
+      && typeof observation.concept === 'string'
+      && typeof observation.raw_value === 'string'
+      && typeof observation.evidence_quote === 'string'
+      && Array.isArray(observation.resolves_goal_ids);
+    if (!valid) {
+      errors.push(validationError('observation_shape_invalid', path));
+      continue;
+    }
+    if (observationIds.has(observation.id)) {
+      errors.push(validationError('observation_id_duplicate', `${path}.id`, [observation.id]));
+      valid = false;
+    }
+    observationIds.add(observation.id);
+    if (observation.resolves_goal_ids.some((goalId) => !knownGoalIds.has(goalId))) {
+      errors.push(validationError('goal_reference_unknown', `${path}.resolves_goal_ids`, [observation.id]));
+      valid = false;
+    }
+    const occurrence = findOccurrence(messageText, observation.evidence_quote, observation.evidence_occurrence);
+    if (!occurrence) {
+      errors.push(validationError('evidence_quote_not_found', `${path}.evidence_quote`, [observation.id]));
+      valid = false;
+    }
+    if (GROUNDED_CONCEPTS.has(observation.concept)) {
+      const grounding = groundingEntries(policy).find((entry) => entry.ref === observation.grounding_ref);
+      const groundingValid = grounding
+        && (!grounding.concept || grounding.concept === observation.concept)
+        && sameGroundedValue(groundingValue(grounding), normalizedComparable(observation.normalized_value));
+      if (!groundingValid) {
+        errors.push(validationError('grounding_invalid', `${path}.grounding_ref`, [observation.id]));
+        valid = false;
+      }
+    }
+    if (valid && occurrence) {
+      const startByte = utf8Length(messageText.slice(0, occurrence.index));
+      const endByte = startByte + utf8Length(observation.evidence_quote);
+      candidateObservations.push({
+        ...jsonClone(observation),
+        evidence: {
+          message_id: policy.turn.message.id,
+          quote: observation.evidence_quote,
+          occurrence: observation.evidence_occurrence,
+          start_byte: startByte,
+          end_byte: endByte,
+          sha256: sha256(`${policy.turn.message.id}\u0000${startByte}\u0000${endByte}\u0000${observation.evidence_quote}`),
+        },
+      });
+    }
+  }
+
+  const observationsById = new Map(candidateObservations.map((observation) => [observation.id, observation]));
+  const factsById = new Map((policy?.facts || []).map((fact) => [fact.fact_id, fact]));
+  const allowedMutations = Array.isArray(policy?.state_authority?.allowed_mutations)
+    ? policy.state_authority.allowed_mutations
+    : [];
+  const mutations = Array.isArray(proposalObject.state_mutations) ? proposalObject.state_mutations : [];
+  if (!Array.isArray(proposalObject.state_mutations)) errors.push(validationError('state_mutations_invalid', 'state_mutations'));
+  for (const [index, mutation] of mutations.entries()) {
+    const path = `state_mutations[${index}]`;
+    const observation = observationsById.get(mutation?.observation_id);
+    if (!exactKeys(mutation, MUTATION_KEYS) || !['set', 'replace'].includes(mutation?.operation) || !observation) {
+      errors.push(validationError('mutation_shape_invalid', path, mutation?.observation_id ? [mutation.observation_id] : []));
+      continue;
+    }
+    const canonicalField = CONCEPT_TO_FIELD[observation.concept];
+    const allowed = allowedMutations.some((entry) => entry.operation === mutation.operation
+      && entry.concept === observation.concept
+      && entry.field === mutation.field
+      && (mutation.operation !== 'replace' || entry.current_fact_id === mutation.replaces_fact_id));
+    if (!canonicalField || canonicalField !== mutation.field || !allowed) {
+      errors.push(validationError('mutation_mapping_forbidden', `${path}.field`, [observation.id], canonicalField ? [canonicalField] : []));
+      continue;
+    }
+    if (mutation.operation === 'set' && mutation.replaces_fact_id !== null) {
+      errors.push(validationError('set_cannot_replace_fact', `${path}.replaces_fact_id`, [observation.id]));
+      continue;
+    }
+    if (mutation.operation === 'replace') {
+      const fact = factsById.get(mutation.replaces_fact_id);
+      if (!fact || fact.field !== mutation.field || fact.mutability !== 'customer_correctable') {
+        errors.push(validationError('fact_not_replaceable', `${path}.replaces_fact_id`, [observation.id]));
+        continue;
+      }
+    }
+    candidateMutations.push({
+      operation: mutation.operation,
+      field: mutation.field,
+      observation_id: observation.id,
+      replaces_fact_id: mutation.replaces_fact_id,
+      projected_value: jsonClone(observation.normalized_value),
+    });
+  }
+
+  for (const rule of policy?.claim_authority?.rules || []) {
+    if (rule?.kind !== 'forbidden_pattern' || typeof rule.pattern !== 'string') continue;
+    let pattern;
+    try {
+      pattern = new RegExp(rule.pattern, String(rule.flags || 'iu').replace(/g/g, ''));
+    } catch (_error) {
+      errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
+      continue;
+    }
+    if (pattern.test(proposalObject.reply_text || '')) {
+      errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
+    }
+  }
+
+  const permissions = new Set((policy?.effect_authority?.permissions || []).map((permission) => permission.type));
+  const requirements = new Map((policy?.effect_authority?.requirements || []).map((requirement) => [requirement.effect_type, requirement]));
+  const resolvedGoalIds = new Set([
+    ...(policy?.goals || []).filter((goal) => goal.status === 'resolved').map((goal) => goal.goal_id),
+    ...candidateObservations.flatMap((observation) => observation.resolves_goal_ids),
+  ]);
+  const effects = Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [];
+  if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
+  for (const [index, effect] of effects.entries()) {
+    const path = `effect_requests[${index}]`;
+    if (!exactKeys(effect, EFFECT_KEYS) || typeof effect.type !== 'string' || !Array.isArray(effect.reason_observation_ids)) {
+      errors.push(validationError('effect_shape_invalid', path));
+      continue;
+    }
+    if (!permissions.has(effect.type)) {
+      errors.push(validationError('effect_not_permitted', `${path}.type`, [], [...permissions]));
+      continue;
+    }
+    const unknownObservation = effect.reason_observation_ids.find((id) => !observationsById.has(id));
+    if (unknownObservation) {
+      errors.push(validationError('effect_observation_unknown', `${path}.reason_observation_ids`, [unknownObservation]));
+      continue;
+    }
+    const requiredGoalIds = requirements.get(effect.type)?.required_goal_ids || [];
+    const unresolved = requiredGoalIds.filter((goalId) => !resolvedGoalIds.has(goalId));
+    if (unresolved.length > 0) {
+      errors.push(validationError('effect_prerequisite_unresolved', path, unresolved));
+      continue;
+    }
+    candidateEffects.push(jsonClone(effect));
+  }
+
+  const valid = errors.length === 0;
+  return {
+    version: V3_CONTRACTS.validation,
+    valid,
+    policy_digest: policy?.policy_digest || null,
+    proposal_digest: isObject(proposal) ? digestObject(proposal) : null,
+    errors,
+    accepted_observations: valid ? candidateObservations : [],
+    authorized_mutations: valid ? candidateMutations : [],
+    authorized_effect_requests: valid ? candidateEffects : [],
+  };
+};
+
 module.exports = {
   V3_CONTRACTS,
   CONCEPT_TO_FIELD,
@@ -220,4 +441,5 @@ module.exports = {
   sha256,
   digestObject,
   compileV3TurnPolicy,
+  validateV3AiProposal,
 };
