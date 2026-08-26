@@ -151,9 +151,10 @@ node <<'NODE' | tee /tmp/cert-node.out
     ...overrides,
   });
 
-  const flow = async (message, aiStub) => {
+  const flow = async (message, aiStub, deterministicOverrides = {}) => {
     const evaluated = await runNode('Evaluate Conversation Step', baseEvaluateRow(message), env);
-    const applied = await runNode('Apply AI Assistance', mergedAiShape(evaluated, stub(aiStub)), env);
+    const deterministicRow = { ...evaluated, ...deterministicOverrides };
+    const applied = await runNode('Apply AI Assistance', mergedAiShape(deterministicRow, stub(aiStub)), env);
     return { evaluated, applied };
   };
   const violatedRule = (applied) => {
@@ -219,14 +220,30 @@ node <<'NODE' | tee /tmp/cert-node.out
 
   // CS-005 «Quiero instalar pastelones en mi patio» (#31.5) — modalidad instalacion
   {
-    const { applied } = await flow('Quiero instalar pastelones en mi patio.', stub({
+    const { applied: firstTurn } = await flow('Quiero instalar pastelones en mi patio.', stub({
       intent: 'quote_request',
       modality: 'installation',
       commercial_missing_fields: '["measurements","terrain","truck_access","debris_removal"]',
       reply_text: 'Para instalación necesito comuna, medidas, acceso del camión y si requiere retiro de escombros.',
     }));
-    eq(applied.modality, 'installation', 'CS-005 modality') && passA();
-    includes(applied.response_text, 'escombro', 'CS-005 pregunta escombros') && passA();
+    eq(firstTurn.modality, 'installation', 'CS-005 modality') && passA();
+    eq(firstTurn.pending_question_key, 'measurements', 'CS-005 respeta orden técnico inicial') && passA();
+
+    const { applied: debrisTurn } = await flow('Quiero instalar pastelones en mi patio.', stub({
+      intent: 'quote_request',
+      modality: 'installation',
+      commercial_missing_fields: '["debris_removal"]',
+      reply_text: '¿La instalación requiere retiro de escombros?',
+    }), {
+      reset_conversation_lead: false,
+      qualification_context: {
+        product: 'Pastelones', modality: 'installation', quantity: '20 m2',
+        commune: 'Santiago', measurements: '20 m2', terrain: 'plano',
+        truck_access: true,
+      },
+    });
+    eq(debrisTurn.pending_question_key, 'debris_removal', 'CS-005 progresa hasta retiro de escombros') && passA();
+    includes(debrisTurn.response_text, 'escombro', 'CS-005 pregunta escombros cuando corresponde') && passA();
   }
 
   // CS-006 «Necesito factura» (#31.6) — escalatoria a Finanzas/Administracion
@@ -402,13 +419,13 @@ def literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 def render_numeric(query, values):
-    return re.sub(r"\$(\d+)", lambda m: literal(values[int(m.group(1)) - 1]), query)
-
-def render_named(query, values):
-    def repl(m):
-        key = m.group(1)
-        return literal(values[key]) if key in values else m.group(0)
-    return re.sub(r":([a-z_]+)", repl, query)
+    params = sorted({int(value) for value in re.findall(r"\$(\d+)", query)})
+    if params != list(range(1, len(values) + 1)):
+        raise ValueError(f"expected contiguous $1..${len(values)}, found {params}")
+    rendered = re.sub(r"\$(\d+)", lambda m: literal(values[int(m.group(1)) - 1]), query)
+    if re.search(r"\$\d+", rendered):
+        raise ValueError("unresolved positional placeholder")
+    return rendered
 
 # --- Lead (nodo real "Persist Lead And Rotation") ---
 wf = json.loads(Path("n8n/workflows/crm-lead-creation-and-assignment.json").read_text())
@@ -427,7 +444,7 @@ lead_params = ["previous_lead_id","source_number_id","external_contact_id","what
                "is_qualified","is_partial","rotation_key","conversation_id","qualification_context"]
 Path("/tmp/cert-lead-1.sql").write_text(render_numeric(lead_q, [lead_values[k] for k in lead_params]))
 
-# --- Handoff (nodo real "Upsert Escalation Handoff", named params) ---
+# --- Handoff (nodo real "Upsert Escalation Handoff", positional params) ---
 disp = json.loads(Path("n8n/workflows/wa-inbound-downstream-dispatcher.json").read_text())
 handoff_node = next(n for n in disp["nodes"] if n["name"] == "Upsert Escalation Handoff")
 handoff_q = handoff_node["parameters"]["query"]
@@ -439,8 +456,15 @@ handoff_values = {
     "idempotency_key": "1:reclamo_instalacion:reclamo", "trigger": "reclamo_instalacion",
     "escalation_reason": "cliente reclama por instalacion", "escalation_area": "claims", "intent": "complaint",
 }
-Path("/tmp/cert-handoff-1.sql").write_text(render_named(handoff_q, handoff_values))
-Path("/tmp/cert-handoff-2.sql").write_text(render_named(handoff_q, handoff_values))
+handoff_params = [
+    "should_write", "conversation_id", "phone_number", "source_number_id",
+    "inbound_event_id", "motivo", "area", "area_label", "prioridad",
+    "responsable", "idempotency_key", "trigger", "escalation_reason",
+    "escalation_area", "intent",
+]
+rendered_handoff = render_numeric(handoff_q, [handoff_values[key] for key in handoff_params])
+Path("/tmp/cert-handoff-1.sql").write_text(rendered_handoff)
+Path("/tmp/cert-handoff-2.sql").write_text(rendered_handoff)
 
 # --- Early opportunity (nodo real "Upsert Early Opportunity") ---
 opp_node = next(n for n in disp["nodes"] if n["name"] == "Upsert Early Opportunity")

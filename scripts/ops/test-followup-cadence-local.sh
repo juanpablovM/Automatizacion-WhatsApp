@@ -30,7 +30,9 @@ assert(dispatcher.connections['Ensure Follow-Up Cancellation'].main[0][0].node==
 for(const file of fs.readdirSync('db/queries/n8n/follow-up-pipeline').filter(f=>f.endsWith('.sql'))){const sql=fs.readFileSync('db/queries/n8n/follow-up-pipeline/'+file,'utf8'); assert(!/(^|[^:]):[a-z_][a-z0-9_]*/im.test(sql),`${file} contains named placeholders`)}
 const policy=require('./tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js');
 let r=policy.resolveCancellationAction({conversation_id:7,message_id:11,text_body:'hola',response_text:'te ayudo',conversation_status_code:'waiting_user'},new Date('2026-08-08T10:00:00Z'));
-assert(r.follow_up_cancel_reason==='client_replied'&&r.follow_up_should_schedule&&r.follow_up_cycle_key==='inbound:11','real inbound payload must cancel and schedule');
+assert(r.follow_up_cancel_reason==='client_replied'&&r.follow_up_should_schedule&&r.follow_up_cycle_key==='inbound:message:11','message-backed inbound must use typed identity and schedule');
+r=policy.resolveCancellationAction({conversation_id:7,inbound_event_id:21,message_id:11,text_body:'hola',response_text:'te ayudo',conversation_status_code:'waiting_user'});
+assert(r.follow_up_should_schedule&&r.follow_up_cycle_key==='inbound:event:21'&&r.follow_up_idempotency_key==='follow-up-policy:7:event:21','persisted event identity must win and let PostgreSQL resolve its timestamp');
 r=policy.resolveCancellationAction({conversation_id:7,message_id:12,text_body:'no me escribas mas',response_text:'x',conversation_status_code:'waiting_user'});
 assert(r.follow_up_cancel_action==='opt_out'&&!r.follow_up_should_schedule,'opt-out must dominate scheduling');
 r=policy.resolveCancellationAction({conversation_id:7,message_id:13,text_body:'',message_type:'image'});
@@ -56,6 +58,13 @@ INSERT INTO whatsapp_numbers(display_name,phone_number,phone_number_id,instance_
 VALUES('Main','+56900000000','pn-main','main');
 INSERT INTO conversations(phone_number,source_number_id,conversation_status_id)
 SELECT p,1,id FROM conversation_statuses CROSS JOIN unnest(ARRAY['56911111111','56922222222','56933333333','56944444444']) p WHERE code='active';
+INSERT INTO inbound_events(
+  id, instance_name, event_fingerprint, dedupe_key, source_number_id,
+  phone_number, queue_key, event_type, normalized_event, should_process,
+  processing_status, created_at
+) VALUES
+  (10, 'main', 'u6-event-10', 'u6-event-10', 1, '56911111111', '1:56911111111', 'messages.upsert', 'message', TRUE, 'processed', '2026-08-07T10:00:00Z'),
+  (40, 'main', 'u6-event-40', 'u6-event-40', 1, '56944444444', '1:56944444444', 'messages.upsert', 'message', TRUE, 'processed', '2026-08-08T10:00:00Z');
 SQL
 
 python3 <<'PY'
@@ -69,22 +78,26 @@ def lit(v):
  return "'"+str(v).replace("'","''")+"'"
 def render(name, values, out):
  s=(Q/name).read_text()
- for i in range(len(values),0,-1): s=s.replace(f'${i}',lit(values[i-1]))
+ params=sorted({int(value) for value in re.findall(r'\$(\d+)',s)})
+ if params != list(range(1, len(values)+1)):
+  raise ValueError(f'{name}: expected contiguous $1..${len(values)}, found {params}')
+ s=re.sub(r'\$(\d+)',lambda match:lit(values[int(match.group(1))-1]),s)
+ if re.search(r'\$\d+',s): raise ValueError(f'{name}: unresolved positional placeholder')
  Path('/tmp/'+out).write_text(s)
-render('05_cancel_pending_follow_ups.sql',[4,'opt_out','opt_out','no me escribas mas','',False,'56944444444',1,'inbound:40','lead_sin_respuesta','2026-08-09T10:00:00Z'],'u6-optout.sql')
-render('01_schedule_follow_up.sql',[4,'','56944444444',1,'lead_sin_respuesta',1,'2026-08-09T10:00:00Z','inbound:40'],'u6-blocked.sql')
-render('05_cancel_pending_follow_ups.sql',[1,'cancel','client_replied','hola','',True,'56911111111',1,'inbound:10','lead_sin_respuesta','2026-08-08T10:00:00Z'],'u6-policy.sql')
+render('05_cancel_pending_follow_ups.sql',[4,'opt_out','opt_out','no me escribas mas','',False,'56944444444',1,'inbound:event:40','lead_sin_respuesta','', 'follow-up-policy:4:event:40',40,24],'u6-optout.sql')
+render('01_schedule_follow_up.sql',[4,'','56944444444',1,'lead_sin_respuesta',1,'2026-08-09T10:00:00Z','inbound:event:40'],'u6-blocked.sql')
+render('05_cancel_pending_follow_ups.sql',[1,'cancel','client_replied','hola','',True,'56911111111',1,'inbound:event:10','lead_sin_respuesta','', 'follow-up-policy:1:event:10',10,24],'u6-policy.sql')
 render('02_claim_due_follow_ups.sql',[50,'00:00','23:59','2026-08-08T10:05:00Z',300],'u6-claim.sql')
 render('01_schedule_follow_up.sql',[2,'','56922222222',1,'lead_sin_respuesta',1,'2026-08-08T10:00:00Z','inbound:20'],'u6-stale-schedule.sql')
 render('01_schedule_follow_up.sql',[3,'','56933333333',1,'lead_sin_respuesta',1,'2026-08-08T10:00:00Z','inbound:30'],'u6-unknown-schedule.sql')
 PY
 run(){ docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -v ON_ERROR_STOP=1 -At < "$1"; }
 val(){ docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -Atqc "$1"; }
-[ "$(run /tmp/u6-optout.sql | tail -1 | cut -d'|' -f4)" = opted_out ]
+[ "$(run /tmp/u6-optout.sql | tail -1 | cut -d'|' -f5)" = opted_out ]
 [ "$(val 'SELECT opted_out::text FROM follow_up_preferences WHERE conversation_id=4')" = true ]
 [ "$(run /tmp/u6-blocked.sql | tail -1 | cut -d'|' -f1)" = opted_out_blocked ]
-[ "$(run /tmp/u6-policy.sql | tail -1 | cut -d'|' -f4)" = scheduled ]
-[ "$(val "SELECT cycle_key||'|'||step_dia FROM follow_ups WHERE conversation_id=1")" = 'inbound:10|1' ]
+[ "$(run /tmp/u6-policy.sql | tail -1 | cut -d'|' -f5)" = scheduled ]
+[ "$(val "SELECT cycle_key||'|'||step_dia FROM follow_ups WHERE conversation_id=1")" = 'inbound:event:10|1' ]
 run /tmp/u6-claim.sql >/dev/null
 FID=$(val 'SELECT id FROM follow_ups WHERE conversation_id=1 AND step_dia=1')
 TOKEN=$(val "SELECT claim_token FROM follow_ups WHERE id=$FID")
@@ -113,10 +126,10 @@ Path('/tmp/u6-sent.sql').write_text(s)
 PY
 run /tmp/u6-sent.sql >/dev/null
 [ "$(val "SELECT estado||'|'||send_attempt_count FROM follow_ups WHERE id=$FID")" = 'sent|2' ]
-[ "$(val "SELECT count(*) FROM follow_ups WHERE conversation_id=1 AND cycle_key='inbound:10' AND step_dia=3")" = 1 ]
+[ "$(val "SELECT count(*) FROM follow_ups WHERE conversation_id=1 AND cycle_key='inbound:event:10' AND step_dia=3")" = 1 ]
 # Completion replay is rejected and cannot duplicate next step.
 [ "$(run /tmp/u6-sent.sql | tail -1 | cut -d'|' -f4)" = claim_rejected ]
-[ "$(val "SELECT count(*) FROM follow_ups WHERE conversation_id=1 AND cycle_key='inbound:10' AND step_dia=3")" = 1 ]
+[ "$(val "SELECT count(*) FROM follow_ups WHERE conversation_id=1 AND cycle_key='inbound:event:10' AND step_dia=3")" = 1 ]
 # Stale sending claims are reclaimed with a new token.
 run /tmp/u6-stale-schedule.sql >/dev/null
 docker exec "$POSTGRES_CONTAINER" psql -U postgres -d "$TEST_DB" -c "UPDATE follow_ups SET estado='sending',claim_token=gen_random_uuid(),claimed_at=NOW()-INTERVAL '10 minutes' WHERE conversation_id=2" >/dev/null
