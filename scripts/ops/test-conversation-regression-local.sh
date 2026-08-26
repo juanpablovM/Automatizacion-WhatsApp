@@ -37,6 +37,13 @@ const requiredBaseCases = Array.from({ length: 12 }, (_, index) =>
   `CP-${String(index + 1).padStart(2, '0')}`
 );
 const requiredAiCases = ['AI-01', 'AI-02', 'AI-03', 'AI-04', 'AI-05', 'AI-06'];
+const requiredV3Cases = [
+  'V3-ROUTE-01', 'V3-ROUTE-02', 'V3-ROUTE-03', 'V3-ROUTE-04',
+  'V3-ROUTE-05', 'V3-ROUTE-06', 'V3-SHADOW-01', 'V3-SHADOW-02',
+  'V3-CANARY-01', 'V3-JOURNEY-01', 'V3-JOURNEY-02', 'V3-JOURNEY-03',
+  'V3-JOURNEY-04', 'V3-JOURNEY-05', 'V3-JOURNEY-06', 'V3-JOURNEY-07',
+  'V3-JOURNEY-08', 'V3-JOURNEY-09', 'V3-JOURNEY-10', 'V3-JOURNEY-11',
+];
 const requiredGate = ['servicio', 'ciudad', 'requerimiento', 'confirmacion'];
 
 const fail = (message) => {
@@ -67,6 +74,10 @@ for (const id of [...requiredBaseCases, ...requiredAiCases]) {
   if (!ids.has(id)) fail(`Falta caso en fixture: ${id}`);
   if (!matrix.includes(id)) fail(`Falta caso en matriz: ${id}`);
 }
+for (const id of requiredV3Cases) {
+  if (!ids.has(id)) fail(`Falta caso v3 en fixture: ${id}`);
+}
+
 if (!fs.existsSync(rolloutRuntimePath)) fail('Falta runtime canonico v3 de routing/rollout');
 if (!fs.existsSync(shadowEvaluatorPath)) fail('Falta workflow AI PRD Shadow Evaluator');
 const shadowEvaluator = JSON.parse(fs.readFileSync(shadowEvaluatorPath, 'utf8'));
@@ -264,6 +275,14 @@ for (const testCase of suite.cases) {
   }
   if (testCase.id.startsWith('AI-') && expected.ai_creates_lead_directly === true && expected.confirmed_by_user !== true) {
     fail(`${testCase.id}: Hormi Atencion solo puede decidir crear lead con confirmacion`);
+  }
+  if (testCase.id.startsWith('V3-JOURNEY-')) {
+    if (!Array.isArray(expected.properties) || expected.properties.length < 2) {
+      fail(`${testCase.id}: journey v3 debe declarar al menos dos propiedades semanticas`);
+    }
+    if (expected.exact_reply_text !== undefined) {
+      fail(`${testCase.id}: journey v3 debe validar propiedades, no copy exacto`);
+    }
   }
   if (testCase.id === 'AI-01' && expected.fallback_deterministic !== true) {
     fail('AI-01 debe caer a fallback deterministico por error de configuracion');

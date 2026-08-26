@@ -1070,6 +1070,264 @@
         "recovery_contract": "v3",
         "legacy_reinterpretation": false
       }
+    },
+    {
+      "id": "V3-JOURNEY-01",
+      "title": "Pregunta del cliente se responde antes de progresar",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "¿Sirve para una entrada vehicular?"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "answers_question",
+          "max_one_primary_request",
+          "unchanged_reply_bytes"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-02",
+      "title": "Incertidumbre no se convierte en hecho",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Creo que podrían ser unos 30 metros, no estoy seguro"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "uncertainty_preserved",
+          "evidence_required"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-03",
+      "title": "Correccion reemplaza solo el hecho citado",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "No es Santiago, es Valparaíso"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "correction_names_prior_fact",
+          "atomic_mutations"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-04",
+      "title": "Digresion conserva progreso sin pregunta forzada",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Antes de seguir, ¿atienden los sábados?"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "answers_question",
+          "no_deterministic_question_override"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-05",
+      "title": "Frustracion permite respuesta natural y handoff autorizado",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Esto es frustrante, necesito hablar con una persona"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "frustration_acknowledged",
+          "receipted_handoff"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-06",
+      "title": "Ambiguedad no autoriza estado ni efecto",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Quiero eso de allá"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "ambiguous_evidence_rejected",
+          "state_preserved"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-07",
+      "title": "Claim sensible exige grounding",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "¿Tienen stock y entrega mañana?"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "claims_grounded",
+          "whole_proposal_rejection"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-08",
+      "title": "Efecto requiere permiso, clave y receipt",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Derívame con ventas"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "effect_authorized",
+          "operation_key_system_derived",
+          "receipt_required"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-09",
+      "title": "Falla de repair preserva estado y usa contingencia recepcionada",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Necesito ayuda"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "one_complete_repair",
+          "pre_turn_state_preserved",
+          "receipted_contingency"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-10",
+      "title": "Replay y concurrencia no duplican entrega ni efectos",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "Necesito 20 baldosas en Quilicura"
+        ],
+        "processable": true,
+        "mode": "canary"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "stable_decision_key",
+          "stable_delivery_key",
+          "no_duplicate_effects"
+        ]
+      }
+    },
+    {
+      "id": "V3-JOURNEY-11",
+      "title": "Orden de hechos no cambia autoridad",
+      "ai_mode": "v3",
+      "input": {
+        "messages": [
+          "En Quilicura necesito 20 baldosas",
+          "Necesito 20 baldosas en Quilicura"
+        ],
+        "processable": true,
+        "mode": "enforce"
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "audit_required": true,
+        "properties": [
+          "reordered_fact_equivalence",
+          "evidence_offsets_per_message"
+        ]
+      }
     }
   ]
 }
