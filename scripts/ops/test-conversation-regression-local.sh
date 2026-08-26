@@ -13,6 +13,7 @@ const matrixPath = 'docs/matriz-pruebas-conversacionales.md';
 const orchestratorPath = 'n8n/workflows/wa-conversation-orchestrator.json';
 const assistantPath = 'n8n/workflows/ai-lead-qualification-assistant.json';
 const conversationStatusesSeedPath = 'db/seeds/002_conversation_statuses.sql';
+const rolloutRuntimePath = 'tests/fixtures/workflow-nodes/shared/v3-rollout-runtime.js';
 const suite = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const matrix = fs.readFileSync(matrixPath, 'utf8');
 const orchestrator = JSON.parse(fs.readFileSync(orchestratorPath, 'utf8'));
@@ -61,6 +62,93 @@ for (const id of [...requiredBaseCases, ...requiredAiCases]) {
   if (!ids.has(id)) fail(`Falta caso en fixture: ${id}`);
   if (!matrix.includes(id)) fail(`Falta caso en matriz: ${id}`);
 }
+if (!fs.existsSync(rolloutRuntimePath)) fail('Falta runtime canonico v3 de routing/rollout');
+const {
+  resolveConversationContractRoute,
+  planShadowEvaluation,
+  recordShadowEvaluation,
+  buildV3PolicyInput,
+} = require(`./${rolloutRuntimePath}`);
+const { compileV3TurnPolicy, validateV3AiProposal } = require('./tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js');
+
+const modeExpectations = {
+  legacy: { contract_version: 'legacy', shadow_requested: false },
+  shadow: { contract_version: 'legacy', shadow_requested: true },
+  canary: { contract_version: 'v3', shadow_requested: false },
+  enforce: { contract_version: 'v3', shadow_requested: false },
+};
+for (const [mode, expected] of Object.entries(modeExpectations)) {
+  const route = resolveConversationContractRoute({ turn_id: `turn-${mode}` }, { mode, rule_id: `rule-${mode}` });
+  if (route.mode !== mode || route.contract_version !== expected.contract_version) {
+    fail(`Routing ${mode} no conserva modo/version contractual`);
+  }
+  if (route.shadow_requested !== expected.shadow_requested) {
+    fail(`Routing ${mode} no conserva aislamiento shadow`);
+  }
+}
+
+const fixedCanary = resolveConversationContractRoute(
+  { turn_id: 'turn-fixed', active_route: { mode: 'canary', contract_version: 'v3', rule_id: 'rule-canary' } },
+  { mode: 'legacy', rule_id: 'rollback' },
+);
+if (fixedCanary.mode !== 'canary' || fixedCanary.contract_version !== 'v3' || !fixedCanary.route_drift_detected) {
+  fail('Rollback/retry no debe reinterpretar un turno v3 activo como legacy');
+}
+if (fixedCanary.recovery_contract !== 'v3' || fixedCanary.legacy_reinterpretation_allowed !== false) {
+  fail('Canary/enforce debe recuperar bajo v3 sin reinterpretacion legacy');
+}
+
+const shadowPlan = planShadowEvaluation({
+  route: resolveConversationContractRoute({ turn_id: 'turn-shadow' }, { mode: 'shadow', rule_id: 'rule-shadow' }),
+  legacy_delivery: { delivered: true, receipt_ref: 'delivery-1' },
+  payload: { state_mutations: [{ field: 'city' }], effect_requests: [{ type: 'handoff' }] },
+});
+if (!shadowPlan.dispatch || shadowPlan.wait_for_completion || shadowPlan.visible_latency_ms !== 0) {
+  fail('Shadow debe iniciar post-delivery sin bloquear la ruta visible');
+}
+if (shadowPlan.allow_mutations || shadowPlan.allow_effects || shadowPlan.payload.state_mutations.length || shadowPlan.payload.effect_requests.length) {
+  fail('Shadow debe eliminar mutaciones y efectos antes del dispatch');
+}
+const shadowFailure = recordShadowEvaluation(shadowPlan, { ok: false, error: 'provider_timeout', duration_ms: 65000 });
+if (shadowFailure.status !== 'failed' || shadowFailure.visible_delivery_affected) {
+  fail('Falla/latencia shadow no debe alterar la entrega legacy');
+}
+const shadowPolicy = compileV3TurnPolicy(buildV3PolicyInput({
+  inbound_event_id: 'shadow-turn-contract',
+  conversation_id: 'conversation-shadow',
+  external_message_id: 'message-shadow',
+  text_body: 'Derivame con ventas',
+  shadow_mode: true,
+}, { shadow: true }));
+if (shadowPolicy.state_authority.allowed_mutations.length || shadowPolicy.effect_authority.permissions.length) {
+  fail('Policy shadow no debe delegar autoridad de estado o efectos');
+}
+const forbiddenShadowEffect = validateV3AiProposal(shadowPolicy, {
+  version: 'ai_conversation_proposal/v3',
+  policy_digest: shadowPolicy.policy_digest,
+  reply_text: 'Puedo ayudarte con la solicitud.',
+  primary_request: null,
+  observations: [],
+  state_mutations: [],
+  effect_requests: [{ type: 'handoff', reason_observation_ids: [] }],
+});
+if (forbiddenShadowEffect.valid || !forbiddenShadowEffect.errors.some((error) => error.code === 'effect_not_permitted')) {
+  fail('Validador v3 debe rechazar efectos propuestos por shadow');
+}
+const groundedPolicyInput = buildV3PolicyInput({
+  inbound_event_id: 'grounding-turn',
+  conversation_id: 'grounding-conversation',
+  external_message_id: 'grounding-message',
+  text_body: 'Necesito baldosas en Quilicura',
+  commercial_context: {
+    catalog_items: [{ id: 'bal-1', name: 'Baldosas', item_type: 'product', applicable_cities: ['Quilicura'] }],
+  },
+});
+if (!groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'product' && entry.value === 'Baldosas')
+  || !groundedPolicyInput.grounding.catalog.some((entry) => entry.concept === 'commune' && entry.value === 'Quilicura')) {
+  fail('Compiler v3 debe derivar grounding allowlisted desde contexto comercial');
+}
+
 
 for (const testCase of suite.cases) {
   if (!testCase.id || !testCase.title) fail('Cada caso debe tener id y title');
