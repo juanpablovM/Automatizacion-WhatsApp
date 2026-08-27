@@ -1,0 +1,23 @@
+{
+  "name": "automatizacion-whatsapp",
+  "private": true,
+  "scripts": {
+    "check:compose": "docker compose -f docker-compose.test.yml config --quiet",
+    "check:parity": "node tests/scripts/sync-workflow-nodes.mjs --check",
+    "check:sql-references": "node tests/scripts/validate-sql-references.mjs",
+    "db:reset:test": "node tests/scripts/reset-test-db.mjs",
+    "test": "vitest run --globals",
+    "test:fixture-contract": "vitest run tests/contract --globals --testTimeout=60000",
+    "test:e2e:n8n": "sh scripts/ops/test-reengagement-n8n-e2e.sh",
+    "test:integration:postgres": "TEST_PG_INTEGRATION=1 vitest run tests/integration --globals --testTimeout=30000",
+    "test:ops-contract": "vitest run tests/ops --globals",
+    "test:property": "vitest run tests/property/precedence-order.test.js --globals",
+    "test:smoke": "vitest run tests/smoke --globals --testTimeout=30000",
+    "test:unit": "vitest run tests/unit --globals"
+  },
+  "devDependencies": {
+    "fast-check": "4.9.0",
+    "pg": "8.16.3",
+    "vitest": "3.2.7"
+  }
+}

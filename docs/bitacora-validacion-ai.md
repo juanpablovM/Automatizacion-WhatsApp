@@ -2,12 +2,25 @@
 
 ## Objetivo
 
-Documentar los cambios realizados durante la validacion real del CRM WhatsApp Automatizado y dejar registrada la decision tecnica sobre la futura incorporacion de AI.
+Documentar los cambios realizados durante las validaciones reales del CRM WhatsApp Automatizado.
+
+## Actualizacion 2026-06-18
+
+La decision AI descrita originalmente en esta bitacora ya fue implementada:
+
+- Gemini `gemini-3.1-flash-lite` es la voz conversacional principal
+- `qualification_context` y `pending_question_key` mantienen memoria estructurada
+- el contrato incluye actualizaciones de campos, pregunta respondida, siguiente pregunta y siguiente mejor accion
+- condiciones comerciales, FAQ y objeciones tienen una carga inicial activa
+- el handoff solo se confirma despues de crear y asignar el lead
+- la regresion local y el E2E de instalacion en Vitacura fueron validados
+
+Las secciones siguientes conservan evidencia historica de iteraciones anteriores y no reemplazan el estado canónico de `docs/handoff-actual.md`.
 
 Este documento complementa:
 
 - [`docs/handoff-actual.md`](./handoff-actual.md)
-- [`PLAN_DE_ACCION_OPTIMIZADO.md`](../PLAN_DE_ACCION_OPTIMIZADO.md)
+- [`docs/archive/PLAN_DE_ACCION_OPTIMIZADO.md`](./archive/PLAN_DE_ACCION_OPTIMIZADO.md), como referencia historica
 - [`docs/n8n-workflows.md`](./n8n-workflows.md)
 
 ## Estado Antes de Esta Iteracion
@@ -19,7 +32,7 @@ El proyecto ya tenia:
 - base CRM separada de la base interna de `n8n`
 - workflows reales versionados
 - ClickUp configurado y validado con una prueba previa
-- plan optimizado documentado para avanzar hacia produccion
+- plan optimizado historico documentado para avanzar hacia produccion
 
 Lo que faltaba validar era el flujo real completo con WhatsApp conectado.
 
@@ -211,6 +224,7 @@ Salida prevista en JSON estructurado:
 - `city`
 - `requirement`
 - `missing_fields`
+- `confirmation_status`
 - `should_create_lead`
 - `needs_confirmation`
 - `confidence`
@@ -219,11 +233,11 @@ Salida prevista en JSON estructurado:
 
 ## Estado Actual del Proyecto
 
-El flujo real ya funciona a nivel funcional inicial.
+El flujo real ya funciona a nivel funcional inicial y la documentacion operativa vigente vive en `README.md`, `docs/handoff-actual.md` y `docs/guia-produccion.md`.
 
 Completado:
 
-- WhatsApp conectado via `Evolution API`
+- WhatsApp conectado via `Evolution API`; la instancia default versionada actual es `wahormiglass`
 - workflows sincronizados y activos donde corresponde
 - conversacion real validada
 - creacion de leads validada
@@ -231,20 +245,20 @@ Completado:
 - asignacion de vendedores validada
 - datos de prueba identificados y marcados/gestionados
 - decision AI documentada
+- `AI - Lead Qualification Assistant` implementado como sub-workflow controlado
+- `.env.example` preparado con API directa y fallback seguro cuando faltan key/modelo
 
 Pendiente inmediato:
 
-1. ejecutar una matriz corta de pruebas conversacionales con casos variados
-2. implementar seguridad y recuperacion minima:
-   - proteccion del webhook
-   - backup de PostgreSQL
-   - backup del volumen de `n8n`
-   - prueba controlada de `OPS - Error Handler`
-3. iniciar `AI - Lead Qualification Assistant` como capa controlada
+1. ejecutar validacion controlada con proveedor AI real y evidenciar fallback seguro ante error
+2. cerrar completamente el smoke de `OPS - Error Handler`
+3. validar backup y verify restore no destructivo con evidencia reciente
+4. cargar proveedor/modelo/API key en `.env` solo por el integrador
+5. ejecutar matriz conversacional con Hormi Atencion encendida antes de considerar produccion
 
 ## Matriz Corta de Pruebas Recomendada
 
-Casos a probar antes de pasar a AI:
+Casos a probar como regresion permanente:
 
 - saludo simple
 - mensaje completo desde el inicio

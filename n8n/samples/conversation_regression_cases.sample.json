@@ -57,7 +57,7 @@
           "ciudad",
           "requerimiento"
         ],
-        "next_step": "confirm",
+        "next_step": "quantity",
         "audit_required": true
       }
     },
@@ -268,8 +268,8 @@
     },
     {
       "id": "AI-01",
-      "title": "AI apagada conserva comportamiento deterministico",
-      "ai_mode": "off",
+      "title": "Error de configuracion AI conserva fallback seguro",
+      "ai_mode": "config_error",
       "input": {
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
@@ -281,7 +281,6 @@
         "lead_created": false,
         "clickup_task_created": false,
         "confirmed_by_user": false,
-        "feature_flag_required": "AI_LEAD_ASSISTANT_ENABLED=false",
         "fallback_deterministic": true,
         "audit_required": true
       }
@@ -294,7 +293,7 @@
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.92,
           "should_create_lead": false
@@ -320,7 +319,7 @@
         "messages": [
           "Hola, necesito comprar baldosas en Santiago para renovar un bano"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": false,
           "http_failure": true
         },
@@ -344,7 +343,7 @@
         "messages": [
           "Algo para la casa"
         ],
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.52,
           "suggested_fields": [
@@ -395,7 +394,7 @@
           "Si, correcto"
         ],
         "precondition": "current_step=confirm con servicio, ciudad y requerimiento completos",
-        "mock_ai": {
+        "provider_fixture": {
           "valid_json": true,
           "confidence": 0.95,
           "intent": "confirmation_yes",
@@ -411,6 +410,465 @@
         "confirmed_by_user": true,
         "ai_creates_lead_directly": true,
         "seller_assigned": true,
+        "audit_required": true
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-01",
+      "title": "[Phase 3] Frustracion detectada por keywords — escalacion",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Ya te dije que es en Santiago, no me estai escuchando?",
+          "Esto es una tontera, necesito hablar con alguien"
+        ],
+        "conversation_state": {
+          "current_step": "city_retry_2",
+          "existing_fields": {}
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "escalation_triggered": true,
+        "escalation_reason": "frustration_detected",
+        "conversation_status_code": "escalation_required",
+        "placeholder_lead_created": true,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-02",
+      "title": "[Phase 3] Loop detection — 3 turnos sin avance en mismo campo",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "No, no quiero eso"
+        ],
+        "precondition": "conversation_state.current_step=service_retry_2 (3er turno sin avance en service)",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "consecutive_failures": 3,
+        "escalation_triggered": true,
+        "escalation_reason": "loop_detected",
+        "conversation_status_code": "escalation_required",
+        "placeholder_lead_created": true,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-07",
+      "title": "[Phase 3] Frustracion detectada por IA — talk_to_human con escalacion",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Esto no funciona, quiero hablar con una ejecutiva por favor"
+        ],
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.88,
+          "intent": "talk_to_human",
+          "escalation_area": "sales",
+          "escalation_reason": "customer_requested_human_contact"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "escalation_triggered": true,
+        "escalation_reason": "customer_requested_human_contact",
+        "conversation_status_code": "escalation_required",
+        "placeholder_lead_created": true,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-03",
+      "title": "[PENDING — Phase 2] Confianza alta auto-avanza sin confirmar",
+      "status": "pending",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Quiero comprar baldosas en Santiago"
+        ],
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.92,
+          "per_field_confidence": {
+            "service": 0.95,
+            "city": 0.98
+          }
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "auto_advanced_fields": [
+          "service",
+          "city"
+        ],
+        "confirmation_asked": false,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-04",
+      "title": "[PENDING — Phase 2] Confianza baja pregunta confirmacion por campo",
+      "status": "pending",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Algo para afuera de la casa"
+        ],
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.85,
+          "per_field_confidence": {
+            "service": 0.65,
+            "city": 0.9
+          }
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "auto_advanced_fields": [
+          "city"
+        ],
+        "confirmation_asked_for": "service",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-05",
+      "title": "[PENDING — Phase 2] Cliente recurrente reusa datos anteriores",
+      "status": "pending",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Hola, quiero lo mismo que la vez pasada"
+        ],
+        "precondition": "numero con lead previo (baldosas, Santiago, instalacion)",
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "previous_lead_reused": true,
+        "fields_prefilled": [
+          "service",
+          "city",
+          "requirement"
+        ],
+        "confirmation_asked": true,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-06",
+      "title": "[Phase 4] Cotizacion generada como quotation_data en output",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Si, confirma los datos"
+        ],
+        "precondition": "todos los datos completos y confirmados",
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "quotation_data_present": true,
+        "quotation_contains_service": true,
+        "quotation_contains_city": true,
+        "audit_required": true,
+        "confirmed_by_user": true,
+        "clickup_task_created": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-08",
+      "title": "[Phase 4] Sin quotation_data cuando no hay lead",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Hola, quiero info"
+        ],
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "quotation_data_is_null": true,
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-09",
+      "title": "[Phase 4] Escalacion genera quotation_data con contexto",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "No me estai escuchando, quiero hablar con una persona"
+        ],
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.7,
+          "escalation_area": "sales",
+          "escalation_reason": "customer_requested_human_contact"
+        },
+        "conversation_state": {
+          "current_step": "service",
+          "existing_fields": {
+            "service": "baldosas",
+            "city": "Santiago"
+          }
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "escalation_triggered": true,
+        "quotation_data_present": true,
+        "quotation_contains_existing_fields": true,
+        "audit_required": true,
+        "confirmed_by_user": true,
+        "clickup_task_created": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-10",
+      "title": "[Guardrail] Saludo mal clasificado por AI no confirma ni crea lead",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Hola"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "conversation_status_code": "waiting_user",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-11",
+      "title": "[Guardrail] Nueva cotizacion no confirma datos anteriores",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Quiero una nueva cotización"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "conversation_status_code": "waiting_user",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": false
+      }
+    },
+    {
+      "id": "CONV-FLOW-V2-12",
+      "title": "[Guardrail] Lead confirmado prioriza handoff sobre escalation_area sales",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Sí"
+        ],
+        "conversation_state": {
+          "current_step": "confirm",
+          "pending_question_key": "final_confirmation"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.95,
+          "intent": "confirmation_yes",
+          "confirmation_status": "confirmed",
+          "should_create_lead": true,
+          "escalation_area": "sales"
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": true,
+        "conversation_status_code": "handed_to_sales",
+        "audit_required": true,
+        "clickup_task_created": false,
+        "confirmed_by_user": true
+      }
+    },
+    {
+      "id": "AN-01",
+      "title": "[PRD 6.10] Mencion directa del material satisface product sin SKU",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Baldosas"
+        ],
+        "conversation_state": {
+          "current_step": "service",
+          "pending_question_key": "product"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.9,
+          "intent": "quote_request",
+          "service": "Baldosas",
+          "modality": "unknown",
+          "explicitly_mentioned_fields": [
+            "product"
+          ],
+          "field_updates": {}
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "next_step_any": [
+          "modality"
+        ],
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AN-02",
+      "title": "[PRD 6.10] Hormigon Armado Losa es un PRODUCTO, no instalacion",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Necesito hormigon armado losa para una losa de 100 m2"
+        ],
+        "conversation_state": {
+          "current_step": "service"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.9,
+          "intent": "installation_inquiry",
+          "service": "Hormigon",
+          "modality": "installation",
+          "explicitly_mentioned_fields": [
+            "product"
+          ],
+          "field_updates": {}
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "conversation_status_code": "waiting_user",
+        "next_step_any": [
+          "modality"
+        ],
+        "audit_required": true
+      }
+    },
+    {
+      "id": "AN-03",
+      "title": "[PRD 6.10] Sin mencion, product queda pendiente y el texto lo formula el modelo",
+      "status": "ready",
+      "ai_mode": "on_valid",
+      "input": {
+        "messages": [
+          "Si"
+        ],
+        "conversation_state": {
+          "current_step": "service",
+          "pending_question_key": "product"
+        },
+        "provider_fixture": {
+          "valid_json": true,
+          "confidence": 0.9,
+          "intent": "quote_request",
+          "service": "Hormigon",
+          "modality": "unknown",
+          "explicitly_mentioned_fields": [],
+          "field_updates": {}
+        },
+        "processable": true
+      },
+      "expected": {
+        "conversation_created": true,
+        "lead_created": false,
+        "clickup_task_created": false,
+        "confirmed_by_user": false,
+        "next_step_any": [
+          "product"
+        ],
         "audit_required": true
       }
     }

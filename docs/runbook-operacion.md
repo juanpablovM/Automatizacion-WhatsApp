@@ -200,14 +200,17 @@ Esta prueba genera auditoria operativa. No ejecutarla durante una prueba comerci
 Estado real actual:
 
 - el smoke fue actualizado para usar una bandera explicita de prueba
-- al momento del ultimo handoff, la prueba aun requiere ajuste adicional para registrar consistentemente la auditoria nueva
+- en la revision del `2026-06-30` no se re-ejecuto este smoke; el estado observado del sistema se apoyo en healthchecks, consultas de auditoria, pruebas locales y restore check
 - no usar su resultado como unico indicador de salud del flujo principal de WhatsApp
 
 ## Pendientes operativos conocidos
 
 - Persisten lineas historicas en logs de `n8n` asociadas a webhooks viejos. No corresponden a la configuracion activa actual.
 - El flujo principal de WhatsApp ya fue validado nuevamente con una conversacion real completa.
-- La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/guia-produccion.md).
+- El backup post-sync autorizado del baseline local actual es `backups/20260630-145829/`; generar uno nuevo despues de cambios relevantes.
+- El round robin actual aun incluye un vendedor de pruebas como notificable.
+- Existen casos historicos de continuidad conversacional con campos contaminados; revisar antes de produccion.
+- La guia de salida a produccion del proyecto vive en [`docs/guia-produccion.md`](./guia-produccion.md).
 
 ## Reconectar Evolution API por QR
 
@@ -239,12 +242,12 @@ sh scripts/dev/evolution-set-webhook.sh
 Checklist:
 
 - Instancia default existe y queda en estado `open`.
-- Webhook queda persistido hacia `host.docker.internal:5678`.
+- Webhook queda persistido hacia la URL definida en `EVOLUTION_WEBHOOK_URL`; la plantilla actual usa `http://n8n:5678/...` dentro de la red Docker, y `host.docker.internal:5678` queda como alternativa para llamar al puerto publicado del host.
 - La URL impresa por `evolution-set-webhook.sh` no muestra secretos reales.
 - Evento configurado: `MESSAGES_UPSERT`, salvo cambio deliberado.
 - No eliminar la instancia ni volumenes para reconectar, a menos que se haya decidido resetear la sesion.
 
-## Activar o desactivar AI
+## Operar AI
 
 Validacion local del contrato sin proveedor real:
 
@@ -252,47 +255,53 @@ Validacion local del contrato sin proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-Desactivar AI:
-
-```bash
-# editar .env
-AI_LEAD_ASSISTANT_ENABLED=false
-docker compose --env-file .env up -d n8n
-```
-
-AI queda activada por defecto en modo API directa. Si la API key o el modelo siguen pendientes, el workflow omite IA y usa fallback deterministico.
+AI queda activada por defecto en modo API directa. Si la API key o el modelo siguen pendientes, el workflow registra `missing_api_config` y usa fallback deterministico.
 
 Configuracion esperada para AI:
 
 ```bash
 # editar .env
-AI_LEAD_ASSISTANT_ENABLED=true
-AI_PROVIDER=direct_api
+AI_PROVIDER=google
 AI_API_KEY_REQUIRED=true
-AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
-AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=<redacted>
-AI_DIRECT_API_MODEL=<modelo elegido>
-AI_DIRECT_API_TIMEOUT_MS=8000
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
+AI_DIRECT_API_TIMEOUT_MS=120000
 docker compose --env-file .env up -d n8n
 ```
+
+`AI - Lead Qualification Assistant` soporta tanto `/chat/completions` como `/responses`; mantener el valor de `.env` alineado con el proveedor elegido.
+Valor canónico del proyecto: `gemini-3.1-flash-lite`.
+`gemini-3.5-flash` solo debe usarse como prueba de escalamiento si aparecen respuestas vagas, `invalid_json` o demasiada caida a fallback.
+Evitar dejar modelos `preview` o aliases `latest` como configuracion versionada.
 
 Checklist antes de activar:
 
 - API key vigente y no expuesta en Git.
-- Modelo definido en `AI_DIRECT_API_MODEL`.
-- Revisar [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
+- Modelo definido en `AI_DIRECT_API_MODEL` y alineado al valor estable acordado.
+- Revisar [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 - `AI - Lead Qualification Assistant` pasa el test local.
 - `sync-n8n-workflows.sh --preflight` pasa.
-- Existe plan de rollback: volver a `AI_LEAD_ASSISTANT_ENABLED=false` y recrear `n8n`.
+- Existe plan de contencion: corregir credenciales/modelo o revisar el proveedor si aparece `missing_api_config`, `provider_error` o `invalid_json`.
 
 Reglas operativas:
 
 - Hormi Atencion decide la conversacion y puede habilitar leads confirmados.
 - n8n y PostgreSQL ejecutan persistencia, ClickUp y asignacion.
 - Hormi Atencion no escribe directo en PostgreSQL ni crea tareas ClickUp fuera del workflow.
-- Un lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
+- La conversacion mantiene `qualification_context` y `pending_question_key`.
+- Un lead requiere necesidad real, datos criticos de la intencion y confirmacion cuando corresponde.
+- La derivacion al cliente solo se anuncia despues de crear y asignar el lead.
 - Si el proveedor AI falla, demora, responde invalido o devuelve baja confianza, el flujo debe caer a logica deterministica.
+
+Validacion completa del asesor:
+
+```bash
+sh scripts/ops/test-ai-assistant-local.sh
+sh scripts/ops/test-conversation-regression-local.sh
+sh scripts/ops/test-advisor-vitacura-e2e.sh
+```
 
 ## Cierre de una ventana operativa
 

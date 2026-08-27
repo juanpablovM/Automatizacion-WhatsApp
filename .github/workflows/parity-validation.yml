@@ -1,0 +1,232 @@
+name: Delivery Validation
+
+on:
+  push:
+    branches: [main, develop, 'feat/**']
+    paths:
+      - '.github/workflows/parity-validation.yml'
+      - '.env.example'
+      - '.gitignore'
+      - 'docker-compose.yml'
+      - 'docker-compose.test.yml'
+      - 'docs/rollback/ROLLBACK_PLAN_TEST_HARNESS.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'infra/postgres/migrations/**'
+      - 'db/seeds/**'
+      - 'db/queries/n8n/**'
+      - 'db/queries/ops/**'
+      - 'n8n/workflow-links.json'
+      - 'n8n/workflows/**'
+      - 'scripts/dev/sync-n8n-workflows.sh'
+      - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/reset-controlled-test-session.sh'
+      - 'tests/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '.github/workflows/parity-validation.yml'
+      - '.env.example'
+      - '.gitignore'
+      - 'docker-compose.yml'
+      - 'docker-compose.test.yml'
+      - 'docs/rollback/ROLLBACK_PLAN_TEST_HARNESS.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'infra/postgres/migrations/**'
+      - 'db/seeds/**'
+      - 'db/queries/n8n/**'
+      - 'db/queries/ops/**'
+      - 'n8n/workflow-links.json'
+      - 'n8n/workflows/**'
+      - 'scripts/dev/sync-n8n-workflows.sh'
+      - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/reset-controlled-test-session.sh'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+jobs:
+  static-contracts:
+    name: Workflow and source contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Validate fixture and workflow parity
+        run: npm run check:parity
+
+      - name: Validate workflow SQL references
+        run: npm run check:sql-references
+
+      - name: Run precedence properties
+        run: npm run test:property
+
+      - name: Run workflow syntax smoke tests
+        run: npm run test:smoke
+
+      - name: Run Code node wrapper and guardrail unit tests
+        run: npm run test:unit
+
+      - name: Run operational script contracts
+        run: npm run test:ops-contract
+
+  fixture-contract:
+    name: Conversation fixture contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Run fixture-level conversation contract
+        run: npm run test:fixture-contract
+
+  compose-contract:
+    name: Test Compose contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose -f docker-compose.test.yml config --quiet
+
+      - name: Verify test and production Compose projects stay isolated
+        shell: bash
+        run: |
+          test_project="$(docker compose -f docker-compose.test.yml config --format json | jq -r '.name')"
+          prod_project="$(docker compose -f docker-compose.yml config --format json | jq -r '.name')"
+          test "$test_project" = "automatizacion-whatsapp-test"
+          test "$prod_project" = "automatizacion-whatsapp"
+          test "$test_project" != "$prod_project"
+
+      - name: Verify test and production Compose publish disjoint host ports
+        shell: bash
+        run: |
+          # A shared project name is not the only way the test stack can reach
+          # production: publishing the same host port makes the test stack fail
+          # to bind, or bind to whatever already answers there.
+          ports_of() {
+            docker compose -f "$1" config --format json \
+              | jq -r '.services[].ports // [] | .[] | .published | select(. != null) | tostring' \
+              | sort -u
+          }
+          test_ports="$(ports_of docker-compose.test.yml)"
+          prod_ports="$(ports_of docker-compose.yml)"
+          echo "test host ports: $(echo "$test_ports" | tr '\n' ' ')"
+          echo "prod host ports: $(echo "$prod_ports" | tr '\n' ' ')"
+          overlap="$(comm -12 <(echo "$test_ports") <(echo "$prod_ports"))"
+          if [ -n "$overlap" ]; then
+            echo "ERROR: test and production Compose publish the same host port(s):" >&2
+            echo "$overlap" >&2
+            exit 1
+          fi
+
+      - name: Verify n8n image matches production default
+        shell: bash
+        run: |
+          test "$(docker compose -f docker-compose.test.yml config --images | grep '/n8n:' | head -n 1)" = \
+            "docker.n8n.io/n8nio/n8n:1.123.29"
+
+  database-migrations:
+    name: PostgreSQL migrations and reset
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Start migrated PostgreSQL
+        run: docker compose -f docker-compose.test.yml up -d --wait postgres
+
+      - name: Rebuild the test schema from versioned migrations
+        run: npm run db:reset:test
+
+      - name: Verify the latest schema objects
+        run: |
+          docker compose -f docker-compose.test.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U test -d testdb -c \
+            "SELECT 'public.follow_up_preferences'::regclass AS follow_up_hardening_applied;"
+
+      - name: Verify concurrent follow-up replay
+        run: npm run test:integration:postgres
+
+      - name: Capture PostgreSQL logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs --no-color postgres > postgres-test-logs.txt
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-test-logs
+          path: postgres-test-logs.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Tear down test infrastructure
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v --remove-orphans
+
+  n8n-reengagement-e2e:
+    name: Real n8n re-engagement E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Run disposable n8n to PostgreSQL to Evolution E2E
+        env:
+          TEST_EVIDENCE_DIR: ${{ runner.temp }}/reengagement-e2e-evidence
+        run: npm run test:e2e:n8n
+
+      - name: Upload E2E failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reengagement-n8n-e2e-logs
+          path: ${{ runner.temp }}/reengagement-e2e-evidence
+          if-no-files-found: error
+          retention-days: 7

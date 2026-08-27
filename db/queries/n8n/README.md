@@ -27,7 +27,28 @@ Estos valores deben ser reemplazados o mapeados desde `n8n` en la fase de implem
 - `crm-lead-creation-and-assignment/`
 - `crm-clickup-sync-lead/`
 - `crm-seller-notification-dispatch/`
+- `ai-sales-advisor/`
 - `ops-error-handler/`
+- `opportunity-cycle/`
+
+## Ciclo de oportunidad (PRD A-001)
+
+- `opportunity-cycle/01_upsert_early_opportunity.sql`
+  - crea o madura la oportunidad de una conversacion al primer mensaje
+  - idempotente por conversacion (indice unico parcial `uq_opportunities_conversation`)
+  - promueve a `qualified` solo cuando el gate comercial quedo limpio y el cliente confirmo
+  - traza cada resultado en `audit_logs` (`created`, `duplicate_skipped`, `promoted_qualified`, `updated`)
+  - las intenciones operativas (reclamo, garantia, comprobante, factura) no escriben
+- `opportunity-cycle/02_link_promoted_lead.sql`
+  - vincula la oportunidad al lead recien creado y la pasa a `promoted`
+  - idempotente: un replay del sub-workflow no re-vincula
+
+## Asesor comercial AI
+
+- `ai-sales-advisor/01_load_commercial_context.sql`
+  - devuelve un JSON con catalogo activo, reglas de precio vigentes, condiciones comerciales, FAQ, objeciones y slots de agenda disponibles
+  - sirve como punto de entrada para enriquecer `AI - Lead Qualification Assistant` o su evolucion a `AI - Sales Advisor`
+  - no debe usarse para prometer precios, descuentos o agenda sin las validaciones del workflow padre
 
 ## Queries operativas fuera de n8n
 

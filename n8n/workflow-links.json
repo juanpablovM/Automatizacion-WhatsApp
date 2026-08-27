@@ -9,24 +9,9 @@
       "targetWorkflow": "WA - Conversation Orchestrator"
     },
     {
-      "sourceWorkflow": "WA - Inbound Entry",
-      "node": "Execute Outbound Messages",
-      "targetWorkflow": "WA - Outbound Messages"
-    },
-    {
-      "sourceWorkflow": "WA - Inbound Entry",
-      "node": "Execute Lead Creation",
-      "targetWorkflow": "CRM - Lead Creation And Assignment"
-    },
-    {
-      "sourceWorkflow": "WA - Inbound Entry",
-      "node": "Execute ClickUp Sync",
-      "targetWorkflow": "CRM - ClickUp Sync Lead"
-    },
-    {
-      "sourceWorkflow": "WA - Inbound Entry",
-      "node": "Execute Seller Notification",
-      "targetWorkflow": "CRM - Seller Notification Dispatch"
+      "sourceWorkflow": "WA - Inbound Recovery",
+      "node": "Execute Inbound Processor",
+      "targetWorkflow": "WA - Conversation Orchestrator"
     },
     {
       "sourceWorkflow": "TEST - ClickUp Sync Smoke",
@@ -37,6 +22,61 @@
       "sourceWorkflow": "WA - Conversation Orchestrator",
       "node": "Execute AI Lead Qualification",
       "targetWorkflow": "AI - Lead Qualification Assistant"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Execute Durable Downstream Dispatcher",
+      "targetWorkflow": "WA - Inbound Downstream Dispatcher"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Recovery",
+      "node": "Resume Durable Downstream",
+      "targetWorkflow": "WA - Inbound Downstream Dispatcher"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute Outbound Response",
+      "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute Lead Creation",
+      "targetWorkflow": "CRM - Lead Creation And Assignment"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute ClickUp Sync",
+      "targetWorkflow": "CRM - ClickUp Sync Lead"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute Seller Notification",
+      "targetWorkflow": "CRM - Seller Notification Dispatch"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute Handoff Outbound",
+      "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch Handoff Notification Workflow",
+      "targetWorkflow": "OPS - Handoff Notification Scheduler"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch Media Download Workflow",
+      "targetWorkflow": "OPS - Media Download Scheduler"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch Next Inbox Event",
+      "targetWorkflow": "WA - Inbound Recovery"
+    },
+    {
+      "sourceWorkflow": "OPS - Follow-Up Scheduler",
+      "node": "Send Via Outbound Rail",
+      "targetWorkflow": "WA - Outbound Messages"
     }
   ]
 }

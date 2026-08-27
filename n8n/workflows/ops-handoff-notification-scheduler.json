@@ -1,0 +1,182 @@
+{
+  "id": "99999999-0000-0000-0000-000000000003",
+  "name": "OPS - Handoff Notification Scheduler",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "91000000-0000-0000-0000-000000000001",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -760,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000002",
+      "name": "Handoff Notification Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -760,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Claim pending handoffs through external_operations.\n-- $1 batch size, $2 stale processing seconds.\nWITH stale AS (\n  UPDATE external_operations eo\n  SET status = 'unknown',\n      reconciliation_required = TRUE,\n      reconciliation_reason = 'stale_processing_without_provider_result',\n      retry_safe = FALSE,\n      claim_token = NULL,\n      updated_at = NOW()\n  WHERE eo.operation_type = 'handoff_clickup_notification'\n    AND eo.status = 'processing'\n    AND eo.locked_at < NOW() - (COALESCE(NULLIF($2::text, '')::integer, 900) * INTERVAL '1 second')\n  RETURNING eo.id\n),\ncandidates AS MATERIALIZED (\n  SELECT h.*,\n         eo.id AS existing_operation_id,\n         eo.status AS existing_operation_status,\n         eo.attempt_count AS existing_attempt_count,\n         eo.reconciliation_required AS existing_reconciliation_required,\n         eo.request_payload AS existing_request_payload\n  FROM handoffs h\n  LEFT JOIN external_operations eo\n    ON eo.operation_key = 'handoff-clickup:' || h.id::text\n  WHERE h.deleted_at IS NULL\n    AND h.estado = 'pending'\n    AND h.next_notification_at <= NOW()\n    AND COALESCE(eo.attempt_count, 0) < h.max_attempts\n    AND (\n      eo.id IS NULL\n      OR eo.status = 'pending'\n      OR (eo.status = 'failed' AND eo.retry_safe = TRUE AND eo.reconciliation_required = FALSE)\n      OR (eo.status = 'unknown' AND eo.reconciliation_required = TRUE\n          AND COALESCE(eo.request_payload->>'no_effect_authorization_consumed', 'false') = 'true')\n    )\n  ORDER BY h.next_notification_at, h.id\n  LIMIT COALESCE(NULLIF($1::text, '')::integer, 20)\n  FOR UPDATE OF h SKIP LOCKED\n),\nseeded AS (\n  INSERT INTO external_operations (\n    operation_key, operation_type, entity_type, entity_id, status,\n    attempt_count, locked_at, claim_token, request_payload\n  )\n  SELECT\n    'handoff-clickup:' || c.id::text,\n    'handoff_clickup_notification',\n    'handoff', c.id, 'processing', 1, NOW(), gen_random_uuid(),\n    jsonb_build_object('handoff_id', c.id, 'area', c.area, 'motivo', c.motivo)\n  FROM candidates c\n  WHERE c.existing_operation_id IS NULL\n  ON CONFLICT (operation_key) DO NOTHING\n  RETURNING *\n),\nreclaimed AS (\n  UPDATE external_operations eo\n  SET status = 'processing',\n      attempt_count = eo.attempt_count + 1,\n      locked_at = NOW(),\n      claim_token = gen_random_uuid(),\n      retry_safe = FALSE,\n      last_error = NULL,\n      updated_at = NOW()\n  FROM candidates c\n  WHERE eo.id = c.existing_operation_id\n    AND (eo.status = 'pending'\n      OR (eo.status = 'failed' AND eo.retry_safe = TRUE)\n      OR (eo.status = 'unknown' AND eo.reconciliation_required = TRUE\n          AND COALESCE(eo.request_payload->>'no_effect_authorization_consumed', 'false') = 'true'))\n  RETURNING eo.*\n),\nclaimed AS (\n  SELECT * FROM seeded\n  UNION ALL\n  SELECT * FROM reclaimed\n)\nSELECT\n  h.id AS handoff_id,\n  h.conversation_id,\n  h.phone_number,\n  h.motivo,\n  h.area,\n  h.area_label,\n  h.prioridad,\n  h.responsable,\n  h.trigger,\n  h.escalation_reason,\n  h.intent,\n  h.idempotency_key,\n  h.max_attempts,\n  cl.id AS operation_id,\n  cl.operation_key,\n  cl.attempt_count,\n  cl.claim_token,\n  cl.reconciliation_required,\n  COALESCE(cl.request_payload->>'no_effect_authorization_consumed', 'false') = 'true' AS no_effect_authorization_consumed\nFROM claimed cl\nJOIN handoffs h ON h.id = cl.entity_id\nORDER BY h.id;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$env.HANDOFF_NOTIFICATION_BATCH_SIZE || 20, $env.HANDOFF_NOTIFICATION_STALE_SECONDS || 900] }}"
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000003",
+      "name": "Claim Pending Handoff Notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -500,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const configured = (value) => Boolean(value) && !String(value).includes('__PENDIENTE__');\n\nconst parseAssignees = (raw, area) => {\n  let mapping;\n  try {\n    mapping = JSON.parse(String(raw || ''));\n  } catch (_error) {\n    return { error: 'HANDOFF_CLICKUP_ASSIGNEES_JSON_invalid_json', assignees: [] };\n  }\n  const selected = mapping && typeof mapping === 'object' ? mapping[area] : null;\n  const values = Array.isArray(selected) ? selected : [selected];\n  const assignees = values\n    .map((value) => Number(value))\n    .filter((value) => Number.isSafeInteger(value) && value > 0);\n  return assignees.length\n    ? { error: null, assignees: [...new Set(assignees)] }\n    : { error: `HANDOFF_CLICKUP_ASSIGNEES_JSON_missing_area:${area}`, assignees: [] };\n};\n\nconst prepareHandoffClickup = (row, env = {}) => {\n  const area = String(row.area || '').trim();\n  const configErrors = [];\n  if (!configured(env.CLICKUP_API_TOKEN)) configErrors.push('CLICKUP_API_TOKEN_missing');\n  if (!configured(env.CLICKUP_HANDOFF_LIST_ID)) configErrors.push('CLICKUP_HANDOFF_LIST_ID_missing');\n  const assignment = area === 'sales'\n    ? parseAssignees(env.HANDOFF_CLICKUP_ASSIGNEES_JSON, area)\n    : { error: `HANDOFF_CLICKUP_AREA_unsupported:${area || 'missing'}`, assignees: [] };\n  if (assignment.error) configErrors.push(assignment.error);\n\n  const handoffId = Number(row.handoff_id);\n  if (!Number.isSafeInteger(handoffId) || handoffId <= 0) configErrors.push('handoff_id_invalid');\n  const operationKey = String(row.operation_key || '').trim();\n  if (!operationKey) configErrors.push('operation_key_missing');\n\n  const description = [\n    `Handoff interno #${handoffId || 'unknown'}`,\n    `Área: ${row.area_label || area || 'No informada'}`,\n    `Responsable: ${row.responsable || 'No informado'}`,\n    `Prioridad: ${row.prioridad || 'No informada'}`,\n    `Motivo: ${row.motivo || 'No informado'}`,\n    `Cliente: ${row.phone_number || 'No informado'}`,\n    `Conversación: ${row.conversation_id || 'No informada'}`,\n    row.escalation_reason ? `Detalle: ${row.escalation_reason}` : null,\n    `Operation key: ${operationKey}`,\n  ].filter(Boolean).join('\\n');\n\n  return {\n    ...row,\n    clickup_config_error: configErrors.length ? configErrors.join(',') : null,\n    should_dispatch_clickup: configErrors.length === 0,\n    clickup_url: configErrors.length ? null : `https://api.clickup.com/api/v2/list/${encodeURIComponent(env.CLICKUP_HANDOFF_LIST_ID)}/task`,\n    clickup_payload: configErrors.length ? null : {\n      name: `[HANDOFF #${handoffId}] ${row.area_label || area} - ${row.motivo || 'escalamiento'}`,\n      description,\n      assignees: assignment.assignees,\n      priority: row.prioridad === 'urgente' ? 1 : row.prioridad === 'alta' ? 2 : 3,\n    },\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { configured, parseAssignees, prepareHandoffClickup };\n}\n\nif (typeof $json !== 'undefined') {\n  return { json: prepareHandoffClickup($json ?? {}, typeof $env !== 'undefined' ? $env : {}) };\n}\n"
+      },
+      "id": "91000000-0000-0000-0000-000000000004",
+      "name": "Prepare Handoff ClickUp Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const normalizedBody = (value) => {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (_error) { return { raw: value }; }\n};\n\nconst result = (row, outcome, statusCode, body, options = {}) => ({\n  ...row,\n  notification_outcome: outcome,\n  notification_status_code: statusCode,\n  notification_external_id: options.externalId || null,\n  notification_external_url: options.externalUrl || null,\n  notification_error: options.error || null,\n  notification_retry_safe: Boolean(options.retrySafe),\n  notification_response_json: JSON.stringify(normalizedBody(body)),\n});\n\nconst reconcileExactMarker = (tasks, operationKey) => {\n  const matches = tasks.filter((task) => String(task.description || '').includes(`Operation key: ${operationKey}`));\n  return matches.length === 1\n    ? { outcome: 'succeeded', match: matches[0] }\n    : matches.length > 1 ? { outcome: 'duplicate_incident' } : { outcome: 'reconciliation_required' };\n};\n\nconst searchExactMarker = async (row, httpRequest, apiToken) => {\n  const operationKey = String(row.operation_key || '').trim();\n  const listId = String(row.clickup_list_id || '').trim() || String(row.clickup_url || '').match(/\\/list\\/([^/]+)\\/task$/)?.[1];\n  if (!operationKey || !listId) throw new Error('clickup_reconciliation_identity_missing');\n  const tasks = [];\n  for (const archived of [false, true]) {\n    for (let page = 0; page < 20; page += 1) {\n      const response = await httpRequest({\n        method: 'GET',\n        url: `https://api.clickup.com/api/v2/list/${encodeURIComponent(listId)}/task?include_closed=true&archived=${archived}&page=${page}`,\n        headers: { Authorization: apiToken },\n        json: true,\n        returnFullResponse: true,\n        ignoreHttpStatusErrors: true,\n        timeout: 30000,\n      });\n      const statusCode = Number(response?.statusCode || 0);\n      if (statusCode < 200 || statusCode >= 300) throw new Error(`clickup_reconciliation_http_${statusCode}`);\n      const body = normalizedBody(response?.body);\n      tasks.push(...(Array.isArray(body.tasks) ? body.tasks : []));\n      if (body.last_page === true) break;\n    }\n  }\n  return reconcileExactMarker(tasks, operationKey);\n};\n\nconst dispatchHandoffClickup = async (row, httpRequest, apiToken) => {\n  if (!row.should_dispatch_clickup) {\n    return result(row, 'deferred', 0, {}, {\n      error: row.clickup_config_error || 'clickup_configuration_missing',\n      retrySafe: false,\n    });\n  }\n\n  try {\n    if (row.reconciliation_required) {\n      const reconciliation = await searchExactMarker(row, httpRequest, apiToken);\n      if (reconciliation.outcome === 'succeeded') {\n        if (!reconciliation.match?.id) {\n          return result(row, 'unknown', 0, reconciliation.match || {}, { error: 'clickup_reconciliation_match_missing_task_id' });\n        }\n        return result(row, 'succeeded', 200, reconciliation.match, {\n          externalId: String(reconciliation.match.id),\n          externalUrl: reconciliation.match.url ? String(reconciliation.match.url) : null,\n        });\n      }\n      if (reconciliation.outcome === 'duplicate_incident') {\n        return result(row, 'failed', 409, {}, { error: 'clickup_reconciliation_duplicate_marker' });\n      }\n      if (!row.no_effect_authorization_consumed) {\n        return result(row, 'unknown', 0, {}, { error: 'clickup_reconciliation_authorization_required' });\n      }\n    }\n    const response = await httpRequest({\n      method: 'POST',\n      url: row.clickup_url,\n      headers: { Authorization: apiToken, 'Content-Type': 'application/json' },\n      body: row.clickup_payload,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n      timeout: 30000,\n    });\n    const statusCode = Number(response?.statusCode || 0);\n    const body = normalizedBody(response?.body);\n    if (statusCode >= 200 && statusCode < 300) {\n      if (!body.id) {\n        return result(row, 'unknown', statusCode, body, {\n          error: 'clickup_success_missing_task_id',\n          retrySafe: false,\n        });\n      }\n      return result(row, 'succeeded', statusCode, body, {\n        externalId: body.id ? String(body.id) : null,\n        externalUrl: body.url ? String(body.url) : null,\n      });\n    }\n    if (statusCode === 425 || statusCode === 429) {\n      return result(row, 'failed', statusCode, body, {\n        error: `clickup_retryable_http_${statusCode}`,\n        retrySafe: true,\n      });\n    }\n    if (statusCode === 0 || statusCode === 408 || statusCode >= 500) {\n      return result(row, 'unknown', statusCode, body, {\n        error: `clickup_ambiguous_http_${statusCode}`,\n        retrySafe: false,\n      });\n    }\n    return result(row, 'failed', statusCode, body, {\n      error: `clickup_http_${statusCode}`,\n      retrySafe: false,\n    });\n  } catch (error) {\n    return result(row, 'unknown', 0, {}, {\n      error: String(error?.message || 'clickup_transport_error'),\n      retrySafe: false,\n    });\n  }\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { normalizedBody, reconcileExactMarker, searchExactMarker, dispatchHandoffClickup };\n}\n\nif (typeof $json !== 'undefined') {\n  return dispatchHandoffClickup($json ?? {}, helpers.httpRequest.bind(helpers), $env.CLICKUP_API_TOKEN)\n    .then((output) => ({ json: output }));\n}\n"
+      },
+      "id": "91000000-0000-0000-0000-000000000005",
+      "name": "Dispatch Handoff ClickUp Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Complete a claimed ClickUp notification.\n-- $1 operation_id, $2 claim_token, $3 outcome, $4 status_code,\n-- $5 external_id, $6 external_url, $7 error, $8 response_json, $9 retry_safe.\nWITH authorized AS MATERIALIZED (\n  SELECT eo.*, h.max_attempts\n  FROM external_operations eo\n  JOIN handoffs h ON h.id = eo.entity_id AND eo.entity_type = 'handoff'\n  WHERE eo.id = $1::bigint\n    AND eo.operation_type = 'handoff_clickup_notification'\n    AND eo.status = 'processing'\n    AND eo.claim_token = $2::uuid\n  FOR UPDATE OF eo, h\n),\nresolved AS (\n  SELECT a.*,\n    CASE\n      WHEN $3::text = 'succeeded' THEN 'succeeded'\n      WHEN $3::text = 'unknown' THEN 'unknown'\n      WHEN $3::text = 'deferred' THEN 'pending'\n      ELSE 'failed'\n    END AS final_status,\n    ($3::text = 'deferred') AS is_deferred,\n    CASE\n      WHEN $3::text = 'failed'\n       AND $9::boolean\n       AND a.attempt_count < a.max_attempts THEN TRUE\n      ELSE FALSE\n    END AS may_retry\n  FROM authorized a\n),\noperation_update AS (\n  UPDATE external_operations eo\n  SET status = r.final_status,\n      attempt_count = CASE WHEN r.is_deferred THEN GREATEST(eo.attempt_count - 1, 0) ELSE eo.attempt_count END,\n      external_id = COALESCE(NULLIF($5::text, ''), eo.external_id),\n      external_url = COALESCE(NULLIF($6::text, ''), eo.external_url),\n      completed_at = CASE WHEN r.final_status = 'succeeded' THEN NOW() ELSE eo.completed_at END,\n      last_error = CASE WHEN r.is_deferred THEN NULL ELSE NULLIF($7::text, '') END,\n      response_payload = COALESCE(NULLIF($8::text, '')::jsonb, '{}'::jsonb),\n      reconciliation_required = r.final_status = 'unknown',\n      reconciliation_reason = CASE WHEN r.final_status = 'unknown' THEN COALESCE(NULLIF($7::text, ''), 'ambiguous_provider_result') ELSE NULL END,\n      retry_safe = r.may_retry,\n      claim_token = NULL,\n      updated_at = NOW()\n  FROM resolved r\n  WHERE eo.id = r.id\n  RETURNING eo.*\n),\nhandoff_update AS (\n  UPDATE handoffs h\n  SET estado = CASE WHEN r.final_status = 'succeeded' THEN 'notified' ELSE h.estado END,\n      notified_at = CASE WHEN r.final_status = 'succeeded' THEN COALESCE(h.notified_at, NOW()) ELSE h.notified_at END,\n      notification_attempt_count = GREATEST(\n        h.notification_attempt_count,\n        CASE WHEN r.is_deferred THEN r.attempt_count - 1 ELSE r.attempt_count END\n      ),\n      last_notification_error = CASE WHEN r.final_status = 'succeeded' THEN NULL ELSE NULLIF($7::text, '') END,\n      next_notification_at = CASE\n        WHEN r.is_deferred THEN NOW() + INTERVAL '60 seconds'\n        WHEN r.may_retry THEN NOW() + (LEAST(3600, 30 * power(2, GREATEST(r.attempt_count - 1, 0))) * INTERVAL '1 second')\n        ELSE h.next_notification_at\n      END,\n      updated_at = NOW()\n  FROM resolved r\n  WHERE h.id = r.entity_id\n  RETURNING h.*\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'handoff_clickup_notification', 'handoff', r.entity_id,\n    'system', 'ops-handoff-notification-scheduler', CASE WHEN r.is_deferred THEN 'deferred_config' ELSE r.final_status END,\n    jsonb_build_object('attempt_count', r.attempt_count - 1),\n    jsonb_build_object('attempt_count', r.attempt_count, 'estado', hu.estado),\n    jsonb_build_object(\n      'operation_id', r.id,\n      'http_status', NULLIF($4::text, '')::integer,\n      'retry_safe', r.may_retry,\n      'reconciliation_required', r.final_status = 'unknown'\n    )\n  FROM resolved r\n  JOIN handoff_update hu ON hu.id = r.entity_id\n  RETURNING id\n)\nSELECT\n  r.entity_id AS handoff_id,\n  r.id AS operation_id,\n  CASE WHEN r.is_deferred THEN 'deferred_config' ELSE r.final_status END AS result,\n  r.may_retry AS retry_safe,\n  hu.estado AS handoff_estado,\n  hu.notification_attempt_count,\n  hu.next_notification_at,\n  (r.final_status = 'unknown') AS reconciliation_required\nFROM resolved r\nJOIN handoff_update hu ON hu.id = r.entity_id;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.operation_id, $json.claim_token, $json.notification_outcome, $json.notification_status_code, $json.notification_external_id, $json.notification_external_url, $json.notification_error, $json.notification_response_json, $json.notification_retry_safe] }}"
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000006",
+      "name": "Complete Handoff Notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Claim Pending Handoff Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Notification Schedule": {
+      "main": [
+        [
+          {
+            "node": "Claim Pending Handoff Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Pending Handoff Notifications": {
+      "main": [
+        [
+          {
+            "node": "Prepare Handoff ClickUp Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Handoff ClickUp Task": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Handoff ClickUp Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Handoff ClickUp Task": {
+      "main": [
+        [
+          {
+            "node": "Complete Handoff Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "91000000-0000-0000-0000-000000000099",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

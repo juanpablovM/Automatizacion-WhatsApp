@@ -1,0 +1,44 @@
+schema: spec-driven
+
+context: |
+  Tech stack: n8n + PostgreSQL 16 + Evolution API + Redis + Docker Compose
+  Architecture: n8n workflow orchestration, Evolution API gateway, Gemini AI via direct API
+  Testing: Shell scripts with inline Node.js (AI contract tests, E2E, regression, smoke)
+  Style: English snake_case DB, soft delete, audit logs, n8n workflow naming prefixes
+
+strict_tdd: true
+
+testing:
+  test_command: sh scripts/ops/test-ai-assistant-local.sh && sh scripts/ops/test-conversation-regression-local.sh
+  coverage_command: ""
+  layer_unit: false
+  layer_integration: true
+  layer_e2e: true
+  linter: ""
+  type_checker: ""
+  formatter: ""
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    guidelines:
+      - Follow existing code patterns
+      - Use crm-whatsapp conventions (snake_case DB, soft delete, audit logs)
+    tdd: true
+    test_command: sh scripts/ops/test-ai-assistant-local.sh && sh scripts/ops/test-conversation-regression-local.sh
+  verify:
+    test_command: sh scripts/ops/test-ai-assistant-local.sh && sh scripts/ops/test-conversation-regression-local.sh
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

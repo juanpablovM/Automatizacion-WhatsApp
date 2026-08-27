@@ -16,8 +16,9 @@ Estado validado:
 - asignacion inicial a vendedores activos con `clickup_user_id`
 - comentario `Conversación Completa Cliente` creado desde el historial conversacional
 - notificacion interna al vendedor mediante comentario asignado
+- diagnostico comercial enriquecido desde `qualification_context`
 
-Las tareas creadas durante la validacion real estan documentadas como datos de prueba en [`docs/handoff-actual.md`](./handoff-actual.md).
+Los identificadores de pruebas no se consideran configuracion permanente. El estado funcional vigente se resume en [`docs/handoff-actual.md`](./handoff-actual.md).
 
 ## Readiness de vendedores
 
@@ -72,10 +73,12 @@ Ejemplo:
 
 La descripcion debe contener:
 
-- resumen breve del lead
+- resumen ejecutivo del lead
 - telefono
 - canal
 - requerimiento resumido
+- modalidad, medidas y condiciones relevantes
+- clasificacion y objeciones detectadas
 - referencia de WhatsApp si aplica
 
 ### Comentario adicional
@@ -175,7 +178,8 @@ Ese comentario debe incluir el historial conversacional completo para no sobreca
 
 El proyecto usa variables para los IDs de ClickUp. En `.env.example` quedan placeholders y en `.env` local se mantienen los valores reales:
 
-- `CLICKUP_LIST_ID`
+- `CLICKUP_LEADS_LIST_ID`: lista `Leads Entrantes`, usada por el flujo comercial
+- `CLICKUP_HANDOFF_LIST_ID`: lista `Handoffs WhatsApp`, usada por las notificaciones y cierres de handoff
 - `CLICKUP_TEAM_ID`
 - `CLICKUP_CF_WHATSAPP_NAME_ID`
 - `CLICKUP_CF_PHONE_ID`

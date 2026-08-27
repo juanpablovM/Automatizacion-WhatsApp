@@ -7,11 +7,10 @@ cd "$ROOT_DIR"
 usage() {
   cat <<'EOF'
 Uso:
-  sh scripts/ops/test-e2e-lead-creation.sh [telefono-sin-plus]
+  E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/ops/test-e2e-lead-creation.sh telefono-controlado-sin-plus
 
-Envía dos mensajes sintéticos al webhook local de WA - Inbound Entry:
-uno con servicio, ciudad y requerimiento, y otro con confirmacion final.
-Verifica que el lead se cree en la base de datos de CRM.
+Ejecuta AI, lead, asignacion, ClickUp, handoff y replay idempotente.
+Genera efectos externos reales; exige telefono controlado y opt-in explicito.
 
 No usar durante pruebas comerciales reales: genera datos de prueba en la base de datos.
 EOF
@@ -31,6 +30,10 @@ case "${1:-}" in
     ;;
 esac
 
+[ -n "${1:-}" ] || { usage >&2; exit 1; }
+[ "${E2E_ALLOW_EXTERNAL_EFFECTS:-}" = yes ] || { echo "ERROR: falta E2E_ALLOW_EXTERNAL_EFFECTS=yes" >&2; exit 1; }
+case "$1" in *[!0-9]*|'') echo "ERROR: telefono controlado invalido" >&2; exit 1 ;; esac
+
 if [ ! -f "$ROOT_DIR/.env" ]; then
   echo "ERROR: no existe .env en $ROOT_DIR" >&2
   exit 1
@@ -48,16 +51,31 @@ if [ -z "${EVOLUTION_WEBHOOK_SECRET:-}" ]; then
 fi
 
 timestamp=$(date +%s)
-suffix=${timestamp#??}
-# Numero de telefono de prueba (sin +). Por defecto usa uno nuevo para no
-# heredar conversaciones o leads anteriores.
-PHONE_NUMBER="${1:-569${suffix}}"
-TEST_MESSAGE="Quiero cotizar hormigón armado en Santiago para una losa de 100 m2"
+PHONE_NUMBER="$1"
+TEST_MESSAGE="Quiero cotizar hormigón armado para una losa de 100 m2 en Santiago, con instalación. El terreno es plano, hay acceso para camión y no necesito retiro de escombros"
 CONFIRM_MESSAGE="Si, correcto"
 
-webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
-  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
-  -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' LIMIT 1;")
+[ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$E2E_WEBHOOK_PATH" in
+  *[!A-Za-z0-9._-]*) echo "ERROR: E2E_WEBHOOK_PATH contiene caracteres invalidos" >&2; exit 1 ;;
+esac
+
+webhook_path=""
+webhook_attempt=0
+while [ "$webhook_attempt" -lt 30 ]; do
+  if [ -n "${E2E_WEBHOOK_PATH:-}" ]; then
+    webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+      psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
+      -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' AND \"webhookPath\" LIKE '%/${E2E_WEBHOOK_PATH}' LIMIT 1;")
+  else
+    webhook_path=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+      psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-crm_whatsapp}" -At \
+      -c "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\" = (SELECT id FROM workflow_entity WHERE name = 'WA - Inbound Entry' LIMIT 1) AND method = 'POST' AND node = 'EvolutionWebhook' AND \"webhookPath\" NOT LIKE '%/acceptance-%' LIMIT 1;")
+  fi
+  [ -z "$webhook_path" ] || break
+  webhook_attempt=$((webhook_attempt + 1))
+  sleep 1
+done
+[ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$webhook_path" in *"/${E2E_WEBHOOK_PATH}") ;; *) echo "ERROR: el webhook activo no es el temporal esperado" >&2; exit 1 ;; esac
 
 if [ -z "$webhook_path" ]; then
   echo "ERROR: no se encontró webhook POST activo para 'WA - Inbound Entry'. Ejecuta scripts/dev/sync-n8n-workflows.sh" >&2
@@ -97,11 +115,15 @@ send_message() {
       }
     }')
 
-  http_status=$(curl -sS -o "$response_file" -w '%{http_code}' \
-    -X POST \
-    -H "Content-Type: application/json" \
-    "$WEBHOOK_URL" \
-    -d "$payload")
+  http_status=000
+  webhook_attempt=0
+  while [ "$webhook_attempt" -lt 10 ]; do
+    http_status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+      -X POST -H "Content-Type: application/json" "$WEBHOOK_URL" -d "$payload")
+    [ "$http_status" -ne 404 ] && break
+    sleep 1
+    webhook_attempt=$((webhook_attempt + 1))
+  done
 
   if [ "$http_status" -ne 200 ]; then
     echo "ERROR: El webhook no respondio con 200 para '$message_text'" >&2
@@ -125,7 +147,7 @@ while [ $attempt -lt 30 ]; do
   sleep 1
   confirm_count=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
     psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
-    -c "SELECT COUNT(*) FROM conversations WHERE phone_number = '${PHONE_NUMBER}' AND current_step LIKE 'confirm%';" 2>/dev/null || echo "0")
+    -c "SELECT COUNT(*) FROM conversations WHERE phone_number = '${PHONE_NUMBER}' AND current_step LIKE 'confirm%' AND updated_at >= NOW() - INTERVAL '2 minutes';" 2>/dev/null || echo "0")
 
   if [ "$confirm_count" -gt 0 ]; then
     confirm_ready=1
@@ -203,11 +225,67 @@ if [ -z "$servicio" ] || [ -z "$ciudad" ] || [ -z "$requerimiento" ]; then
   exit 1
 fi
 
-# Opcional: verificar que el estado sea algo como 'Calificado Completo' o 'Creado en ClickUp'
-# Esto depende del flujo y de si ClickUp está configurado.
-# Por ahora, solo verificamos que el lead exista y tenga los datos básicos.
+query_app() {
+  docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+    psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At -c "$1"
+}
+
+conversation_id=$(query_app "SELECT source_conversation_id FROM leads WHERE id=${lead_id};")
+attempt=0
+acceptance=""
+while [ $attempt -lt 30 ]; do
+  acceptance=$(query_app "SELECT CONCAT_WS('|',
+    COALESCE(l.assigned_seller_id::text,''), COALESCE(l.clickup_task_id,''),
+    (SELECT COUNT(*) FROM advisor_decisions ad WHERE ad.conversation_id=c.id),
+    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.direction='outgoing' AND m.text_body LIKE '%quedó asignada%'),
+    COALESCE(ie.processing_status,''), COALESCE(ie.processing_phase,'')
+  ) FROM conversations c JOIN leads l ON l.id=${lead_id}
+    LEFT JOIN inbound_events ie ON ie.external_message_id='e2e-test-${timestamp}-confirm'
+  WHERE c.id=${conversation_id} LIMIT 1;")
+  old_ifs=$IFS; IFS='|'; set -- $acceptance; IFS=$old_ifs
+  if [ -n "${1:-}" ] && [ -n "${2:-}" ] && [ "${3:-0}" -gt 0 ] && [ "${4:-0}" -eq 1 ] && [ "${5:-}" = processed ] && [ "${6:-}" = completed ]; then
+    break
+  fi
+  sleep 1
+  attempt=$((attempt + 1))
+done
+if [ $attempt -eq 30 ]; then
+  echo "ERROR: acceptance incompleta (assignment|clickup|ai|handoff|status|phase): $acceptance" >&2
+  exit 1
+fi
+
+effect_counts() {
+  query_app "SELECT CONCAT_WS('|',
+    (SELECT COUNT(*) FROM messages WHERE conversation_id=${conversation_id} AND direction='outgoing'),
+    (SELECT COUNT(*) FROM leads WHERE source_conversation_id=${conversation_id}),
+    (SELECT COUNT(*) FROM lead_assignments WHERE lead_id=${lead_id}),
+    (SELECT COUNT(*) FROM external_operations WHERE entity_id=${lead_id}),
+    (SELECT COALESCE(SUM(attempt_count),0) FROM external_operations WHERE entity_id=${lead_id}),
+    (SELECT COUNT(*) FROM inbound_events WHERE external_message_id='e2e-test-${timestamp}-confirm')
+  );"
+}
+
+before_replay=$(effect_counts)
+echo "Reproduciendo el mismo evento para validar idempotencia..."
+send_message "e2e-test-${timestamp}-confirm" "$CONFIRM_MESSAGE" /tmp/e2e-lead-replay-response.json
+attempt=0; stable=0; after_replay=""
+while [ "$attempt" -lt 30 ]; do
+  sleep 1
+  after_replay=$(effect_counts)
+  terminal=$(query_app "SELECT COUNT(*) FROM inbound_events WHERE external_message_id='e2e-test-${timestamp}-confirm' AND processing_status='processed' AND processing_phase='completed';")
+  if [ "$terminal" -eq 1 ] && [ "$after_replay" = "$before_replay" ]; then stable=$((stable + 1)); else stable=0; fi
+  [ "$stable" -ge 3 ] && break
+  attempt=$((attempt + 1))
+done
+[ "$stable" -ge 3 ] || { echo "ERROR: replay no alcanzo estado terminal estable: before=$before_replay after=$after_replay" >&2; exit 1; }
+
+evidence_file=${E2E_EVIDENCE_FILE:-/tmp/e2e-lead-${timestamp}-evidence.json}
+jq -nc --arg phone "$PHONE_NUMBER" --arg conversation_id "$conversation_id" --arg lead_id "$lead_id" \
+  --arg acceptance "$acceptance" --arg effects "$after_replay" \
+  '{phone:$phone,conversation_id:$conversation_id,lead_id:$lead_id,acceptance:$acceptance,effects_after_replay:$effects}' > "$evidence_file"
 
 echo "E2E test passed: Lead creado correctamente con servicio='$servicio', ciudad='$ciudad', requerimiento='$requerimiento'"
+echo "Acceptance/replay evidence: $evidence_file"
 
 # Mostrar el registro de auditoría reciente para trazabilidad
 docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \

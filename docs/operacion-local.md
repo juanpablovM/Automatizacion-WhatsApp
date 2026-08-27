@@ -4,6 +4,26 @@
 
 Documentar como levantar y operar el proyecto localmente en macOS con vistas a futura migracion a servidor.
 
+## Estado observado al 2026-06-30
+
+En la revision operativa de esa fecha se observo:
+
+- stack local arriba y healthy
+- `wahormiglass` en estado `open`
+- `sync-n8n-workflows.sh --preflight` en `OK`
+- `test-ai-assistant-local.sh` en `OK`
+- `test-conversation-regression-local.sh` en `OK`
+- `verify-backup-local.sh` en `OK` sobre el backup post-sync autorizado
+
+Tambien se detectaron riesgos abiertos:
+
+- errores historicos en `audit_logs`
+- mensajes salientes historicos con `delivery_status='failed'`
+- un vendedor de pruebas aun activo en round robin
+- casos de continuidad donde se contaminaron campos comerciales
+
+Para el detalle, revisar [`docs/estado-actual-2026-06-30.md`](./estado-actual-2026-06-30.md).
+
 ## Requisitos previos
 
 - Docker Desktop instalado y funcionando
@@ -19,7 +39,7 @@ No necesitas instalar `n8n` ni `PostgreSQL` de forma nativa.
 - `PostgreSQL`: `127.0.0.1:5433`
 - `Evolution API`: `http://127.0.0.1:8080`
 
-Los puertos publicados quedan ligados a `127.0.0.1`, por lo que son accesibles desde tu Mac y no quedan expuestos publicamente por defecto.
+El `docker-compose.yml` publica estos puertos en `0.0.0.0` mediante variables de entorno. En una maquina local se consumen por `127.0.0.1`; antes de mover el stack a staging o produccion hay que restringirlos con firewall, redes privadas y reverse proxy.
 
 Nota:
 
@@ -42,7 +62,7 @@ Esta separacion mantiene desacopladas:
 1. Entra al proyecto:
 
 ```bash
-cd /Users/juanpablovonmarttens/Documents/Automatización\ /crm-whatsapp-automatizado
+cd /home/agentesai/Automatizacion-WhatsApp
 ```
 
 2. Crea tu archivo local de entorno:
@@ -117,6 +137,10 @@ Estado validado:
 - los sub-workflows se ejecutan desde `WA - Inbound Entry`
 - `OPS - Error Handler` queda configurado como workflow de errores
 
+Nota:
+
+- que un workflow aparezca `inactive` en `workflow_entity` no implica que este fuera de uso si es sub-workflow invocado mediante `Execute Workflow`
+
 El procedimiento operativo completo esta en [`runbook-operacion.md`](./runbook-operacion.md).
 
 ## Persistir webhook de Evolution API
@@ -171,6 +195,9 @@ Para verificar el ultimo backup sin tocar las bases reales:
 sh scripts/ops/verify-backup-local.sh
 ```
 
+En el cierre P0 del `2026-06-30`, esta verificacion paso correctamente sobre el backup post-sync `backups/20260630-145829/`.
+Ese directorio queda como punto de restauracion autorizado para el baseline local actual.
+
 Esta verificacion crea bases temporales `*_restore_check_<timestamp>`, restaura los dumps ahi, valida conteos basicos y elimina esas bases al terminar. No es un restore destructivo sobre las bases reales.
 
 Tambien puedes indicar un directorio especifico:
@@ -187,7 +214,7 @@ Para validar que `OPS - Error Handler` recibe fallos reales desde n8n:
 sh scripts/ops/test-error-handler.sh
 ```
 
-El script envia un evento sintetico autorizado con timestamp invalido, espera la auditoria y muestra los ultimos errores registrados.
+El script envia un evento sintetico autorizado con la bandera interna `__force_error_handler_test`, espera la auditoria y muestra los ultimos errores registrados.
 
 ## Reintentos HTTP externos
 
@@ -205,9 +232,12 @@ La plantilla local mantiene Hormi Atencion por API directa activado por defecto.
 
 ```bash
 AI_DIRECT_API_KEY=<redacted>
-AI_DIRECT_API_MODEL=<modelo elegido>
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
 docker compose --env-file .env up -d n8n
 ```
+
+Valor canónico actual: `gemini-3.1-flash-lite`.
+Si se necesita mas calidad, evaluar `gemini-3.5-flash` como prueba controlada; no dejar `preview` ni `latest` como default.
 
 Para validar el contrato local sin llamar al proveedor real:
 
@@ -215,7 +245,7 @@ Para validar el contrato local sin llamar al proveedor real:
 sh scripts/ops/test-ai-assistant-local.sh
 ```
 
-La prueba local usa mocks y cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor, modo AI desactivado y contrato API directa. No usa `.env` real ni llama al proveedor AI.
+La prueba local valida contrato y fallback con respuestas simuladas en memoria. Cubre: saludo, lead completo sin confirmacion, lead completo con confirmacion, correccion del usuario, mensaje ambiguo de baja confianza, respuesta invalida del proveedor y error de configuracion. No usa `.env` real ni llama al proveedor AI.
 
 Diagnostico de autenticacion:
 
@@ -226,34 +256,31 @@ Diagnostico de autenticacion:
 
 Guardrails actuales del sub-workflow:
 
-- `should_create_lead` solo puede quedar `true` con `service`, `city`, `requirement`, `confirmation_status=confirmed`, `intent=confirmation_yes` y `confidence >= 0.75`.
+- `should_create_lead` solo puede quedar `true` con datos criticos, confirmacion aplicable y `confidence >= 0.75`.
 - si falta confirmacion, `missing_fields` incluye `confirmation` y el resumen ClickUp queda vacio.
 - si `confidence < 0.75`, no se aceptan campos nuevos sugeridos por AI; solo se conservan campos ya existentes en el contexto.
 - si la respuesta del proveedor AI no contiene JSON valido, se devuelve fallback seguro con `should_create_lead=false`.
+- `field_updates` se validan antes de persistirse.
+- `pending_question_key` controla la interpretacion de respuestas breves.
+- no se anuncia derivacion antes de contar con `lead_id`.
 
 Variables esperadas en `.env`:
 
 ```bash
-AI_LEAD_ASSISTANT_ENABLED=true
-AI_PROVIDER=direct_api
+AI_PROVIDER=google
 AI_API_KEY_REQUIRED=true
-AI_DIRECT_API_BASE_URL=https://api.openai.com/v1
-AI_DIRECT_API_PATH=/responses
+AI_DIRECT_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
-AI_DIRECT_API_MODEL=__PENDIENTE__
-AI_DIRECT_API_TIMEOUT_MS=8000
+AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
+AI_DIRECT_API_TIMEOUT_MS=120000
 ```
 
-La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](/home/agentesai/Automatizacion-WhatsApp/docs/ai-api-directa-configuracion.md).
+El sub-workflow tambien soporta `/responses`; el valor versionado en `.env.example` es `/chat/completions`, y el test local de contrato puede ejercitar cualquiera de las dos formas sin salir a internet.
 
-Rollback operativo:
+La guia vigente esta en [`docs/ai-api-directa-configuracion.md`](./ai-api-directa-configuracion.md).
 
-```bash
-AI_LEAD_ASSISTANT_ENABLED=false
-docker compose --env-file .env up -d n8n
-```
-
-Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar lead confirmado; `n8n` y PostgreSQL ejecutan persistencia, ClickUp y asignacion. La creacion de lead sigue requiriendo `servicio + ciudad + requerimiento + confirmacion`.
+Regla de seguridad: Hormi Atencion decide la conversacion y puede habilitar un lead confirmado; `n8n` y PostgreSQL validan memoria, guardrails, persistencia, ClickUp y asignacion.
 
 ## Alcance actual
 

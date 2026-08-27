@@ -12,6 +12,7 @@ La arquitectura de persistencia queda separada asi:
 
 - `crm_whatsapp`: base interna de `n8n`
 - `crm_whatsapp_app`: base del CRM y la automatizacion de negocio
+- `evolution_api`: base tecnica usada por `Evolution API`
 
 ## Principios aplicados
 
@@ -51,10 +52,31 @@ La arquitectura de persistencia queda separada asi:
   - crea indices operativos
   - crea unicidad parcial para registros activos
 
+- `004_create_commercial_advisor_tables.sql`
+  - crea fuentes comerciales para el asesor AI
+  - crea catalogo, condiciones, reglas de precio, FAQ, objeciones, agenda, cotizaciones preliminares y decisiones AI auditables
+
+- `005_create_conversation_memory_indexes.sql`
+  - optimiza la lectura de historial por conversacion
+  - optimiza la busqueda del ultimo reinicio de solicitud
+
+- `006_add_conversation_qualification_context.sql`
+  - agrega `conversations.qualification_context`
+  - agrega `conversations.pending_question_key`
+  - agrega `leads.qualification_context`
+  - crea indices para memoria y preguntas pendientes
+
 ## Seeds implementados
 
 - `001_lead_statuses.sql`
 - `002_conversation_statuses.sql`
+- `003_sellers.example.sql`
+- `004_whatsapp_numbers.example.sql`
+- `005_commercial_advisor.example.sql`
+- `006_catalogo_hormiglass.sql`
+- `007_catalogo_hormiglass_actualizacion.sql`
+
+Los seeds `003`, `004` y `005` son ejemplos operativos. Los seeds `006` y `007` cargan catalogo publico Hormiglass y reglas de precio publicas. Las condiciones, FAQ y objeciones activas del entorno deben revisarse como contenido aprobado; agenda y datos sensibles deben mantenerse fuera de Git cuando correspondan.
 
 ## Dominios cubiertos por la base actual
 
@@ -66,6 +88,55 @@ La arquitectura de persistencia queda separada asi:
 - historial de asignaciones
 - auditoria general
 - catalogos de estados
+- fuentes comerciales para asesor AI: catalogo, precios, condiciones, FAQ, objeciones y agenda
+
+## Fuentes comerciales del asesor AI
+
+La migracion `004_create_commercial_advisor_tables.sql` contiene las fuentes estructuradas que usa `Hormi Atencion` como asesor comercial AI.
+
+Tablas principales:
+
+- `catalog_categories`: categorias comerciales del catalogo
+- `catalog_items`: productos, servicios, paquetes u otros items recomendables
+- `catalog_item_media`: imagenes, videos, documentos o links asociados al catalogo
+- `commercial_conditions`: condiciones aprobadas de pago, garantia, despacho, instalacion, cambios, descuentos o cotizacion
+- `price_rules`: precios fijos, precios desde, rangos, formulas o marcadores de revision humana
+- `faq_entries`: preguntas frecuentes con respuestas aprobadas
+- `objection_playbooks`: respuestas sugeridas para objeciones comerciales
+- `appointment_slots`: disponibilidad real o controlada para llamadas, visitas, mediciones, retiros o despachos
+- `appointment_bookings`: solicitudes o reservas de agenda vinculadas a conversaciones y leads
+- `quote_drafts`: cotizaciones preliminares o borradores de precio
+- `advisor_decisions`: decisiones estructuradas de la AI con validacion y payloads auditables
+
+Regla operativa:
+
+- la AI puede recomendar o responder usando estas tablas, pero `n8n` debe validar antes de informar precios, ofrecer agenda, crear cotizaciones o cerrar compromisos.
+- los precios publicos pueden versionarse; precios privados, descuentos privados, agenda real y condiciones sensibles no deben versionarse en este repositorio.
+- si no hay fuente oficial, la AI debe preguntar, derivar o indicar que requiere validacion.
+
+Estado actual de fuentes comerciales:
+
+- `catalog_items`: 28 productos/servicios publicos Hormiglass cargados
+- `price_rules`: 28 reglas de precio publicas cargadas
+- `commercial_conditions`: 8 activas en el entorno validado
+- `faq_entries`: 12 activas
+- `objection_playbooks`: 5 activos
+- `appointment_slots`: pendiente
+- `advisor_decisions`: insercion conectada desde el orquestador conversacional cuando la AI esta habilitada
+
+## Memoria comercial
+
+`conversations.qualification_context` conserva el diagnostico acumulado sin depender del texto generado por la AI. Incluye, cuando aplica:
+
+- modalidad, medidas, cantidad y uso
+- terreno, acceso de camion y retiro de escombros
+- urgencia, fotos y fecha deseada
+- tipo de cliente y datos B2B
+- D.A.T.O.S., clasificacion, objecion y resumen ejecutivo
+
+`pending_question_key` indica la pregunta principal vigente. De esta forma, una respuesta `si/no` se aplica al dato correcto y no se interpreta automaticamente como confirmacion o rechazo global.
+
+Al crear el lead, `qualification_context` se copia a `leads` y queda disponible para ClickUp y ventas.
 
 ## Estado runtime observado
 
@@ -184,19 +255,32 @@ Con `PostgreSQL` ya levantado en Docker:
 
 ```bash
 docker compose --env-file .env exec -T postgres \
-  psql -U postgres -d crm_whatsapp_app -f infra/postgres/migrations/001_create_status_catalogs.sql
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/001_create_status_catalogs.sql
 
 docker compose --env-file .env exec -T postgres \
-  psql -U postgres -d crm_whatsapp_app -f infra/postgres/migrations/002_create_operational_tables.sql
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/002_create_operational_tables.sql
 
 docker compose --env-file .env exec -T postgres \
-  psql -U postgres -d crm_whatsapp_app -f infra/postgres/migrations/003_create_indexes.sql
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/003_create_indexes.sql
 
 docker compose --env-file .env exec -T postgres \
-  psql -U postgres -d crm_whatsapp_app -f db/seeds/001_lead_statuses.sql
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/004_create_commercial_advisor_tables.sql
 
 docker compose --env-file .env exec -T postgres \
-  psql -U postgres -d crm_whatsapp_app -f db/seeds/002_conversation_statuses.sql
+  psql -U postgres -d crm_whatsapp_app \
+  < infra/postgres/migrations/005_create_conversation_memory_indexes.sql
+
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  < db/seeds/001_lead_statuses.sql
+
+docker compose --env-file .env exec -T postgres \
+  psql -U postgres -d crm_whatsapp_app \
+  < db/seeds/002_conversation_statuses.sql
 ```
 
 Estos comandos suponen que mantienes los valores por defecto de `.env` para:
@@ -212,5 +296,8 @@ Estos comandos suponen que mantienes los valores por defecto de `.env` para:
 - cargar `clickup_user_id` real en cada vendedor activo que deba recibir leads
 - definir marca formal para excluir datos de validacion en metricas comerciales
 - cargar o documentar numeros reales de WhatsApp si se operaran multiples numeros
-- documentar consultas operativas iniciales
+- ampliar consultas operativas iniciales mas alla de readiness ClickUp/round robin
+- sincronizar y validar el workflow AI que ya carga catalogo y precios publicos
+- definir condiciones comerciales, FAQ, objeciones y agenda cuando exista informacion aprobada
+- validar inserciones reales en `advisor_decisions` con proveedor AI o mock controlado
 - probar restore desde los backups generados por `scripts/ops/backup-local.sh`; existe verificacion no destructiva en `scripts/ops/verify-backup-local.sh`

@@ -1,0 +1,156 @@
+{
+  "name": "OPS - Media Download Scheduler",
+  "id": "99999999-0000-0000-0000-000000000004",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "91000000-0000-0000-0000-000000000001",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000002",
+      "name": "Media Download Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Claim due media downloads. $1 batch size, $2 stale seconds.\nWITH stale AS (\n  UPDATE media_attachments\n  SET download_state = CASE\n        WHEN retry_count >= max_retries THEN 'exhausted'::media_download_state\n        ELSE 'failed'::media_download_state\n      END,\n      claim_token = NULL,\n      locked_at = NULL,\n      next_retry_at = CASE WHEN retry_count < max_retries THEN NOW() ELSE NULL END,\n      last_error = 'stale_download_claim_recovered',\n      updated_at = NOW()\n  WHERE download_state = 'downloading'\n    AND locked_at < NOW() - (COALESCE(NULLIF($2::text, '')::integer, 900) * INTERVAL '1 second')\n  RETURNING id\n),\ncandidates AS MATERIALIZED (\n  SELECT m.id\n  FROM media_attachments m\n  WHERE m.deleted_at IS NULL\n    AND m.download_state IN ('pending', 'failed')\n    AND COALESCE(m.next_retry_at, m.created_at) <= NOW()\n    AND m.retry_count < m.max_retries\n  ORDER BY COALESCE(m.next_retry_at, m.created_at), m.id\n  LIMIT COALESCE(NULLIF($1::text, '')::integer, 20)\n  FOR UPDATE OF m SKIP LOCKED\n),\nclaimed AS (\n  UPDATE media_attachments m\n  SET download_state = 'downloading',\n      retry_count = m.retry_count + 1,\n      claim_token = gen_random_uuid(),\n      locked_at = NOW(),\n      last_error = NULL,\n      updated_at = NOW()\n  FROM candidates c\n  WHERE m.id = c.id\n  RETURNING m.*\n)\nSELECT\n  c.id AS media_id,\n  c.claim_token,\n  c.retry_count,\n  c.max_retries,\n  c.message_id,\n  c.instance_name,\n  c.attachment_type,\n  c.mime_type,\n  c.filename,\n  c.file_size,\n  NULLIF(c.metadata->>'expected_sha256', '') AS expected_sha256,\n  c.raw_payload,\n  COALESCE(\n    NULLIF(c.metadata->>'max_bytes', '')::bigint,\n    CASE WHEN c.attachment_type = 'video' THEN 52428800 ELSE 26214400 END\n  ) AS max_bytes\nFROM claimed c\nORDER BY c.id;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$env.MEDIA_DOWNLOAD_BATCH_SIZE || 20, $env.MEDIA_DOWNLOAD_STALE_SECONDS || 900] }}"
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000003",
+      "name": "Claim Due Media Downloads",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        20
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\nconst fs = require('fs');\nconst path = require('path');\n\nconst configured = (value) => Boolean(String(value || '').trim()) && !String(value).includes('__PENDIENTE__');\nconst normalizeBody = (body) => {\n  if (typeof body !== 'string') return body || {};\n  try { return JSON.parse(body); } catch (_error) { return { raw: body }; }\n};\nconst outcome = (row, mediaOutcome, options = {}) => ({\n  ...row,\n  media_outcome: mediaOutcome,\n  media_sha256: options.sha256 || null,\n  media_bytes_length: options.bytesLength ?? null,\n  media_storage_path: options.storagePath || null,\n  media_storage_token: options.storageToken || null,\n  media_error: options.error || null,\n  media_http_status: options.httpStatus || 0,\n});\n\nconst mimeCategory = (mime) => {\n  const value = String(mime || '').split(';')[0].trim().toLowerCase();\n  if (value.startsWith('image/')) return 'image';\n  if (value.startsWith('audio/')) return 'audio';\n  if (value.startsWith('video/')) return 'video';\n  return value ? 'document' : null;\n};\n\nconst extractBase64 = (body) => {\n  const source = body?.base64 ?? body?.data?.base64 ?? body?.data ?? null;\n  if (typeof source !== 'string') return { error: 'base64_missing' };\n  const trimmed = source.trim();\n  const dataUrl = trimmed.match(/^data:([^;,]+);base64,(.*)$/s);\n  return {\n    encoded: dataUrl ? dataUrl[2] : trimmed,\n    dataUrlMime: dataUrl ? dataUrl[1].toLowerCase() : null,\n  };\n};\n\nconst decodeBase64Bounded = (encoded, maxBytes) => {\n  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return { error: 'max_bytes_invalid' };\n  if (!encoded || encoded.length > 4 * Math.ceil(maxBytes / 3) + 4) return { error: 'oversized_encoded' };\n  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return { error: 'invalid_base64' };\n  const bytes = Buffer.from(encoded, 'base64');\n  if (bytes.length > maxBytes) return { error: 'oversized_actual', bytesLength: bytes.length };\n  const canonical = bytes.toString('base64').replace(/=+$/, '');\n  if (canonical !== encoded.replace(/=+$/, '')) return { error: 'invalid_base64' };\n  return { bytes };\n};\n\nconst normalizeExpectedSha256 = (value) => {\n  const raw = String(value || '').trim();\n  if (!raw) return { value: null, error: null };\n  if (/^[0-9a-fA-F]{64}$/.test(raw)) return { value: raw.toLowerCase(), error: null };\n  if (!/^[A-Za-z0-9+/]{43}=$/.test(raw)) return { value: null, error: 'expected_sha256_invalid' };\n  const bytes = Buffer.from(raw, 'base64');\n  if (bytes.length !== 32 || bytes.toString('base64') !== raw) return { value: null, error: 'expected_sha256_invalid' };\n  return { value: bytes.toString('hex'), error: null };\n};\n\nconst persistAtomic = (bytes, sha256, storageRoot, claimToken) => {\n  const root = path.resolve(storageRoot);\n  const relativePath = path.posix.join('media', sha256.slice(0, 2), sha256);\n  const directory = path.join(root, 'media', sha256.slice(0, 2));\n  const finalPath = path.join(directory, sha256);\n  if (!finalPath.startsWith(`${root}${path.sep}`)) throw new Error('storage_path_escape');\n  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });\n\n  if (fs.existsSync(finalPath)) {\n    const existing = fs.readFileSync(finalPath);\n    const existingHash = crypto.createHash('sha256').update(existing).digest('hex');\n    if (existingHash !== sha256 || existing.length !== bytes.length) throw new Error('storage_hash_collision');\n    return relativePath;\n  }\n\n  const safeToken = String(claimToken || 'claim').replace(/[^a-zA-Z0-9-]/g, '');\n  const temporaryPath = path.join(directory, `.${sha256}.${safeToken}.tmp`);\n  let descriptor;\n  try {\n    descriptor = fs.openSync(temporaryPath, 'wx', 0o600);\n    fs.writeFileSync(descriptor, bytes);\n    fs.fsyncSync(descriptor);\n    fs.closeSync(descriptor);\n    descriptor = undefined;\n    fs.renameSync(temporaryPath, finalPath);\n    fs.chmodSync(finalPath, 0o600);\n  } finally {\n    if (descriptor !== undefined) fs.closeSync(descriptor);\n    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);\n  }\n  return relativePath;\n};\n\nconst downloadAndPersistMedia = async (row, env, httpRequest, persist = persistAtomic) => {\n  const baseUrl = String(env.EVOLUTION_API_BASE_URL || '').trim().replace(/\\/+$/, '');\n  const apiKey = String(env.EVOLUTION_API_KEY || '').trim();\n  const storageRoot = String(env.MEDIA_STORAGE_ROOT || '/data/media').trim();\n  const instance = String(row.instance_name || env.EVOLUTION_DEFAULT_INSTANCE || '').trim();\n  if (!configured(baseUrl) || !configured(apiKey) || !configured(storageRoot) || !instance) {\n    return outcome(row, 'deferred', { error: 'media_configuration_missing' });\n  }\n  if (path.resolve(storageRoot) !== '/data/media') {\n    return outcome(row, 'deferred', { error: 'media_storage_root_must_be_/data/media' });\n  }\n\n  const raw = row.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};\n  const message = raw.data ?? raw.message ?? raw;\n  if (!message || (typeof message === 'object' && Object.keys(message).length === 0)) {\n    return outcome(row, 'rejected', { error: 'raw_media_message_missing' });\n  }\n  const expected = normalizeExpectedSha256(row.expected_sha256);\n  if (expected.error) return outcome(row, 'rejected', { error: expected.error });\n\n  let response;\n  try {\n    response = await httpRequest({\n      method: 'POST',\n      url: `${baseUrl}/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`,\n      headers: { apikey: apiKey, 'Content-Type': 'application/json' },\n      body: { message },\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n      timeout: Number(env.MEDIA_DOWNLOAD_TIMEOUT_MS || 30000),\n    });\n  } catch (error) {\n    return outcome(row, 'failed', { error: String(error?.message || 'evolution_transport_error') });\n  }\n\n  const status = Number(response?.statusCode || 0);\n  const body = normalizeBody(response?.body);\n  if (status === 401 || status === 403) return outcome(row, 'deferred', { error: `evolution_http_${status}`, httpStatus: status });\n  if ([400, 404, 410].includes(status)) return outcome(row, 'expired', { error: `evolution_http_${status}`, httpStatus: status });\n  if (status === 429 || status >= 500 || status === 0) return outcome(row, 'failed', { error: `evolution_http_${status}`, httpStatus: status });\n  if (status < 200 || status >= 300) return outcome(row, 'rejected', { error: `evolution_http_${status}`, httpStatus: status });\n\n  const extracted = extractBase64(body);\n  if (extracted.error) return outcome(row, 'rejected', { error: extracted.error, httpStatus: status });\n  const decoded = decodeBase64Bounded(extracted.encoded, Number(row.max_bytes));\n  if (decoded.error) return outcome(row, 'rejected', { error: decoded.error, bytesLength: decoded.bytesLength, httpStatus: status });\n\n  const responseMime = String(body?.mimetype || body?.mimeType || body?.data?.mimetype || extracted.dataUrlMime || '').toLowerCase();\n  const expectedCategory = String(row.attachment_type || '').toLowerCase();\n  if (!responseMime || mimeCategory(responseMime) !== expectedCategory) {\n    return outcome(row, 'rejected', { error: 'mime_category_mismatch', bytesLength: decoded.bytes.length, httpStatus: status });\n  }\n  const expectedMime = String(row.mime_type || '').split(';')[0].trim().toLowerCase();\n  if (expectedMime && responseMime.split(';')[0].trim() !== expectedMime) {\n    return outcome(row, 'rejected', { error: 'mime_type_mismatch', bytesLength: decoded.bytes.length, httpStatus: status });\n  }\n\n  const sha256 = crypto.createHash('sha256').update(decoded.bytes).digest('hex');\n  const expectedHash = expected.value;\n  if (expectedHash && expectedHash !== sha256) {\n    return outcome(row, 'rejected', { error: 'sha256_mismatch', sha256, bytesLength: decoded.bytes.length, httpStatus: status });\n  }\n\n  try {\n    const storagePath = persist(decoded.bytes, sha256, storageRoot, row.claim_token);\n    return outcome(row, 'downloaded', {\n      sha256,\n      bytesLength: decoded.bytes.length,\n      storagePath,\n      storageToken: `sha256:${sha256}`,\n      httpStatus: status,\n    });\n  } catch (error) {\n    return outcome(row, 'failed', { error: String(error?.message || 'media_storage_error'), httpStatus: status });\n  }\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { configured, normalizeBody, mimeCategory, extractBase64, decodeBase64Bounded, normalizeExpectedSha256, persistAtomic, downloadAndPersistMedia };\n}\n\nif (typeof items !== 'undefined') {\n  return downloadAndPersistMedia(items[0]?.json ?? {}, $env ?? {}, helpers.httpRequest.bind(helpers))\n    .then((result) => [{ json: result }]);\n}\n"
+      },
+      "id": "91000000-0000-0000-0000-000000000004",
+      "name": "Download and Persist Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Complete a claimed media download.\n-- $1 media_id, $2 claim_token, $3 outcome, $4 sha256, $5 bytes_length,\n-- $6 storage_path, $7 storage_token, $8 error, $9 http_status.\nWITH authorized AS MATERIALIZED (\n  SELECT *\n  FROM media_attachments\n  WHERE id = $1::bigint\n    AND download_state = 'downloading'\n    AND claim_token = $2::uuid\n    AND deleted_at IS NULL\n  FOR UPDATE\n),\nresolved AS (\n  SELECT a.*,\n    CASE\n      WHEN $3::text = 'downloaded' THEN 'downloaded'::media_download_state\n      WHEN $3::text = 'deferred' THEN 'pending'::media_download_state\n      WHEN $3::text = 'expired' THEN 'expired'::media_download_state\n      WHEN $3::text = 'rejected' THEN 'rejected'::media_download_state\n      WHEN a.retry_count >= a.max_retries THEN 'exhausted'::media_download_state\n      ELSE 'failed'::media_download_state\n    END AS final_state,\n    ($3::text = 'deferred') AS is_deferred\n  FROM authorized a\n),\napplied AS (\n  UPDATE media_attachments m\n  SET download_state = r.final_state,\n      retry_count = CASE WHEN r.is_deferred THEN GREATEST(m.retry_count - 1, 0) ELSE m.retry_count END,\n      next_retry_at = CASE\n        WHEN r.is_deferred THEN NOW() + INTERVAL '60 seconds'\n        WHEN r.final_state = 'failed' THEN NOW() + (LEAST(3600, 10 * POWER(2, GREATEST(m.retry_count - 1, 0))) * INTERVAL '1 second')\n        ELSE NULL\n      END,\n      sha256 = CASE WHEN r.final_state = 'downloaded' THEN NULLIF($4::text, '') ELSE m.sha256 END,\n      file_size = CASE WHEN r.final_state = 'downloaded' THEN NULLIF($5::text, '')::bigint ELSE m.file_size END,\n      storage_path = CASE WHEN r.final_state = 'downloaded' THEN NULLIF($6::text, '') ELSE m.storage_path END,\n      storage_token = CASE WHEN r.final_state = 'downloaded' THEN NULLIF($7::text, '') ELSE m.storage_token END,\n      attach_pending = CASE WHEN r.final_state = 'downloaded' THEN TRUE ELSE m.attach_pending END,\n      last_error = CASE WHEN r.final_state = 'downloaded' THEN NULL ELSE NULLIF($8::text, '') END,\n      rejected_reason = CASE WHEN r.final_state = 'rejected' THEN NULLIF($8::text, '') ELSE m.rejected_reason END,\n      metadata = m.metadata || jsonb_strip_nulls(jsonb_build_object('last_http_status', NULLIF($9::text, '')::integer)),\n      claim_token = NULL,\n      locked_at = NULL,\n      updated_at = NOW()\n  FROM resolved r\n  WHERE m.id = r.id\n  RETURNING m.*\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'media_download', 'media_attachment', r.id, 'system',\n    'ops-media-download-scheduler', r.final_state::text,\n    jsonb_build_object('download_state', r.download_state, 'retry_count', r.retry_count - 1),\n    jsonb_build_object('download_state', a.download_state, 'retry_count', a.retry_count),\n    jsonb_strip_nulls(jsonb_build_object('outcome', $3::text, 'http_status', NULLIF($9::text, '')::integer))\n  FROM resolved r JOIN applied a ON a.id = r.id\n  RETURNING id\n)\nSELECT\n  a.id AS media_id,\n  a.download_state::text AS download_state,\n  a.retry_count,\n  a.next_retry_at,\n  a.sha256,\n  a.storage_path,\n  a.attach_pending\nFROM applied a;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.media_id, $json.claim_token, $json.media_outcome, $json.media_sha256 || '', $json.media_bytes_length ?? '', $json.media_storage_path || '', $json.media_storage_token || '', $json.media_error || '', $json.media_http_status || ''] }}"
+        }
+      },
+      "id": "91000000-0000-0000-0000-000000000005",
+      "name": "Complete Media Download",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        780,
+        20
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Claim Due Media Downloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Download Schedule": {
+      "main": [
+        [
+          {
+            "node": "Claim Due Media Downloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Due Media Downloads": {
+      "main": [
+        [
+          {
+            "node": "Download and Persist Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download and Persist Media": {
+      "main": [
+        [
+          {
+            "node": "Complete Media Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Santiago"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "91000000-0000-0000-0000-000000000006",
+  "tags": []
+}

@@ -53,7 +53,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const item = items[0]?.json ?? {};\nconst body = item.body ?? item;\nconst headers = item.headers ?? {};\nconst query = item.query ?? {};\n\nconst headerValue = (name) => {\n  const wanted = name.toLowerCase();\n  const hit = Object.keys(headers).find((key) => key.toLowerCase() === wanted);\n  return hit ? headers[hit] : null;\n};\n\nconst expectedWebhookSecret = String($env.EVOLUTION_WEBHOOK_SECRET || '').trim();\nconst receivedWebhookSecret = String(\n  headerValue('x-evolution-webhook-secret') ??\n    headerValue('x-webhook-secret') ??\n    query.token ??\n    query.secret ??\n    body.webhook_secret ??\n    ''\n).trim();\n\nif (expectedWebhookSecret && receivedWebhookSecret !== expectedWebhookSecret) {\n  return [\n    {\n      json: {\n        should_process: false,\n        security_rejected: true,\n        event_type: 'webhook_secret_mismatch',\n        normalized_event: 'SECURITY_REJECTED',\n        raw_payload_json: JSON.stringify(body),\n      },\n    },\n  ];\n}\n\nif (body && body.__force_error_handler_test === true) {\n  throw new Error('Forced OPS Error Handler smoke test');\n}\n\nconst normalizeFileSize = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.trunc(value) : null;\n  if (typeof value === 'bigint') {\n    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);\n    return value <= maxSafe ? Number(value) : null;\n  }\n  if (typeof value === 'string') {\n    const cleaned = value.trim();\n    if (!/^\\d+$/.test(cleaned)) return null;\n    const parsed = Number(cleaned);\n    return Number.isSafeInteger(parsed) ? parsed : null;\n  }\n  if (typeof value === 'object') {\n    if (typeof value.low === 'number') {\n      const low = value.low >>> 0;\n      const high = typeof value.high === 'number' ? value.high : 0;\n      const computed = high * 4294967296 + low;\n      return Number.isSafeInteger(computed) ? computed : null;\n    }\n    if (typeof value.value === 'string' || typeof value.value === 'number') {\n      return normalizeFileSize(value.value);\n    }\n  }\n  return null;\n};\n\nconst normalizeTextValue = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  if (typeof value === 'string') return value;\n  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);\n  if (Array.isArray(value) && value.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255)) {\n    return Buffer.from(value).toString('base64');\n  }\n  if (typeof value === 'object') {\n    if (value.type === 'Buffer' && Array.isArray(value.data)) {\n      return Buffer.from(value.data).toString('base64');\n    }\n    if (typeof value.url === 'string') return value.url;\n    try {\n      return JSON.stringify(value);\n    } catch (_error) {\n      return null;\n    }\n  }\n  return null;\n};\n\nconst eventName = String(body.event || body.type || '').trim();\nconst normalizedEvent = eventName.replace(/[.:-]+/g, '_').toUpperCase();\nconst instanceName = body.instance || body.instanceName || body.sender || null;\nconst data = body.data ?? body.message ?? {};\nconst key = data.key ?? {};\nconst primaryRemoteJid = String(key.remoteJid || data.key?.remoteJid || '').trim();\nconst alternateRemoteJid = String(key.remoteJidAlt || data.key?.remoteJidAlt || '').trim();\nconst remoteJid = primaryRemoteJid.endsWith('@lid') && alternateRemoteJid ? alternateRemoteJid : primaryRemoteJid;\nconst isGroup = remoteJid.endsWith('@g.us');\nconst isFromMe = Boolean(key.fromMe ?? data.fromMe ?? false);\n\nconst pickText = (message) => {\n  if (!message || typeof message !== 'object') return null;\n  if (typeof message.conversation === 'string') return message.conversation;\n  if (typeof message.extendedTextMessage?.text === 'string') return message.extendedTextMessage.text;\n  if (typeof message.imageMessage?.caption === 'string') return message.imageMessage.caption;\n  if (typeof message.videoMessage?.caption === 'string') return message.videoMessage.caption;\n  if (typeof message.documentMessage?.caption === 'string') return message.documentMessage.caption;\n  if (typeof message.buttonsResponseMessage?.selectedButtonId === 'string') return message.buttonsResponseMessage.selectedButtonId;\n  if (typeof message.listResponseMessage?.title === 'string') return message.listResponseMessage.title;\n  if (typeof message.templateButtonReplyMessage?.selectedDisplayText === 'string') return message.templateButtonReplyMessage.selectedDisplayText;\n  if (typeof message.locationMessage?.name === 'string') return message.locationMessage.name;\n  return null;\n};\n\nconst buildAttachment = (message) => {\n  const definitions = [\n    ['imageMessage', 'image'],\n    ['audioMessage', 'audio'],\n    ['documentMessage', 'document'],\n    ['videoMessage', 'video'],\n    ['stickerMessage', 'sticker'],\n  ];\n\n  for (const [field, attachmentType] of definitions) {\n    if (message?.[field]) {\n      const attachment = message[field];\n      return {\n        attachment_type: attachmentType,\n        mime_type: normalizeTextValue(attachment.mimetype),\n        filename: normalizeTextValue(attachment.fileName),\n        external_media_id: normalizeTextValue(attachment.mediaKey ?? attachment.directPath),\n        external_url: normalizeTextValue(attachment.url),\n        sha256: normalizeTextValue(attachment.fileSha256),\n        file_size: normalizeFileSize(attachment.fileLength),\n      };\n    }\n  }\n\n  return {\n    attachment_type: null,\n    mime_type: null,\n    filename: null,\n    external_media_id: null,\n    external_url: null,\n    sha256: null,\n    file_size: null,\n  };\n};\n\nif (normalizedEvent !== 'MESSAGES_UPSERT' || isFromMe || !remoteJid || isGroup) {\n  return [\n    {\n      json: {\n        should_process: false,\n        event_type: eventName || 'ignored_event',\n        normalized_event: normalizedEvent,\n        raw_payload_json: JSON.stringify(body),\n      },\n    },\n  ];\n}\n\nconst message = data.message ?? {};\nconst textBody = pickText(message);\nconst attachment = buildAttachment(message);\nconst phoneNumber = remoteJid.includes('@') ? remoteJid.split('@')[0] : remoteJid;\nconst externalTimestamp = data.messageTimestamp || body.date_time || null;\n\nreturn [\n  {\n    json: {\n      should_process: true,\n      event_type: eventName,\n      normalized_event: normalizedEvent,\n      instance_name: instanceName,\n      phone_number: phoneNumber || null,\n      source_number_id: null,\n      whatsapp_name: data.pushName || data.pushname || data.notifyName || null,\n      external_contact_id: primaryRemoteJid || remoteJid || null,\n      external_message_id: key.id || data.key?.id || null,\n      external_timestamp: externalTimestamp,\n      message_type: attachment.attachment_type ? attachment.attachment_type : 'text',\n      text_body: textBody,\n      raw_payload_json: JSON.stringify(body),\n      ...attachment,\n    },\n  },\n];"
+        "jsCode": "const item = items[0]?.json ?? {};\nconst body = item.body ?? item;\nconst headers = item.headers ?? {};\nconst query = item.query ?? {};\n\nconst headerValue = (name) => {\n  const wanted = name.toLowerCase();\n  const hit = Object.keys(headers).find((key) => key.toLowerCase() === wanted);\n  return hit ? headers[hit] : null;\n};\n\nconst expectedWebhookSecret = String($env.EVOLUTION_WEBHOOK_SECRET || '').trim();\nconst receivedWebhookSecret = String(\n  headerValue('x-evolution-webhook-secret') ??\n    headerValue('x-webhook-secret') ??\n    query.token ??\n    query.secret ??\n    body.webhook_secret ??\n    ''\n).trim();\n\nif (expectedWebhookSecret && receivedWebhookSecret !== expectedWebhookSecret) {\n  return [\n    {\n      json: {\n        should_process: false,\n        security_rejected: true,\n        event_type: 'webhook_secret_mismatch',\n        normalized_event: 'SECURITY_REJECTED',\n        raw_payload_json: JSON.stringify(body),\n      },\n    },\n  ];\n}\n\nif (body && body.__force_error_handler_test === true) {\n  throw new Error('Forced OPS Error Handler smoke test');\n}\n\nconst normalizeFileSize = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.trunc(value) : null;\n  if (typeof value === 'bigint') {\n    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);\n    return value <= maxSafe ? Number(value) : null;\n  }\n  if (typeof value === 'string') {\n    const cleaned = value.trim();\n    if (!/^\\d+$/.test(cleaned)) return null;\n    const parsed = Number(cleaned);\n    return Number.isSafeInteger(parsed) ? parsed : null;\n  }\n  if (typeof value === 'object') {\n    if (typeof value.low === 'number') {\n      const low = value.low >>> 0;\n      const high = typeof value.high === 'number' ? value.high : 0;\n      const computed = high * 4294967296 + low;\n      return Number.isSafeInteger(computed) ? computed : null;\n    }\n    if (typeof value.value === 'string' || typeof value.value === 'number') {\n      return normalizeFileSize(value.value);\n    }\n  }\n  return null;\n};\n\nconst normalizeTextValue = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  if (typeof value === 'string') return value;\n  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);\n  if (Array.isArray(value) && value.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255)) {\n    return Buffer.from(value).toString('base64');\n  }\n  if (typeof value === 'object') {\n    if (value.type === 'Buffer' && Array.isArray(value.data)) {\n      return Buffer.from(value.data).toString('base64');\n    }\n    if (typeof value.url === 'string') return value.url;\n    try {\n      return JSON.stringify(value);\n    } catch (_error) {\n      return null;\n    }\n  }\n  return null;\n};\n\nconst eventName = String(body.event || body.type || '').trim();\nconst normalizedEvent = eventName.replace(/[.:-]+/g, '_').toUpperCase();\nconst instanceName = body.instance || body.instanceName || body.sender || $env.EVOLUTION_DEFAULT_INSTANCE || null;\nconst data = body.data ?? body.message ?? {};\nconst key = data.key ?? {};\nconst primaryRemoteJid = String(key.remoteJid || data.key?.remoteJid || '').trim();\nconst alternateRemoteJid = String(key.remoteJidAlt || data.key?.remoteJidAlt || '').trim();\nconst remoteJid = primaryRemoteJid.endsWith('@lid') && alternateRemoteJid ? alternateRemoteJid : primaryRemoteJid;\nconst isGroup = remoteJid.endsWith('@g.us');\nconst isFromMe = Boolean(key.fromMe ?? data.fromMe ?? false);\n\nconst pickText = (message) => {\n  if (!message || typeof message !== 'object') return null;\n  if (typeof message.conversation === 'string') return message.conversation;\n  if (typeof message.extendedTextMessage?.text === 'string') return message.extendedTextMessage.text;\n  if (typeof message.imageMessage?.caption === 'string') return message.imageMessage.caption;\n  if (typeof message.videoMessage?.caption === 'string') return message.videoMessage.caption;\n  if (typeof message.documentMessage?.caption === 'string') return message.documentMessage.caption;\n  if (typeof message.buttonsResponseMessage?.selectedButtonId === 'string') return message.buttonsResponseMessage.selectedButtonId;\n  if (typeof message.listResponseMessage?.title === 'string') return message.listResponseMessage.title;\n  if (typeof message.templateButtonReplyMessage?.selectedDisplayText === 'string') return message.templateButtonReplyMessage.selectedDisplayText;\n  if (typeof message.locationMessage?.name === 'string') return message.locationMessage.name;\n  return null;\n};\n\nconst buildAttachment = (message) => {\n  const definitions = [\n    ['imageMessage', 'image'],\n    ['audioMessage', 'audio'],\n    ['documentMessage', 'document'],\n    ['videoMessage', 'video'],\n    ['stickerMessage', 'sticker'],\n  ];\n\n  for (const [field, attachmentType] of definitions) {\n    if (message?.[field]) {\n      const attachment = message[field];\n      return {\n        attachment_type: attachmentType,\n        mime_type: normalizeTextValue(attachment.mimetype),\n        filename: normalizeTextValue(attachment.fileName),\n        external_media_id: normalizeTextValue(attachment.mediaKey ?? attachment.directPath),\n        external_url: normalizeTextValue(attachment.url),\n        sha256: normalizeTextValue(attachment.fileSha256),\n        file_size: normalizeFileSize(attachment.fileLength),\n      };\n    }\n  }\n\n  return {\n    attachment_type: null,\n    mime_type: null,\n    filename: null,\n    external_media_id: null,\n    external_url: null,\n    sha256: null,\n    file_size: null,\n  };\n};\n\nif (normalizedEvent !== 'MESSAGES_UPSERT' || isFromMe || !remoteJid || isGroup) {\n  return [\n    {\n      json: {\n        should_process: false,\n        event_type: eventName || 'ignored_event',\n        normalized_event: normalizedEvent,\n        raw_payload_json: JSON.stringify(body),\n      },\n    },\n  ];\n}\n\nconst message = data.message ?? {};\nconst textBody = pickText(message);\nconst attachment = buildAttachment(message);\nconst phoneNumber = remoteJid.includes('@') ? remoteJid.split('@')[0] : remoteJid;\nconst externalTimestamp = data.messageTimestamp || body.date_time || null;\n\nreturn [\n  {\n    json: {\n      should_process: true,\n      event_type: eventName,\n      normalized_event: normalizedEvent,\n      instance_name: instanceName,\n      phone_number: phoneNumber || null,\n      source_number_id: null,\n      whatsapp_name: data.pushName || data.pushname || data.notifyName || null,\n      external_contact_id: primaryRemoteJid || remoteJid || null,\n      external_message_id: key.id || data.key?.id || null,\n      external_timestamp: externalTimestamp,\n      message_type: attachment.attachment_type ? attachment.attachment_type : 'text',\n      text_body: textBody,\n      raw_payload_json: JSON.stringify(body),\n      ...attachment,\n    },\n  },\n];"
       },
       "id": "4",
       "name": "Normalize Evolution Payload",
@@ -67,7 +67,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'accepted' } }}",
+        "responseBody": "={{ { status: 'accepted', inbox_event_id: $json.inbound_event_id || null, duplicate: Boolean($json.duplicate_event) } }}",
         "options": {
           "responseCode": 200
         }
@@ -77,7 +77,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        780,
+        1040,
         420
       ]
     },
@@ -91,7 +91,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1040,
+        1300,
         420
       ]
     },
@@ -99,7 +99,7 @@
       "parameters": {
         "source": "database",
         "workflowId": {
-          "value": "RSpKCzHpoSVWLxRV",
+          "value": "zEs4qs4XmAziAeHY",
           "mode": "list",
           "cachedResultName": "WA - Conversation Orchestrator"
         },
@@ -113,140 +113,65 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.1,
       "position": [
-        1300,
+        1560,
         420
       ]
     },
     {
       "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "return items.filter((item) => String(item?.json?.response_text || '').trim().length > 0).map((item) => item.json);"
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM claim_inbound_event(jsonb_strip_nulls(jsonb_build_object(\n  'instance_name', NULLIF($1::text, ''),\n  'external_message_id', NULLIF($2::text, ''),\n  'phone_number', NULLIF($3::text, ''),\n  'event_type', NULLIF($4::text, ''),\n  'normalized_event', NULLIF($5::text, ''),\n  'requested_processing', COALESCE(NULLIF($6::text, '')::boolean, FALSE),\n  'raw_payload_json', COALESCE(NULLIF($7::text, ''), '{}'),\n  'whatsapp_name', NULLIF($8::text, ''),\n  'external_contact_id', NULLIF($9::text, ''),\n  'external_timestamp', NULLIF($10::text, ''),\n  'message_type', COALESCE(NULLIF($11::text, ''), 'unknown'),\n  'text_body', NULLIF($12::text, ''),\n  'attachment_type', NULLIF($13::text, ''),\n  'mime_type', NULLIF($14::text, ''),\n  'filename', NULLIF($15::text, ''),\n  'external_media_id', NULLIF($16::text, ''),\n  'external_url', NULLIF($17::text, ''),\n  'sha256', NULLIF($18::text, ''),\n  'file_size', NULLIF($19::text, '')\n)));\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.instance_name, $json.external_message_id, $json.phone_number, $json.event_type, $json.normalized_event, $json.should_process, $json.raw_payload_json, $json.whatsapp_name, $json.external_contact_id, $json.external_timestamp, $json.message_type, $json.text_body, $json.attachment_type, $json.mime_type, $json.filename, $json.external_media_id, $json.external_url, $json.sha256, $json.file_size] }}"
+        }
       },
-      "id": "8",
-      "name": "Filter Outbound Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "10000000-0000-0000-0000-000000000013",
+      "name": "Persist Durable Inbox",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
       "position": [
-        1560,
-        300
+        780,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "10000000-0000-0000-0000-000000000014",
+      "name": "Recovery Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        700
       ]
     },
     {
       "parameters": {
         "source": "database",
         "workflowId": {
-          "value": "Njf3OjhyPWLkVJo1",
+          "value": "",
           "mode": "list",
-          "cachedResultName": "WA - Outbound Messages"
+          "cachedResultName": "WA - Inbound Downstream Dispatcher"
         },
         "mode": "each",
         "options": {
           "waitForSubWorkflow": true
         }
       },
-      "id": "9",
-      "name": "Execute Outbound Messages",
+      "id": "50000000-0000-0000-0000-000000000001",
+      "name": "Execute Durable Downstream Dispatcher",
       "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
-      "continueOnFail": true,
+      "typeVersion": 1.2,
       "position": [
         1820,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const shouldCreateLead = (value) => {\n  if (value === true || value === 1) return true;\n  if (typeof value === 'string') {\n    const normalized = value.trim().toLowerCase();\n    return normalized === 'true' || normalized === '1';\n  }\n  return false;\n};\n\nreturn items\n  .filter((item) => shouldCreateLead(item?.json?.should_create_lead))\n  .map((item) => item.json);"
-      },
-      "id": "10",
-      "name": "Filter Lead Creation",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1560,
-        560
-      ]
-    },
-    {
-      "parameters": {
-        "source": "database",
-        "workflowId": {
-          "value": "Jv0sFsQsLUcag1ml",
-          "mode": "list",
-          "cachedResultName": "CRM - Lead Creation And Assignment"
-        },
-        "mode": "each",
-        "options": {
-          "waitForSubWorkflow": true
-        }
-      },
-      "id": "11",
-      "name": "Execute Lead Creation",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
-      "position": [
-        1820,
-        560
-      ]
-    },
-    {
-      "parameters": {
-        "source": "database",
-        "workflowId": {
-          "value": "by9twGB9iSQp9gzT",
-          "mode": "list",
-          "cachedResultName": "CRM - ClickUp Sync Lead"
-        },
-        "mode": "each",
-        "options": {
-          "waitForSubWorkflow": true
-        }
-      },
-      "id": "12",
-      "name": "Execute ClickUp Sync",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
-      "position": [
-        2080,
-        560
-      ]
-    },
-    {
-      "parameters": {
-        "source": "database",
-        "workflowId": {
-          "value": "wOCHWXatCnBz81Mq",
-          "mode": "list",
-          "cachedResultName": "CRM - Seller Notification Dispatch"
-        },
-        "mode": "each",
-        "options": {
-          "waitForSubWorkflow": true
-        }
-      },
-      "id": "13",
-      "name": "Execute Seller Notification",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
-      "continueOnFail": true,
-      "position": [
-        2600,
-        560
-      ]
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "return items\n  .filter((item) => String(item?.json?.clickup_task_id || '').trim().length > 0)\n  .map((item) => item.json);"
-      },
-      "id": "14",
-      "name": "Filter ClickUp Ready",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2340,
-        560
+        420
       ]
     }
   ],
@@ -278,7 +203,7 @@
       "main": [
         [
           {
-            "node": "Respond Accepted",
+            "node": "Persist Durable Inbox",
             "type": "main",
             "index": 0
           }
@@ -311,67 +236,29 @@
       "main": [
         [
           {
-            "node": "Filter Lead Creation",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Filter Outbound Response",
+            "node": "Execute Durable Downstream Dispatcher",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Filter Outbound Response": {
+    "Persist Durable Inbox": {
       "main": [
         [
           {
-            "node": "Execute Outbound Messages",
+            "node": "Respond Accepted",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Filter Lead Creation": {
+    "Recovery Workflow Input": {
       "main": [
         [
           {
-            "node": "Execute Lead Creation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Execute Lead Creation": {
-      "main": [
-        [
-          {
-            "node": "Execute ClickUp Sync",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Execute ClickUp Sync": {
-      "main": [
-        [
-          {
-            "node": "Filter ClickUp Ready",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Filter ClickUp Ready": {
-      "main": [
-        [
-          {
-            "node": "Execute Seller Notification",
+            "node": "Filter Processable Events",
             "type": "main",
             "index": 0
           }
@@ -381,7 +268,8 @@
   },
   "active": false,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "executionTimeout": 360
   },
   "versionId": "10000000-0000-0000-0000-000000000003",
   "meta": {},

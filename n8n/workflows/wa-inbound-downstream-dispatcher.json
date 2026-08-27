@@ -1,0 +1,1253 @@
+{
+  "name": "WA - Inbound Downstream Dispatcher",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "50000000-0000-0000-0000-000000000010",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        180,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => {\n  const source = item.json || {};\n  const payload = source.downstream_payload && typeof source.downstream_payload === 'object'\n    ? source.downstream_payload\n    : source;\n  let state = {};\n  try { state = JSON.parse(payload.after_payload_json || '{}'); } catch (_error) {}\n  return { json: {\n    ...payload,\n    should_escalate: payload.should_escalate ?? state.should_escalate ?? false,\n    escalation_reason: payload.escalation_reason ?? state.escalation_reason ?? null,\n    inbound_event_id: source.inbound_event_id || payload.inbound_event_id || null,\n    processing_token: source.processing_token || payload.processing_token || null,\n  } };\n});"
+      },
+      "id": "50000000-0000-0000-0000-000000000011",
+      "name": "Normalize Durable Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-Boolean(String($json-response_text || '')-trim())",
+              "leftValue": "={{ Boolean(String($json.response_text || '').trim()) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000012",
+      "name": "Should Send Response",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "77777777-0000-0000-0000-000000000001",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000013",
+      "name": "Execute Outbound Response",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        920,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { outbound_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000014",
+      "name": "Outbound Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { outbound_lane_complete: true, outbound_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000015",
+      "name": "Outbound Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-Boolean($json-should_create_lead)",
+              "leftValue": "={{ Boolean($json.should_create_lead) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "condition-Boolean($json-commercial-gate-clear)",
+              "leftValue": "={{ !(Array.isArray($json.commercial_missing_fields) && $json.commercial_missing_fields.length > 0) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000016",
+      "name": "Should Create Lead",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - Lead Creation And Assignment"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000017",
+      "name": "Execute Lead Creation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        920,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - ClickUp Sync Lead"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000018",
+      "name": "Execute ClickUp Sync",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1180,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "clickup-task-ready",
+              "leftValue": "={{ Boolean(String($json.clickup_task_id || '').trim()) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000019",
+      "name": "Filter ClickUp Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1420,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - Seller Notification Dispatch"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000020",
+      "name": "Execute Seller Notification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { seller_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000021",
+      "name": "Seller Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "preferInput2"
+            }
+          }
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000022",
+      "name": "Merge Lead Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1180,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\nconst parsedLeadId = Number(row.lead_id);\nconst leadId = Number.isSafeInteger(parsedLeadId) && parsedLeadId > 0 ? parsedLeadId : null;\nconst assigned = row.assignment_result === 'assigned' && Boolean(row.assigned_seller_id);\nif (!leadId || !row.conversation_id || !row.phone_number) {\n  return [{ json: { ...row, should_send_handoff: false, message: null, response_text: null, lead_id: null } }];\n}\nconst message = assigned\n  ? 'Gracias, ya registré tu solicitud y quedó asignada al equipo comercial. Una ejecutiva revisará los antecedentes para preparar una cotización acorde a tu proyecto.'\n  : 'Gracias, ya registré tu solicitud. El equipo comercial podrá revisar el caso sin que tengas que repetir la información.';\nreturn [{ json: {\n  ...row,\n  should_send_handoff: true,\n  message,\n  response_text: message,\n  response_kind: assigned ? 'handoff_confirmed' : 'handoff_registered_unassigned',\n  lead_id: leadId,\n} }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000023",
+      "name": "Prepare Verified Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "77777777-0000-0000-0000-000000000001",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000024",
+      "name": "Execute Handoff Outbound",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { handoff_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000025",
+      "name": "Handoff Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000026",
+      "name": "Merge Lead Effects",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2140,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { lead_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000027",
+      "name": "Lead Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { lead_lane_complete: true, lead_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000028",
+      "name": "Lead Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 3,
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000029",
+      "name": "Merge Dispatch Completion",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2640,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbound_events\nSET processing_status='processed', processing_phase='completed', processed_at=NOW(),\n    processing_token=NULL, failure_reason=NULL, updated_at=NOW()\nWHERE id=NULLIF($1::text,'')::bigint\n  AND processing_status='processing' AND processing_token=NULLIF($2::text,'')\n  AND downstream_payload <> '{}'::jsonb\nRETURNING id AS completed_inbound_event_id, TRUE AS downstream_completed;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.inbound_event_id, $json.processing_token] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000030",
+      "name": "Mark Inbox Processed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2900,
+        360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Inbound Recovery"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000031",
+      "name": "Dispatch Next Inbox Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3160,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { handoff_lane_complete: true, handoff_skipped: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000033",
+      "name": "Handoff Lane Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-should-send-handoff",
+              "leftValue": "={{ $json.should_send_handoff === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000034",
+      "name": "Handoff Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1500,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst OPERATIONAL_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n]);\n\nconst conversationId = Number(row.conversation_id);\nconst hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\nconst phoneNumber = String(row.phone_number || '').trim();\n\nconst intent = String(row.intent || '').trim();\nconst isOperational = OPERATIONAL_INTENTS.has(intent);\n\nconst shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational;\n\nconst commercialBlocked = Array.isArray(row.commercial_missing_fields)\n  && row.commercial_missing_fields.length > 0;\n\nconst qualified = Boolean(row.should_create_lead)\n  && !commercialBlocked\n  && row.confirmation_status === 'confirmed';\n\nconst requestedStatus = qualified ? 'qualified' : 'new';\n\nreturn [\n  {\n    json: {\n      ...row,\n      opportunity_scope: {\n        conversation_id: conversationId,\n        phone_number: phoneNumber,\n        source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n        external_contact_id: row.external_contact_id || null,\n        whatsapp_name: row.whatsapp_name || null,\n        service: row.service || null,\n        city: row.city || null,\n        requirement: row.requirement || null,\n        intent_code: intent || null,\n        inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n      },\n      opportunity_write: shouldWrite,\n      opportunity_status: requestedStatus,\n      opportunity_skipped: !shouldWrite,\n    },\n  },\n];\n"
+      },
+      "id": "50000000-0000-0000-0000-000000000035",
+      "name": "Ensure Early Opportunity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input_payload AS (\n  SELECT\n    $1::text AS phone_number,\n    NULLIF($2::text, '')::bigint AS source_number_id,\n    $3::bigint AS conversation_id,\n    NULLIF($4::text, '') AS external_contact_id,\n    NULLIF($5::text, '') AS whatsapp_name,\n    NULLIF($6::text, '') AS service,\n    NULLIF($7::text, '') AS city,\n    NULLIF($8::text, '') AS requirement,\n    NULLIF($9::text, '') AS intent_code,\n    NULLIF($10::text, '')::bigint AS inbound_event_id,\n    $11::boolean AS should_write,\n    $12::text AS requested_status\n),\nexisting AS MATERIALIZED (\n  SELECT o.id, o.status_code, o.updated_at\n  FROM input_payload ip\n  JOIN opportunities o ON o.conversation_id = ip.conversation_id\n  WHERE o.deleted_at IS NULL\n),\nwritten AS (\n  INSERT INTO opportunities (\n    phone_number, source_number_id, conversation_id, external_contact_id,\n    whatsapp_name, service, city, requirement, intent_code, status_code,\n    inbound_event_id\n  )\n  SELECT\n    ip.phone_number, ip.source_number_id, ip.conversation_id, ip.external_contact_id,\n    ip.whatsapp_name, ip.service, ip.city, ip.requirement, ip.intent_code,\n    ip.requested_status, ip.inbound_event_id\n  FROM input_payload ip\n  WHERE ip.should_write\n  ON CONFLICT (conversation_id) WHERE deleted_at IS NULL\n  DO UPDATE SET\n    service = COALESCE(EXCLUDED.service, opportunities.service),\n    city = COALESCE(EXCLUDED.city, opportunities.city),\n    requirement = COALESCE(EXCLUDED.requirement, opportunities.requirement),\n    intent_code = COALESCE(EXCLUDED.intent_code, opportunities.intent_code),\n    inbound_event_id = COALESCE(EXCLUDED.inbound_event_id, opportunities.inbound_event_id),\n    status_code = CASE\n      WHEN opportunities.status_code = 'new' AND EXCLUDED.status_code = 'qualified'\n        THEN 'qualified'\n      ELSE opportunities.status_code\n    END,\n    updated_at = NOW()\n  RETURNING id, status_code\n),\nwrite_outcome AS (\n  SELECT\n    ip.conversation_id,\n    COALESCE(w.id, e.id) AS opportunity_id,\n    COALESCE(w.status_code, e.status_code) AS opportunity_status,\n    CASE\n      WHEN NOT ip.should_write THEN 'skipped'\n      WHEN e.id IS NULL THEN 'created'\n      WHEN w.status_code = 'qualified' AND e.status_code = 'new' THEN 'promoted_qualified'\n      WHEN w.status_code = e.status_code THEN 'duplicate_skipped'\n      ELSE 'updated'\n    END AS outcome\n  FROM input_payload ip\n  LEFT JOIN existing e ON TRUE\n  LEFT JOIN written w ON TRUE\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'opportunity_sync',\n    'opportunity',\n    wo.opportunity_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    wo.outcome,\n    CASE WHEN e.id IS NULL THEN '{}'::jsonb\n         ELSE jsonb_build_object('status_code', e.status_code) END,\n    jsonb_build_object('id', wo.opportunity_id, 'status_code', wo.opportunity_status),\n    jsonb_build_object('conversation_id', wo.conversation_id, 'inbound_event_id', ip.inbound_event_id)\n  FROM input_payload ip\n  JOIN write_outcome wo ON TRUE\n  LEFT JOIN existing e ON TRUE\n  WHERE ip.should_write\n  RETURNING 1\n)\nSELECT\n  wo.opportunity_id,\n  wo.opportunity_status,\n  wo.outcome\nFROM write_outcome wo;",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.opportunity_scope.phone_number, $json.opportunity_scope.source_number_id, $json.opportunity_scope.conversation_id, $json.opportunity_scope.external_contact_id, $json.opportunity_scope.whatsapp_name, $json.opportunity_scope.service, $json.opportunity_scope.city, $json.opportunity_scope.requirement, $json.opportunity_scope.intent_code, $json.opportunity_scope.inbound_event_id, $json.opportunity_write, $json.opportunity_status] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000036",
+      "name": "Upsert Early Opportunity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        800
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-handoff-write-required",
+              "leftValue": "={{ $json.handoff_write === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50000000-0000-0000-0000-000000000042",
+      "name": "Handoff Write Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// Ensure Escalation Handoff — Unidad 3: escalamiento humano durable (P0).\n// -----------------------------------------------------------------------------\n// Nodo del dispatcher \"WA - Inbound Downstream Dispatcher\". SOURCE OF TRUTH\n// del routing motivo->area->prioridad->responsable (PRD #22/#23/#9.5/#11) y\n// del gate de no-cierre de intenciones operativas (PRD #22.16/#31.7).\n//\n// El mismo archivo es, en pruebas (harness), un modulo Node: expone\n// HANDOFF_ROUTING, routeEscalation, evaluateClosureGate y buildIdempotencyKey\n// para los tests de contrato. En n8n (Code node) solo se ejecuta la seccion\n// final que lee `items`. Single source of truth: el fixture se reinyecta al\n// workflow con tests/scripts/sync-workflow-nodes.mjs.\n//\n// Idempotency key: `{conversation_id}:{motivo}:{trigger}` — el trigger es el\n// motivo textual normalizado (o 'intent:<codigo>'), de modo que un replay del\n// mismo evento no duplica y un motivo distinto abre un handoff propio.\n//\n// Precedencia de routing (memoria #679):\n// opt-out/abandono → humano → escalación/terminal → operacional → re-engagement → comercial/IA\n// =============================================================================\n\nconst HANDOFF_ROUTING = {\n  // PRECEDENCIA 1: opt-out/abandono\n  opt_out: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  abandoned: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n\n  // PRECEDENCIA 2: humano (solicitud explícita de persona)\n  talk_human: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n\n  // PRECEDENCIA 3: escalación/terminal\n  frustration: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  high_urgency: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  large_project: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  complex_installation: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  complaint: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  discount: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n  special_payment_condition: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n\n  // PRECEDENCIA 4: operacional\n  scheduling_change: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  committed_issue: { area: 'scheduling', area_label: 'Programación', prioridad: 'alta', responsable: 'Programación (despacho/instalación)' },\n  stock_confirm: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  photos_eval: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  payment_proof: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  invoice: { area: 'finance', area_label: 'Finanzas', prioridad: 'media', responsable: 'Finanzas / Administración' },\n  warranty: { area: 'post_sale', area_label: 'Postventa', prioridad: 'alta', responsable: 'Administración / Postventa' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n\n  // PRECEDENCIA 5: re-engagement\n  loop: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n  reengagement: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },\n\n  // PRECEDENCIA 6: comercial/IA (B2B)\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  purchase_order: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n};\n\n// Fallback determinista por area declarada por la AI (contrato del advisor).\nconst AREA_FALLBACK = {\n  sales: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },\n  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },\n  finance: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },\n  post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },\n  claims: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },\n  scheduling: { area: 'scheduling', area_label: 'Programación', prioridad: 'media', responsable: 'Programación (despacho/instalación)' },\n  management: { area: 'management', area_label: 'Gerencia', prioridad: 'alta', responsable: 'Gerencia' },\n};\n\nconst DEFAULT_ROUTING = { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' };\n\nconst INTENT_TO_MOTIVE = {\n  talk_to_human: 'talk_human',\n  complaint: 'complaint',\n  warranty_inquiry: 'warranty',\n  payment_proof: 'payment_proof',\n  invoice_request: 'invoice',\n  b2b_request: 'b2b',\n  purchase_order: 'purchase_order',\n  discount_request: 'discount',\n  reschedule_delivery: 'scheduling_change',\n  reschedule_installation: 'scheduling_change',\n  post_sale: 'post_sale',\n  stock_inquiry: 'stock_confirm',\n  returning_customer: 'loop',\n  review: 'loop',\n  opt_out: 'opt_out',           // PRECEDENCIA 1\n  abandoned_conversation: 'abandoned', // PRECEDENCIA 1\n  frustration_detected: 'frustration', // PRECEDENCIA 3\n  loop_detected: 'loop',        // PRECEDENCIA 5\n  reengagement_detected: 'reengagement', // PRECEDENCIA 5\n};\n\n// Motivo por señales de texto del reason de escalamiento (PRD #22 triggers).\n// Ordenado por PRECEDENCIA (primero = mayor precedencia)\nconst REASON_TO_MOTIVE = [\n  // PRECEDENCIA 1: opt-out/abandono\n  ['opt_out', /no me escribas|escribas mas|dame de baja|baja.*(pas|mensajes|programa)|\\bstop\\b|no quiero.*mensajes|dej.*escribirme|no me envies|darme de baja|quitarme|no me molestes|opt.?out/i],\n  ['abandoned', /ya no (me )?(interesa|necesito|quiero)|lo pense|estoy con (la )?(otra|competencia)|no voy a (comprar|avanzar)|cerremos/i],\n\n  // PRECEDENCIA 2: humano\n  ['talk_human', /hablar.*(persona|humano|ejecutiva|operador)|atencion humana|persona real|\\bejecutiv\\b|\\boperador\\b|\\basesor\\b|necesito (una|un) (ejecutiva|asesor|humano|operador|persona)/i],\n\n  // PRECEDENCIA 3: escalación/terminal\n  ['complaint', /reclamo|queja|molest|frustr|mala atencion|falla|roto|quebr|problema/i],\n  ['frustration', /no me (estai|está|estas|estás|escuchas|entiendes)|no (escuchai|escucha|entendi)|que (lata|fome)|pesimo|mal servicio|no (sirve|funciona|gusta)|decepcionado|ayuda|no entiendo|que (hay|hace) (falta|que hacer)|quejarme|problema contigo/i],\n  ['high_urgency', /urgent|para ayer|necesito (ya|ahora|urgente)/i],\n  ['large_project', /2\\.000\\.000|dos millones|millon/i],\n  ['complex_installation', /instalacion|coordinacion logistica|acceso/i],\n  ['discount', /descuento|igualar|bajo el precio|rebaja/i],\n  ['special_payment_condition', /condicion (especial|servicio de pago|pago a 30)/i],\n\n  // PRECEDENCIA 4: operacional\n  ['warranty', /garant/i],\n  ['payment_proof', /comprobante|transferencia|abono|pago|pago enviado/i],\n  ['invoice', /factur/i],\n  ['scheduling_change', /reagend|cambio de fecha|fecha/i],\n  ['committed_issue', /despacho|programada|programado|pedido comprometido/i],\n  ['stock_confirm', /stock|disponibilidad/i],\n  ['photos_eval', /foto|fotos|imagen/i],\n\n  // PRECEDENCIA 5: re-engagement\n  ['loop', /(no me (estai|está|estas|estás)|no (escuchai|escucha|entendi|entiendes)).*(repet|otra vez|de nuevo)|(repet|otra vez|de nuevo).*(no me|no escucha|no entendi)/i],\n  ['reengagement', /hola de nuevo|volvi|volví|retomar|seguir.*anterior|la anterior|misma solicitud|misma cotizacion/i],\n\n  // PRECEDENCIA 6: comercial/IA (B2B)\n  ['b2b', /b2b|empresa|constructora|inmobiliaria|licitacion|proveedor|volumen/i],\n  ['purchase_order', /orden de compra|\\boc\\b/i],\n];\n\nconst normalizeReason = (value) => String(value ?? '').trim().replace(/\\s+/g, ' ').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n\nconst motiveFromReason = (reason) => {\n  const text = normalizeReason(reason);\n  if (!text) return null;\n  for (const [motive, pattern] of REASON_TO_MOTIVE) {\n    if (pattern.test(text)) return motive;\n  }\n  return null;\n};\n\n// =============================================================================\n// Precedence resolver: dado un conjunto de motivos candidatos, devuelve el de\n// mayor precedencia según el orden: opt-out/abandono → humano → escalación/terminal\n// → operacional → re-engagement → comercial/IA\n// =============================================================================\nconst PRECEDENCE_ORDER = [\n  'opt_out',\n  'abandoned',\n  'talk_human',\n  'complaint',\n  'frustration',\n  'high_urgency',\n  'large_project',\n  'complex_installation',\n  'discount',\n  'special_payment_condition',\n  'warranty',\n  'payment_proof',\n  'invoice',\n  'scheduling_change',\n  'committed_issue',\n  'stock_confirm',\n  'photos_eval',\n  'post_sale',\n  'loop',\n  'reengagement',\n  'b2b',\n  'purchase_order',\n];\n\nconst resolvePrecedence = (motives) => {\n  if (!motives || motives.length === 0) return null;\n  for (const motive of PRECEDENCE_ORDER) {\n    if (motives.includes(motive)) return motive;\n  }\n  return motives[0]; // fallback to first if not in precedence list\n};\n\nconst routeEscalation = (row) => {\n  const conversationId = Number(row.conversation_id);\n  const hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\n  const phoneNumber = String(row.phone_number || '').trim();\n  const shouldEscalate = Boolean(row.should_escalate) || Boolean(row.escalation_required);\n  const area = String(row.escalation_area || '').trim();\n  const aiRequestsOperational = Boolean(area && area !== 'none' && area !== 'sales');\n  const escalated = shouldEscalate || aiRequestsOperational;\n\n  if (!escalated || !hasConversation || !phoneNumber) {\n    return {\n      escalated: false,\n      write: false,\n      motivo: null,\n      routing: null,\n      idempotency_key: null,\n      trigger: null,\n      precedence_level: null,\n      all_candidate_motives: [],\n    };\n  }\n\n  const intent = String(row.intent || '').trim();\n  const rawReason = String(row.escalation_reason || '').trim();\n  const customerText = String(row.text_body || '').trim();\n  const normalizedText = customerText.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n  const isReengagement = Boolean(row.is_reengagement);\n  const hasPendingFollowups = Boolean(row.has_pending_followups);\n\n  // Collect ALL candidate motives from different sources\n  const candidateMotives = new Set();\n\n  // 1. From raw reason text (highest signal)\n  const reasonMotive = motiveFromReason(rawReason);\n  if (reasonMotive) candidateMotives.add(reasonMotive);\n\n  // 2. From AI intent\n  const intentMotive = INTENT_TO_MOTIVE[intent];\n  if (intentMotive) candidateMotives.add(intentMotive);\n\n  // 3. From AI declared area\n  if (area && area !== 'none') candidateMotives.add(area);\n\n  // 4. From conversation context: re-engagement\n  if (isReengagement) {\n    if (hasPendingFollowups) candidateMotives.add('reengagement');\n    else candidateMotives.add('loop');\n  }\n\n  // 5. From frustration/loop detection in conversation orchestrator\n  if (row.escalation_reason === 'frustration_detected') candidateMotives.add('frustration');\n  if (row.escalation_reason === 'loop_detected') candidateMotives.add('loop');\n\n  // 6. From opt-out/abandoned detection\n  const optOutPatterns = [/no me escribas|escribas mas|dame de baja|baja.*(pas|mensajes|programa)|\\bstop\\b|no quiero.*mensajes|dej.*escribirme|no me envies|darme de baja|quitarme|no me molestes|opt.?out/i];\n  const abandonedPatterns = [/ya no (interesa|necesito|quiero)|lo pense|estoy con (otra|competencia)|no voy a (comprar|avanzar)|cerremos/i];\n  if (optOutPatterns.some(p => p.test(normalizedText))) candidateMotives.add('opt_out');\n  if (abandonedPatterns.some(p => p.test(normalizedText))) candidateMotives.add('abandoned');\n\n  // Resolve to highest precedence motive\n  const allCandidates = Array.from(candidateMotives);\n  const resolvedMotive = resolvePrecedence(allCandidates);\n\n  const routing = HANDOFF_ROUTING[resolvedMotive] || AREA_FALLBACK[area] || DEFAULT_ROUTING;\n  const trigger = rawReason || (intent ? `intent:${intent}` : routing.area);\n\n  // Determine precedence level for logging\n  const precedenceLevel = PRECEDENCE_ORDER.indexOf(resolvedMotive) + 1;\n\n  return {\n    escalated: true,\n    write: true,\n    motivo: resolvedMotive || routing.area,\n    routing,\n    trigger,\n    idempotency_key: buildIdempotencyKey(conversationId, resolvedMotive || routing.area, trigger),\n    precedence_level: precedenceLevel,\n    all_candidate_motives: allCandidates,\n  };\n};\n\nconst buildIdempotencyKey = (conversationId, motivo, trigger) =>\n  [conversationId, motivo, trigger].join(':');\n\n// =============================================================================\n// Gate de no-cierre (PRD #33.16, #33.8): ninguna intencion operativa\n// (reclamo, garantia, comprobante, factura) ni B2B se cierra mientras el\n// escalamiento no exista y este al menos 'notified'.\n// =============================================================================\nconst OPERATIONAL_CLOSURE_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n  'b2b_request',\n  'purchase_order',\n]);\n\nconst NOTIFIED_OR_BETTER = new Set(['notified', 'acknowledged', 'resolved']);\n\nconst evaluateClosureGate = (input) => {\n  const intent = String(input.intent || '').trim();\n  const shouldEscalate = Boolean(input.should_escalate || input.escalation_required);\n  const customerType = String(input.customer_type || '').trim();\n  const leadClass = String(input.lead_class || '').trim();\n  const operational = OPERATIONAL_CLOSURE_INTENTS.has(intent)\n    || customerType === 'b2b'\n    || leadClass === 'D';\n\n  if (!operational || !shouldEscalate) {\n    return {\n      operational,\n      requires_handoff: false,\n      closure_allowed: true,\n      required_status: null,\n      reason: 'no_handoff_required',\n      handoff_exists: false,\n    };\n  }\n\n  const handoffExists = Boolean(input.handoff_exists);\n  const handoffStatus = String(input.handoff_status || '').trim();\n  if (!handoffExists) {\n    return {\n      operational,\n      requires_handoff: true,\n      closure_allowed: false,\n      required_status: 'notified',\n      reason: 'handoff_missing',\n      handoff_exists: false,\n    };\n  }\n\n  const ready = NOTIFIED_OR_BETTER.has(handoffStatus);\n  return {\n    operational,\n    requires_handoff: true,\n    closure_allowed: ready,\n    required_status: 'notified',\n    reason: ready ? 'handoff_notified' : 'handoff_pending',\n    handoff_exists: true,\n    handoff_status: handoffStatus,\n  };\n};\n\n// =============================================================================\n// Seccion n8n (Code node): procesa el item de entrada del dispatcher.\n// En Node (harness) `items` no existe y este bloque no se ejecuta.\n// =============================================================================\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    HANDOFF_ROUTING,\n    AREA_FALLBACK,\n    DEFAULT_ROUTING,\n    motiveFromReason,\n    routeEscalation,\n    buildIdempotencyKey,\n    evaluateClosureGate,\n    OPERATIONAL_CLOSURE_INTENTS,\n    PRECEDENCE_ORDER,\n    resolvePrecedence,\n    REASON_TO_MOTIVE,\n    INTENT_TO_MOTIVE,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const row = items[0]?.json ?? {};\n  const resolution = routeEscalation(row);\n  const gate = evaluateClosureGate({\n    intent: row.intent,\n    should_escalate: resolution.escalated,\n    customer_type: row.customer_type,\n    lead_class: row.lead_class,\n    handoff_exists: row.declared_handoff_exists === true && resolution.escalated,\n    handoff_status: row.declared_handoff_status || row.handoff_status || 'pending',\n  });\n\n  return [\n    {\n      json: {\n        ...row,\n        handoff_write: resolution.write,\n        handoff_skipped: !resolution.write,\n        handoff_scope: {\n          conversation_id: Number(row.conversation_id) > 0 ? Number(row.conversation_id) : null,\n          phone_number: String(row.phone_number || '').trim() || null,\n          source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n          inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n          motivo: resolution.motivo,\n          area: resolution.routing?.area ?? null,\n          area_label: resolution.routing?.area_label ?? null,\n          prioridad: resolution.routing?.prioridad ?? null,\n          responsable: resolution.routing?.responsable ?? null,\n          idempotency_key: resolution.idempotency_key,\n          trigger: resolution.trigger,\n          escalation_reason: String(row.escalation_reason || '').trim() || null,\n          escalation_area: String(row.escalation_area || '').trim() || null,\n          intent: String(row.intent || '').trim() || null,\n          estado: 'pending',\n        },\n        handoff_gate: gate,\n        // Structured logging for precedence resolution (memoria #679)\n        handoff_precedence_level: resolution.precedence_level,\n        handoff_candidate_motives: resolution.all_candidate_motives,\n        handoff_resolved_motive: resolution.motivo,\n      },\n    },\n  ];\n}"
+      },
+      "id": "50000000-0000-0000-0000-000000000040",
+      "name": "Ensure Escalation Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 01_upsert_handoff.sql — Registro durable del escalamiento (Unidad 3).\n-- Nodo n8n: \"Upsert Escalation Handoff\" (WA - Inbound Downstream Dispatcher).\n-- -----------------------------------------------------------------------------\n-- Idempotente por idempotency_key `{conversation_id}:{motivo}:{trigger}`:\n-- el indice unico parcial uq_handoffs_idempotency garantiza una sola fila\n-- activa por evento. Un replay del dispatch (recovery) o un reintento con el\n-- mismo motivo NO duplica y deja traza en audit_logs como 'duplicate_skipped'.\n-- El estado del handoff (pending/notified/acknowledged/resolved) nunca se\n-- degrada en un upsert posterior.\n--\n-- Params:\n-- Params posicionales n8n Postgres v2: $1..$15 (ver queryReplacement del workflow).\n-- =============================================================================\nWITH input_payload AS (\n  SELECT\n    $1::boolean AS should_write,\n    $2::bigint AS conversation_id,\n    $3::text AS phone_number,\n    NULLIF($4::text, '')::bigint AS source_number_id,\n    NULLIF($5::text, '')::bigint AS inbound_event_id,\n    $6::text AS motivo,\n    $7::text AS area,\n    $8::text AS area_label,\n    $9::text AS prioridad,\n    $10::text AS responsable,\n    $11::text AS idempotency_key,\n    NULLIF($12::text, '') AS trigger,\n    NULLIF($13::text, '') AS escalation_reason,\n    NULLIF($14::text, '') AS escalation_area,\n    NULLIF($15::text, '') AS intent\n),\nexisting AS MATERIALIZED (\n  SELECT h.id, h.estado, h.notification_attempt_count\n  FROM input_payload ip\n  JOIN handoffs h ON h.idempotency_key = ip.idempotency_key\n  WHERE h.deleted_at IS NULL\n),\nwritten AS (\n  INSERT INTO handoffs (\n    idempotency_key, conversation_id, phone_number, source_number_id,\n    inbound_event_id, motivo, area, area_label, prioridad, responsable,\n    trigger, escalation_reason, escalation_area, intent, estado\n  )\n  SELECT\n    ip.idempotency_key, ip.conversation_id, ip.phone_number, ip.source_number_id,\n    ip.inbound_event_id, ip.motivo, ip.area, ip.area_label, ip.prioridad,\n    ip.responsable, ip.trigger, ip.escalation_reason, ip.escalation_area,\n    ip.intent, 'pending'\n  FROM input_payload ip\n  WHERE ip.should_write\n  ON CONFLICT (idempotency_key) WHERE deleted_at IS NULL\n  DO UPDATE SET\n    motivo = EXCLUDED.motivo,\n    area = EXCLUDED.area,\n    area_label = EXCLUDED.area_label,\n    prioridad = EXCLUDED.prioridad,\n    responsable = EXCLUDED.responsable,\n    trigger = COALESCE(EXCLUDED.trigger, handoffs.trigger),\n    escalation_reason = COALESCE(EXCLUDED.escalation_reason, handoffs.escalation_reason),\n    escalation_area = COALESCE(EXCLUDED.escalation_area, handoffs.escalation_area),\n    intent = COALESCE(EXCLUDED.intent, handoffs.intent),\n    updated_at = NOW()\n  RETURNING id, estado\n),\nwrite_outcome AS (\n  SELECT\n    ip.conversation_id,\n    COALESCE(w.id, e.id) AS handoff_id,\n    COALESCE(w.estado, e.estado) AS handoff_estado,\n    CASE\n      WHEN NOT ip.should_write THEN 'skipped'\n      WHEN e.id IS NULL THEN 'created'\n      WHEN w.id IS NOT NULL AND w.estado = 'pending' THEN 'duplicate_skipped'\n      ELSE 'updated'\n    END AS outcome\n  FROM input_payload ip\n  LEFT JOIN existing e ON TRUE\n  LEFT JOIN written w ON TRUE\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'handoff_sync',\n    'handoff',\n    wo.handoff_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    wo.outcome,\n    CASE WHEN e.id IS NULL THEN '{}'::jsonb\n         ELSE jsonb_build_object('estado', e.estado,\n                                 'notification_attempt_count', e.notification_attempt_count) END,\n    jsonb_build_object('id', wo.handoff_id, 'estado', wo.handoff_estado,\n                       'motivo', ip.motivo, 'area', ip.area,\n                       'prioridad', ip.prioridad, 'responsable', ip.responsable),\n    jsonb_build_object('conversation_id', wo.conversation_id,\n                       'idempotency_key', ip.idempotency_key,\n                       'inbound_event_id', ip.inbound_event_id)\n  FROM input_payload ip\n  JOIN write_outcome wo ON TRUE\n  LEFT JOIN existing e ON TRUE\n  WHERE ip.should_write\n  RETURNING 1\n)\nSELECT\n  wo.handoff_id,\n  wo.handoff_estado,\n  wo.outcome\nFROM write_outcome wo;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.handoff_write, $json.handoff_scope.conversation_id, $json.handoff_scope.phone_number, $json.handoff_scope.source_number_id, $json.handoff_scope.inbound_event_id, $json.handoff_scope.motivo, $json.handoff_scope.area, $json.handoff_scope.area_label, $json.handoff_scope.prioridad, $json.handoff_scope.responsable, $json.handoff_scope.idempotency_key, $json.handoff_scope.trigger, $json.handoff_scope.escalation_reason, $json.handoff_scope.escalation_area, $json.handoff_scope.intent] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000041",
+      "name": "Upsert Escalation Handoff",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Ensure Escalation Handoff').first().json;\nconst result = items[0]?.json ?? {};\nreturn [{ json: { ...source, ...result, escalation_lane_complete: true } }];"
+      },
+      "id": "50000000-0000-0000-0000-000000000045",
+      "name": "Escalation Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build the durable metadata record for inbound media. Downloading happens only\n// through Evolution's fixed internal getBase64FromMediaMessage endpoint.\n\nconst MEDIA_POLICY = {\n  allowed_types: ['image', 'document', 'audio', 'video'],\n  max_bytes: {\n    image: 25 * 1024 * 1024,\n    document: 25 * 1024 * 1024,\n    audio: 25 * 1024 * 1024,\n    video: 50 * 1024 * 1024,\n  },\n};\n\nconst normalizeSize = (value) => {\n  if (value === undefined || value === null || value === '') return null;\n  const parsed = Number(value);\n  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;\n};\n\nconst evaluateMediaPolicy = (row, policy = MEDIA_POLICY) => {\n  const type = String(row.attachment_type || '').trim().toLowerCase();\n  if (!type) return { decision: 'skipped', reason: 'no_media', max_bytes: null };\n  if (!policy.allowed_types.includes(type)) {\n    return { decision: 'rejected', reason: 'unsupported_type', max_bytes: null };\n  }\n  const maxBytes = policy.max_bytes[type];\n  const declaredSize = normalizeSize(row.file_size);\n  if (declaredSize !== null && declaredSize > maxBytes) {\n    return { decision: 'rejected', reason: 'oversized_declared', max_bytes: maxBytes };\n  }\n  return { decision: 'proceed', reason: null, max_bytes: maxBytes };\n};\n\nconst buildMediaDedupeKey = (row) => {\n  const mediaKey = String(row.media_key || row.external_media_id || '').trim();\n  if (mediaKey) return `media:${mediaKey}`;\n  const messageId = String(row.external_message_id || row.message_id || '').trim();\n  return messageId ? `message:${messageId}` : null;\n};\n\nconst parseRawPayload = (row) => {\n  if (row.raw_payload && typeof row.raw_payload === 'object') return { value: row.raw_payload, error: null };\n  if (typeof row.raw_payload_json !== 'string' || !row.raw_payload_json.trim()) {\n    return { value: {}, error: 'raw_payload_missing' };\n  }\n  try {\n    const parsed = JSON.parse(row.raw_payload_json);\n    return parsed && typeof parsed === 'object'\n      ? { value: parsed, error: null }\n      : { value: {}, error: 'raw_payload_invalid' };\n  } catch (_error) {\n    return { value: {}, error: 'raw_payload_invalid' };\n  }\n};\n\nconst mediaScopeFor = (row, env = {}) => {\n  const policy = {\n    allowed_types: MEDIA_POLICY.allowed_types,\n    max_bytes: { ...MEDIA_POLICY.max_bytes },\n  };\n  for (const type of policy.allowed_types) {\n    const configured = Number(env[`MEDIA_MAX_BYTES_${type.toUpperCase()}`]);\n    if (Number.isSafeInteger(configured) && configured > 0) policy.max_bytes[type] = configured;\n  }\n\n  const evaluation = evaluateMediaPolicy(row, policy);\n  const parsedPayload = parseRawPayload(row);\n  const payloadRejected = evaluation.decision === 'proceed' && parsedPayload.error;\n  const conversationId = Number(row.conversation_id);\n  const inboundEventId = Number(row.inbound_event_id);\n  const sourceNumberId = Number(row.source_number_id);\n\n  return {\n    ...row,\n    media_write: evaluation.decision !== 'skipped',\n    media_skipped: evaluation.decision === 'skipped',\n    media_scope: {\n      media_key: String(row.media_key || row.external_media_id || '').trim() || null,\n      external_url: String(row.external_url || '').trim() || null,\n      message_id: String(row.external_message_id || row.message_id || '').trim() || null,\n      inbound_event_id: Number.isSafeInteger(inboundEventId) && inboundEventId > 0 ? inboundEventId : null,\n      conversation_id: Number.isSafeInteger(conversationId) && conversationId > 0 ? conversationId : null,\n      source_number_id: Number.isSafeInteger(sourceNumberId) && sourceNumberId > 0 ? sourceNumberId : null,\n      instance_name: String(row.instance_name || '').trim() || null,\n      phone_number: String(row.phone_number || '').trim() || null,\n      attachment_type: String(row.attachment_type || '').trim().toLowerCase() || null,\n      mime_type: String(row.mime_type || '').trim().toLowerCase() || null,\n      filename: String(row.filename || '').trim() || null,\n      file_size: normalizeSize(row.file_size),\n      expected_sha256: String(row.sha256 || '').trim() || null,\n      max_bytes: evaluation.max_bytes,\n      dedupe_key: buildMediaDedupeKey(row),\n      raw_payload: parsedPayload.value,\n      download_state: evaluation.decision === 'rejected' || payloadRejected ? 'rejected' : 'pending',\n      rejected_reason: payloadRejected ? parsedPayload.error : evaluation.reason,\n      attach_pending: false,\n      attached_to: null,\n    },\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { MEDIA_POLICY, normalizeSize, evaluateMediaPolicy, buildMediaDedupeKey, parseRawPayload, mediaScopeFor };\n}\n\nif (typeof items !== 'undefined') {\n  return [{ json: mediaScopeFor(items[0]?.json ?? {}, $env ?? {}) }];\n}\n"
+      },
+      "id": "50000000-0000-0000-0000-000000000060",
+      "name": "Ensure Media Attachment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3420,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Register inbound media metadata without downloading untrusted external URLs.\n-- $1 should_write, $2 media_key, $3 external_url (metadata only), $4 message_id,\n-- $5 inbound_event_id, $6 conversation_id, $7 source_number_id,\n-- $8 instance_name, $9 phone_number, $10 attachment_type, $11 mime_type,\n-- $12 filename, $13 file_size, $14 download_state, $15 rejected_reason,\n-- $16 dedupe_key, $17 raw_payload JSON, $18 max_bytes, $19 expected_sha256,\n-- $20 dispatcher_payload JSON.\nWITH input AS MATERIALIZED (\n  SELECT\n    COALESCE(NULLIF($1::text, '')::boolean, FALSE) AS should_write,\n    NULLIF($2::text, '') AS media_key,\n    NULLIF($3::text, '') AS external_url,\n    NULLIF($4::text, '') AS message_id,\n    NULLIF($5::text, '')::bigint AS inbound_event_id,\n    NULLIF($6::text, '')::bigint AS conversation_id,\n    NULLIF($7::text, '')::bigint AS source_number_id,\n    NULLIF($8::text, '') AS instance_name,\n    NULLIF($9::text, '') AS phone_number,\n    NULLIF($10::text, '') AS attachment_type,\n    NULLIF($11::text, '') AS mime_type,\n    NULLIF($12::text, '') AS filename,\n    NULLIF($13::text, '')::bigint AS file_size,\n    COALESCE(NULLIF($14::text, ''), 'pending')::media_download_state AS download_state,\n    NULLIF($15::text, '') AS rejected_reason,\n    NULLIF($16::text, '') AS dedupe_key,\n    COALESCE(NULLIF($17::text, '')::jsonb, '{}'::jsonb) AS raw_payload,\n    NULLIF($18::text, '')::bigint AS max_bytes,\n    NULLIF(btrim($19::text), '') AS expected_sha256,\n    COALESCE(NULLIF($20::text, '')::jsonb, '{}'::jsonb) AS dispatcher_payload\n),\nexisting AS MATERIALIZED (\n  SELECT m.id\n  FROM media_attachments m, input i\n  WHERE m.deleted_at IS NULL\n    AND i.should_write\n    AND (\n      (i.media_key IS NOT NULL AND m.media_key = i.media_key)\n      OR (i.media_key IS NULL AND i.external_url IS NOT NULL AND m.media_key IS NULL AND m.external_url = i.external_url)\n      OR (i.media_key IS NULL AND i.external_url IS NULL AND m.message_id = i.message_id)\n    )\n  ORDER BY m.id\n  LIMIT 1\n  FOR UPDATE OF m\n),\ntouched AS (\n  UPDATE media_attachments m\n  SET duplicate_count = m.duplicate_count + 1,\n      updated_at = NOW()\n  WHERE m.id IN (SELECT id FROM existing)\n  RETURNING m.id, 'duplicate_skipped'::text AS result\n),\ninserted AS (\n  INSERT INTO media_attachments (\n    media_key, external_url, message_id, inbound_event_id, conversation_id,\n    source_number_id, instance_name, phone_number, attachment_type, mime_type,\n    filename, file_size, download_state, rejected_reason, metadata, raw_payload\n  )\n  SELECT\n    i.media_key, i.external_url, i.message_id, i.inbound_event_id, i.conversation_id,\n    i.source_number_id, i.instance_name, i.phone_number, i.attachment_type, i.mime_type,\n    i.filename, i.file_size, i.download_state, i.rejected_reason,\n    jsonb_strip_nulls(jsonb_build_object(\n      'dedupe_key', i.dedupe_key,\n      'message_id', i.message_id,\n      'max_bytes', i.max_bytes,\n      'expected_sha256', i.expected_sha256,\n      'external_url_is_metadata_only', TRUE\n    )),\n    i.raw_payload\n  FROM input i\n  WHERE i.should_write\n    AND i.message_id IS NOT NULL\n    AND (i.media_key IS NOT NULL OR i.external_url IS NOT NULL OR i.message_id IS NOT NULL)\n    AND NOT EXISTS (SELECT 1 FROM existing)\n  ON CONFLICT DO NOTHING\n  RETURNING id, 'created'::text AS result\n),\nevent AS MATERIALIZED (\n  SELECT * FROM inserted\n  UNION ALL\n  SELECT * FROM touched\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'media_sync', 'media_attachment', e.id, 'system',\n    'wa-inbound-downstream-dispatcher', e.result, '{}'::jsonb,\n    jsonb_strip_nulls(jsonb_build_object(\n      'media_key', i.media_key,\n      'attachment_type', i.attachment_type,\n      'download_state', i.download_state\n    )),\n    jsonb_build_object('dedupe_key', i.dedupe_key)\n  FROM event e CROSS JOIN input i\n  RETURNING id\n)\nSELECT\n  i.dispatcher_payload,\n  e.id AS media_id,\n  COALESCE(e.result, CASE WHEN i.should_write THEN 'conflict_skipped' ELSE 'no_media' END) AS media_registration_result\nFROM input i\nLEFT JOIN event e ON TRUE\nLIMIT 1;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [Boolean($json.media_write), $json.media_scope?.media_key || '', $json.media_scope?.external_url || '', $json.media_scope?.message_id || '', $json.media_scope?.inbound_event_id || '', $json.media_scope?.conversation_id || '', $json.media_scope?.source_number_id || '', $json.media_scope?.instance_name || '', $json.media_scope?.phone_number || '', $json.media_scope?.attachment_type || '', $json.media_scope?.mime_type || '', $json.media_scope?.filename || '', $json.media_scope?.file_size ?? '', $json.media_scope?.download_state || 'pending', $json.media_scope?.rejected_reason || '', $json.media_scope?.dedupe_key || '', JSON.stringify($json.media_scope?.raw_payload || {}), $json.media_scope?.max_bytes || '', $json.media_scope?.expected_sha256 || '', JSON.stringify($json)] }}"
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000061",
+      "name": "Upsert Media Attachment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3520,
+        1160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => ({ json: { ...item.json, media_lane_complete: true } }));"
+      },
+      "id": "50000000-0000-0000-0000-000000000065",
+      "name": "Media Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3920,
+        1160
+      ]
+    },
+    {
+      "name": "Ensure Follow-Up Cancellation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        840
+      ],
+      "parameters": {
+        "jsCode": "const OPT_OUT_PATTERNS = [\n  /no me escribas mas/i,\n  /escribas mas/i,\n  /baja.*(de la lista|pas|mensajes|programa)/i,\n  /\\bstop\\b/i,\n  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,\n  /dej(?:a|en) de escribirme/i,\n  /no me envies mas mensajes/i,\n  /darme de baja/i,\n  /quitarme de la lista/i,\n  /no me molestes/i,\n];\n\nconst LOST_PATTERNS = [\n  /ya no (me interesa|necesito|quiero)/i,\n  /lo pense y no (voy a|quiero)/i,\n  /estoy con (otra|la competencia)/i,\n  /no voy a (comprar|avanzar)/i,\n  /cerremos el tema/i,\n];\n\nconst matches = (patterns, text) => patterns.some((pattern) => pattern.test(String(text || '').trim()));\nconst detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);\nconst detectLostIntent = (text) => matches(LOST_PATTERNS, text);\n\nconst asPositiveInteger = (value) => {\n  const parsed = Number(value);\n  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundCreatedEpochMs = (row, explicitEpochMs = 0) => {\n  const numeric = Number(explicitEpochMs || row.inbound_created_epoch_ms || 0);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric;\n\n  const parsed = Date.parse(String(row.inbound_created_at || ''));\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundIdentity = (row) => {\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  if (inboundEventId) return { type: 'event', id: inboundEventId };\n\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  if (inboundMessageId) return { type: 'message', id: inboundMessageId };\n\n  return null;\n};\n\n// One persisted inbound applies the follow-up policy at most once to its target\n// conversation. The action is intentionally absent from the key: a replay must\n// not create another policy event if downstream classification changes.\nconst buildIdempotencyKey = (targetConversationId, inboundIdentity) => {\n  if (!targetConversationId || !inboundIdentity) return null;\n  return `follow-up-policy:${targetConversationId}:${inboundIdentity.type}:${inboundIdentity.id}`;\n};\n\nconst resolveCancellationAction = (row, explicitEpochMs = 0) => {\n  const targetConversationId = asPositiveInteger(\n    row.target_conversation_id\n      || row.follow_up_target_conversation_id\n      || row.conversation_id,\n  );\n  const validConversation = Boolean(targetConversationId);\n  const customerText = String(row.text_body || '').trim();\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  const inboundIdentity = resolveInboundIdentity(row);\n  const inboundCreatedEpochMs = resolveInboundCreatedEpochMs(row, explicitEpochMs);\n  const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);\n  const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);\n  const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));\n  const optOut = detectOptOut(customerText);\n  const lost = detectLostIntent(customerText);\n\n  let action = validConversation ? 'cancel' : 'none';\n  let cancelReason = validConversation ? 'client_replied' : 'no_conversation';\n  if (optOut) {\n    action = 'opt_out';\n    cancelReason = 'opt_out';\n  } else if (lost) {\n    action = 'cancel';\n    cancelReason = 'lost';\n  } else if (escalated) {\n    action = 'cancel';\n    cancelReason = 'escalated';\n  } else if (closed) {\n    action = 'cancel';\n    cancelReason = 'closed';\n  }\n\n  const responseText = String(row.response_text || '').trim();\n  const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));\n  const scheduleCandidate = validConversation\n    && action === 'cancel'\n    && cancelReason === 'client_replied'\n    && responseText.length > 0\n    && String(row.conversation_status_code || '') === 'waiting_user';\n  const databaseCanResolveTimestamp = inboundIdentity?.type === 'event';\n  const shouldSchedule = scheduleCandidate\n    && Boolean(inboundIdentity)\n    && (Boolean(inboundCreatedEpochMs) || databaseCanResolveTimestamp);\n  const cycleKey = inboundIdentity\n    ? `inbound:${inboundIdentity.type}:${inboundIdentity.id}`\n    : null;\n\n  return {\n    follow_up_target_conversation_id: targetConversationId,\n    follow_up_cancel_action: action,\n    follow_up_cancel_reason: cancelReason,\n    follow_up_source_text: customerText || null,\n    follow_up_source_message_id: inboundMessageId,\n    follow_up_should_schedule: shouldSchedule,\n    follow_up_cycle_key: cycleKey,\n    follow_up_motivo: 'lead_sin_respuesta',\n    follow_up_scheduled_at: shouldSchedule\n      && inboundCreatedEpochMs\n      ? new Date(inboundCreatedEpochMs + firstDelayHours * 3600000).toISOString()\n      : null,\n    follow_up_schedule_skipped_reason: scheduleCandidate && !shouldSchedule\n      ? 'missing_persisted_inbound_identity_or_timestamp'\n      : null,\n    follow_up_cancel_decided: Boolean(action && action !== 'none'),\n    follow_up_idempotency_key: buildIdempotencyKey(targetConversationId, inboundIdentity),\n    follow_up_inbound_created_epoch_ms: inboundCreatedEpochMs,\n    follow_up_source_event_id: inboundEventId,\n    follow_up_first_delay_hours: firstDelayHours,\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    OPT_OUT_PATTERNS,\n    LOST_PATTERNS,\n    detectOptOut,\n    detectLostIntent,\n    resolveCancellationAction,\n    resolveInboundCreatedEpochMs,\n    resolveInboundIdentity,\n    buildIdempotencyKey,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const firstDelayHours = Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24);\n  return items.map((item) => ({\n    json: {\n      ...item.json,\n      ...resolveCancellationAction({\n        ...item.json,\n        follow_up_first_delay_hours: firstDelayHours,\n      }),\n    },\n  }));\n}\n"
+      },
+      "id": "50000000-0000-0000-0000-000000000066"
+    },
+    {
+      "name": "Follow-Up Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4460,
+        920
+      ],
+      "parameters": {
+        "jsCode": "const out = (items || []).map((i) => ({ json: { ...i.json, follow_up_lane: \"complete\" } })); return out;"
+      },
+      "id": "50000000-0000-0000-0000-000000000067"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "99999999-0000-0000-0000-000000000003",
+          "mode": "list",
+          "cachedResultName": "OPS - Handoff Notification Scheduler"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000044",
+      "name": "Dispatch Handoff Notification Workflow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        900,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return items.map((item) => {\n  const row = item.json || {};\n  const payload = typeof row.dispatcher_payload === 'string' ? JSON.parse(row.dispatcher_payload) : (row.dispatcher_payload || {});\n  return { json: { ...payload, media_id: row.media_id ?? null, media_registration_result: row.media_registration_result || null } };\n});"
+      },
+      "id": "50000000-0000-0000-0000-000000000038",
+      "name": "Restore Media Dispatch Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3620,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "99999999-0000-0000-0000-000000000004",
+          "mode": "list",
+          "cachedResultName": "OPS - Media Download Scheduler"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000039",
+      "name": "Dispatch Media Download Workflow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3720,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Apply one persisted inbound to the follow-up policy atomically.\n-- $1 target_conversation_id, $2 action, $3 cancel_reason, $4 source_text,\n-- $5 source_message_id, $6 should_schedule, $7 phone_number,\n-- $8 source_number_id, $9 cycle_key, $10 motivo, $11 scheduled_at,\n-- $12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),\n-- $13 inbound_event_id, $14 first_delay_hours.\nWITH raw_input AS (\n  SELECT\n    $1::bigint conversation_id,\n    NULLIF($2::text, '') action,\n    NULLIF($3::text, '') cancel_reason,\n    NULLIF($4::text, '') source_text,\n    NULLIF($5::text, '')::bigint source_message_id,\n    COALESCE(NULLIF($6::text, '')::boolean, FALSE) should_schedule,\n    NULLIF($7::text, '') phone_number,\n    NULLIF($8::text, '')::bigint source_number_id,\n    NULLIF($9::text, '') cycle_key,\n    COALESCE(NULLIF($10::text, ''), 'lead_sin_respuesta') motivo,\n    NULLIF($11::text, '')::timestamptz requested_scheduled_at,\n    NULLIF($12::text, '') idempotency_key,\n    NULLIF($13::text, '')::bigint inbound_event_id,\n    GREATEST(1, COALESCE(NULLIF($14::text, '')::integer, 24)) first_delay_hours\n), input AS (\n  SELECT\n    r.conversation_id,\n    r.action,\n    r.cancel_reason,\n    r.source_text,\n    r.source_message_id,\n    r.should_schedule,\n    r.phone_number,\n    r.source_number_id,\n    r.cycle_key,\n    r.motivo,\n    COALESCE(\n      r.requested_scheduled_at,\n      ie.created_at + make_interval(hours => r.first_delay_hours)\n    ) scheduled_at,\n    r.idempotency_key,\n    r.inbound_event_id\n  FROM raw_input r\n  LEFT JOIN inbound_events ie ON ie.id = r.inbound_event_id\n), policy_claim AS MATERIALIZED (\n  UPDATE inbound_events ie\n  SET downstream_payload = jsonb_set(\n        COALESCE(ie.downstream_payload, '{}'::jsonb),\n        '{follow_up_policy_receipt}',\n        jsonb_build_object(\n          'idempotency_key', i.idempotency_key,\n          'conversation_id', i.conversation_id,\n          'claimed_at', NOW()\n        ),\n        TRUE\n      ),\n      updated_at = NOW()\n  FROM input i\n  WHERE ie.id = i.inbound_event_id\n    AND i.idempotency_key IS NOT NULL\n    AND NOT (COALESCE(ie.downstream_payload, '{}'::jsonb) ? 'follow_up_policy_receipt')\n  RETURNING ie.id\n), preference AS (\n  INSERT INTO follow_up_preferences (\n    conversation_id, opted_out, opted_out_at, source_message_id, source_text\n  )\n  SELECT i.conversation_id, TRUE, NOW(), i.source_message_id, i.source_text\n  FROM input i\n  WHERE i.action = 'opt_out'\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  ON CONFLICT (conversation_id) DO UPDATE SET\n    opted_out = TRUE,\n    opted_out_at = COALESCE(follow_up_preferences.opted_out_at, EXCLUDED.opted_out_at),\n    source_message_id = EXCLUDED.source_message_id,\n    source_text = EXCLUDED.source_text,\n    updated_at = NOW()\n  RETURNING conversation_id\n), cancelled AS (\n  UPDATE follow_ups f SET\n    estado = CASE WHEN i.action = 'opt_out' THEN 'opted_out' ELSE 'cancelled' END,\n    opted_out = (i.action = 'opt_out'),\n    result = CASE WHEN i.cancel_reason = 'lost' THEN 'lost' ELSE COALESCE(f.result, 'responded') END,\n    lost_reason = CASE WHEN i.cancel_reason = 'lost' THEN i.source_text ELSE f.lost_reason END,\n    claim_token = NULL,\n    claimed_at = NULL,\n    next_retry_at = NULL,\n    updated_at = NOW()\n  FROM input i\n  WHERE f.conversation_id = i.conversation_id\n    AND f.deleted_at IS NULL\n    AND f.estado IN ('pending', 'sending', 'error')\n    AND i.action IN ('opt_out', 'cancel')\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING f.id\n), scheduled AS (\n  INSERT INTO follow_ups (\n    idempotency_key, cycle_key, conversation_id, phone_number, source_number_id,\n    motivo, step_dia, scheduled_at, metadata\n  )\n  SELECT\n    i.conversation_id || ':' || i.cycle_key || ':1',\n    i.cycle_key,\n    i.conversation_id,\n    i.phone_number,\n    i.source_number_id,\n    i.motivo,\n    1,\n    i.scheduled_at,\n    jsonb_build_object(\n      'cycle_key', i.cycle_key,\n      'source_message_id', i.source_message_id,\n      'policy_idempotency_key', i.idempotency_key\n    )\n  FROM input i\n  WHERE i.should_schedule\n    AND i.cycle_key IS NOT NULL\n    AND i.phone_number IS NOT NULL\n    AND i.scheduled_at IS NOT NULL\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n    AND NOT EXISTS (\n      SELECT 1\n      FROM follow_up_preferences p\n      WHERE p.conversation_id = i.conversation_id\n        AND p.opted_out = TRUE\n    )\n  ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING\n  RETURNING id\n), audit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'follow_up_inbound_policy',\n    'conversation',\n    i.conversation_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    CASE\n      WHEN i.action = 'opt_out' THEN 'opted_out'\n      WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'cancelled_and_scheduled'\n      WHEN i.action = 'cancel' THEN 'cancelled'\n      ELSE 'no_action'\n    END,\n    '{}'::jsonb,\n    jsonb_build_object(\n      'cancelled', (SELECT COUNT(*) FROM cancelled),\n      'scheduled', (SELECT COUNT(*) FROM scheduled),\n      'action', i.action,\n      'idempotency_key', i.idempotency_key\n    ),\n    jsonb_build_object('cycle_key', i.cycle_key)\n  FROM input i\n  WHERE i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING id\n)\nSELECT\n  (SELECT COUNT(*) FROM cancelled) cancelled_count,\n  (SELECT COUNT(*) FROM scheduled) scheduled_count,\n  EXISTS(SELECT 1 FROM preference) opted_out_persisted,\n  (\n    EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n    AND NOT EXISTS(SELECT 1 FROM policy_claim)\n  ) replayed,\n  CASE\n    WHEN EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n      AND NOT EXISTS(SELECT 1 FROM policy_claim) THEN 'replayed'\n    WHEN EXISTS(SELECT 1 FROM preference) THEN 'opted_out'\n    WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'scheduled'\n    WHEN EXISTS(SELECT 1 FROM cancelled) THEN 'cancelled'\n    ELSE 'no_action'\n  END result;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.follow_up_target_conversation_id || $json.target_conversation_id || $json.conversation_id, $json.follow_up_cancel_action || '', $json.follow_up_cancel_reason || '', $json.follow_up_source_text || '', $json.follow_up_source_message_id || '', $json.follow_up_should_schedule, $json.phone_number || '', $json.source_number_id || '', $json.follow_up_cycle_key || '', $json.follow_up_motivo || '', $json.follow_up_scheduled_at || '', $json.follow_up_idempotency_key || '', $json.follow_up_source_event_id || $json.inbound_event_id || '', $json.follow_up_first_delay_hours || 24] }}"
+        }
+      },
+      "id": "apply-inbound-follow-up-policy",
+      "name": "Apply Inbound Follow-Up Policy",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2060,
+        820
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize Durable Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Durable Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Should Send Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Create Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Lead Context",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Early Opportunity",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Escalation Handoff",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ensure Media Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Outbound Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outbound Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Outbound Response": {
+      "main": [
+        [
+          {
+            "node": "Outbound Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outbound Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Outbound Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Should Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Execute Lead Creation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lead Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Lead Creation": {
+      "main": [
+        [
+          {
+            "node": "Execute ClickUp Sync",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Lead Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Execute ClickUp Sync": {
+      "main": [
+        [
+          {
+            "node": "Filter ClickUp Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter ClickUp Ready": {
+      "main": [
+        [
+          {
+            "node": "Execute Seller Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Seller Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Seller Notification": {
+      "main": [
+        [
+          {
+            "node": "Seller Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seller Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Lead Context": {
+      "main": [
+        [
+          {
+            "node": "Prepare Verified Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Handoff Outbound": {
+      "main": [
+        [
+          {
+            "node": "Handoff Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Lead Effects": {
+      "main": [
+        [
+          {
+            "node": "Lead Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Lead Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Dispatch Completion": {
+      "main": [
+        [
+          {
+            "node": "Mark Inbox Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Inbox Processed": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Next Inbox Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Verified Handoff": {
+      "main": [
+        [
+          {
+            "node": "Handoff Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Items?": {
+      "main": [
+        [
+          {
+            "node": "Execute Handoff Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handoff Lane Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Lane Skipped": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Effects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Early Opportunity": {
+      "main": [
+        [
+          {
+            "node": "Upsert Early Opportunity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Escalation Handoff": {
+      "main": [
+        [
+          {
+            "node": "Handoff Write Required?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff Write Required?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Escalation Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalation Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Escalation Handoff": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Handoff Notification Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Media Attachment": {
+      "main": [
+        [
+          {
+            "node": "Upsert Media Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Ensure Follow-Up Cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Follow-Up Cancellation": {
+      "main": [
+        [
+          {
+            "node": "Apply Inbound Follow-Up Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Handoff Notification Workflow": {
+      "main": [
+        [
+          {
+            "node": "Escalation Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge Dispatch Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Media Attachment": {
+      "main": [
+        [
+          {
+            "node": "Restore Media Dispatch Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Media Dispatch Context": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Media Download Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Media Download Workflow": {
+      "main": [
+        [
+          {
+            "node": "Media Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Inbound Follow-Up Policy": {
+      "main": [
+        [
+          {
+            "node": "Follow-Up Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": [],
+  "versionId": "50000000-0000-0000-0000-000000000032",
+  "id": null
+}

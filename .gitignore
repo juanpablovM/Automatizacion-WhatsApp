@@ -4,6 +4,14 @@
 .env.*.local
 *.log
 .local/
+node_modules/
+coverage/
+tests/evidence/
+rollback-state-*.sql
+n8n-logs-*.txt
+execution-history-*.txt
+inbox-state-*.txt
+conversation-state-*.txt
 
 # IDE
 .idea/
@@ -14,6 +22,7 @@ tmp/
 data/
 backups/
 .hermes/
+.herms/
 
 # Datos operativos privados
 db/seeds/*_real.sql
@@ -21,7 +30,15 @@ db/seeds/private/
 
 # n8n
 .n8n/
+n8n/workflows/backup/
+*.bak
 
 # Python
 __pycache__/
 *.pyc
+docs/FLUJO-CONVERSACIONAL-COMPLETO.md
+hormiglass_catalogo.csv
+# Local Pi runtime state
+.atl/
+.pi/gentle-ai/persona.json
+.codegraph/

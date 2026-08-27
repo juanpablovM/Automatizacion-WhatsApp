@@ -10,25 +10,50 @@ La carpeta `.hermes` fue retirada del repo para evitar duplicar planes historico
 
 ## Estado actual resumido
 
-Hoy el proyecto ya tiene:
+El corte canónico está en [`estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md). En síntesis:
 
-- flujo local funcional con `Docker Compose`
-- `n8n`, `PostgreSQL`, `Redis` y `Evolution API` levantando correctamente
-- sesion de WhatsApp reconectada y validada
-- webhook actual de `WA - Inbound Entry` persistido y operativo
-- conversacion real de prueba procesada de punta a punta
-- mensajes salientes reales enviados con estado `sent`
-- lead y derivacion comercial funcionando en pruebas reales
-- sincronizacion de workflows con script oficial de `n8n`
-- correccion aplicada para que `scripts/dev/evolution-connect-instance.sh` use la instancia real configurada
-- endurecimiento parcial del manejo de timestamps entrantes
+- U0 y U2 están completas en la rama.
+- U1, U5 y U6, junto con una versión previa de U3, están desplegadas en el runtime local observado.
+- El candidato final `complete-durable-handoff-delivery` está archivado y verificado con 10/10 requisitos y 10/10 escenarios PASS.
+- El contrato AI pasó 9 escenarios, la regresión conversacional 33 casos y los harnesses focalizados de handoff/operaciones/dispatcher están en PASS.
+- La remediación final Sales-only, con marcador exacto `Operation key: {operation_key}` y reconciliación GET-first, todavía no está desplegada.
+- El candidato está confirmado y publicado en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR. Permanecen pendientes el despliegue controlado exclusivo del scheduler y la aceptación externa autorizada.
+- El 08/08 había 5 outbounds en cuarentena `unknown/reconciliation_required`. **Actualización 21/08 (verificado en runtime):** 0 en `unknown`/`reconciliation_required`; quedan 2 registros `failed` históricos (`handoff_clickup_notification`, ids 89 y 90, del 12/08 y 17/08), cerrados sin reintento (`last_error: preserved_test_artifact_closed_no_replay`) y conservados como evidencia. **No deben reejecutarse (`replay`) ni reintentarse**.
+- U4, U7, U8 y U9 permanecen pendientes por decisión.
+- U7 conserva errores en KPI-19, KPI-26 y KPI-29.
+- U8 no tiene una certificación válida: la ejecución anterior falló por SQL posicional sin parámetros y no debe regenerarse antes de corregir U7/U8.
 
 Pendientes reales detectados:
 
-- terminar de cerrar el smoke de `OPS - Error Handler`
+- mantener `d38c371` como candidato publicado de referencia; no existe PR
+- desplegar sólo el scheduler corregido, con snapshot, verificación de paridad y rollback disponible
+- conservar los 2 registros `failed` históricos (ids 89, 90) cerrados sin reintento, sin reejecutarlos (`replay`) ni reintentarlos — 0 operaciones activas en cuarentena `unknown/reconciliation_required` al 21/08
+- repetir migraciones e importación únicamente en los ambientes objetivo que todavía no recibieron este corte
+- configurar credenciales ClickUp/Evolution, variables de follow-up y el volumen persistente de media en el ambiente objetivo
+- ejecutar preflight, verificación remota, gates y E2E controlado después de sincronizar el runtime
+- remediar U7 y rehacer U8 sólo cuando se retome explícitamente ese alcance
 - limpiar ruido historico de logs viejos para diagnostico mas claro
 - formalizar despliegue productivo, secretos, backups y monitoreo
 - separar claramente `dev`, `staging` y `prod`
+- ampliar la matriz E2E en staging antes de abrir trafico productivo
+- definir una fuente de agenda real antes de ofrecer horarios
+- aplicar la migracion comercial en cualquier ambiente nuevo antes de sincronizar el workflow AI actualizado
+
+## Despliegue de la remediación final de handoff
+
+No ejecutar esta secuencia sin autorización de despliegue y un snapshot recuperable del ambiente.
+
+1. Confirmar que el despliegue toma como fuente el candidato publicado `d38c371` de `feat/afinar-hormi-atencion`; no existe PR.
+2. Crear y verificar el backup previo.
+3. Confirmar que las migraciones `015`, `016` y `017` ya estén aplicadas sobre `crm_whatsapp_app`; aplicarlas en orden sólo donde falten.
+4. Con autorización operativa, ejecutar `scripts/ops/configure-handoff-clickup.sh` para crear o reutilizar la lista dedicada, validar el responsable Sales, actualizar sólo las claves de entorno aprobadas y recrear `n8n`. Este paso no es read-only.
+5. Ejecutar los gates locales y confirmar 9 escenarios AI, 33 casos conversacionales y los harnesses focalizados en PASS.
+6. Desplegar únicamente `OPS - Handoff Notification Scheduler` mediante `scripts/ops/deploy-handoff-scheduler.sh`, conservando el dispatcher `791f9f3` y la ruta conversacional. Este despliegue no toca los 2 registros `failed` históricos (ids 89, 90) mientras no se invoque ningún workflow.
+7. Verificar paridad remota, activación y capacidad de rollback del scheduler.
+8. Reconciliar mediante GET cualquier operación ClickUp ambigua; un POST de handoff posterior requiere cero coincidencias y autorización de no-efecto coincidente ya consumida. Para Evolution, la búsqueda del proveedor usa una consulta POST y requiere autorización separada: es una búsqueda, no un envío. Los 2 registros `failed` históricos (ids 89, 90) no deben reejecutarse (`replay`) ni reintentarse; no hay operaciones activas en `unknown/reconciliation_required` al 21/08.
+9. Cerrar con un E2E nuevo sobre un teléfono controlado, bajo autorización independiente, y guardar evidencia del runtime.
+
+Un gate local verde valida el repositorio; sólo los pasos de despliegue y verificación remota validan el runtime.
 
 ## Plan de ejecucion por etapas
 
@@ -42,11 +67,11 @@ Objetivo:
 
 Incluye:
 
-- cerrar el smoke de `OPS - Error Handler`
+- repetir el smoke de `OPS - Error Handler` ante cambios de manejo de errores
 - limpiar ruido historico de logs que complique diagnostico
 - repetir preflight y sincronizacion de workflows
 - volver a validar backup y restore no destructivo
-- repetir una prueba end-to-end real con AI apagada
+- repetir una prueba end-to-end real con proveedor AI configurado
 
 Criterio de salida:
 
@@ -85,10 +110,10 @@ Evidencia esperada:
 
 ##### 0.3 Cierre del smoke de `OPS - Error Handler`
 
-- [ ] Ejecutar `sh scripts/ops/test-error-handler.sh`
-- [ ] Confirmar incremento real de auditoria
-- [ ] Confirmar workflow y ultimo nodo en el registro creado
-- [ ] Documentar brevemente el resultado del smoke
+- [x] Ejecutar `sh scripts/ops/test-error-handler.sh`
+- [x] Confirmar incremento real de auditoria
+- [x] Confirmar workflow y ultimo nodo en el registro creado
+- [x] Documentar brevemente el resultado del smoke
 
 Evidencia esperada:
 
@@ -130,9 +155,9 @@ Evidencia esperada:
 - runbook actualizado o validado contra el estado actual
 - criterio compartido para distinguir ruido historico de falla real
 
-##### 0.6 Prueba end-to-end real con AI apagada
+##### 0.6 Prueba end-to-end real con proveedor AI
 
-- [ ] Confirmar `AI_LEAD_ASSISTANT_ENABLED=false`
+- [ ] Confirmar `AI_DIRECT_API_KEY` y `AI_DIRECT_API_MODEL` reales en el entorno
 - [ ] Ejecutar una conversacion real de punta a punta
 - [ ] Confirmar respuesta saliente `sent`
 - [ ] Confirmar derivacion, lead y sync en ClickUp
@@ -164,7 +189,7 @@ La Etapa 0 debe considerarse cerrada solo si se cumplen simultaneamente estas co
 - los workflows sincronizan correctamente
 - `OPS - Error Handler` deja auditoria repetible
 - backup y restore no destructivo fueron validados
-- el flujo real de WhatsApp funciona con AI apagada
+- el flujo real de WhatsApp funciona con proveedor AI configurado
 - el equipo ya no esta diagnosticando contra ruido historico
 
 ### Etapa 1. Congelar baseline funcional
@@ -178,8 +203,8 @@ Incluye:
 - congelar imagenes y tags
 - consolidar nombres finales de instancia, workflows y variables
 - dejar documentado el procedimiento de sync y rollback de workflows
-- confirmar comportamiento conversacional completo con `AI_LEAD_ASSISTANT_ENABLED=false`
-- confirmar que lead, round robin, ClickUp y notificacion funcionan sin depender de AI
+- confirmar comportamiento conversacional completo con proveedor AI real
+- confirmar que lead, round robin, ClickUp y notificacion siguen protegidos por fallback si el proveedor AI falla
 
 Criterio de salida:
 
@@ -257,18 +282,57 @@ Objetivo:
 
 Incluye:
 
-- activar AI en `staging` o workspace del integrador con `AI_PROVIDER=direct_api`
+- desplegar AI en `staging` con `AI_PROVIDER=google`, el endpoint OpenAI-compatible y `gemini-3.1-flash-lite`
 - validar respuestas reales de Hormi Atencion via proveedor directo
 - validar API key/modelo segun `docs/ai-api-directa-configuracion.md`
 - confirmar fallback deterministico cuando AI falle
 - confirmar que Hormi Atencion no persiste ni asigna por fuera de los workflows
-- comparar comportamiento con y sin AI sobre conversaciones reales de prueba
+- comparar respuestas Gemini con el fallback sobre conversaciones reales de prueba
 
 Criterio de salida:
 
 - AI agrega valor sin romper el baseline
 - el sistema sigue siendo operable aunque el proveedor AI falle
-- queda evidencia de que Hormi Atencion puede operar en produccion con rollback a `AI_LEAD_ASSISTANT_ENABLED=false`
+- queda evidencia de que Hormi Atencion puede operar en produccion con fallback seguro y observabilidad suficiente
+
+### Etapa 5B. Asesor comercial AI
+
+Objetivo:
+
+- validar y endurecer en staging la asesoria comercial ya implementada.
+
+La capacidad existe en el entorno local validado. Antes de produccion debe repetirse en staging sin habilitar promesas que no tengan fuente verificable.
+
+Incluye:
+
+- usar catalogo publico Hormiglass ya cargado
+- usar reglas de precio publicas ya cargadas
+- definir fuente oficial de agenda o disponibilidad cuando se quiera ofrecer agenda
+- revisar las condiciones comerciales, FAQ y objeciones ya cargadas
+- validar el contrato JSON ampliado, memoria y siguiente mejor accion
+- probar las validaciones de `n8n` para impedir precios, descuentos, agenda o condiciones inventadas
+- registrar en auditoria que productos, precios, condiciones o cupos fueron informados al cliente
+- actualizar ClickUp con resumen comercial completo para que ventas no repita preguntas
+- actualizar matriz de pruebas con casos de precio, agenda, objeciones y condiciones comerciales
+
+Criterio de salida:
+
+- la AI recomienda solo productos o servicios existentes en catalogo
+- la AI informa precios solo cuando existe fuente oficial o deja claro que son referenciales
+- la AI ofrece agenda solo si existe disponibilidad real o la deja como solicitud pendiente
+- la AI maneja objeciones solo cuando existan respuestas aprobadas
+- todo cierre comercial queda respaldado por confirmacion y auditoria
+- existe rollback a modo calificacion de lead
+
+Estado actual:
+
+- catalogo y precios publicos cargados
+- condiciones comerciales, FAQ y objeciones cargadas
+- workflow AI conectado al contexto comercial versionado
+- agenda diferida
+- auditoria en `advisor_decisions` conectada desde el orquestador
+- memoria conversacional persistente implementada
+- flujo E2E de instalacion validado
 
 ### Etapa 6. Preparar operacion diaria
 
@@ -314,28 +378,32 @@ Criterio de salida:
 
 Si hubiera que seguir desde el estado actual del repo, el orden mas sensato seria:
 
-1. cerrar `OPS - Error Handler`
-2. volver a correr backup y verify restore
-3. congelar baseline sin AI
-4. montar `staging` con proxy, HTTPS y secretos separados
-5. correr matriz funcional y casos de borde en `staging`
-6. activar AI en entorno controlado
+1. volver a correr backup y verify restore
+2. congelar baseline funcional con AI y fallback
+3. montar `staging` con proxy, HTTPS y secretos separados
+4. correr matriz funcional y casos de borde en `staging`
+5. desplegar AI en staging con secretos separados
+6. repetir la matriz comercial y los guardrails
 7. recien despues preparar el corte a `prod`
 
 ## Dependencias entre frentes
 
 - No tiene sentido abrir `prod` si antes no esta resuelto backup y restore.
-- No conviene validar AI seriamente si el baseline sin AI aun cambia.
+- No conviene promover cambios de AI si el baseline y el fallback aun cambian.
+- La ausencia de agenda bloquea ofrecer horarios, no la asesoria comercial general.
+- Descuentos, stock, pagos y agenda deben derivarse mientras no exista una fuente verificable.
+- El cierre comercial solo puede promoverse si `n8n` valida precio, confirmacion, handoff y auditoria.
 - No conviene discutir monitoreo final sin haber definido `staging` y `prod`.
-- El cierre de `OPS - Error Handler` mejora mucho la capacidad de diagnostico para todas las etapas siguientes.
+- Repetir `OPS - Error Handler` cuando cambien los workflows protege la capacidad de diagnostico.
 
 ## Proximo foco recomendado
 
 El siguiente bloque de trabajo con mejor retorno hoy es:
 
-1. dejar completamente operativo `OPS - Error Handler`
-2. ejecutar una pasada formal de backup y restore con evidencia
-3. marcar el baseline sin AI como version candidata para `staging`
+1. ejecutar una pasada formal de backup y restore con evidencia
+2. marcar el baseline con AI y fallback como candidato para `staging`
+3. repetir E2E de material, instalacion, B2B, reclamo, garantia y objeciones
+4. mantener agenda deshabilitada hasta integrar disponibilidad real
 
 Eso te deja una base mucho mas firme para pasar de “funciona en local” a “podemos empezar a prepararlo en serio para produccion”.
 
@@ -439,17 +507,25 @@ Eso te deja una base mucho mas firme para pasar de “funciona en local” a “
 - [ ] Confirmar notificacion al vendedor
 - [ ] Confirmar comportamiento cuando ClickUp falle
 - [ ] Confirmar comportamiento cuando no haya vendedor notificable
+- [ ] Confirmar que sólo `sales` genera payload y POST de handoff a ClickUp
+- [ ] Confirmar el marcador exacto `Operation key: {operation_key}` en la descripción
+- [ ] Confirmar reconciliación GET-first de operaciones ClickUp ambiguas y ausencia de replay de los 2 registros `failed` históricos (ids 89, 90; 0 en cuarentena activa al 21/08)
 
 ### 10. AI
 
-- [ ] Ejecutar baseline con `AI_LEAD_ASSISTANT_ENABLED=false`
-- [ ] Activar AI en entorno controlado con `AI_PROVIDER=direct_api`
+- [ ] Activar AI en entorno controlado con el `AI_PROVIDER` y endpoint/modelo reales del proveedor elegido
 - [ ] Validar respuestas de Hormi Atencion con trafico real
 - [ ] Confirmar que API key/modelo y salida JSON estructurada fueron probados antes de produccion
 - [ ] Confirmar fallback deterministico cuando AI falle
 - [ ] Confirmar que Hormi Atencion solo habilite leads con confirmacion explicita
 - [ ] Confirmar que Hormi Atencion no escriba directo a PostgreSQL
 - [ ] Confirmar que Hormi Atencion no cree tareas en ClickUp fuera del workflow
+- [x] Definir catalogo oficial antes de recomendar productos o servicios especificos
+- [x] Definir reglas de precio antes de informar montos
+- [ ] Definir fuente de agenda antes de ofrecer horarios
+- [ ] Definir condiciones comerciales aprobadas antes de responder dudas sensibles
+- [ ] Auditar precio, condicion, producto o agenda informada por la AI
+- [ ] Validar rollback a modo calificacion de leads
 
 ### 11. Observabilidad
 

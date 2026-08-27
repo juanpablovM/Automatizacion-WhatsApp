@@ -4,17 +4,18 @@ Automatizacion para capturar, calificar, registrar y asignar leads desde WhatsAp
 
 ## Que hace este proyecto
 
-Este repo implementa una base operativa para:
+Este repo implementa un asesor comercial operativo para:
 
 - recibir mensajes entrantes desde WhatsApp via `Evolution API`
-- guiar la conversacion para capturar servicio, ciudad y requerimiento
+- conversar como asesor comercial segun el PRD Hormiglass
+- diagnosticar mediante D.A.T.O.S. y capturar contexto tecnico/comercial
+- interpretar respuestas breves segun la pregunta pendiente
 - crear y trazar leads en `PostgreSQL`
 - asignar leads con round robin
 - sincronizar leads a `ClickUp`
 - notificar al vendedor asignado
-- dejar auditoria tecnica y funcional del flujo
-
-Tambien prepara una evolucion controlada hacia un asesor comercial AI, manteniendo a `n8n` y `PostgreSQL` como capa de control del estado y de las integraciones.
+- dejar auditoria tecnica, funcional y de decisiones AI
+- confirmar la derivacion solo despues de crear y asignar el lead
 
 ## Arquitectura
 
@@ -25,7 +26,7 @@ Componentes principales:
 - `Evolution API`: entrada y salida de WhatsApp self-hosted
 - `Redis`: soporte operativo de `Evolution API`
 - `ClickUp`: destino operativo de los leads
-- proveedor AI por API directa: capa opcional para comprension y respuesta conversacional
+- proveedor AI por API directa: capa oficial para comprension y respuesta conversacional
 
 Principio clave:
 
@@ -35,19 +36,17 @@ Principio clave:
 
 ## Estado del proyecto
 
-Estado actual de madurez:
+Estado recomendado: `preproduccion / validacion controlada`.
 
-- base tecnica implementada y documentada
-- workflows principales versionados
-- integracion con WhatsApp, `PostgreSQL` y `ClickUp` ya incorporada al flujo
-- asistente AI preparado con fallback seguro a flujo deterministico
-- esquema de base ampliado para soportar catalogo, precios, condiciones y futura evolucion comercial AI
+- El candidato `complete-durable-handoff-delivery` está implementado, verificado y archivado: 10/10 requisitos y 10/10 escenarios en PASS.
+- La entrega ClickUp V1 queda limitada a Sales, usa el marcador exacto `Operation key: {operation_key}` y reconcilia mediante GET antes de cualquier POST ambiguo.
+- La corrección final está confirmada y publicada en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR. El runtime observado conserva el scheduler anterior y sigue pendiente el despliegue controlado exclusivo del scheduler.
+- El inventario observado el 08/08 contenía 5 outbounds en cuarentena `unknown/reconciliation_required`. **Actualización 21/08 (verificado en runtime):** 0 operaciones en `unknown`/`reconciliation_required`; quedan únicamente 2 registros `failed` históricos (`handoff_clickup_notification`, ids 89 y 90, del 12/08 y 17/08), cerrados sin reintento (`last_error: preserved_test_artifact_closed_no_replay`) y conservados como evidencia. **No deben reejecutarse (`replay`) ni reintentarse**.
+- U4, U7, U8 y U9 permanecen pendientes por decisión.
+- La certificación vigente no demuestra todavía el cierre del PRD.
+- El runtime local observado tiene las migraciones `015`–`017`, Entry/Recovery y los schedulers OPS activos; queda pendiente entregar la corrección final mediante el procedimiento controlado.
 
-Estado recomendado para comunicar publicamente:
-
-- `preproduccion / validacion controlada`
-
-Eso significa que el proyecto ya tiene implementacion real y documentacion amplia, pero todavia requiere endurecimiento operativo, validacion ampliada y cierre formal antes de considerarse listo para produccion.
+El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual-2026-08-08.md`](./docs/estado-actual-2026-08-08.md).
 
 ## Alcance actual
 
@@ -61,17 +60,20 @@ Hoy el repo cubre:
 - auditoria de errores y eventos
 - contratos y pruebas locales del asistente AI
 - base de catalogo y precios publicos para evolucion comercial AI
+- memoria comercial estructurada en conversaciones y leads
+- preguntas consultivas de un dato principal por turno
+- interpretacion contextual de `si/no`
+- resumen ejecutivo enriquecido para ClickUp
 - auditoria de decisiones AI en `advisor_decisions` desde el orquestador conversacional
 - PRD funcional del agente Hormiglass con diagnostico D.A.T.O.S., clasificacion A/B/C/D y guardrails comerciales
 
-No cubre todavia de punta a punta:
+Pendientes fuera del alcance actual:
 
 - salida productiva endurecida
 - staging separado
-- agenda real
-- condiciones comerciales aprobadas
-- FAQ y objeciones cargadas como fuente oficial
-- conversacion end-to-end con AI encendida y proveedor/mock registrando decisiones reales
+- agenda real con cupos reservables
+- integracion de inventario para confirmar stock
+- validacion financiera automatica de pagos
 - observabilidad y monitoreo de nivel produccion
 
 La configuracion funcional vigente del asesor esta en `docs/prd-agente-whatsapp-hormiglass.md`.
@@ -112,7 +114,8 @@ Antes de levantar el stack, reemplaza al menos:
 Si vas a probar integraciones reales, tambien completa:
 
 - `CLICKUP_API_TOKEN`
-- `CLICKUP_LIST_ID`
+- `CLICKUP_LEADS_LIST_ID` para las tareas creadas por el flujo comercial
+- `CLICKUP_HANDOFF_LIST_ID` para las notificaciones operativas de handoff
 - `CLICKUP_CF_*`
 - `AI_DIRECT_API_KEY`
 - `AI_DIRECT_API_MODEL`
@@ -135,8 +138,24 @@ En el primer arranque, `n8n` pedira crear el usuario propietario de la instancia
 
 ```bash
 sh scripts/dev/sync-n8n-workflows.sh --preflight
-sh scripts/dev/sync-n8n-workflows.sh
+E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/dev/sync-n8n-workflows.sh --deploy TELEFONO_CONTROLADO
 ```
+
+La sincronizacion es un release gate: captura un snapshot, pausa Entry/Recovery,
+resuelve todos los enlaces por nombre, importa, exporta y verifica el runtime, y
+solo entonces reactiva el trafico. Comandos operativos:
+
+```bash
+sh scripts/dev/sync-n8n-workflows.sh --verify-remote
+sh scripts/dev/sync-n8n-workflows.sh --snapshot /ruta/snapshot
+sh scripts/dev/sync-n8n-workflows.sh --rollback /ruta/snapshot
+sh scripts/ops/test-dispatcher-runtime-integrity-local.sh all
+E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/ops/test-e2e-lead-creation.sh TELEFONO_CONTROLADO
+```
+
+`--rollback` pausa antes de importar, restaura y verifica el snapshot completo.
+`--deploy` aísla Evolution durante la aceptación, exige teléfono controlado y
+opt-in, y activa definitivamente solo después del E2E y replay idempotente.
 
 ## Servicios locales
 
@@ -182,21 +201,27 @@ El esquema principal incluye:
 - auditoria
 - catalogos de estados
 - tablas base para asesor comercial AI
+- contexto de calificacion persistente y pregunta pendiente contextual
 
 ## Asistente AI
 
-El subworkflow `AI - Lead Qualification Assistant` funciona como capa opcional de asistencia conversacional.
+El subworkflow `AI - Lead Qualification Assistant` funciona como la capa oficial de asistencia conversacional.
 
 Comportamiento esperado:
 
-- si la AI esta bien configurada, puede interpretar intencion, extraer datos y redactar respuesta
-- si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo debe caer a una ruta deterministica segura
+- Gemini es la voz principal: interpreta, orienta, maneja objeciones y redacta la respuesta
+- `n8n` valida actualizaciones de campos, guardrails y siguiente accion
+- cada turno hace una sola pregunta principal cuando se requieren datos
+- respuestas `si/no` se interpretan segun `pending_question_key`
+- el handoff se anuncia solo despues de crear y asignar el lead
+- si falta configuracion, hay error del proveedor o la confianza es insuficiente, el flujo cae a una ruta deterministica segura sin apagar la AI del proyecto
 
 El proyecto ya incluye:
 
 - contrato estructurado de salida JSON
-- pruebas locales con mocks
-- base de contexto comercial para catalogo y precios publicos
+- pruebas locales de contrato y fallback con respuestas simuladas en memoria
+- base de contexto comercial para catalogo, precios, condiciones, FAQ y objeciones
+- prueba real reproducible `scripts/ops/test-advisor-vitacura-e2e.sh`
 
 ## Documentacion recomendada
 
@@ -213,6 +238,7 @@ Para entender el proyecto desde lo general a lo especifico:
 - [Asesor comercial AI](./docs/asesor-comercial-ai.md)
 - [Fuentes comerciales AI](./docs/fuentes-comerciales-ai.md)
 - [Guia de produccion](./docs/guia-produccion.md)
+- [Estado actual 2026-08-08](./docs/estado-actual-2026-08-08.md)
 
 La documentacion operativa de mantenimiento diario, runbooks y handoff conviene tratarla como material interno del equipo si el repositorio va a mantenerse publico.
 
@@ -231,11 +257,11 @@ La plantilla `.env.example` contiene placeholders seguros. Toda configuracion re
 
 ## Roadmap tecnico inmediato
 
-- cerrar baseline deterministico sin AI
-- ampliar validacion end-to-end
 - endurecer configuracion para staging y produccion
-- completar validaciones de salida operativa
-- conectar fuentes oficiales adicionales para la fase de asesor comercial AI
+- agregar monitoreo, alertas y correlacion operativa
+- definir agenda real antes de ofrecer cupos
+- integrar inventario y Finanzas solo cuando existan fuentes confiables
+- ampliar la matriz E2E con B2B, reclamos, garantia y pagos
 
 ## Licencia / uso
 
