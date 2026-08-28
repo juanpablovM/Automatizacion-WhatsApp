@@ -980,6 +980,25 @@ const nextStepField = shouldCreateLead ? 'complete'
   : missing === 'confirm' ? 'confirm'
   : missing;
 
+// The escalation copy has to match the route that produced it. Telling the
+// client "no quiero hacerte repetir lo mismo" is only true when a loop is what
+// escalated the turn. On a B2B enquiry or an explicit request for a human it
+// describes something that never happened — observed in test conversation 150,
+// where a first-time tender enquiry was answered with that line.
+const LOOP_ESCALATION_REASONS = new Set([
+  'confirmation_rejection_loop',
+  'no_progress_commercial_question_loop',
+]);
+const escalationRoutingText = () => {
+  if (antiRepeatHandoff || LOOP_ESCALATION_REASONS.has(deterministic.escalation_reason)) {
+    return 'No quiero hacerte repetir lo mismo. Te derivaré con una persona del equipo para continuar.';
+  }
+  if (deterministic.escalation_reason === 'human_requested') {
+    return 'Por supuesto. Te derivaré con una persona del equipo para que continúe contigo.';
+  }
+  return 'Voy a derivarte con una persona del equipo para que revise tu caso en detalle.';
+};
+
 // Model C: Response Selection Logic
 const selectResponseText = () => {
   // Policy responses are deterministic and must not be overwritten by the model.
@@ -1018,7 +1037,7 @@ const selectResponseText = () => {
       return { text: deterministic.deterministic_reply || 'Tu solicitud ya está derivada a una persona del equipo.', kind: 'escalation_already_required' };
     }
     return {
-      text: 'No quiero hacerte repetir lo mismo. Te derivaré con una persona del equipo para continuar.',
+      text: escalationRoutingText(),
       kind: 'escalation_routing',
     };
   }
