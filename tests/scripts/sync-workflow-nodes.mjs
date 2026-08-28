@@ -98,6 +98,16 @@ const NODES = [
     parameter: 'query',
   },
   {
+    // The completion query was an unregistered second copy: the file and the
+    // node held the same bytes by hand, with nothing checking they stayed that
+    // way. Registering it puts the deferral window under the parity gate.
+    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
+    node: 'Complete Handoff Notification',
+    fixture: 'db/queries/n8n/handoff-routing/03_complete_notification.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
+  {
     workflow: 'n8n/workflows/ops-handoff-clickup-closure.json',
     node: 'Normalize ClickUp Closure',
     fixture: 'ops-handoff-clickup-closure/normalize-clickup-closure.js',
