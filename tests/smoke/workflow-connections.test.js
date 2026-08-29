@@ -35,6 +35,9 @@ const ALLOWED_TERMINALS = {
   'wa-inbound-downstream-dispatcher.json': [
     // Genuinely parallel lanes, each ending in its own completion node.
     'Dispatch Next Inbox Event', 'Upsert Early Opportunity', 'Follow-Up Lane Complete',
+    // The v3 shadow evaluation is a fourth lane, dispatched after outbound
+    // delivery and closed like the others.
+    'Shadow Lane Complete',
   ],
   'wa-inbound-entry.json': [
     // The health-check GET replies and stops; the POST hands off downstream.

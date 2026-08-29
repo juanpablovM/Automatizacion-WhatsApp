@@ -860,6 +860,19 @@
         1060,
         40
       ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = (items || []).map((i) => ({ json: { ...i.json, shadow_lane: \"complete\" } })); return out;"
+      },
+      "id": "1",
+      "name": "Shadow Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        40
+      ]
     }
   ],
   "connections": {
@@ -1354,7 +1367,13 @@
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "Shadow Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Merge Outbound Context": {
@@ -1362,6 +1381,17 @@
         [
           {
             "node": "Outbound Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch AI PRD Shadow": {
+      "main": [
+        [
+          {
+            "node": "Shadow Lane Complete",
             "type": "main",
             "index": 0
           }
