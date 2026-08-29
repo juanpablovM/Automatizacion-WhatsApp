@@ -42,3 +42,8 @@ hormiglass_catalogo.csv
 .atl/
 .pi/gentle-ai/persona.json
 .codegraph/
+
+# Archivo vacio que reaparece tras correr el sync de workflows. Origen no
+# identificado: ningun script del repo redirige a "-l". Es basura de un comando
+# mal formado en la cadena de herramientas, nunca un artefacto legitimo.
+-l
