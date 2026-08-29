@@ -367,7 +367,7 @@ de handoff. La tasa de cancelación de follow-ups queda explicada o corregida.
 
 ### Evidencia
 
-`docs/estado-actual-2026-08-08.md` se declara «corte canónico actualizado 2026-08-17», fija
+`docs/estado-actual.md` se declara «corte canónico actualizado 2026-08-17», fija
 `HEAD d38c371` y afirma que la remediación no está desplegada. El HEAD real es `a3fc789`,
 79 commits por delante de `origin/main` y 1 por detrás.
 
@@ -381,7 +381,7 @@ de handoff. La tasa de cancelación de follow-ups queda explicada o corregida.
 
 ### Estado — en curso
 
-Este documento y `docs/estado-actual-2026-08-08.md` fueron corregidos contra `a3fc789`, el
+Este documento y `docs/estado-actual.md` fueron corregidos contra `a3fc789`, el
 runtime vigente y el run de CI 32585056879. La tarea 3 sigue abierta: el nombre del corte
 canónico todavía lleva fecha.
 

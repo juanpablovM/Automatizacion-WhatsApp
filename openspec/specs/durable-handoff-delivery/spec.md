@@ -2,19 +2,32 @@
 
 ## Purpose
 
-Define V1 Sales handoff delivery into ClickUp with deferral, idempotency, reconciliation, and evidence. It MUST NOT change dispatcher `791f9f3` or certified conversation behavior.
+Define handoff delivery into ClickUp with deferral, idempotency, reconciliation, and evidence. It MUST NOT change dispatcher `791f9f3` or certified conversation behavior.
 
 ## Requirements
 
-### Requirement: Sales-only task destination
+### Requirement: Configured-area task destination
 
-The system MUST create V1 handoff tasks only for Sales handoffs and only in the dedicated ClickUp list named `Handoffs WhatsApp`.
+The system MUST create handoff tasks only for areas with at least one valid ClickUp assignee configured in `HANDOFF_CLICKUP_ASSIGNEES_JSON`, and only in the dedicated ClickUp list named `Handoffs WhatsApp`.
 
-#### Scenario: Sales handoff creates task in dedicated list
+Configuration, not a hard-coded area name, decides which areas are deliverable. An area MUST NOT be deliverable merely because it is declared in the mapping: it MUST resolve to at least one positive integer assignee.
 
-- GIVEN a recoverable Sales handoff ready for delivery
+> Supersedes the V1 `Sales-only task destination` requirement. Sales-only was a
+> deliberate V1 scope limit, and while it held, a handoff in any other area
+> deferred every 60 seconds forever without ever being delivered or reported.
+
+#### Scenario: Configured area creates task in dedicated list
+
+- GIVEN a recoverable handoff whose area has a configured assignee
 - WHEN the scheduler delivers it
 - THEN exactly one ClickUp task SHALL exist in `Handoffs WhatsApp`
+
+#### Scenario: Declared area without assignees is not deliverable
+
+- GIVEN a handoff whose area appears in the mapping with an empty assignee list
+- WHEN delivery is evaluated
+- THEN no ClickUp POST SHALL occur
+- AND the handoff SHALL be deferred with recoverable evidence naming the area
 
 ### Requirement: Per-item prepare output contract
 

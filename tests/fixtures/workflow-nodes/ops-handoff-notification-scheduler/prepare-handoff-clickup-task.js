@@ -1,9 +1,15 @@
 const configured = (value) => Boolean(value) && !String(value).includes('__PENDIENTE__');
 
 const parseAssignees = (raw, area) => {
+  // An absent mapping and a corrupt one are different operator problems, and
+  // saying "invalid_json" when nothing was configured sends whoever reads the
+  // error looking for a syntax mistake that does not exist.
+  if (!configured(raw)) {
+    return { error: 'HANDOFF_CLICKUP_ASSIGNEES_JSON_missing', assignees: [] };
+  }
   let mapping;
   try {
-    mapping = JSON.parse(String(raw || ''));
+    mapping = JSON.parse(String(raw));
   } catch (_error) {
     return { error: 'HANDOFF_CLICKUP_ASSIGNEES_JSON_invalid_json', assignees: [] };
   }
@@ -22,9 +28,13 @@ const prepareHandoffClickup = (row, env = {}) => {
   const configErrors = [];
   if (!configured(env.CLICKUP_API_TOKEN)) configErrors.push('CLICKUP_API_TOKEN_missing');
   if (!configured(env.CLICKUP_HANDOFF_LIST_ID)) configErrors.push('CLICKUP_HANDOFF_LIST_ID_missing');
-  const assignment = area === 'sales'
+  // Which areas can be delivered is a configuration question, not a name hard
+  // coded here. An area earns delivery by having at least one real ClickUp
+  // assignee in HANDOFF_CLICKUP_ASSIGNEES_JSON; every other case defers with
+  // recoverable evidence and never reaches a POST, exactly as before.
+  const assignment = area
     ? parseAssignees(env.HANDOFF_CLICKUP_ASSIGNEES_JSON, area)
-    : { error: `HANDOFF_CLICKUP_AREA_unsupported:${area || 'missing'}`, assignees: [] };
+    : { error: 'HANDOFF_CLICKUP_AREA_unsupported:missing', assignees: [] };
   if (assignment.error) configErrors.push(assignment.error);
 
   const handoffId = Number(row.handoff_id);
