@@ -28,19 +28,33 @@ describeIntegration('a deferral cannot wait forever', () => {
 
   const createdIds = [];
 
-  // Other integration files share this database and vitest runs them in
-  // parallel, so a claim batch is never guaranteed to be ours alone. Pick our
-  // own handoff out of the batch instead of assuming it is the only row.
+  // The claim query MUTATES every candidate it touches: it seeds or reclaims
+  // external_operations and moves them to 'processing'. Other integration files
+  // share this database and vitest runs them in parallel, so claiming a wide
+  // batch would trample their rows — close-undeliverable-area-handoffs, for
+  // one, requires its operation to still be 'pending'.
+  //
+  // Claim a batch of exactly one instead. insertHandoff backdates
+  // next_notification_at far enough that our row always sorts first under the
+  // query's ORDER BY next_notification_at, id, and beforeEach retires our
+  // earlier handoffs, so a batch of one is always ours and only ours.
   const claimOwn = async (handoffId) => {
-    const { rows } = await client.query(claimSql, ['200', '900']);
+    const { rows } = await client.query(claimSql, ['1', '900']);
     const mine = rows.find((row) => String(row.handoff_id) === String(handoffId));
     expect(mine, `handoff ${handoffId} was not claimed`).toBeDefined();
     return mine;
   };
 
-  const claimedIds = async () => {
-    const { rows } = await client.query(claimSql, ['200', '900']);
-    return rows.map((row) => String(row.handoff_id));
+  // Reading what the claim WOULD select, without leaving its writes behind:
+  // run it inside a transaction and roll back.
+  const claimableIds = async () => {
+    await client.query('BEGIN');
+    try {
+      const { rows } = await client.query(claimSql, ['200', '900']);
+      return rows.map((row) => String(row.handoff_id));
+    } finally {
+      await client.query('ROLLBACK');
+    }
   };
 
   const complete = async (operationId, claimToken, outcome, error = null) => {
@@ -61,7 +75,7 @@ describeIntegration('a deferral cannot wait forever', () => {
         estado, notification_attempt_count, max_attempts,
         next_notification_at, created_at
       ) VALUES ($1, $2, '15550009999', $3, $4, $4, upper($4), 'alta', 'Área de prueba',
-                'pending', 0, 3, NOW() - INTERVAL '1 minute', NOW() - ($5 || ' hours')::interval)
+                'pending', 0, 3, NOW() - INTERVAL '10 years', NOW() - ($5 || ' hours')::interval)
       RETURNING id
     `, [`deferral-cap-${sequence}`, conversationId, sourceNumberId, area, String(ageHours)]);
     createdIds.push(rows[0].id);
@@ -162,10 +176,10 @@ describeIntegration('a deferral cannot wait forever', () => {
     await complete(claimed.operation_id, claimed.claim_token, 'deferred', 'HANDOFF_CLICKUP_AREA_unsupported:b2b');
 
     await client.query(
-      'UPDATE handoffs SET next_notification_at = NOW() - INTERVAL \'1 minute\' WHERE id = $1',
+      'UPDATE handoffs SET next_notification_at = NOW() - INTERVAL \'10 years\' WHERE id = $1',
       [handoffId],
     );
-    expect(await claimedIds()).not.toContain(String(handoffId));
+    expect(await claimableIds()).not.toContain(String(handoffId));
   });
 
   test('a successful dispatch is unaffected by the window', async () => {
