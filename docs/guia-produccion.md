@@ -10,7 +10,7 @@ La carpeta `.hermes` fue retirada del repo para evitar duplicar planes historico
 
 ## Estado actual resumido
 
-El corte canónico está en [`estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md). En síntesis:
+El corte canónico está en [`estado-actual.md`](./estado-actual.md). En síntesis:
 
 - U0 y U2 están completas en la rama.
 - U1, U5 y U6, junto con una versión previa de U3, están desplegadas en el runtime local observado.

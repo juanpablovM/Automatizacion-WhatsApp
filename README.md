@@ -38,15 +38,18 @@ Principio clave:
 
 Estado recomendado: `preproduccion / validacion controlada`.
 
-- El candidato `complete-durable-handoff-delivery` está implementado, verificado y archivado: 10/10 requisitos y 10/10 escenarios en PASS.
-- La entrega ClickUp V1 queda limitada a Sales, usa el marcador exacto `Operation key: {operation_key}` y reconcilia mediante GET antes de cualquier POST ambiguo.
-- La corrección final está confirmada y publicada en `feat/afinar-hormi-atencion` hasta `d38c371`; no existe PR. El runtime observado conserva el scheduler anterior y sigue pendiente el despliegue controlado exclusivo del scheduler.
-- El inventario observado el 08/08 contenía 5 outbounds en cuarentena `unknown/reconciliation_required`. **Actualización 21/08 (verificado en runtime):** 0 operaciones en `unknown`/`reconciliation_required`; quedan únicamente 2 registros `failed` históricos (`handoff_clickup_notification`, ids 89 y 90, del 12/08 y 17/08), cerrados sin reintento (`last_error: preserved_test_artifact_closed_no_replay`) y conservados como evidencia. **No deben reejecutarse (`replay`) ni reintentarse**.
-- U4, U7, U8 y U9 permanecen pendientes por decisión.
-- La certificación vigente no demuestra todavía el cierre del PRD.
-- El runtime local observado tiene las migraciones `015`–`017`, Entry/Recovery y los schedulers OPS activos; queda pendiente entregar la corrección final mediante el procedimiento controlado.
+> Todo el tráfico del sistema es de prueba. No hay clientes reales: las conversaciones se conducen deliberadamente para encontrar fallas del bot.
 
-El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual-2026-08-08.md`](./docs/estado-actual-2026-08-08.md).
+- Repositorio y runtime están alineados. `main` quedó reconciliada el 2026-08-27 tras 87 commits represados, y está protegida con los cinco checks de `Delivery Validation` como requeridos.
+- La entrega a ClickUp ya no está limitada a Sales por código: **la configuración decide** qué áreas son entregables, según los asignados declarados en `HANDOFF_CLICKUP_ASSIGNEES_JSON`. El marcador exacto `Operation key: {operation_key}` y la reconciliación GET-first antes de cualquier POST ambiguo siguen vigentes.
+- Un despacho diferido tiene ventana de seis horas. Pasada, termina de forma visible en vez de reintentar cada 60 segundos indefinidamente.
+- El grafo de conexiones de los workflows está bajo gate: terminales esperadas, ambas ramas de cada IF cableadas, y referencias solo a nodos existentes.
+- Los 7 salientes históricos en `unknown` y las operaciones 89 y 90 con marcador `preserved_test_artifact_closed_no_replay` se conservan como evidencia. **No deben reejecutarse (`replay`) ni reintentarse.**
+- Queda pendiente configurar el asignado de ClickUp para `b2b`: el área está declarada con cero asignados, así que un handoff B2B difiere y termina visible en lugar de entregarse.
+- El contrato conversacional v3 está congelado: implementado y verificado, pero su carril no está conectado a la salida.
+- U4, U7, U8 y U9 permanecen pendientes por decisión. La certificación vigente no demuestra todavía el cierre del PRD.
+
+El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual.md`](./docs/estado-actual.md).
 
 ## Alcance actual
 
@@ -238,7 +241,7 @@ Para entender el proyecto desde lo general a lo especifico:
 - [Asesor comercial AI](./docs/asesor-comercial-ai.md)
 - [Fuentes comerciales AI](./docs/fuentes-comerciales-ai.md)
 - [Guia de produccion](./docs/guia-produccion.md)
-- [Estado actual 2026-08-08](./docs/estado-actual-2026-08-08.md)
+- [Estado actual 2026-08-08](./docs/estado-actual.md)
 
 La documentacion operativa de mantenimiento diario, runbooks y handoff conviene tratarla como material interno del equipo si el repositorio va a mantenerse publico.
 

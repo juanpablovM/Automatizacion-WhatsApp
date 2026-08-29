@@ -27,7 +27,7 @@ Estado de entrega en el corte del `2026-08-17`:
 - este estado no incluye el despliegue de la remediación final Sales-only/GET-first
 - el round robin aun incluye un vendedor de pruebas como notificable
 
-El corte canónico vive en [`docs/estado-actual-2026-08-08.md`](./estado-actual-2026-08-08.md).
+El corte canónico vive en [`docs/estado-actual.md`](./estado-actual.md).
 
 La instancia local validada incluye:
 
