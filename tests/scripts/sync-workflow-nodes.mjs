@@ -74,6 +74,11 @@ const NODES = [
   },
   {
     workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Prepare V3 Saga Result',
+    fixture: 'wa-conversation-orchestrator/prepare-v3-saga-result.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
     node: 'Validate And Authorize V3',
     fixture: 'wa-conversation-orchestrator/validate-and-authorize-v3.js',
     runtimes: ['shared/v3-contract-runtime.js'],

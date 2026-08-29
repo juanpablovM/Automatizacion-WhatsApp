@@ -507,7 +507,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return items.map(item => ({ json: { ...item.json, v3_saga: true } }));"
+        "jsCode": "// Rejoin the v3 saga with the turn context so the lane can emit the same\n// downstream contract the legacy lane emits.\n//\n// Why this is needed at all: every step of the v3 saga is a Postgres node, and\n// an n8n Postgres node REPLACES the item with its query result. By the time the\n// lane reaches here the original turn row — phone_number, processing_token,\n// inbound_event_id and the rest of the 77 fields Prepare Conversation Output\n// reads — is long gone, replaced by ledger rows. The previous version of this\n// node was `{ ...item.json, v3_saga: true }`, a passthrough of ledger columns\n// with no outgoing connection, so a v3 turn reached the dispatcher with no\n// dispatch contract at all: no reply, no handoff, no follow-up.\n//\n// The context is read back from `Merge AI Assistance`, the last node before the\n// contract route splits legacy from v3, which still holds the complete turn row.\n// The saga outcome is layered on top so ledger state wins where both define a\n// field.\n\nconst asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});\n\nconst turnContext = () => {\n  // $() is only available inside n8n. Outside it (unit tests) the caller passes\n  // the context explicitly, so the node stays testable without a live engine.\n  if (typeof $ === 'function') {\n    try {\n      return asObject($('Merge AI Assistance').first().json);\n    } catch (_error) {\n      return {};\n    }\n  }\n  return {};\n};\n\nconst prepareV3SagaResult = (sagaItems, context) => {\n  const base = asObject(context);\n  const items = Array.isArray(sagaItems) ? sagaItems : [];\n  if (!items.length) {\n    // A saga that produced no row still owes the dispatcher a turn: emitting\n    // nothing here is how the lane used to lose items silently.\n    return [{ json: { ...base, v3_saga: true, v3_saga_empty: true } }];\n  }\n  return items.map((item) => ({\n    json: {\n      ...base,\n      ...asObject(item.json ?? item),\n      v3_saga: true,\n    },\n  }));\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { prepareV3SagaResult, turnContext };\n}\n\nif (typeof items !== 'undefined') {\n  return prepareV3SagaResult(items, turnContext());\n}\n"
       },
       "id": "v3-14",
       "name": "Prepare V3 Saga Result",
@@ -724,8 +724,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1860,
-        100
+        1240,
+        340
       ],
       "credentials": {
         "postgres": {
@@ -745,8 +745,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        2060,
-        180
+        1440,
+        340
       ]
     },
     {
@@ -779,8 +779,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2260,
-        180
+        1640,
+        340
       ]
     },
     {
@@ -798,7 +798,7 @@
       "typeVersion": 2.5,
       "position": [
         1840,
-        180
+        300
       ],
       "credentials": {
         "postgres": {
@@ -819,7 +819,7 @@
       "typeVersion": 3.2,
       "position": [
         2040,
-        180
+        340
       ]
     }
   ],
@@ -944,12 +944,12 @@
       "main": [
         [
           {
-            "node": "Persist V3 Turn Authority",
+            "node": "Fix V3 Route",
             "type": "main",
             "index": 0
           },
           {
-            "node": "Merge V3 Authority Context",
+            "node": "Merge V3 Route Context",
             "type": "main",
             "index": 0
           }
@@ -1245,12 +1245,23 @@
       "main": [
         [
           {
-            "node": "Prepare V3 Execution",
+            "node": "Persist V3 Turn Authority",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge V3 Authority Context",
             "type": "main",
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "Apply AI Assistance",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Persist V3 Turn Authority": {
@@ -1268,12 +1279,18 @@
       "main": [
         [
           {
-            "node": "Fix V3 Route",
+            "node": "Prepare V3 Execution",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Prepare V3 Saga Result": {
+      "main": [
+        [
           {
-            "node": "Merge V3 Route Context",
+            "node": "Prepare Conversation Output",
             "type": "main",
             "index": 0
           }
