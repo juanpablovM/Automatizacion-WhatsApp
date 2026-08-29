@@ -87,10 +87,17 @@ for (const name of ['Upsert Escalation Handoff']) {
 }
 const base = { handoff_id: 7, operation_id: 10, claim_token: '00000000-0000-0000-0000-000000000001', area: 'claims', area_label: 'Reclamos', responsable: 'Equipo Reclamos', prioridad: 'urgente', motivo: 'complaint', phone_number: '56912345678', conversation_id: 1, idempotency_key: '1:complaint:x', operation_key: 'handoff-clickup:7' };
 const env = { CLICKUP_API_TOKEN: 'token', CLICKUP_HANDOFF_LIST_ID: 'list', HANDOFF_CLICKUP_ASSIGNEES_JSON: '{"claims":[456]}' };
+// A non-sales area with a configured assignee is dispatchable: configuration
+// decides which areas can be delivered, not a name hard coded in the node.
 const prepared = prepareHandoffClickup(base, env);
-assert.equal(prepared.should_dispatch_clickup, false);
-assert.equal(prepared.clickup_payload, null);
-assert.match(prepared.clickup_config_error, /HANDOFF_CLICKUP_AREA_unsupported:claims/);
+assert.equal(prepared.should_dispatch_clickup, true);
+assert.deepEqual(prepared.clickup_payload.assignees, [456]);
+assert.equal(prepared.clickup_config_error, null);
+// An area with no entry in the mapping still defers, with no POST.
+const unmapped = prepareHandoffClickup({...base, area: 'finance'}, env);
+assert.equal(unmapped.should_dispatch_clickup, false);
+assert.equal(unmapped.clickup_payload, null);
+assert.match(unmapped.clickup_config_error, /HANDOFF_CLICKUP_ASSIGNEES_JSON_missing_area:finance/);
 const salesBase = {...base, area: 'sales', area_label: 'Ventas', responsable: 'Equipo Ventas'};
 const salesEnv = {...env, HANDOFF_CLICKUP_ASSIGNEES_JSON: '{"sales":[456]}'};
 const preparedSales = prepareHandoffClickup(salesBase, salesEnv);
