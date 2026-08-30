@@ -59,6 +59,9 @@ services:
       CLICKUP_STATUS_ACKNOWLEDGED: ${TEST_CLICKUP_STATUS_ACKNOWLEDGED:-in progress,en progreso,en curso}
       CLICKUP_STATUS_RESOLVED: ${TEST_CLICKUP_STATUS_RESOLVED:-complete,completed,closed,done,cerrado,resuelto}
       AI_LEAD_ASSISTANT_ENABLED: "false"
+      # Rollout del contrato conversacional versionado: legacy | shadow | canary | enforce.
+      # Por defecto legacy, de modo que v3 permanece inerte salvo que la prueba lo pida.
+      AI_PRD_CONTRACT_MODE: ${TEST_AI_PRD_CONTRACT_MODE:-legacy}
       FOLLOW_UP_FIRST_DELAY_HOURS: 24
       OUTBOUND_CLAIM_STALE_SECONDS: 300
     # Reserved 55xxx range; production publishes N8N_PORT (5678) on the host.

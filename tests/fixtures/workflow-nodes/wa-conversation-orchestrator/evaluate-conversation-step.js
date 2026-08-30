@@ -897,6 +897,19 @@ function evaluateConversationStep(row) {
 
   return {
       json: {
+        // La ruta del contrato la decide Resolve Conversation Contract Route, el
+        // nodo inmediatamente anterior. Este nodo arma un objeto nuevo, asi que
+        // lo que no se nombre aqui se pierde antes de llegar a
+        // `Use V3 Contract?`, cuya condicion es contract_version === 'v3'.
+        // Sin estos cinco campos esa comparacion recibia undefined en todos los
+        // turnos y v3 no podia activarse con ningun valor de
+        // AI_PRD_CONTRACT_MODE. apply-ai-assistance ya los declara como campos
+        // deterministas: el contrato esperaba que fluyeran, nadie los emitia.
+        contract_route: row.contract_route ?? null,
+        contract_version: row.contract_version ?? null,
+        contract_mode: row.contract_mode ?? null,
+        route_mode: row.route_mode ?? null,
+        route_rule_id: row.route_rule_id ?? null,
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
