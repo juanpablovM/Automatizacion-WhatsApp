@@ -35,6 +35,27 @@ describe('v3 canary E2E binding contract', () => {
     expect(harness).not.toMatch(/curl[^\n]+https?:\/\/(?!127\.0\.0\.1)/);
   });
 
+  test('captures the v3 ledger rows when the turn never reaches delivered', () => {
+    // The stack is torn down with `compose down -v` on the way out, so anything
+    // not written to the evidence directory is gone. The n8n execution data
+    // shows which node returned no rows but never why, and every v3 commit is a
+    // single statement whose WHERE clause spans four tables.
+    const harness = source(harnessPath);
+
+    expect(harness).toContain('v3-ledger-state.json');
+    for (const table of [
+      'conversation_turn_executions',
+      'advisor_decisions',
+      'inbound_events',
+      'handoffs',
+      'messages',
+    ]) {
+      expect(harness, `ledger evidence misses ${table}`).toMatch(
+        new RegExp(`v3_ledger_evidence[\\s\\S]*?FROM ${table}`, 'i'),
+      );
+    }
+  });
+
   test('seeds only the WhatsApp source number and binds the two turns plus replay', () => {
     const harness = source(harnessPath);
     const seed = harness.match(/# WU4_SEED_BEGIN([\s\S]*?)# WU4_SEED_END/)?.[1] || '';

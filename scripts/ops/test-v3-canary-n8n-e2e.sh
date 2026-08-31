@@ -85,6 +85,39 @@ ORDER BY data."executionId"::BIGINT DESC
 LIMIT 50;
 SQL
   } > "$EVIDENCE_DIR/n8n-execution-data.tsv" 2>&1 || true
+
+  # Every v3 commit is one statement whose WHERE clause spans four tables, and
+  # the stack is destroyed on the way out. Without these rows a commit that
+  # matched nothing is indistinguishable from one that never ran.
+  {
+    compose exec -T postgres psql -U test -d testdb -At <<'SQL'
+WITH v3_ledger_evidence AS (
+  SELECT jsonb_build_object(
+    'conversation_turn_executions', (
+      SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY row.id), '[]'::JSONB)
+      FROM conversation_turn_executions row
+    ),
+    'advisor_decisions', (
+      SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY row.id), '[]'::JSONB)
+      FROM advisor_decisions row
+    ),
+    'inbound_events', (
+      SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY row.id), '[]'::JSONB)
+      FROM inbound_events row
+    ),
+    'handoffs', (
+      SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY row.id), '[]'::JSONB)
+      FROM handoffs row
+    ),
+    'messages', (
+      SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY row.id), '[]'::JSONB)
+      FROM messages row
+    )
+  ) AS value
+)
+SELECT jsonb_pretty(value) FROM v3_ledger_evidence;
+SQL
+  } > "$EVIDENCE_DIR/v3-ledger-state.json" 2>&1 || true
 }
 
 for command in cmp curl docker jq npm; do
