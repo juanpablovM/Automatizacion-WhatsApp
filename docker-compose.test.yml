@@ -58,7 +58,13 @@ services:
       CLICKUP_WEBHOOK_SECRET: ${TEST_CLICKUP_WEBHOOK_SECRET:-test-clickup-webhook-secret}
       CLICKUP_STATUS_ACKNOWLEDGED: ${TEST_CLICKUP_STATUS_ACKNOWLEDGED:-in progress,en progreso,en curso}
       CLICKUP_STATUS_RESOLVED: ${TEST_CLICKUP_STATUS_RESOLVED:-complete,completed,closed,done,cerrado,resuelto}
-      AI_LEAD_ASSISTANT_ENABLED: "false"
+      AI_LEAD_ASSISTANT_ENABLED: ${TEST_AI_LEAD_ASSISTANT_ENABLED:-false}
+      AI_PROVIDER: ${TEST_AI_PROVIDER:-mock}
+      AI_DIRECT_API_BASE_URL: ${TEST_AI_DIRECT_API_BASE_URL:-http://mock-ai:8081}
+      AI_DIRECT_API_PATH: ${TEST_AI_DIRECT_API_PATH:-/chat/completions}
+      AI_DIRECT_API_KEY: ${TEST_AI_DIRECT_API_KEY:-test-ai-key}
+      AI_DIRECT_API_MODEL: ${TEST_AI_DIRECT_API_MODEL:-test-ai-model}
+      AI_DIRECT_API_MAX_ATTEMPTS: ${TEST_AI_DIRECT_API_MAX_ATTEMPTS:-1}
       # Rollout del contrato conversacional versionado: legacy | shadow | canary | enforce.
       # Por defecto legacy, de modo que v3 permanece inerte salvo que la prueba lo pida.
       AI_PRD_CONTRACT_MODE: ${TEST_AI_PRD_CONTRACT_MODE:-legacy}
@@ -71,6 +77,8 @@ services:
       postgres:
         condition: service_healthy
       mock-evolution:
+        condition: service_healthy
+      mock-ai:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz/readiness || exit 1"]
@@ -103,8 +111,16 @@ services:
             const chunks = [];
             request.on('data', (chunk) => chunks.push(chunk));
             request.on('end', () => {
-              requests.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString('utf8') });
-              response.end(JSON.stringify({ success: true, key: { id: 'synthetic-message-id' } }));
+              const body = Buffer.concat(chunks).toString('utf8');
+              const responseId = 'synthetic-message-id-' + (requests.length + 1);
+              requests.push({
+                method: request.method,
+                url: request.url,
+                body,
+                parsed_body: JSON.parse(body),
+                response_id: responseId,
+              });
+              response.end(JSON.stringify({ success: true, key: { id: responseId } }));
             });
             return;
           }
@@ -114,6 +130,22 @@ services:
         server.listen(8080, '0.0.0.0');
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  mock-ai:
+    image: node:20.19.4-alpine
+    environment:
+      PORT: 8081
+    ports:
+      - "${TEST_MOCK_AI_PORT:-58081}:8081"
+    volumes:
+      - ./tests/fixtures/mock-ai-server.mjs:/app/mock-ai-server.mjs:ro
+    command: ["node", "/app/mock-ai-server.mjs"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/health"]
       interval: 5s
       timeout: 3s
       retries: 10

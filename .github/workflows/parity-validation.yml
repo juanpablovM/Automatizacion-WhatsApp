@@ -20,6 +20,7 @@ on:
       - 'n8n/workflows/**'
       - 'scripts/dev/sync-n8n-workflows.sh'
       - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/test-v3-canary-n8n-e2e.sh'
       - 'scripts/ops/reset-controlled-test-session.sh'
       - 'tests/**'
   pull_request:
@@ -40,6 +41,7 @@ on:
       - 'n8n/workflows/**'
       - 'scripts/dev/sync-n8n-workflows.sh'
       - 'scripts/ops/test-reengagement-n8n-e2e.sh'
+      - 'scripts/ops/test-v3-canary-n8n-e2e.sh'
       - 'scripts/ops/reset-controlled-test-session.sh'
       - 'tests/**'
 
@@ -227,5 +229,36 @@ jobs:
         with:
           name: reengagement-n8n-e2e-logs
           path: ${{ runner.temp }}/reengagement-e2e-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+  n8n-v3-canary-e2e:
+    name: Binding n8n v3 canary E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Run isolated v3 canary receipt E2E
+        env:
+          TEST_EVIDENCE_DIR: ${{ runner.temp }}/v3-canary-n8n-e2e-evidence
+        run: npm run test:e2e:v3-canary
+
+      - name: Upload v3 canary failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-canary-n8n-e2e-evidence
+          path: ${{ runner.temp }}/v3-canary-n8n-e2e-evidence
           if-no-files-found: error
           retention-days: 7
