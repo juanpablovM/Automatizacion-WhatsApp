@@ -357,6 +357,7 @@ validateV3ContractLibrary();
 const validateV3SagaLibrary = () => {
   const runtime = loadFixture(V3_SAGA_RUNTIME);
   for (const symbol of [
+    'canonicalizeMergedTurnItem',
     'buildV3RepairRequest',
     'buildV3ContingencyDecision',
     'planV3Recovery',
@@ -368,7 +369,7 @@ const validateV3SagaLibrary = () => {
       process.exitCode = 1;
     }
   }
-  const adapter = `${runtime}\n\nconst input = items[0]?.json ?? {};\nconst policy = input.v3_policy || input.turn_policy;\nconst v3Recovery = planV3Recovery({\n  policy,\n  validation: input.v3_validation ?? null,\n  repairAttempt: Number(input.v3_repair_attempt || 0),\n  providerOutcome: input.v3_provider_outcome || 'accepted',\n  preTurnState: input.qualification_context || {},\n  expectedSnapshotDigest: input.expected_snapshot_digest || null,\n});\nreturn [{ json: {\n  ...input,\n  v3_recovery: v3Recovery,\n  v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),\n  ai_repair_request: v3Recovery.repair_request || null,\n  turn_policy: v3Recovery.repair_request?.policy || policy,\n  v3_policy: v3Recovery.repair_request?.policy || policy,\n  v3_recovery_decision: v3Recovery.decision || null,\n  decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,\n  delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,\n} }];\n`;
+  const adapter = `${runtime}\n\nconst input = canonicalizeMergedTurnItem(items[0]?.json ?? {});\nconst policy = input.v3_policy || input.turn_policy;\nconst v3Recovery = planV3Recovery({\n  policy,\n  validation: input.v3_validation ?? null,\n  repairAttempt: Number(input.v3_repair_attempt || 0),\n  providerOutcome: input.v3_provider_outcome || 'accepted',\n  preTurnState: input.qualification_context || {},\n  expectedSnapshotDigest: input.expected_snapshot_digest || null,\n});\nreturn [{ json: {\n  ...input,\n  v3_recovery: v3Recovery,\n  v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),\n  ai_repair_request: v3Recovery.repair_request || null,\n  turn_policy: v3Recovery.repair_request?.policy || policy,\n  v3_policy: v3Recovery.repair_request?.policy || policy,\n  v3_recovery_decision: v3Recovery.decision || null,\n  decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,\n  delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,\n} }];\n`;
   const fixturePath = path.join(fixturesRoot, V3_SAGA_FIXTURE);
   const actual = fs.existsSync(fixturePath) ? fs.readFileSync(fixturePath, 'utf8') : '';
   checkedCount += 1;

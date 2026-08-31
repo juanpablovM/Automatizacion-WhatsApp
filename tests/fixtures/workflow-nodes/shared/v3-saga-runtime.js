@@ -145,12 +145,36 @@ function reconcileV3Operation({ operation, operationKey, payloadDigest, matches,
   return { resolution: 'duplicate', retry_authorized: false, recovery_required: true };
 }
 
+const MERGE_SUFFIX = /_(1|2)$/;
+
+// `Merge AI Assistance` combines with `addSuffix`, so every field arriving here
+// carries the input it came from in its name: `_1` for the policy side, `_2` for
+// the AI side. Re-emitting that shape suffixes it again on the next pass through
+// the merge (`contract_version_1_1`), and the nodes downstream read the single
+// suffix produced by the first cycle. Rebuild the canonical item instead.
+const canonicalizeMergedTurnItem = (input) => {
+  const source = input && typeof input === 'object' ? input : {};
+  const canonical = {};
+  // Fields contributed after the merge carry no suffix; keep them.
+  for (const [key, value] of Object.entries(source)) {
+    if (!MERGE_SUFFIX.test(key)) canonical[key] = value;
+  }
+  // The policy side is the authoritative turn context, so it wins over a stale
+  // bare field of the same name. The AI side is dropped: carrying it forward is
+  // what compounds the suffixes.
+  for (const [key, value] of Object.entries(source)) {
+    if (key.endsWith('_1')) canonical[key.slice(0, -2)] = value;
+  }
+  return canonical;
+};
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     canonicalJson,
     sha256,
     digestObject,
     cloneJsonValue,
+    canonicalizeMergedTurnItem,
     buildV3RepairRequest,
     buildV3ContingencyDecision,
     planV3Recovery,

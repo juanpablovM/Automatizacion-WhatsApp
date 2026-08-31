@@ -12,6 +12,76 @@ const runCodeNodeWithoutStructuredClone = (source, items) => {
   return new vm.Script(`(function () { ${source}\n})()`).runInContext(context);
 };
 
+// `Merge AI Assistance` combines with `addSuffix`, so by the time an item
+// reaches this node every field from the policy side carries a `_1` suffix and
+// every field from the AI side a `_2` one. Measured on the real canary the
+// input holds 64 `_1` keys, 91 `_2` keys and 36 bare ones. Emitting that soup
+// back into the repair cycle re-suffixes it (`contract_version_1_1`), and
+// `Use V3 Contract?` — which reads `contract_version_1` — then routes the turn
+// to legacy on the second pass. The node must emit the canonical, unsuffixed
+// shape instead, so cycle two reproduces cycle one exactly.
+describe('Build V3 Repair — canonical item across the merge', () => {
+  const mergedInput = (overrides = {}) => ({
+    // policy side, suffixed `_1` by the merge
+    contract_version_1: 'v3',
+    conversation_id_1: 'conv-77',
+    qualification_context_1: { name: 'Ana' },
+    expected_snapshot_digest_1: 'c'.repeat(64),
+    v3_policy_1: {
+      version: 'ai_prd_turn_policy/v3',
+      policy_digest: 'd'.repeat(64),
+      turn: { id: 'turn-merged' },
+    },
+    // AI side, suffixed `_2` by the merge
+    contract_version_2: 'legacy',
+    conversation_id_2: 'stale-conv',
+    // bare fields contributed after the merge
+    v3_validation: {
+      version: 'conversation_validation_result/v3',
+      valid: false,
+      errors: [{ code: 'proposal_shape_invalid', path: '$' }],
+    },
+    ...overrides,
+  });
+
+  test('emits unsuffixed fields so the second cycle keeps routing to v3', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const output = runCodeNode(source, [{ json: mergedInput() }])[0].json;
+
+    // The policy side becomes canonical: this is what `Use V3 Contract?` needs
+    // to find as `contract_version_1` after the merge suffixes it once again.
+    expect(output.contract_version).toBe('v3');
+    expect(output.conversation_id).toBe('conv-77');
+    expect(output.qualification_context).toEqual({ name: 'Ana' });
+
+    // The AI side is dropped rather than carried forward and re-suffixed.
+    expect(Object.keys(output).filter((key) => /_[12]$/.test(key))).toEqual([]);
+    expect(output.v3_recovery.action).toBe('repair');
+  });
+
+  test('reads the repair attempt through the suffix so the loop terminates', () => {
+    // Cycle two feeds `v3_repair_attempt` back through the merge as `_1`. If the
+    // node misses it the attempt reads 0 and the turn repairs forever instead of
+    // falling through to contingency.
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const output = runCodeNode(source, [{
+      json: mergedInput({ v3_repair_attempt_1: 1 }),
+    }])[0].json;
+
+    expect(output.v3_recovery.action).toBe('contingency');
+    expect(output.v3_recovery.decision.version).toBe('system_contingency_decision/v3');
+  });
+
+  test('prefers the policy side over a stale bare field of the same name', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const output = runCodeNode(source, [{
+      json: mergedInput({ conversation_id: 'stale-bare' }),
+    }])[0].json;
+
+    expect(output.conversation_id).toBe('conv-77');
+  });
+});
+
 describe('Build V3 Repair — real n8n Code node wrapper', () => {
   test('repairs from turn_policy alone and preserves both policy aliases', () => {
     const source = fs.readFileSync(fixturePath, 'utf8');
