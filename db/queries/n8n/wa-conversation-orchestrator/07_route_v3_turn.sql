@@ -13,7 +13,16 @@ WITH input AS MATERIALIZED (
     COALESCE(NULLIF($8::TEXT, ''), 'service') AS current_step,
     COALESCE(NULLIF($9::TEXT, ''), 'unknown') AS message_type,
     NULLIF($10::TEXT, '') AS external_message_id,
-    NULLIF($11::TEXT, '')::TIMESTAMPTZ AS external_timestamp,
+    CASE
+      WHEN NULLIF(BTRIM($11::TEXT), '') IS NULL THEN NULL::TIMESTAMPTZ
+      WHEN BTRIM($11::TEXT) ~ '^[0-9]{10}$'
+        THEN TO_TIMESTAMP(BTRIM($11::TEXT)::DOUBLE PRECISION)
+      WHEN BTRIM($11::TEXT) ~ '^[0-9]{13}$'
+        THEN TO_TIMESTAMP(BTRIM($11::TEXT)::DOUBLE PRECISION / 1000.0)
+      WHEN BTRIM($11::TEXT) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$'
+        THEN BTRIM($11::TEXT)::TIMESTAMPTZ
+      ELSE ('invalid_external_timestamp:' || BTRIM($11::TEXT))::TIMESTAMPTZ
+    END AS external_timestamp,
     NULLIF($12::TEXT, '') AS text_body,
     COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload
 ), valid_claim AS MATERIALIZED (

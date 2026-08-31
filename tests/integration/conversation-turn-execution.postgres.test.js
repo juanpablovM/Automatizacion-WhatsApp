@@ -147,6 +147,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     routeMode = 'enforce',
     routeRuleId = 'test-early-route',
     textBody = 'Necesito una cotización',
+    externalTimestamp = null,
   }) => client.query(routeSql, [
     event.inboundEventId,
     event.token,
@@ -158,7 +159,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     'service',
     'text',
     `message-${event.inboundEventId}`,
-    null,
+    externalTimestamp,
     textBody,
     { source: 'integration-test' },
   ]);
@@ -324,6 +325,52 @@ describeIntegration('v3 conversation turn execution saga', () => {
           WHERE conversation_id = $2) AS advisor_rows
     `, [event.inboundEventId, routed.rows[0].conversation_id]);
     expect(durable.rows[0]).toEqual({ ledger_rows: 1, incoming_rows: 1, advisor_rows: 0 });
+  });
+
+  test('parses supported external timestamps and rejects non-ISO text fail-closed', async () => {
+    const cases = [
+      { raw: '1788193749', expected: new Date(1788193749 * 1000).toISOString() },
+      { raw: '1788193749000', expected: new Date(1788193749000).toISOString() },
+      { raw: '2026-08-31T12:34:56.789Z', expected: '2026-08-31T12:34:56.789Z' },
+    ];
+
+    for (const [index, timestampCase] of cases.entries()) {
+      sequence += 1;
+      const phoneNumber = `15557${String(sequence).padStart(6, '0')}`;
+      const event = await seedUnboundEvent(phoneNumber, `timestamp-${index}-${sequence}`);
+      const routed = await routeEarly({
+        event,
+        phoneNumber,
+        externalTimestamp: timestampCase.raw,
+      });
+      const persisted = await client.query(
+        `SELECT external_timestamp FROM messages
+         WHERE inbound_event_id = $1 AND direction = 'incoming'`,
+        [event.inboundEventId],
+      );
+
+      expect(routed.rows[0].route_matches).toBe(true);
+      expect(persisted.rows).toHaveLength(1);
+      expect(persisted.rows[0].external_timestamp.toISOString()).toBe(timestampCase.expected);
+    }
+
+    sequence += 1;
+    const invalidPhone = `15557${String(sequence).padStart(6, '0')}`;
+    const invalidEvent = await seedUnboundEvent(invalidPhone, `timestamp-invalid-${sequence}`);
+    await expect(routeEarly({
+      event: invalidEvent,
+      phoneNumber: invalidPhone,
+      externalTimestamp: '2026-08-31 12:34:56',
+    })).rejects.toThrow();
+
+    const invalidWrites = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM conversation_turn_executions
+          WHERE inbound_event_id = $1) AS ledger_rows,
+        (SELECT COUNT(*)::int FROM messages
+          WHERE inbound_event_id = $1 AND direction = 'incoming') AS incoming_rows
+    `, [invalidEvent.inboundEventId]);
+    expect(invalidWrites.rows[0]).toEqual({ ledger_rows: 0, incoming_rows: 0 });
   });
 
   test('replays the same inbound against the original early ledger and incoming evidence', async () => {
