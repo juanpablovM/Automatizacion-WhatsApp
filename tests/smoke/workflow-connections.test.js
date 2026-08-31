@@ -92,6 +92,121 @@ export const danglingBranches = (workflow) => {
     .map(({ node, wired }) => `${node} wires outputs [${wired.join(', ')}]`);
 };
 
+// A Merge node in `combine` mode emits nothing unless every wired input carries
+// items in the same run, and inside a loop that is silent. The v3 repair cycle
+// re-entered `Execute AI Lead Qualification`, which feeds input 1 only, so
+// `Merge AI Assistance` produced zero items on its second run: the branch died,
+// the turn stayed `processing/orchestrating` forever, and n8n still reported the
+// execution as a success with no error on any node.
+//
+// The rule: whenever a branch loops back into the feeders of a combine Merge, it
+// must refill every wired input of that Merge, not a subset.
+const inputEdges = (workflow) => {
+  const edges = [];
+  for (const [source, outputs] of Object.entries(workflow.connections || {})) {
+    (outputs.main || []).forEach((branch, output) => {
+      for (const target of branch || []) {
+        edges.push({
+          source, output, target: target.node, input: target.index || 0,
+        });
+      }
+    });
+  }
+  return edges;
+};
+
+const walk = (edges, start, stopAt, visit) => {
+  const seen = new Set();
+  const queue = [start];
+  while (queue.length) {
+    const node = queue.shift();
+    if (seen.has(node)) continue;
+    seen.add(node);
+    if (node === stopAt) continue;
+    for (const edge of edges) {
+      if (edge.source !== node) continue;
+      visit(edge);
+      queue.push(edge.target);
+    }
+  }
+  return seen;
+};
+
+// Inside a cycle every edge trivially "reaches back" to its own source, so
+// reachability alone would flag the whole loop. The edge that actually closes
+// the loop is the DFS back edge: the one landing on a node still on the stack.
+const backEdges = (workflow, edges) => {
+  const targets = new Set(edges.map((edge) => edge.target));
+  const roots = (workflow.nodes || [])
+    .map((node) => node.name)
+    .filter((name) => !targets.has(name));
+  const found = [];
+  const done = new Set();
+  const stack = new Set();
+
+  const visit = (node) => {
+    stack.add(node);
+    for (const edge of edges.filter((candidate) => candidate.source === node)) {
+      if (stack.has(edge.target)) found.push(edge);
+      else if (!done.has(edge.target)) visit(edge.target);
+    }
+    stack.delete(node);
+    done.add(node);
+  };
+
+  const starts = roots.length ? roots : (workflow.nodes || []).map((node) => node.name);
+  for (const start of starts) if (!done.has(start)) visit(start);
+  for (const node of (workflow.nodes || []).map((n) => n.name)) if (!done.has(node)) visit(node);
+  return found;
+};
+
+// Which inputs of `merge` this one output branch of `source` ends up feeding.
+const branchFeedsInputs = (edges, source, output, merge) => {
+  const inputs = new Set();
+  for (const edge of edges) {
+    if (edge.source !== source || edge.output !== output) continue;
+    if (edge.target === merge) { inputs.add(edge.input); continue; }
+    walk(edges, edge.target, merge, (downstream) => {
+      if (downstream.target === merge) inputs.add(downstream.input);
+    });
+  }
+  return inputs;
+};
+
+export const starvedMergeReentries = (workflow) => {
+  const edges = inputEdges(workflow);
+  const issues = [];
+  const merges = (workflow.nodes || []).filter((node) => (
+    node.type === 'n8n-nodes-base.merge' && node.parameters?.mode === 'combine'
+  ));
+
+  // A branch is a re-entry when it loops back: its target can reach its source.
+  const reentries = [];
+  for (const edge of backEdges(workflow, edges)) {
+    const seen = reentries.some((r) => r.source === edge.source && r.output === edge.output);
+    if (!seen) reentries.push({ source: edge.source, output: edge.output });
+  }
+
+  for (const merge of merges) {
+    const wired = [...new Set(
+      edges.filter((edge) => edge.target === merge.name).map((edge) => edge.input),
+    )].sort();
+    if (wired.length < 2) continue;
+
+    for (const { source, output } of reentries) {
+      const fed = branchFeedsInputs(edges, source, output, merge.name);
+      if (fed.size === 0) continue; // this loop never reaches the merge
+      const starved = wired.filter((input) => !fed.has(input));
+      if (!starved.length) continue;
+      issues.push(
+        `${merge.name} starves input(s) [${starved.join(', ')}] `
+        + `when ${source} [output ${output}] re-enters`,
+      );
+    }
+  }
+  return issues.sort();
+};
+
 export const unknownTargets = (workflow) => {
   const declared = new Set(workflow.nodes.map((node) => node.name));
   const edges = forwardEdges(workflow);
@@ -163,6 +278,12 @@ describe('Smoke — Workflow connection graph', () => {
 
     test(`${file} connects only nodes that exist`, () => {
       expect(unknownTargets(workflow)).toEqual([]);
+    });
+
+    test(`${file} refills every input of a combine Merge it loops back into`, () => {
+      // A starved input makes the Merge emit zero items on its second run and
+      // the branch vanishes without an error anywhere.
+      expect(starvedMergeReentries(workflow)).toEqual([]);
     });
 
     test(`${file} declares every Execute Workflow node in the link manifest`, () => {
@@ -251,6 +372,66 @@ describe('Smoke — Workflow connection graph', () => {
       ]);
     });
 
+    test('a repair loop that refills only one input of a combine Merge is caught', () => {
+      // The exact shape the canary died on: the loop re-enters the AI call,
+      // which feeds input 1, while input 0 is fed only by the policy node that
+      // never runs a second time.
+      const starvedLoop = {
+        nodes: [
+          { name: 'Compile V3 Turn Policy', type: 'n8n-nodes-base.code' },
+          { name: 'Execute AI Lead Qualification', type: 'n8n-nodes-base.executeWorkflow' },
+          {
+            name: 'Merge AI Assistance',
+            type: 'n8n-nodes-base.merge',
+            parameters: { mode: 'combine', combineBy: 'combineByPosition', numberInputs: 2 },
+          },
+          { name: 'Build V3 Repair', type: 'n8n-nodes-base.code' },
+          { name: 'V3 Recovery Is Contingency?', type: 'n8n-nodes-base.if' },
+          { name: 'Prepare V3 Contingency Decision', type: 'n8n-nodes-base.code' },
+        ],
+        connections: {
+          'Compile V3 Turn Policy': {
+            main: [[
+              { node: 'Execute AI Lead Qualification', index: 0 },
+              { node: 'Merge AI Assistance', index: 0 },
+            ]],
+          },
+          'Execute AI Lead Qualification': { main: [[{ node: 'Merge AI Assistance', index: 1 }]] },
+          'Merge AI Assistance': { main: [[{ node: 'Build V3 Repair', index: 0 }]] },
+          'Build V3 Repair': { main: [[{ node: 'V3 Recovery Is Contingency?', index: 0 }]] },
+          'V3 Recovery Is Contingency?': {
+            main: [
+              [{ node: 'Prepare V3 Contingency Decision', index: 0 }],
+              [{ node: 'Execute AI Lead Qualification', index: 0 }],
+            ],
+          },
+        },
+      };
+
+      expect(starvedMergeReentries(starvedLoop)).toEqual([
+        'Merge AI Assistance starves input(s) [0] '
+        + 'when V3 Recovery Is Contingency? [output 1] re-enters',
+      ]);
+
+      // Refilling input 0 on the same branch clears it.
+      const refilled = {
+        ...starvedLoop,
+        connections: {
+          ...starvedLoop.connections,
+          'V3 Recovery Is Contingency?': {
+            main: [
+              [{ node: 'Prepare V3 Contingency Decision', index: 0 }],
+              [
+                { node: 'Execute AI Lead Qualification', index: 0 },
+                { node: 'Merge AI Assistance', index: 0 },
+              ],
+            ],
+          },
+        },
+      };
+      expect(starvedMergeReentries(refilled)).toEqual([]);
+    });
+
     test('a Postgres v2 node with legacy queryParams is caught', () => {
       const workflow = {
         nodes: [{
@@ -279,6 +460,19 @@ describe('Smoke — Workflow connection graph', () => {
       expect(branchTargets(workflow, 'V3 Route Fixed?', 0)).toEqual(['Evaluate Conversation Step']);
       expect(branchTargets(workflow, 'V3 Route Fixed?', 1)).toEqual(['Degrade V3 Route To Legacy']);
       expect(branchTargets(workflow, 'Degrade V3 Route To Legacy', 0)).toEqual(['Evaluate Conversation Step']);
+    });
+
+    test('carries the repaired policy back into the AI merge on the second cycle', () => {
+      // Both feeders of `Merge AI Assistance` must fire again on repair: the
+      // repaired policy into input 0 and the retried AI proposal into input 1.
+      expect(branchTargets(workflow, 'V3 Recovery Is Contingency?', 1)).toEqual([
+        'Execute AI Lead Qualification',
+        'Merge AI Assistance',
+      ]);
+      expect(
+        (workflow.connections['V3 Recovery Is Contingency?'].main[1] || [])
+          .find(({ node }) => node === 'Merge AI Assistance').index,
+      ).toBe(0);
     });
 
     test('attaches a valid decision directly to the early ledger', () => {

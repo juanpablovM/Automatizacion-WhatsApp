@@ -1102,6 +1102,11 @@
             "node": "Execute AI Lead Qualification",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge AI Assistance",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
