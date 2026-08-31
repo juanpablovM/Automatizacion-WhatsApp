@@ -25,6 +25,13 @@ const workflowLinks = JSON.parse(
   fs.readFileSync(path.join(repoRoot, 'n8n', 'workflow-links.json'), 'utf8'),
 ).links;
 
+// The shadow evaluator retains one separately tracked pending credential/bind
+// migration. No other versioned workflow may ship a placeholder credential or
+// a legacy Postgres v1 bind shape.
+const RUNTIME_NODE_ISSUE_ALLOWLIST = new Set([
+  'ai-prd-shadow-evaluator.json::Persist Shadow Advisor Audit',
+]);
+
 // A sub-workflow returns the output of the last node that ran, so two terminals
 // mean two different output contracts for the caller. One terminal is the norm:
 // 11 of the 15 versioned workflows have exactly one. The exceptions are real and
@@ -104,6 +111,28 @@ export const missingWorkflowLinks = (workflow, links = workflowLinks) => workflo
   .map((node) => `${workflow.name} -> ${node.name}`)
   .sort();
 
+const isPlaceholderCredential = (credential) => [credential?.id, credential?.name]
+  .some((value) => /^__.*__$/.test(String(value || '')) || String(value || '').includes('__PENDIENTE__'));
+
+export const placeholderCredentialIssues = (workflow, file, allowlist = RUNTIME_NODE_ISSUE_ALLOWLIST) => (
+  workflow.nodes.flatMap((node) => {
+    const nodeKey = `${file}::${node.name}`;
+    if (allowlist.has(nodeKey)) return [];
+    return Object.entries(node.credentials || {})
+      .filter(([, credential]) => isPlaceholderCredential(credential))
+      .map(([credentialType]) => `${nodeKey}::${credentialType}`);
+  }).sort()
+);
+
+export const postgresV2BindingIssues = (workflow, file, allowlist = RUNTIME_NODE_ISSUE_ALLOWLIST) => (
+  workflow.nodes
+    .filter((node) => node.type === 'n8n-nodes-base.postgres' && Number(node.typeVersion) >= 2)
+    .filter((node) => !allowlist.has(`${file}::${node.name}`))
+    .filter((node) => !String(node.parameters?.options?.queryReplacement || '').trim())
+    .map((node) => `${file}::${node.name}`)
+    .sort()
+);
+
 const branchTargets = (workflow, source, branch) => (
   workflow.connections?.[source]?.main?.[branch] || []
 ).map((target) => target.node).sort();
@@ -138,6 +167,14 @@ describe('Smoke — Workflow connection graph', () => {
 
     test(`${file} declares every Execute Workflow node in the link manifest`, () => {
       expect(missingWorkflowLinks(workflow)).toEqual([]);
+    });
+
+    test(`${file} has no runtime placeholder credentials`, () => {
+      expect(placeholderCredentialIssues(workflow, file)).toEqual([]);
+    });
+
+    test(`${file} uses the Postgres v2 binding schema`, () => {
+      expect(postgresV2BindingIssues(workflow, file)).toEqual([]);
     });
   }
 
@@ -201,6 +238,32 @@ describe('Smoke — Workflow connection graph', () => {
         'Synthetic Source -> Portable Executor',
       ]);
     });
+
+    test('a placeholder credential is caught', () => {
+      const workflow = {
+        nodes: [{
+          name: 'Broken Postgres',
+          credentials: { postgres: { id: '__PENDIENTE__', name: 'Postgres' } },
+        }],
+      };
+      expect(placeholderCredentialIssues(workflow, 'synthetic.json', new Set())).toEqual([
+        'synthetic.json::Broken Postgres::postgres',
+      ]);
+    });
+
+    test('a Postgres v2 node with legacy queryParams is caught', () => {
+      const workflow = {
+        nodes: [{
+          name: 'Legacy Bind Shape',
+          type: 'n8n-nodes-base.postgres',
+          typeVersion: 2.6,
+          parameters: { additionalFields: { queryParams: 'id' } },
+        }],
+      };
+      expect(postgresV2BindingIssues(workflow, 'synthetic.json', new Set())).toEqual([
+        'synthetic.json::Legacy Bind Shape',
+      ]);
+    });
   });
 
   describe('v3 durable authority topology', () => {
@@ -256,6 +319,28 @@ describe('Smoke — Workflow connection graph', () => {
       expect(workflow.nodes.some(({ name }) => name === 'V3 Has Delivery Receipt?')).toBe(false);
       expect(workflow.nodes.some(({ name }) => name === 'Record V3 Delivery')).toBe(false);
     });
+
+    test('uses the canonical Postgres credential and explicit v2 bind arrays', () => {
+      const expectedCredential = {
+        id: '4f0b597f-5081-48fc-9226-1cd8db06ca38',
+        name: 'Postgres CRM App Local',
+      };
+      const expectedBindings = {
+        'Fix V3 Route': '={{ [$json.inbound_event_id, $json.processing_token, $json.conversation_id, $json.input_source_number_id, $json.phone_number, $json.contract_mode, $json.route_rule_id, $json.current_step, $json.message_type, $json.input_external_message_id, $json.input_external_timestamp, $json.text_body, $json.raw_payload_json] }}',
+        'Persist V3 Turn Authority': '={{ [$json.inbound_event_id, $json.processing_token, $json.conversation_id, $json.source_number_id, $json.phone_number, $json.message_type, $json.external_message_id, $json.text_body, $json.raw_payload_json, $json.current_step, $json.decision_id, $json.turn_policy, $json.ai_proposal, $json.v3_validation, $json.v3_decision, $json.ai_provider, $json.ai_model, $json.decision_digest] }}',
+      };
+
+      for (const [name, queryReplacement] of Object.entries(expectedBindings)) {
+        const node = workflow.nodes.find((candidate) => candidate.name === name);
+        expect(node.typeVersion).toBe(2.6);
+        expect(node.credentials.postgres).toEqual(expectedCredential);
+        expect(node.parameters.options).toEqual({
+          queryBatching: 'transaction',
+          queryReplacement,
+        });
+        expect(node.parameters.additionalFields).toBeUndefined();
+      }
+    });
   });
 
   describe('v3 post-provider delivery topology', () => {
@@ -266,6 +351,15 @@ describe('Smoke — Workflow connection graph', () => {
       expect(branchTargets(workflow, 'V3 Delivery Result?', 0)).toEqual(['Record V3 Delivery Receipt']);
       expect(branchTargets(workflow, 'V3 Delivery Result?', 1)).toEqual(['Outbound Lane Complete']);
       expect(branchTargets(workflow, 'Record V3 Delivery Receipt', 0)).toEqual(['Outbound Lane Complete']);
+    });
+
+    test('binds the exact delivery receipt fields with the Postgres v2 schema', () => {
+      const node = workflow.nodes.find(({ name }) => name === 'Record V3 Delivery Receipt');
+      expect(node.parameters.options).toEqual({
+        queryBatching: 'transaction',
+        queryReplacement: '={{ [$json.decision_id, $json.delivery_message_id, $json.delivery_status, $json.provider_external_message_id, $json.delivery_key] }}',
+      });
+      expect(node.parameters.additionalFields).toBeUndefined();
     });
   });
 });
