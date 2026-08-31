@@ -2,7 +2,7 @@ name: Delivery Validation
 
 on:
   push:
-    branches: [main, develop, 'feat/**']
+    branches: [main, develop, 'feat/**', 'fix/**']
     paths:
       - '.github/workflows/parity-validation.yml'
       - '.env.example'
@@ -23,7 +23,6 @@ on:
       - 'scripts/ops/reset-controlled-test-session.sh'
       - 'tests/**'
   pull_request:
-    branches: [main, develop]
     paths:
       - '.github/workflows/parity-validation.yml'
       - '.env.example'
