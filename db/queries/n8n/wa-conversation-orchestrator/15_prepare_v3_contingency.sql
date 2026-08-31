@@ -9,9 +9,9 @@ WITH target AS MATERIALIZED (
     AND execution.state = 'routed'
     AND execution.decision_id IS NULL
     AND $3::JSONB->>'version' = 'ai_prd_turn_policy/v3'
-    AND $4::JSONB->>'schema' = 'system_contingency_decision/v3'
+    AND $4::JSONB->>'version' = 'system_contingency_decision/v3'
     AND $4::JSONB->>'policy_digest' = $3::JSONB->>'policy_digest'
-    AND $4::JSONB->'mutations' = '[]'::JSONB
+    AND $4::JSONB->'state_mutations' = '[]'::JSONB
   FOR UPDATE OF execution, event
 ), advisor AS (
   INSERT INTO advisor_decisions (

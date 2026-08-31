@@ -93,6 +93,10 @@ export const unknownTargets = (workflow) => {
   return [...missing].sort();
 };
 
+const branchTargets = (workflow, source, branch) => (
+  workflow.connections?.[source]?.main?.[branch] || []
+).map((target) => target.node).sort();
+
 describe('Smoke — Workflow connection graph', () => {
   const workflowFiles = fs.readdirSync(workflowsDir).filter((f) => f.endsWith('.json'));
 
@@ -167,6 +171,30 @@ describe('Smoke — Workflow connection graph', () => {
         },
       };
       expect(unknownTargets(withGhost)).toEqual(['Node That Was Deleted']);
+    });
+  });
+
+  describe('v3 durable authority topology', () => {
+    const workflow = readWorkflow('wa-conversation-orchestrator.json');
+
+    test('routes and fixes v3 before policy compilation, with explicit legacy degradation', () => {
+      expect(branchTargets(workflow, 'Resolve Conversation Contract Route', 0)).toEqual(['Route V3 Early?']);
+      expect(branchTargets(workflow, 'Route V3 Early?', 0)).toEqual([
+        'Fix V3 Route',
+        'Merge V3 Route Context',
+      ]);
+      expect(branchTargets(workflow, 'Route V3 Early?', 1)).toEqual(['Evaluate Conversation Step']);
+      expect(branchTargets(workflow, 'V3 Route Fixed?', 0)).toEqual(['Evaluate Conversation Step']);
+      expect(branchTargets(workflow, 'V3 Route Fixed?', 1)).toEqual(['Degrade V3 Route To Legacy']);
+      expect(branchTargets(workflow, 'Degrade V3 Route To Legacy', 0)).toEqual(['Evaluate Conversation Step']);
+    });
+
+    test('attaches a valid decision directly to the early ledger', () => {
+      expect(branchTargets(workflow, 'V3 Proposal Valid?', 0)).toEqual([
+        'Merge V3 Authority Context',
+        'Persist V3 Turn Authority',
+      ]);
+      expect(branchTargets(workflow, 'V3 Proposal Valid?', 1)).toEqual(['Build V3 Repair']);
     });
   });
 });

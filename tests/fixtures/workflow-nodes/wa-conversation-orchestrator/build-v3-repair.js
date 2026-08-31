@@ -54,12 +54,12 @@ function buildV3ContingencyDecision({ policy, reason, expectedSnapshotDigest }) 
   };
   const replyText = 'No pude completar la gestión automática. Derivé el caso al equipo para revisión.';
   const decision = {
-    schema: 'system_contingency_decision/v3',
+    version: 'system_contingency_decision/v3',
     decision_id: decisionId,
     expected_snapshot_digest: expectedSnapshotDigest || null,
     policy_digest: policy.policy_digest,
     reply: { text: replyText, sha256: sha256(replyText), delivery_key: deliveryKey },
-    mutations: [],
+    state_mutations: [],
     effect_commands: [{
       type: 'internal_handoff',
       operation_key: operationKey,
@@ -99,7 +99,7 @@ function planV3Recovery({
 }
 
 function releaseV3Contingency({ decision, handoffReceipt }) {
-  if (decision?.schema !== 'system_contingency_decision/v3') {
+  if (decision?.version !== 'system_contingency_decision/v3') {
     throw new Error('invalid_v3_contingency');
   }
   const command = decision.effect_commands?.find((effect) => effect.type === 'internal_handoff');

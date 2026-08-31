@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { evaluateConversationStep } from '../fixtures/workflow-nodes/wa-conversation-orchestrator/evaluate-conversation-step.js';
 
@@ -32,6 +33,12 @@ const canaryRoute = {
 const outputOf = (row) => {
   const result = evaluateConversationStep(row);
   return result.json ?? result;
+};
+
+const degradeV3Route = (row) => {
+  const workflow = JSON.parse(fs.readFileSync('n8n/workflows/wa-conversation-orchestrator.json', 'utf8'));
+  const node = workflow.nodes.find(({ name }) => name === 'Degrade V3 Route To Legacy');
+  return new Function('items', node.parameters.jsCode)([{ json: row }])[0].json;
 };
 
 describe('the contract route survives step evaluation', () => {
@@ -71,5 +78,29 @@ describe('the contract route survives step evaluation', () => {
 
     expect(out.contract_version ?? null).toBeNull();
     expect(out.contract_route ?? null).toBeNull();
+  });
+
+  test('an active v3 race is explicitly degraded to legacy with its route audit preserved', () => {
+    const out = degradeV3Route({
+      ...turn(canaryRoute),
+      route_matches: false,
+      route_failure_reason: 'active_turn_exists',
+    });
+
+    expect(out).toMatchObject({
+      contract_version: 'legacy',
+      contract_mode: 'legacy',
+      route_mode: 'legacy',
+      v3_route_degraded: true,
+      v3_route_failure_reason: 'active_turn_exists',
+      v3_original_contract_route: canaryRoute.contract_route,
+    });
+    expect(out.contract_route).toMatchObject({
+      contract_version: 'legacy',
+      mode: 'legacy',
+      visible_contract: 'legacy',
+      recovery_contract: 'legacy',
+      legacy_reinterpretation_allowed: true,
+    });
   });
 });

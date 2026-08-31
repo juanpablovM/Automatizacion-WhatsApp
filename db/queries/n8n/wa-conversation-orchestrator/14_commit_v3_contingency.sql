@@ -17,9 +17,9 @@ WITH execution_lock AS MATERIALIZED (
   WHERE execution.decision_id = $1::TEXT
     AND execution.state IN ('prepared', 'delivery_pending', 'delivered')
     AND event.processing_token = $2::TEXT
-    AND decision.output_payload->>'schema' = 'system_contingency_decision/v3'
+    AND decision.output_payload->>'version' = 'system_contingency_decision/v3'
     AND decision.output_payload->>'decision_id' = execution.decision_id
-    AND decision.output_payload->'mutations' = '[]'::JSONB
+    AND decision.output_payload->'state_mutations' = '[]'::JSONB
     AND command.value->>'type' = 'internal_handoff'
     AND COALESCE((command.value->>'required_before_reply')::BOOLEAN, FALSE)
     AND decision.output_payload#>>'{reply,delivery_key}' = execution.delivery_key
@@ -58,7 +58,7 @@ WITH execution_lock AS MATERIALIZED (
   SELECT jsonb_build_object(
     'schema', 'internal_handoff_receipt/v3',
     'operation_key', fixed_handoff.idempotency_key,
-    'id', fixed_handoff.id,
+    'handoff_id', fixed_handoff.id,
     'status', 'succeeded',
     'created_at', fixed_handoff.created_at
   ) AS value
@@ -73,7 +73,7 @@ WITH execution_lock AS MATERIALIZED (
          target.output_payload#>>'{reply,text}',
          jsonb_build_object(
            'number', target.phone_number,
-           'schema', 'system_contingency_decision/v3',
+           'version', 'system_contingency_decision/v3',
            'decision_id', target.decision_id,
            'reply_sha256', target.output_payload#>>'{reply,sha256}',
            'handoff_receipt', handoff_receipt.value

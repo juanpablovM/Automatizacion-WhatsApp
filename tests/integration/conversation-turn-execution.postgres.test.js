@@ -10,6 +10,9 @@ const {
   validateV3AiProposal,
   authorizeV3ConversationDecision,
 } = require('../fixtures/workflow-nodes/shared/v3-contract-runtime.js');
+const {
+  planV3Recovery,
+} = require('../fixtures/workflow-nodes/shared/v3-saga-runtime.js');
 
 const enabled = process.env.TEST_PG_INTEGRATION === '1';
 const describeIntegration = enabled ? describe : describe.skip;
@@ -36,6 +39,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
   const reconcileEffectSql = query('13_reconcile_v3_effect');
   const contingencySql = query('14_commit_v3_contingency');
   const prepareContingencySql = query('15_prepare_v3_contingency');
+  const persistAuthoritySql = query('16_persist_v3_turn_authority');
 
   let sourceNumberId;
   let activeStatusId;
@@ -97,6 +101,23 @@ describeIntegration('v3 conversation turn execution saga', () => {
     return { inboundEventId: rows[0].id, token };
   };
 
+  const seedUnboundEvent = async (phoneNumber, suffix) => {
+    const token = `token-${suffix}`;
+    const { rows } = await client.query(`
+      INSERT INTO inbound_events (
+        instance_name, external_message_id, event_fingerprint, dedupe_key,
+        source_number_id, phone_number, queue_key, event_type, normalized_event,
+        should_process, processing_status, processing_token, processing_phase
+      ) VALUES (
+        'v3-test', $1::text, $1::text, $1::text, $2::bigint, $3::text,
+        $2::bigint::text || ':' || $3::text,
+        'messages.upsert', 'message', TRUE, 'processing', $4::text, 'orchestrating'
+      )
+      RETURNING id
+    `, [`event-${suffix}`, sourceNumberId, phoneNumber, token]);
+    return { inboundEventId: rows[0].id, token };
+  };
+
   const seedConversation = async (qualification = { city: 'Santiago' }) => {
     sequence += 1;
     const { rows } = await client.query(`
@@ -104,10 +125,33 @@ describeIntegration('v3 conversation turn execution saga', () => {
         source_number_id, phone_number, conversation_status_id,
         current_step, qualification_context
       ) VALUES ($1, $2, $3, 'qualification', $4::jsonb)
-      RETURNING id, qualification_context
+      RETURNING id, phone_number, qualification_context
     `, [sourceNumberId, `15559${String(sequence).padStart(6, '0')}`, activeStatusId, qualification]);
     return rows[0];
   };
+
+  const routeEarly = ({
+    event,
+    conversationId = null,
+    phoneNumber,
+    routeMode = 'enforce',
+    routeRuleId = 'test-early-route',
+    textBody = 'Necesito una cotización',
+  }) => client.query(routeSql, [
+    event.inboundEventId,
+    event.token,
+    conversationId,
+    sourceNumberId,
+    phoneNumber,
+    routeMode,
+    routeRuleId,
+    'service',
+    'text',
+    `message-${event.inboundEventId}`,
+    null,
+    textBody,
+    { source: 'integration-test' },
+  ]);
 
   const seedTurn = async ({
     qualification = { city: 'Santiago' },
@@ -122,12 +166,22 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const decisionId = `decision-${suffix}`;
     const deliveryKey = `delivery-${suffix}`;
     const snapshotDigest = `snapshot-${suffix}`;
+    const policyDigest = `policy-${suffix}`;
+    const proposalDigest = `proposal-${suffix}`;
+    const decisionDigest = `decision-digest-${suffix}`;
+    const policy = {
+      version: 'ai_prd_turn_policy/v3',
+      policy_digest: policyDigest,
+      turn: { id: String(event.inboundEventId), conversation_id: String(conversation.id) },
+    };
     const outputPayload = contingency ? {
-      schema: 'system_contingency_decision/v3',
+      version: 'system_contingency_decision/v3',
       decision_id: decisionId,
       expected_snapshot_digest: snapshotDigest,
+      policy_digest: policyDigest,
+      decision_digest: decisionDigest,
       reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
-      mutations: [],
+      state_mutations: [],
       effect_commands: [{
         type: 'internal_handoff',
         operation_key: `handoff-${suffix}`,
@@ -141,40 +195,65 @@ describeIntegration('v3 conversation turn execution saga', () => {
     } : {
       version: 'validated_conversation_decision/v3',
       decision_id: decisionId,
+      turn_id: String(event.inboundEventId),
+      conversation_id: String(conversation.id),
+      conversation_revision_expected: 0,
       expected_snapshot_digest: snapshotDigest,
+      policy_digest: policyDigest,
+      proposal_digest: proposalDigest,
       reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
       state_mutations: stateMutations,
       effect_commands: effectCommands,
     };
-    const advisor = await client.query(`
-      INSERT INTO advisor_decisions (
-        conversation_id, decision_type, input_payload, output_payload,
-        validation_result
-      ) VALUES ($1, 'v3_conversation_decision', $2::jsonb, $3::jsonb, 'accepted')
-      RETURNING id
-    `, [conversation.id, { policy_digest: `policy-${suffix}` }, outputPayload]);
-
-    const routed = await client.query(routeSql, [
-      event.inboundEventId, conversation.id, 'enforce', 'test-rule', 1,
-      snapshotDigest, qualification,
-    ]);
+    const routed = await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'test-rule',
+      textBody: 'Necesito una cotización',
+    });
     expect(routed.rows).toHaveLength(1);
     expect(routed.rows[0].route_acquired).toBe(true);
 
-    const initialState = contingency
-      ? 'prepared'
-      : effectCommands.length > 0 ? 'effects_pending' : 'ready_to_commit';
-    const prepared = await client.query(prepareSql, [
-      event.inboundEventId, advisor.rows[0].id, decisionId, initialState,
-      `policy-${suffix}`, `proposal-${suffix}`, `decision-digest-${suffix}`, deliveryKey,
-    ]);
+    const proposal = { version: 'ai_conversation_proposal/v3', policy_digest: policyDigest };
+    const validation = {
+      version: 'conversation_validation_result/v3',
+      valid: true,
+      policy_digest: policyDigest,
+      proposal_digest: proposalDigest,
+      errors: [],
+    };
+    const prepared = contingency
+      ? await client.query(prepareContingencySql, [
+          event.inboundEventId, event.token, policy, outputPayload,
+        ])
+      : await client.query(persistAuthoritySql, [
+          event.inboundEventId,
+          event.token,
+          conversation.id,
+          sourceNumberId,
+          conversation.phone_number,
+          'text',
+          `message-${event.inboundEventId}`,
+          'Necesito una cotización',
+          { source: 'integration-test' },
+          'service',
+          decisionId,
+          policy,
+          proposal,
+          validation,
+          outputPayload,
+          'integration-provider',
+          'integration-model',
+          decisionDigest,
+        ]);
     expect(prepared.rows[0].decision_matches).toBe(true);
 
     return {
       conversationId: conversation.id,
       inboundEventId: event.inboundEventId,
       token: event.token,
-      advisorDecisionId: advisor.rows[0].id,
+      advisorDecisionId: prepared.rows[0].advisor_decision_id,
       decisionId,
       deliveryKey,
       snapshotDigest,
@@ -202,6 +281,103 @@ describeIntegration('v3 conversation turn execution saga', () => {
   afterAll(async () => {
     await cleanupFixtureNamespace();
     await client.end();
+  });
+
+  test('new contact acquires the v3 ledger before AI compilation', async () => {
+    sequence += 1;
+    const phoneNumber = `15558${String(sequence).padStart(6, '0')}`;
+    const event = await seedUnboundEvent(phoneNumber, `early-route-${sequence}`);
+
+    const routed = await routeEarly({ event, phoneNumber });
+
+    expect(routed.rows).toHaveLength(1);
+    expect(routed.rows[0]).toMatchObject({
+      claim_valid: true,
+      route_acquired: true,
+      replayed: false,
+      route_matches: true,
+      state: 'routed',
+    });
+    expect(routed.rows[0].conversation_id).toBeTruthy();
+    expect(routed.rows[0].incoming_message_id).toBeTruthy();
+
+    const durable = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM conversation_turn_executions
+          WHERE inbound_event_id = $1 AND state = 'routed') AS ledger_rows,
+        (SELECT COUNT(*)::int FROM messages
+          WHERE inbound_event_id = $1 AND direction = 'incoming') AS incoming_rows,
+        (SELECT COUNT(*)::int FROM advisor_decisions
+          WHERE conversation_id = $2) AS advisor_rows
+    `, [event.inboundEventId, routed.rows[0].conversation_id]);
+    expect(durable.rows[0]).toEqual({ ledger_rows: 1, incoming_rows: 1, advisor_rows: 0 });
+  });
+
+  test('replays the same inbound against the original early ledger and incoming evidence', async () => {
+    sequence += 1;
+    const phoneNumber = `15558${String(sequence).padStart(6, '0')}`;
+    const event = await seedUnboundEvent(phoneNumber, `early-replay-${sequence}`);
+    const first = await routeEarly({ event, phoneNumber });
+    const replay = await routeEarly({ event, phoneNumber });
+
+    expect(first.rows[0].route_acquired).toBe(true);
+    expect(replay.rows).toHaveLength(1);
+    expect(replay.rows[0]).toMatchObject({
+      route_acquired: false,
+      replayed: true,
+      route_matches: true,
+      id: first.rows[0].id,
+      conversation_id: first.rows[0].conversation_id,
+      incoming_message_id: first.rows[0].incoming_message_id,
+    });
+
+    const counts = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM conversation_turn_executions
+          WHERE inbound_event_id = $1) AS ledger_rows,
+        (SELECT COUNT(*)::int FROM messages
+          WHERE inbound_event_id = $1 AND direction = 'incoming') AS incoming_rows
+    `, [event.inboundEventId]);
+    expect(counts.rows[0]).toEqual({ ledger_rows: 1, incoming_rows: 1 });
+  });
+
+  test('an active-turn race degrades without a v3 ledger or incoming message', async () => {
+    const conversation = await seedConversation();
+    const firstEvent = await seedEvent(conversation.id, `active-winner-${sequence}`);
+    const winner = await routeEarly({
+      event: firstEvent,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+    });
+    await client.query(
+      "UPDATE inbound_events SET processing_status = 'processed' WHERE id = $1",
+      [firstEvent.inboundEventId],
+    );
+    const losingEvent = await seedEvent(conversation.id, `active-loser-${sequence}`);
+    const loser = await routeEarly({
+      event: losingEvent,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+    });
+
+    expect(winner.rows[0].route_matches).toBe(true);
+    expect(loser.rows).toHaveLength(1);
+    expect(loser.rows[0]).toMatchObject({
+      claim_valid: true,
+      route_acquired: false,
+      replayed: false,
+      route_matches: false,
+      route_failure_reason: 'active_turn_exists',
+    });
+
+    const losingWrites = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM conversation_turn_executions
+          WHERE inbound_event_id = $1) AS ledger_rows,
+        (SELECT COUNT(*)::int FROM messages
+          WHERE inbound_event_id = $1 AND direction = 'incoming') AS incoming_rows
+    `, [losingEvent.inboundEventId]);
+    expect(losingWrites.rows[0]).toEqual({ ledger_rows: 0, incoming_rows: 0 });
   });
 
   test('keeps preparation and the authorized decision immutable on replay', async () => {
@@ -299,6 +475,18 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const suffix = `runtime-contract-${sequence}`;
     const event = await seedEvent(conversation.id, suffix);
     const messageText = 'Soy Pedro y necesito 25 unidades';
+    const routed = await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'runtime-contract',
+      textBody: messageText,
+    });
+    expect(routed.rows[0]).toMatchObject({
+      route_acquired: true,
+      route_matches: true,
+      state: 'routed',
+    });
     const policy = compileV3TurnPolicy({
       turn: {
         id: String(event.inboundEventId),
@@ -379,34 +567,33 @@ describeIntegration('v3 conversation turn execution saga', () => {
       expect.objectContaining({ operation: 'set', field: 'quantity', projected_value: '25 unidades' }),
     ]);
 
-    const advisor = await client.query(`
-      INSERT INTO advisor_decisions (
-        conversation_id, decision_type, input_payload, output_payload,
-        validation_result
-      ) VALUES ($1, 'v3_conversation_decision', $2::jsonb, $3::jsonb, 'accepted')
-      RETURNING id
-    `, [conversation.id, { policy, proposal, validation }, decision]);
-    const routed = await client.query(routeSql, [
+    const attached = await client.query(persistAuthoritySql, [
       event.inboundEventId,
+      event.token,
       conversation.id,
-      'enforce',
-      'runtime-contract',
-      1,
-      decision.expected_snapshot_digest,
-      qualification,
-    ]);
-    expect(routed.rows[0].route_acquired).toBe(true);
-    const prepared = await client.query(prepareSql, [
-      event.inboundEventId,
-      advisor.rows[0].id,
+      sourceNumberId,
+      conversation.phone_number,
+      'text',
+      `message-${event.inboundEventId}`,
+      messageText,
+      { source: 'integration-test' },
+      'service',
       decision.decision_id,
-      'ready_to_commit',
-      decision.policy_digest,
-      decision.proposal_digest,
+      policy,
+      proposal,
+      validation,
+      decision,
+      'integration-provider',
+      'integration-model',
       digestObject(decision),
-      decision.reply.delivery_key,
     ]);
-    expect(prepared.rows[0].decision_matches).toBe(true);
+    expect(attached.rows).toHaveLength(1);
+    expect(attached.rows[0]).toMatchObject({
+      decision_matches: true,
+      decision_id: decision.decision_id,
+      state: 'ready_to_commit',
+    });
+    expect(attached.rows[0].advisor_decision_id).toBeTruthy();
 
     const committed = await client.query(commitSql, [
       decision.decision_id,
@@ -455,22 +642,34 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const other = new pg.Client(connection);
     await other.connect();
     try {
+      const routeValues = (event) => [
+        event.inboundEventId, event.token, conversation.id, sourceNumberId,
+        conversation.phone_number, 'enforce', 'serial', 'service', 'text',
+        `message-${event.inboundEventId}`, null, 'Necesito una cotización',
+        { source: 'integration-test' },
+      ];
       const [a, b] = await Promise.all([
-        client.query(routeSql, [first.inboundEventId, conversation.id, 'enforce', 'serial', 1, 'snap-a', conversation.qualification_context]),
-        other.query(routeSql, [second.inboundEventId, conversation.id, 'enforce', 'serial', 1, 'snap-b', conversation.qualification_context]),
+        client.query(routeSql, routeValues(first)),
+        other.query(routeSql, routeValues(second)),
       ]);
-      expect(a.rows.length + b.rows.length).toBe(1);
-      const activeEvent = (a.rows[0] || b.rows[0]).inbound_event_id;
+      expect(a.rows).toHaveLength(1);
+      expect(b.rows).toHaveLength(1);
+      expect(a.rows[0].route_matches).toBe(true);
+      expect(b.rows[0]).toMatchObject({ claim_valid: false, route_matches: false });
+      const activeEvent = a.rows[0].inbound_event_id;
       await client.query(
         "UPDATE conversation_turn_executions SET state = 'aborted' WHERE inbound_event_id = $1",
         [activeEvent],
       );
-      const waiting = activeEvent === String(first.inboundEventId) ? second : first;
-      const retried = await client.query(routeSql, [
-        waiting.inboundEventId, conversation.id, 'enforce', 'serial', 1,
-        activeEvent === String(first.inboundEventId) ? 'snap-b' : 'snap-a',
-        conversation.qualification_context,
-      ]);
+      await client.query(
+        "UPDATE inbound_events SET processing_status = 'processed' WHERE id = $1",
+        [first.inboundEventId],
+      );
+      await client.query(
+        "UPDATE inbound_events SET processing_status = 'processing' WHERE id = $1",
+        [second.inboundEventId],
+      );
+      const retried = await client.query(routeSql, routeValues(second));
       expect(retried.rows[0].route_acquired).toBe(true);
     } finally {
       await other.end();
@@ -571,7 +770,8 @@ describeIntegration('v3 conversation turn execution saga', () => {
     expect(first.rows[0].handoff_id).toBe(replay.rows[0].handoff_id);
     expect(first.rows[0].delivery_message_id).toBe(replay.rows[0].delivery_message_id);
     expect(first.rows[0].text_body).toBe(replyText);
-    expect(String(first.rows[0].handoff_receipt.id)).toBe(first.rows[0].handoff_id);
+    expect(String(first.rows[0].handoff_receipt.handoff_id)).toBe(first.rows[0].handoff_id);
+    expect(first.rows[0].handoff_receipt).not.toHaveProperty('id');
 
     const persisted = await client.query(`
       SELECT c.qualification_context,
@@ -589,6 +789,109 @@ describeIntegration('v3 conversation turn execution saga', () => {
     expect(persisted.rows[0].messages).toBe(1);
   });
 
+  test('invalid proposal repairs once then commits one contingency handoff and outbox', async () => {
+    const qualification = { city: 'Santiago', service: 'installation' };
+    const conversation = await seedConversation(qualification);
+    const event = await seedEvent(conversation.id, `repair-contingency-${sequence}`);
+    const routed = await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'repair-contingency',
+    });
+    expect(routed.rows[0].state).toBe('routed');
+
+    const policy = compileV3TurnPolicy({
+      turn: {
+        id: String(event.inboundEventId),
+        conversation_id: String(conversation.id),
+        conversation_revision: 0,
+        message: { id: `message-${event.inboundEventId}`, text: 'Necesito ayuda' },
+      },
+      history: { messages: [] },
+      facts: [],
+      goals: [],
+      allowed_mutations: [],
+      grounding: {},
+      claim_rules: [],
+      effect_permissions: [],
+      effect_requirements: [],
+    });
+    const invalidValidation = validateV3AiProposal(policy, null);
+    const firstRecovery = planV3Recovery({
+      policy,
+      validation: invalidValidation,
+      repairAttempt: 0,
+      preTurnState: qualification,
+    });
+    expect(firstRecovery.action).toBe('repair');
+    expect(firstRecovery.repair_request.repair_attempt).toBe(1);
+
+    const expectedSnapshotDigest = digestObject({
+      conversation_revision: policy.turn.conversation_revision,
+      facts: policy.facts,
+    });
+    const terminalRecovery = planV3Recovery({
+      policy,
+      validation: invalidValidation,
+      repairAttempt: firstRecovery.repair_request.repair_attempt,
+      preTurnState: qualification,
+      expectedSnapshotDigest,
+    });
+    expect(terminalRecovery.action).toBe('contingency');
+    expect(terminalRecovery.decision).toMatchObject({
+      version: 'system_contingency_decision/v3',
+      state_mutations: [],
+    });
+
+    const prepared = await client.query(prepareContingencySql, [
+      event.inboundEventId,
+      event.token,
+      policy,
+      terminalRecovery.decision,
+    ]);
+    expect(prepared.rows[0]).toMatchObject({
+      state: 'prepared',
+      decision_matches: true,
+    });
+
+    const firstCommit = await client.query(contingencySql, [
+      terminalRecovery.decision.decision_id,
+      event.token,
+    ]);
+    const replay = await client.query(contingencySql, [
+      terminalRecovery.decision.decision_id,
+      event.token,
+    ]);
+    expect(firstCommit.rows[0]).toMatchObject({ state: 'delivery_pending', replayed: false });
+    expect(replay.rows[0]).toMatchObject({ state: 'delivery_pending', replayed: true });
+    expect(replay.rows[0].handoff_id).toBe(firstCommit.rows[0].handoff_id);
+    expect(replay.rows[0].delivery_message_id).toBe(firstCommit.rows[0].delivery_message_id);
+
+    const durable = await client.query(`
+      SELECT conversation.qualification_context,
+        COUNT(DISTINCT handoff.id)::int AS handoffs,
+        COUNT(DISTINCT message.id)::int AS outbox_messages
+      FROM conversations conversation
+      LEFT JOIN handoffs handoff ON handoff.conversation_id = conversation.id
+        AND handoff.idempotency_key = $2
+      LEFT JOIN messages message ON message.conversation_id = conversation.id
+        AND message.idempotency_key = $3
+        AND message.direction = 'outgoing'
+      WHERE conversation.id = $1
+      GROUP BY conversation.id
+    `, [
+      conversation.id,
+      terminalRecovery.decision.effect_commands[0].operation_key,
+      terminalRecovery.decision.reply.delivery_key,
+    ]);
+    expect(durable.rows[0]).toEqual({
+      qualification_context: qualification,
+      handoffs: 1,
+      outbox_messages: 1,
+    });
+  });
+
   test('persists a generated contingency decision before releasing its handoff', async () => {
     const conversation = await seedConversation({ city: 'Santiago', service: 'installation' });
     const event = await seedEvent(conversation.id, `generated-contingency-${sequence}`);
@@ -601,22 +904,24 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const operationKey = `handoff-generated-${sequence}`;
     const deliveryKey = `delivery-generated-${sequence}`;
     const decision = {
-      schema: 'system_contingency_decision/v3', decision_id: decisionId,
+      version: 'system_contingency_decision/v3', decision_id: decisionId,
       decision_digest: `decision-digest-generated-${sequence}`,
       expected_snapshot_digest: policy.state_authority.expected_snapshot_digest,
       policy_digest: policy.policy_digest,
       reply: { text: 'Derivé el caso al equipo para revisión.', sha256: 'reply-generated', delivery_key: deliveryKey },
-      mutations: [],
+      state_mutations: [],
       effect_commands: [{
         type: 'internal_handoff', operation_key: operationKey,
         payload_digest: `payload-generated-${sequence}`, required_before_reply: true,
         payload: { motive: 'v3_recovery', area: 'sales', area_label: 'Ventas', priority: 'alta', owner: 'Equipo Ventas', trigger: `generated-${sequence}` },
       }],
     };
-    await client.query(routeSql, [
-      event.inboundEventId, conversation.id, 'enforce', 'generated-contingency', 1,
-      policy.state_authority.expected_snapshot_digest, conversation.qualification_context,
-    ]);
+    await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'generated-contingency',
+    });
     const prepared = await client.query(prepareContingencySql, [
       event.inboundEventId, event.token, policy, decision,
     ]);

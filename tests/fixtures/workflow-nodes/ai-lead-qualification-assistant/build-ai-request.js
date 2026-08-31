@@ -185,6 +185,7 @@ if (usesV3Contract) {
     },
   };
   const v3BasePayload = {
+    ...row,
     ai_contract_version: 'v3',
     ai_provider: provider,
     ai_model: model,

@@ -49,4 +49,38 @@ describe('Build AI Request — real n8n Code node wrapper', () => {
     expect(output[0].json.ai_request.messages).toBeInstanceOf(Array);
     expect(output[0].json.ai_request.messages[1].content).toContain('"message_current":"Hola, necesito baldosas para mi patio"');
   });
+
+  test('preserves the v3 policy and repair attempt through the repair request', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const turnPolicy = {
+      version: 'ai_prd_turn_policy/v3',
+      policy_digest: 'a'.repeat(64),
+      state_authority: { allowed_mutations: [] },
+      effect_authority: { permissions: [] },
+    };
+    const repairRequest = {
+      schema: 'ai_conversation_repair_request/v3',
+      policy_digest: turnPolicy.policy_digest,
+      complete_repair: true,
+      repair_attempt: 1,
+      errors: [{ code: 'proposal_shape_invalid', path: '$' }],
+    };
+    const output = runCodeNode(source, [{
+      json: {
+        contract_version: 'v3',
+        turn_policy: turnPolicy,
+        v3_policy: turnPolicy,
+        v3_repair_attempt: 1,
+        ai_repair_request: repairRequest,
+      },
+    }], {
+      AI_DIRECT_API_KEY: 'fake-key-123',
+      AI_DIRECT_API_MODEL: 'test-model',
+    });
+
+    expect(output[0].json.turn_policy).toEqual(turnPolicy);
+    expect(output[0].json.v3_policy).toEqual(turnPolicy);
+    expect(output[0].json.v3_repair_attempt).toBe(1);
+    expect(output[0].json.ai_repair_request).toEqual(repairRequest);
+  });
 });

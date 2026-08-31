@@ -52,4 +52,33 @@ describe('Normalize AI Result — real n8n Code node wrapper', () => {
     expect(output[0].json.ai_parse_error).toBeTruthy();
     expect(output[0].json.should_create_lead).toBe(false);
   });
+
+  test('preserves the v3 policy and repair attempt after normalization', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const turnPolicy = { version: 'ai_prd_turn_policy/v3', policy_digest: 'b'.repeat(64) };
+    const proposal = {
+      version: 'ai_conversation_proposal/v3',
+      policy_digest: turnPolicy.policy_digest,
+      reply_text: 'Propuesta reparada',
+      primary_request: null,
+      observations: [],
+      state_mutations: [],
+      effect_requests: [],
+    };
+    const output = runCodeNode(source, [{
+      json: {
+        ai_contract_version: 'v3',
+        turn_policy: turnPolicy,
+        v3_policy: turnPolicy,
+        v3_repair_attempt: 1,
+        ai_status_code: 200,
+        ai_response: { choices: [{ message: { content: JSON.stringify(proposal) } }] },
+      },
+    }]);
+
+    expect(output[0].json.turn_policy).toEqual(turnPolicy);
+    expect(output[0].json.v3_policy).toEqual(turnPolicy);
+    expect(output[0].json.v3_repair_attempt).toBe(1);
+    expect(output[0].json.ai_proposal).toEqual(proposal);
+  });
 });
