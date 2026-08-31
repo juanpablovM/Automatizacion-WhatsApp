@@ -21,6 +21,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const workflowsDir = path.join(repoRoot, 'n8n', 'workflows');
+const workflowLinks = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, 'n8n', 'workflow-links.json'), 'utf8'),
+).links;
 
 // A sub-workflow returns the output of the last node that ran, so two terminals
 // mean two different output contracts for the caller. One terminal is the norm:
@@ -93,6 +96,14 @@ export const unknownTargets = (workflow) => {
   return [...missing].sort();
 };
 
+export const missingWorkflowLinks = (workflow, links = workflowLinks) => workflow.nodes
+  .filter((node) => node.type === 'n8n-nodes-base.executeWorkflow')
+  .filter((node) => !links.some((link) => (
+    link.sourceWorkflow === workflow.name && link.node === node.name
+  )))
+  .map((node) => `${workflow.name} -> ${node.name}`)
+  .sort();
+
 const branchTargets = (workflow, source, branch) => (
   workflow.connections?.[source]?.main?.[branch] || []
 ).map((target) => target.node).sort();
@@ -123,6 +134,10 @@ describe('Smoke — Workflow connection graph', () => {
 
     test(`${file} connects only nodes that exist`, () => {
       expect(unknownTargets(workflow)).toEqual([]);
+    });
+
+    test(`${file} declares every Execute Workflow node in the link manifest`, () => {
+      expect(missingWorkflowLinks(workflow)).toEqual([]);
     });
   }
 
@@ -172,6 +187,20 @@ describe('Smoke — Workflow connection graph', () => {
       };
       expect(unknownTargets(withGhost)).toEqual(['Node That Was Deleted']);
     });
+
+    test('an Execute Workflow node omitted from the manifest is caught', () => {
+      const unlinked = {
+        name: 'Synthetic Source',
+        nodes: [{
+          name: 'Portable Executor',
+          type: 'n8n-nodes-base.executeWorkflow',
+          parameters: { workflowId: { value: '' } },
+        }],
+      };
+      expect(missingWorkflowLinks(unlinked, [])).toEqual([
+        'Synthetic Source -> Portable Executor',
+      ]);
+    });
   });
 
   describe('v3 durable authority topology', () => {
@@ -211,6 +240,14 @@ describe('Smoke — Workflow connection graph', () => {
       expect(executor.type).toBe('n8n-nodes-base.executeWorkflow');
       expect(executor.parameters.workflowId.cachedResultName).toBe('CRM - Lead Creation And Assignment');
       expect(executor.parameters.options.waitForSubWorkflow).toBe(true);
+    });
+
+    test('declares the portable v3 lead executor in the workflow link manifest', () => {
+      expect(workflowLinks).toContainEqual({
+        sourceWorkflow: 'WA - Conversation Orchestrator',
+        node: 'Execute V3 Lead Effect',
+        targetWorkflow: 'CRM - Lead Creation And Assignment',
+      });
     });
 
     test('leaves delivery pending in the orchestrator until the provider returns', () => {

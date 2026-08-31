@@ -57,6 +57,36 @@ snapshot_production_containers() {
       done >> "$snapshot_path"
 }
 
+capture_n8n_failure_evidence() {
+  {
+    compose exec -T postgres psql -U test -d testdb -At -F '	' <<'SQL'
+SELECT
+  execution.id,
+  COALESCE(workflow.name, execution."workflowId"),
+  execution.status,
+  execution.mode,
+  execution."startedAt",
+  execution."stoppedAt"
+FROM execution_entity execution
+LEFT JOIN workflow_entity workflow ON workflow.id=execution."workflowId"
+ORDER BY execution.id::BIGINT DESC
+LIMIT 50;
+SQL
+  } > "$EVIDENCE_DIR/n8n-execution-summary.tsv" 2>&1 || true
+
+  {
+    compose exec -T postgres psql -U test -d testdb -At -F '	' <<'SQL'
+SELECT
+  data."executionId",
+  data.data,
+  data."workflowData"
+FROM execution_data data
+ORDER BY data."executionId"::BIGINT DESC
+LIMIT 50;
+SQL
+  } > "$EVIDENCE_DIR/n8n-execution-data.tsv" 2>&1 || true
+}
+
 for command in cmp curl docker jq npm; do
   require "$command"
 done
@@ -70,6 +100,7 @@ cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
   if [ "$status" -ne 0 ]; then
+    capture_n8n_failure_evidence
     compose logs --no-color > "$EVIDENCE_DIR/compose.log" 2>&1 || true
     compose ps --all > "$EVIDENCE_DIR/compose-ps.txt" 2>&1 || true
   fi
@@ -216,6 +247,8 @@ turn_two_payload=$(build_payload synthetic-v3-canary-002 \
 post_event() {
   event_payload=$1
   output_file=$2
+  n8n_execution_floor=$(compose exec -T postgres psql -U test -d testdb -At -c \
+    'SELECT COALESCE(MAX(id::BIGINT), 0) FROM execution_entity;')
   status=$(curl -sS -o "$output_file" -w '%{http_code}' \
     -X POST \
     -H 'Content-Type: application/json' \
@@ -230,6 +263,16 @@ wait_for_delivered_turn() {
   status_file=$2
   attempt=0
   while [ "$attempt" -lt 90 ]; do
+    n8n_error=$(compose exec -T postgres psql -U test -d testdb -At -F '|' \
+      -v execution_floor="$n8n_execution_floor" -c \
+      "SELECT execution.id, COALESCE(workflow.name, execution.\"workflowId\"), execution.status
+       FROM execution_entity execution
+       LEFT JOIN workflow_entity workflow ON workflow.id=execution.\"workflowId\"
+       WHERE execution.id::BIGINT > :'execution_floor'::BIGINT
+         AND execution.status='error'
+       ORDER BY execution.id::BIGINT DESC
+       LIMIT 1;")
+    [ -z "$n8n_error" ] || fail "n8n execution failed after $external_message_id: $n8n_error"
     compose exec -T postgres psql -v ON_ERROR_STOP=1 -v external_message_id="$external_message_id" \
       -U test -d testdb -At > "$status_file" <<'SQL'
 SELECT jsonb_build_object(

@@ -73,6 +73,19 @@ describe('v3 canary E2E binding contract', () => {
     expect(harness).toContain('after-replay.json');
   });
 
+  test('fails fast on n8n execution errors and preserves internal execution evidence', () => {
+    const harness = source(harnessPath);
+
+    expect(harness).toContain('n8n_execution_floor');
+    expect(harness).toContain("execution.status='error'");
+    expect(harness).toContain('capture_n8n_failure_evidence');
+    expect(harness).toContain('n8n-execution-summary.tsv');
+    expect(harness).toContain('n8n-execution-data.tsv');
+    expect(harness.indexOf('capture_n8n_failure_evidence')).toBeLessThan(
+      harness.indexOf('compose down -v --remove-orphans'),
+    );
+  });
+
   test('registers a dedicated local AI mock and an isolated CI job', () => {
     const compose = source(composePath);
     const packageJson = JSON.parse(source(packagePath));

@@ -24,6 +24,11 @@
       "targetWorkflow": "AI - Lead Qualification Assistant"
     },
     {
+      "sourceWorkflow": "WA - Conversation Orchestrator",
+      "node": "Execute V3 Lead Effect",
+      "targetWorkflow": "CRM - Lead Creation And Assignment"
+    },
+    {
       "sourceWorkflow": "WA - Inbound Entry",
       "node": "Execute Durable Downstream Dispatcher",
       "targetWorkflow": "WA - Inbound Downstream Dispatcher"
