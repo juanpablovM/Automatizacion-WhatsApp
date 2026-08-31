@@ -1,6 +1,15 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+
+const require = createRequire(import.meta.url);
+const {
+  compileV3TurnPolicy,
+  digestObject,
+  validateV3AiProposal,
+  authorizeV3ConversationDecision,
+} = require('../fixtures/workflow-nodes/shared/v3-contract-runtime.js');
 
 const enabled = process.env.TEST_PG_INTEGRATION === '1';
 const describeIntegration = enabled ? describe : describe.skip;
@@ -102,7 +111,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
 
   const seedTurn = async ({
     qualification = { city: 'Santiago' },
-    mutations = [{ operation: 'set', field: 'service', value: 'installation' }],
+    stateMutations = [{ operation: 'set', field: 'service', projected_value: 'installation' }],
     effectCommands = [],
     replyText = 'Sí, puedo ayudarte exactamente.\n¿En qué comuna sería?',
     contingency = false,
@@ -130,11 +139,11 @@ describeIntegration('v3 conversation turn execution saga', () => {
         },
       }],
     } : {
-      schema: 'validated_conversation_decision/v3',
+      version: 'validated_conversation_decision/v3',
       decision_id: decisionId,
       expected_snapshot_digest: snapshotDigest,
       reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
-      mutations,
+      state_mutations: stateMutations,
       effect_commands: effectCommands,
     };
     const advisor = await client.query(`
@@ -284,6 +293,161 @@ describeIntegration('v3 conversation turn execution saga', () => {
     }
   });
 
+  test('commits the exact decision contract emitted by the canonical runtime', async () => {
+    const qualification = { name: 'Juan', city: 'Santiago' };
+    const conversation = await seedConversation(qualification);
+    const suffix = `runtime-contract-${sequence}`;
+    const event = await seedEvent(conversation.id, suffix);
+    const messageText = 'Soy Pedro y necesito 25 unidades';
+    const policy = compileV3TurnPolicy({
+      turn: {
+        id: String(event.inboundEventId),
+        conversation_id: String(conversation.id),
+        conversation_revision: 1,
+        message: { id: `message-${suffix}`, text: messageText },
+      },
+      history: { messages: [] },
+      facts: [{
+        fact_id: 'fact:name',
+        field: 'name',
+        value: 'Juan',
+        mutability: 'customer_correctable',
+        source: { message_id: 'previous-message', evidence_digest: 'previous-evidence' },
+      }],
+      goals: [
+        { goal_id: 'name', status: 'resolved' },
+        { goal_id: 'quantity', status: 'unresolved' },
+      ],
+      allowed_mutations: [
+        { operation: 'replace', concept: 'name', field: 'name', current_fact_id: 'fact:name' },
+        { operation: 'set', concept: 'quantity', field: 'quantity' },
+      ],
+      grounding: {},
+      claim_rules: [],
+      effect_permissions: [],
+      effect_requirements: [],
+    });
+    const proposal = {
+      version: 'ai_conversation_proposal/v3',
+      policy_digest: policy.policy_digest,
+      reply_text: 'Gracias, Pedro. Registré las 25 unidades.',
+      primary_request: null,
+      observations: [
+        {
+          id: 'observation-name',
+          concept: 'name',
+          raw_value: 'Pedro',
+          normalized_value: 'Pedro',
+          evidence_quote: 'Pedro',
+          evidence_occurrence: 1,
+          grounding_ref: null,
+          resolves_goal_ids: ['name'],
+        },
+        {
+          id: 'observation-quantity',
+          concept: 'quantity',
+          raw_value: '25 unidades',
+          normalized_value: '25 unidades',
+          evidence_quote: '25 unidades',
+          evidence_occurrence: 1,
+          grounding_ref: null,
+          resolves_goal_ids: ['quantity'],
+        },
+      ],
+      state_mutations: [
+        {
+          operation: 'replace',
+          field: 'name',
+          observation_id: 'observation-name',
+          replaces_fact_id: 'fact:name',
+        },
+        {
+          operation: 'set',
+          field: 'quantity',
+          observation_id: 'observation-quantity',
+          replaces_fact_id: null,
+        },
+      ],
+      effect_requests: [],
+    };
+    const validation = validateV3AiProposal(policy, proposal);
+    expect(validation.valid).toBe(true);
+    const decision = authorizeV3ConversationDecision(policy, proposal, validation);
+    expect(decision.version).toBe('validated_conversation_decision/v3');
+    expect(decision.state_mutations).toEqual([
+      expect.objectContaining({ operation: 'replace', field: 'name', projected_value: 'Pedro' }),
+      expect.objectContaining({ operation: 'set', field: 'quantity', projected_value: '25 unidades' }),
+    ]);
+
+    const advisor = await client.query(`
+      INSERT INTO advisor_decisions (
+        conversation_id, decision_type, input_payload, output_payload,
+        validation_result
+      ) VALUES ($1, 'v3_conversation_decision', $2::jsonb, $3::jsonb, 'accepted')
+      RETURNING id
+    `, [conversation.id, { policy, proposal, validation }, decision]);
+    const routed = await client.query(routeSql, [
+      event.inboundEventId,
+      conversation.id,
+      'enforce',
+      'runtime-contract',
+      1,
+      decision.expected_snapshot_digest,
+      qualification,
+    ]);
+    expect(routed.rows[0].route_acquired).toBe(true);
+    const prepared = await client.query(prepareSql, [
+      event.inboundEventId,
+      advisor.rows[0].id,
+      decision.decision_id,
+      'ready_to_commit',
+      decision.policy_digest,
+      decision.proposal_digest,
+      digestObject(decision),
+      decision.reply.delivery_key,
+    ]);
+    expect(prepared.rows[0].decision_matches).toBe(true);
+
+    const committed = await client.query(commitSql, [
+      decision.decision_id,
+      event.token,
+      decision.expected_snapshot_digest,
+    ]);
+
+    expect(committed.rows).toHaveLength(1);
+    expect(committed.rows[0].text_body).toBe(decision.reply.text);
+    expect(committed.rows[0].raw_payload).toMatchObject({
+      version: decision.version,
+      decision_id: decision.decision_id,
+    });
+    expect(committed.rows[0].raw_payload).not.toHaveProperty('schema');
+    const state = await client.query(
+      'SELECT qualification_context FROM conversations WHERE id = $1',
+      [conversation.id],
+    );
+    expect(state.rows[0].qualification_context).toEqual({
+      name: 'Pedro',
+      city: 'Santiago',
+      quantity: '25 unidades',
+    });
+  });
+
+  test('rejects legacy mutation aliases instead of accepting a parallel contract', async () => {
+    await expect(client.query(
+      `SELECT apply_v3_state_mutations(
+        '{}'::jsonb,
+        '[{"operation":"set","field":"quantity","value":"25"}]'::jsonb
+      )`,
+    )).rejects.toThrow(/unsupported v3 mutation operation/i);
+
+    await expect(client.query(
+      `SELECT apply_v3_state_mutations(
+        '{"quantity":"25"}'::jsonb,
+        '[{"operation":"remove","field":"quantity"}]'::jsonb
+      )`,
+    )).rejects.toThrow(/unsupported v3 mutation operation/i);
+  });
+
   test('serializes different active turns for one conversation', async () => {
     const conversation = await seedConversation();
     const first = await seedEvent(conversation.id, `serial-a-${sequence}`);
@@ -400,7 +564,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const replyText = 'No pude completar la gestión automática. Te derivé al equipo para revisión.';
     const turn = await seedTurn({
       qualification: { city: 'Santiago', service: 'installation', budget: 'pending' },
-      mutations: [], replyText, contingency: true,
+      stateMutations: [], replyText, contingency: true,
     });
     const first = await client.query(contingencySql, [turn.decisionId, turn.token]);
     const replay = await client.query(contingencySql, [turn.decisionId, turn.token]);
@@ -464,7 +628,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
   });
 
   test('stores one delivery receipt through the legal terminal transition', async () => {
-    const turn = await seedTurn({ mutations: [] });
+    const turn = await seedTurn({ stateMutations: [] });
     const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
     const receipt = { provider_message_id: 'wamid.v3.1', delivered_bytes_sha256: `reply-turn-${sequence}` };
     const delivered = await client.query(transitionSql, [

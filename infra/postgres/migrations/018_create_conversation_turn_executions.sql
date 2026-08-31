@@ -103,10 +103,9 @@ BEGIN
     IF v_field IS NULL OR v_field LIKE '\_%' ESCAPE '\' THEN
       RAISE EXCEPTION 'invalid v3 mutation field';
     END IF;
-    IF v_mutation->>'operation' = 'set' AND v_mutation ? 'value' THEN
-      v_result := jsonb_set(v_result, ARRAY[v_field], v_mutation->'value', TRUE);
-    ELSIF v_mutation->>'operation' = 'remove' THEN
-      v_result := v_result - v_field;
+    IF v_mutation->>'operation' IN ('set', 'replace')
+       AND v_mutation ? 'projected_value' THEN
+      v_result := jsonb_set(v_result, ARRAY[v_field], v_mutation->'projected_value', TRUE);
     ELSE
       RAISE EXCEPTION 'unsupported v3 mutation operation';
     END IF;

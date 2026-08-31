@@ -1,4 +1,4 @@
-const { createHash } = require('node:crypto');
+const { createHash } = require('crypto');
 
 const canonicalJson = (value) => {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -20,7 +20,7 @@ const requirePolicy = (policy) => {
 function buildV3RepairRequest({ policy, validation, repairAttempt = 0 }) {
   requirePolicy(policy);
   if (repairAttempt !== 0) throw new Error('repair_limit_exhausted');
-  if (validation?.schema !== 'conversation_validation_result/v3'
+  if (validation?.version !== 'conversation_validation_result/v3'
       || validation.valid !== false || !Array.isArray(validation.errors)
       || validation.errors.length === 0) {
     throw new Error('repair_requires_machine_errors');

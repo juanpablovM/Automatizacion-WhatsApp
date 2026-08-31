@@ -15,7 +15,7 @@ WITH execution_lock AS MATERIALIZED (
   WHERE execution.decision_id = $1::TEXT
     AND event.processing_token = $2::TEXT
     AND execution.expected_snapshot_digest = $3::TEXT
-    AND decision.output_payload->>'schema' = 'validated_conversation_decision/v3'
+    AND decision.output_payload->>'version' = 'validated_conversation_decision/v3'
     AND decision.output_payload->>'decision_id' = execution.decision_id
     AND decision.output_payload->>'expected_snapshot_digest' = execution.expected_snapshot_digest
     AND decision.output_payload#>>'{reply,delivery_key}' = execution.delivery_key
@@ -28,7 +28,7 @@ WITH execution_lock AS MATERIALIZED (
   UPDATE conversations conversation
   SET qualification_context = apply_v3_state_mutations(
         target.state_before,
-        COALESCE(target.output_payload->'mutations', '[]'::JSONB)
+        COALESCE(target.output_payload->'state_mutations', '[]'::JSONB)
       ),
       updated_at = NOW()
   FROM target
@@ -46,7 +46,7 @@ WITH execution_lock AS MATERIALIZED (
          target.output_payload#>>'{reply,text}',
          jsonb_build_object(
            'number', target.phone_number,
-           'schema', 'validated_conversation_decision/v3',
+           'version', 'validated_conversation_decision/v3',
            'decision_id', target.decision_id,
            'reply_sha256', target.output_payload#>>'{reply,sha256}'
          ),
