@@ -10,6 +10,17 @@ const canonicalJson = (value) => {
 };
 const sha256 = (value) => createHash('sha256').update(String(value), 'utf8').digest('hex');
 const digestObject = (value) => sha256(canonicalJson(value));
+const cloneJsonValue = (value) => {
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(cloneJsonValue);
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, cloneJsonValue(nested)]),
+    );
+  }
+  if (['string', 'number', 'boolean'].includes(typeof value)) return value;
+  throw new Error('non_json_recovery_state');
+};
 const requirePolicy = (policy) => {
   if (policy?.version !== 'ai_prd_turn_policy/v3' || !policy.policy_digest) {
     throw new Error('invalid_v3_policy');
@@ -76,7 +87,7 @@ function planV3Recovery({
   expectedSnapshotDigest,
 }) {
   requirePolicy(policy);
-  const preservedState = structuredClone(preTurnState ?? {});
+  const preservedState = cloneJsonValue(preTurnState ?? {});
   if (providerOutcome === 'outage' || repairAttempt >= 1) {
     return {
       action: 'contingency',
@@ -139,6 +150,7 @@ if (typeof module !== 'undefined' && module.exports) {
     canonicalJson,
     sha256,
     digestObject,
+    cloneJsonValue,
     buildV3RepairRequest,
     buildV3ContingencyDecision,
     planV3Recovery,
