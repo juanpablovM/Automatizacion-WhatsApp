@@ -149,8 +149,9 @@ if (typeof module !== 'undefined' && module.exports) {
 
 
 const input = items[0]?.json ?? {};
+const policy = input.v3_policy || input.turn_policy;
 const v3Recovery = planV3Recovery({
-  policy: input.v3_policy,
+  policy,
   validation: input.v3_validation ?? null,
   repairAttempt: Number(input.v3_repair_attempt || 0),
   providerOutcome: input.v3_provider_outcome || 'accepted',
@@ -162,7 +163,8 @@ return [{ json: {
   v3_recovery: v3Recovery,
   v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),
   ai_repair_request: v3Recovery.repair_request || null,
-  turn_policy: v3Recovery.repair_request?.policy || input.turn_policy || input.v3_policy,
+  turn_policy: v3Recovery.repair_request?.policy || policy,
+  v3_policy: v3Recovery.repair_request?.policy || policy,
   v3_recovery_decision: v3Recovery.decision || null,
   decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,
   delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,
