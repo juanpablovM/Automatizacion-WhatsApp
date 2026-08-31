@@ -99,6 +99,7 @@ SELECT fixed.*,
        command.whatsapp_name,
        command.external_contact_id,
        command.effect AS v3_effect_command,
+       command.effect->>'payload_digest' AS effect_payload_digest,
        command.v3_decision,
        TRUE AS operation_matches
 FROM fixed

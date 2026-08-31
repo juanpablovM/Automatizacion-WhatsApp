@@ -248,6 +248,24 @@ export const postgresV2BindingIssues = (workflow, file, allowlist = RUNTIME_NODE
     .sort()
 );
 
+// n8n's Postgres v1 node resolves every bound parameter with a flat lookup —
+// `newItem[property] = item.json[property]` in its own genericFunctions.js — so
+// a dotted path like `v3_recovery.decision.decision_id` binds undefined, which
+// reaches Postgres as NULL. Nothing errors: the statement simply matches no row
+// and returns an empty result. That is how `Commit V3 Contingency` silently
+// committed nothing while every value it needed was present in the item.
+export const nestedQueryParamIssues = (workflow, file, allowlist = RUNTIME_NODE_ISSUE_ALLOWLIST) => (
+  (workflow.nodes || [])
+    .filter((node) => node.type === 'n8n-nodes-base.postgres')
+    .filter((node) => !allowlist.has(`${file}::${node.name}`))
+    .flatMap((node) => String(node.parameters?.additionalFields?.queryParams || '')
+      .split(',')
+      .map((param) => param.trim())
+      .filter((param) => param.includes('.'))
+      .map((param) => `${file}::${node.name}::${param}`))
+    .sort()
+);
+
 const branchTargets = (workflow, source, branch) => (
   workflow.connections?.[source]?.main?.[branch] || []
 ).map((target) => target.node).sort();
@@ -296,6 +314,11 @@ describe('Smoke — Workflow connection graph', () => {
 
     test(`${file} uses the Postgres v2 binding schema`, () => {
       expect(postgresV2BindingIssues(workflow, file)).toEqual([]);
+    });
+
+    test(`${file} binds every Postgres parameter as a flat field`, () => {
+      // A nested path binds NULL and the statement quietly matches nothing.
+      expect(nestedQueryParamIssues(workflow, file)).toEqual([]);
     });
   }
 
@@ -369,6 +392,24 @@ describe('Smoke — Workflow connection graph', () => {
       };
       expect(placeholderCredentialIssues(workflow, 'synthetic.json', new Set())).toEqual([
         'synthetic.json::Broken Postgres::postgres',
+      ]);
+    });
+
+    test('a Postgres parameter bound through a nested path is caught', () => {
+      const workflow = {
+        nodes: [{
+          name: 'Commit V3 Contingency',
+          type: 'n8n-nodes-base.postgres',
+          typeVersion: 1,
+          parameters: {
+            additionalFields: {
+              queryParams: 'decision_id, v3_recovery.decision.decision_id, processing_token',
+            },
+          },
+        }],
+      };
+      expect(nestedQueryParamIssues(workflow, 'synthetic.json', new Set())).toEqual([
+        'synthetic.json::Commit V3 Contingency::v3_recovery.decision.decision_id',
       ]);
     });
 
@@ -473,6 +514,37 @@ describe('Smoke — Workflow connection graph', () => {
         (workflow.connections['V3 Recovery Is Contingency?'].main[1] || [])
           .find(({ node }) => node === 'Merge AI Assistance').index,
       ).toBe(0);
+    });
+
+    test('restores the turn context before committing a contingency', () => {
+      // A Postgres node replaces the item with its result set, so the row coming
+      // out of `Prepare V3 Contingency Decision` carries neither `v3_recovery`
+      // nor `processing_token` — the two parameters `Commit V3 Contingency`
+      // binds. The valid lane already solves this by merging the workflow
+      // context back over the row; the contingency lane must do the same or the
+      // commit matches no execution and silently returns zero rows.
+      expect(branchTargets(workflow, 'V3 Recovery Is Contingency?', 0)).toEqual([
+        'Merge V3 Contingency Context',
+        'Prepare V3 Contingency Decision',
+      ]);
+      expect(branchTargets(workflow, 'Prepare V3 Contingency Decision', 0))
+        .toEqual(['Merge V3 Contingency Context']);
+      expect(branchTargets(workflow, 'Merge V3 Contingency Context', 0))
+        .toEqual(['Commit V3 Contingency']);
+
+      // Context on input 0, database row on input 1 — the same shape the
+      // authority lane uses, so the row wins on clashing fields.
+      const inputOf = (source) => workflow.connections[source].main
+        .flat()
+        .find(({ node }) => node === 'Merge V3 Contingency Context').index;
+      expect(inputOf('V3 Recovery Is Contingency?')).toBe(0);
+      expect(inputOf('Prepare V3 Contingency Decision')).toBe(1);
+
+      const merge = workflow.nodes.find(({ name }) => name === 'Merge V3 Contingency Context');
+      const authority = workflow.nodes.find(({ name }) => name === 'Merge V3 Authority Context');
+      expect(merge.type).toBe('n8n-nodes-base.merge');
+      expect(merge.typeVersion).toBe(authority.typeVersion);
+      expect(merge.parameters).toEqual(authority.parameters);
     });
 
     test('attaches a valid decision directly to the early ledger', () => {
