@@ -281,10 +281,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Attach an immutable authorized decision to the previously fixed route.\n-- Replays with the same identities return the existing row unchanged.\nWITH locked AS (\n  SELECT execution.id\n  FROM conversation_turn_executions execution\n  WHERE execution.inbound_event_id = $1::BIGINT\n  FOR UPDATE\n), prepared AS (\n  UPDATE conversation_turn_executions execution\n  SET advisor_decision_id = $2::BIGINT,\n      decision_id = $3::TEXT,\n      state = $4::TEXT,\n      policy_digest = $5::TEXT,\n      proposal_digest = $6::TEXT,\n      decision_digest = $7::TEXT,\n      delivery_key = $8::TEXT,\n      attempt = GREATEST(execution.attempt, 1),\n      updated_at = NOW()\n  FROM locked\n  WHERE execution.id = locked.id\n    AND execution.state = 'routed'\n    AND execution.decision_id IS NULL\n    AND $4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')\n  RETURNING execution.*\n), fixed AS (\n  SELECT prepared.* FROM prepared\n  UNION ALL\n  SELECT execution.*\n  FROM conversation_turn_executions execution\n  WHERE execution.inbound_event_id = $1::BIGINT\n    AND NOT EXISTS (SELECT 1 FROM prepared)\n)\nSELECT execution.*,\n  execution.advisor_decision_id = $2::BIGINT\n    AND execution.decision_id = $3::TEXT\n    AND execution.state = $4::TEXT\n    AND execution.policy_digest = $5::TEXT\n    AND execution.proposal_digest = $6::TEXT\n    AND execution.decision_digest = $7::TEXT\n    AND execution.delivery_key = $8::TEXT AS decision_matches\nFROM fixed execution;\n",
+        "query": "-- Recover the immutable advisor decision already attached by Persist V3 Turn\n-- Authority. This is a read boundary, not a second authority writer.\nSELECT\n  execution.*,\n  decision.output_payload AS v3_decision,\n  decision.input_payload->'policy' AS v3_policy,\n  TRUE AS decision_matches\nFROM conversation_turn_executions execution\nJOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\nWHERE execution.inbound_event_id = $1::BIGINT\n  AND execution.decision_id = decision.output_payload->>'decision_id'\n  AND decision.output_payload->>'version' = 'validated_conversation_decision/v3'\n  AND execution.state IN (\n    'effects_pending', 'reconciliation_required', 'ready_to_commit',\n    'delivery_pending', 'delivered'\n  );\n",
         "additionalFields": {
           "mode": "transaction",
-          "queryParams": "inbound_event_id,advisor_decision_id,decision_id,v3_initial_state,policy_digest,proposal_digest,decision_digest,delivery_key"
+          "queryParams": "inbound_event_id"
         }
       },
       "id": "v3-05",
@@ -353,7 +353,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Claim one authorized blocking effect by stable operation key and payload digest.\n-- Unknown/processing outcomes never become executable without reconciliation.\nWITH operation_lock AS MATERIALIZED (\n  SELECT pg_advisory_xact_lock(hashtextextended('v3-effect:' || $2::TEXT, 0))\n), command AS MATERIALIZED (\n  SELECT execution.id AS execution_id, execution.decision_id, effect.value AS effect\n  FROM conversation_turn_executions execution\n  JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\n  CROSS JOIN LATERAL jsonb_array_elements(\n    COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)\n  ) effect(value)\n  CROSS JOIN operation_lock\n  WHERE execution.decision_id = $1::TEXT\n    AND execution.state IN ('effects_pending', 'reconciliation_required')\n    AND effect.value->>'operation_key' = $2::TEXT\n    AND effect.value->>'type' = $3::TEXT\n    AND effect.value->'payload' = $4::JSONB\n    AND effect.value->>'payload_digest' = $5::TEXT\n    AND COALESCE((effect.value->>'required_before_reply')::BOOLEAN, FALSE)\n), existing AS MATERIALIZED (\n  SELECT operation.*\n  FROM external_operations operation\n  JOIN command ON command.decision_id = operation.request_payload#>>'{v3,decision_id}'\n  WHERE operation.operation_key = $2::TEXT\n    AND operation.request_payload#>>'{v3,payload_digest}' = $5::TEXT\n  FOR UPDATE\n), inserted AS (\n  INSERT INTO external_operations (\n    operation_key, operation_type, entity_type, entity_id, status,\n    attempt_count, locked_at, request_payload, response_payload,\n    reconciliation_required, retry_safe\n  )\n  SELECT $2::TEXT, $3::TEXT, 'conversation_turn_execution', command.execution_id,\n         'processing', 1, NOW(),\n         jsonb_build_object(\n           'payload', $4::JSONB,\n           'v3', jsonb_build_object(\n             'decision_id', command.decision_id,\n             'payload_digest', $5::TEXT,\n             'claim_token', md5(random()::TEXT || clock_timestamp()::TEXT || $2::TEXT)\n           )\n         ),\n         '{}'::JSONB, FALSE, FALSE\n  FROM command\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n  ON CONFLICT (operation_key) DO NOTHING\n  RETURNING *\n), reclaimed AS (\n  UPDATE external_operations operation\n  SET status = 'processing',\n      attempt_count = operation.attempt_count + 1,\n      locked_at = NOW(),\n      request_payload = jsonb_set(\n        operation.request_payload,\n        '{v3,claim_token}',\n        to_jsonb(md5(random()::TEXT || clock_timestamp()::TEXT || operation.operation_key))\n      ),\n      response_payload = jsonb_set(operation.response_payload, '{reconciliation,consumed}', 'true'::JSONB),\n      reconciliation_required = FALSE,\n      retry_safe = FALSE,\n      last_error = NULL,\n      updated_at = NOW()\n  FROM existing\n  WHERE operation.id = existing.id\n    AND existing.status = 'failed'\n    AND existing.retry_safe = TRUE\n    AND existing.reconciliation_required = FALSE\n    AND existing.response_payload#>>'{reconciliation,resolution}' = 'no_effect_proven'\n    AND COALESCE((existing.response_payload#>>'{reconciliation,consumed}')::BOOLEAN, FALSE) = FALSE\n  RETURNING operation.*\n), fixed AS (\n  SELECT inserted.*, TRUE AS should_execute FROM inserted\n  UNION ALL\n  SELECT reclaimed.*, TRUE AS should_execute FROM reclaimed\n  UNION ALL\n  SELECT existing.*, FALSE AS should_execute FROM existing\n  WHERE NOT EXISTS (SELECT 1 FROM reclaimed)\n)\nSELECT fixed.*,\n       fixed.request_payload#>>'{v3,claim_token}' AS claim_token,\n       TRUE AS operation_matches\nFROM fixed;\n",
+        "query": "-- Claim one authorized blocking effect by stable operation key and payload digest.\n-- Unknown/processing outcomes never become executable without reconciliation.\nWITH operation_lock AS MATERIALIZED (\n  SELECT pg_advisory_xact_lock(hashtextextended('v3-effect:' || $2::TEXT, 0))\n), command AS MATERIALIZED (\n  SELECT execution.id AS execution_id,\n         execution.decision_id,\n         execution.conversation_id,\n         conversation.qualification_context,\n         conversation.source_number_id,\n         conversation.phone_number,\n         event.id AS inbound_event_id,\n         COALESCE(event.normalized_payload->>'whatsapp_name', event.raw_payload#>>'{data,pushName}') AS whatsapp_name,\n         COALESCE(event.normalized_payload->>'external_contact_id', event.raw_payload#>>'{data,key,remoteJid}') AS external_contact_id,\n         decision.output_payload AS v3_decision,\n         effect.value AS effect\n  FROM conversation_turn_executions execution\n  JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\n  JOIN conversations conversation ON conversation.id = execution.conversation_id\n  JOIN inbound_events event ON event.id = execution.inbound_event_id\n  CROSS JOIN LATERAL jsonb_array_elements(\n    COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)\n  ) effect(value)\n  CROSS JOIN operation_lock\n  WHERE execution.decision_id = $1::TEXT\n    AND execution.state IN ('effects_pending', 'reconciliation_required')\n    AND effect.value->>'operation_key' = $2::TEXT\n    AND effect.value->>'type' = $3::TEXT\n    AND effect.value->>'type' IN ('create_lead', 'handoff')\n    AND effect.value->'payload' = $4::JSONB\n    AND effect.value->>'payload_digest' = $5::TEXT\n    AND COALESCE((effect.value->>'required_before_reply')::BOOLEAN, FALSE)\n), existing AS MATERIALIZED (\n  SELECT operation.*\n  FROM external_operations operation\n  JOIN command ON command.decision_id = operation.request_payload#>>'{v3,decision_id}'\n  WHERE operation.operation_key = $2::TEXT\n    AND operation.request_payload#>>'{v3,payload_digest}' = $5::TEXT\n  FOR UPDATE\n), inserted AS (\n  INSERT INTO external_operations (\n    operation_key, operation_type, entity_type, entity_id, status,\n    attempt_count, locked_at, request_payload, response_payload,\n    reconciliation_required, retry_safe\n  )\n  SELECT $2::TEXT, $3::TEXT, 'conversation_turn_execution', command.execution_id,\n         'processing', 1, NOW(),\n         jsonb_build_object(\n           'payload', $4::JSONB,\n           'v3', jsonb_build_object(\n             'decision_id', command.decision_id,\n             'payload_digest', $5::TEXT,\n             'claim_token', md5(random()::TEXT || clock_timestamp()::TEXT || $2::TEXT)\n           )\n         ),\n         '{}'::JSONB, FALSE, FALSE\n  FROM command\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n  ON CONFLICT (operation_key) DO NOTHING\n  RETURNING *\n), reclaimed AS (\n  UPDATE external_operations operation\n  SET status = 'processing',\n      attempt_count = operation.attempt_count + 1,\n      locked_at = NOW(),\n      request_payload = jsonb_set(\n        operation.request_payload,\n        '{v3,claim_token}',\n        to_jsonb(md5(random()::TEXT || clock_timestamp()::TEXT || operation.operation_key))\n      ),\n      response_payload = jsonb_set(operation.response_payload, '{reconciliation,consumed}', 'true'::JSONB),\n      reconciliation_required = FALSE,\n      retry_safe = FALSE,\n      last_error = NULL,\n      updated_at = NOW()\n  FROM existing\n  WHERE operation.id = existing.id\n    AND existing.status = 'failed'\n    AND existing.retry_safe = TRUE\n    AND existing.reconciliation_required = FALSE\n    AND existing.response_payload#>>'{reconciliation,resolution}' = 'no_effect_proven'\n    AND COALESCE((existing.response_payload#>>'{reconciliation,consumed}')::BOOLEAN, FALSE) = FALSE\n  RETURNING operation.*\n), fixed AS (\n  SELECT inserted.*, TRUE AS should_execute FROM inserted\n  UNION ALL\n  SELECT reclaimed.*, TRUE AS should_execute FROM reclaimed\n  UNION ALL\n  SELECT existing.*, FALSE AS should_execute FROM existing\n  WHERE NOT EXISTS (SELECT 1 FROM reclaimed)\n)\nSELECT fixed.*,\n       fixed.request_payload#>>'{v3,claim_token}' AS claim_token,\n       command.conversation_id,\n       command.qualification_context,\n       command.source_number_id,\n       command.phone_number,\n       command.inbound_event_id,\n       command.whatsapp_name,\n       command.external_contact_id,\n       command.effect AS v3_effect_command,\n       command.v3_decision,\n       TRUE AS operation_matches\nFROM fixed\nJOIN command ON command.execution_id = fixed.entity_id;\n",
         "additionalFields": {
           "mode": "transaction",
           "queryParams": "decision_id,v3_effect_command.operation_key,v3_effect_command.type,v3_effect_command.payload,v3_effect_command.payload_digest"
@@ -588,7 +588,7 @@
           "conditions": [
             {
               "id": "v3-17-condition",
-              "leftValue": "={{ Boolean($('Apply AI Assistance').first().json.v3_effect_outcome) }}",
+              "leftValue": "={{ $json.should_execute === true }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -602,7 +602,7 @@
         "options": {}
       },
       "id": "v3-17",
-      "name": "V3 Effect Result Present?",
+      "name": "V3 Effect Should Execute?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
@@ -613,10 +613,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Persist one provider outcome with its exact claim token, then advance the\n-- ledger only from durable receipts. Unknown outcomes enter reconciliation.\nWITH target AS MATERIALIZED (\n  SELECT operation.*\n  FROM external_operations operation\n  WHERE operation.operation_key = $1::TEXT\n    AND operation.request_payload#>>'{v3,payload_digest}' = $2::TEXT\n    AND operation.request_payload#>>'{v3,claim_token}' = $3::TEXT\n    AND operation.status = 'processing'\n  FOR UPDATE\n), recorded AS (\n  UPDATE external_operations operation\n  SET status = CASE $4::TEXT\n        WHEN 'succeeded' THEN 'succeeded'\n        WHEN 'failed' THEN 'failed'\n        WHEN 'unknown' THEN 'unknown'\n      END,\n      external_id = NULLIF($6::TEXT, ''),\n      response_payload = COALESCE($5::JSONB, '{}'::JSONB),\n      completed_at = CASE WHEN $4::TEXT IN ('succeeded', 'failed') THEN NOW() END,\n      last_error = NULLIF($7::TEXT, ''),\n      reconciliation_required = $4::TEXT = 'unknown',\n      reconciliation_reason = CASE WHEN $4::TEXT = 'unknown' THEN COALESCE(NULLIF($7::TEXT, ''), 'ambiguous_effect_outcome') END,\n      retry_safe = FALSE,\n      updated_at = NOW()\n  FROM target\n  WHERE operation.id = target.id\n    AND $4::TEXT IN ('succeeded', 'failed', 'unknown')\n  RETURNING operation.*\n), receipt AS MATERIALIZED (\n  SELECT jsonb_build_object(\n    'operation_key', recorded.operation_key,\n    'payload_digest', recorded.request_payload#>>'{v3,payload_digest}',\n    'status', recorded.status,\n    'external_id', recorded.external_id,\n    'recorded_at', recorded.updated_at\n  ) AS value,\n  recorded.request_payload#>>'{v3,decision_id}' AS decision_id,\n  recorded.status\n  FROM recorded\n), execution_update AS (\n  UPDATE conversation_turn_executions execution\n  SET effect_receipt_refs = CASE\n        WHEN EXISTS (\n          SELECT 1 FROM jsonb_array_elements(execution.effect_receipt_refs) item\n          WHERE item->>'operation_key' = $1::TEXT\n        ) THEN execution.effect_receipt_refs\n        ELSE execution.effect_receipt_refs || jsonb_build_array(receipt.value)\n      END,\n      state = CASE\n        WHEN receipt.status = 'unknown' THEN 'reconciliation_required'\n        WHEN receipt.status = 'failed' THEN 'aborted'\n        WHEN NOT EXISTS (\n          SELECT 1\n          FROM advisor_decisions decision\n          CROSS JOIN LATERAL jsonb_array_elements(\n            COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)\n          ) command(value)\n          WHERE decision.id = execution.advisor_decision_id\n            AND COALESCE((command.value->>'required_before_reply')::BOOLEAN, FALSE)\n            AND NOT EXISTS (\n              SELECT 1 FROM external_operations operation\n              WHERE operation.operation_key = command.value->>'operation_key'\n                AND operation.status = 'succeeded'\n                AND operation.request_payload#>>'{v3,payload_digest}' = command.value->>'payload_digest'\n            )\n        ) THEN 'ready_to_commit'\n        ELSE 'effects_pending'\n      END,\n      last_error = CASE\n        WHEN receipt.status IN ('unknown', 'failed')\n          THEN jsonb_build_object('code', COALESCE(NULLIF($7::TEXT, ''), receipt.status || '_effect'))\n        ELSE NULL\n      END,\n      updated_at = NOW()\n  FROM receipt\n  WHERE execution.decision_id = receipt.decision_id\n    AND execution.state IN ('effects_pending', 'reconciliation_required')\n  RETURNING execution.*\n)\nSELECT recorded.*, execution_update.state AS execution_state,\n       execution_update.effect_receipt_refs, execution_update.last_error\nFROM recorded\nJOIN execution_update\n  ON execution_update.decision_id = recorded.request_payload#>>'{v3,decision_id}';\n",
+        "query": "-- Persist one provider outcome with its exact claim token, then advance the\n-- ledger only from durable receipts. Unknown outcomes enter reconciliation.\nWITH target AS MATERIALIZED (\n  SELECT operation.*\n  FROM external_operations operation\n  WHERE operation.operation_key = $1::TEXT\n    AND operation.request_payload#>>'{v3,payload_digest}' = $2::TEXT\n    AND operation.request_payload#>>'{v3,claim_token}' = $3::TEXT\n    AND operation.status = 'processing'\n  FOR UPDATE\n), recorded AS (\n  UPDATE external_operations operation\n  SET status = CASE $4::TEXT\n        WHEN 'succeeded' THEN 'succeeded'\n        WHEN 'failed' THEN 'failed'\n        WHEN 'unknown' THEN 'unknown'\n      END,\n      external_id = NULLIF($6::TEXT, ''),\n      response_payload = COALESCE($5::JSONB, '{}'::JSONB),\n      completed_at = CASE WHEN $4::TEXT IN ('succeeded', 'failed') THEN NOW() END,\n      last_error = NULLIF($7::TEXT, ''),\n      reconciliation_required = $4::TEXT = 'unknown',\n      reconciliation_reason = CASE WHEN $4::TEXT = 'unknown' THEN COALESCE(NULLIF($7::TEXT, ''), 'ambiguous_effect_outcome') END,\n      retry_safe = FALSE,\n      updated_at = NOW()\n  FROM target\n  WHERE operation.id = target.id\n    AND $4::TEXT IN ('succeeded', 'failed', 'unknown')\n    AND (\n      $4::TEXT <> 'succeeded'\n      OR (\n        $5::JSONB->>'version' = 'v3_effect_receipt/v1'\n        AND $5::JSONB->>'operation_key' = target.operation_key\n        AND $5::JSONB->>'payload_digest' = target.request_payload#>>'{v3,payload_digest}'\n        AND $5::JSONB->>'effect_type' = target.operation_type\n        AND $5::JSONB->>'status' = 'succeeded'\n        AND (\n          (target.operation_type = 'create_lead' AND NULLIF($5::JSONB->>'lead_id', '') IS NOT NULL)\n          OR (\n            target.operation_type = 'handoff'\n            AND NULLIF($5::JSONB->>'handoff_id', '') IS NOT NULL\n            AND NOT ($5::JSONB ? 'id')\n          )\n        )\n      )\n    )\n  RETURNING operation.*\n), receipt AS MATERIALIZED (\n  SELECT CASE\n    WHEN recorded.status = 'succeeded' THEN\n      COALESCE($5::JSONB, '{}'::JSONB) || jsonb_build_object('recorded_at', recorded.updated_at)\n    ELSE jsonb_build_object(\n      'version', 'v3_effect_receipt/v1',\n      'operation_key', recorded.operation_key,\n      'payload_digest', recorded.request_payload#>>'{v3,payload_digest}',\n      'effect_type', recorded.operation_type,\n      'status', recorded.status,\n      'error', NULLIF($7::TEXT, ''),\n      'recorded_at', recorded.updated_at\n    )\n  END AS value,\n  recorded.request_payload#>>'{v3,decision_id}' AS decision_id,\n  recorded.status\n  FROM recorded\n), execution_update AS (\n  UPDATE conversation_turn_executions execution\n  SET effect_receipt_refs = CASE\n        WHEN EXISTS (\n          SELECT 1 FROM jsonb_array_elements(execution.effect_receipt_refs) item\n          WHERE item->>'operation_key' = $1::TEXT\n        ) THEN execution.effect_receipt_refs\n        ELSE execution.effect_receipt_refs || jsonb_build_array(receipt.value)\n      END,\n      state = CASE\n        WHEN receipt.status = 'unknown' THEN 'reconciliation_required'\n        WHEN receipt.status = 'failed' THEN 'aborted'\n        WHEN NOT EXISTS (\n          SELECT 1\n          FROM advisor_decisions decision\n          CROSS JOIN LATERAL jsonb_array_elements(\n            COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)\n          ) command(value)\n          WHERE decision.id = execution.advisor_decision_id\n            AND COALESCE((command.value->>'required_before_reply')::BOOLEAN, FALSE)\n            AND NOT EXISTS (\n              SELECT 1 FROM recorded current_operation\n              WHERE current_operation.operation_key = command.value->>'operation_key'\n                AND current_operation.status = 'succeeded'\n                AND current_operation.request_payload#>>'{v3,payload_digest}' = command.value->>'payload_digest'\n            )\n            AND NOT EXISTS (\n              SELECT 1 FROM external_operations operation\n              WHERE operation.operation_key = command.value->>'operation_key'\n                AND operation.status = 'succeeded'\n                AND operation.request_payload#>>'{v3,payload_digest}' = command.value->>'payload_digest'\n            )\n        ) THEN 'ready_to_commit'\n        ELSE 'effects_pending'\n      END,\n      last_error = CASE\n        WHEN receipt.status IN ('unknown', 'failed')\n          THEN jsonb_build_object('code', COALESCE(NULLIF($7::TEXT, ''), receipt.status || '_effect'))\n        ELSE NULL\n      END,\n      updated_at = NOW()\n  FROM receipt\n  WHERE execution.decision_id = receipt.decision_id\n    AND execution.state IN ('effects_pending', 'reconciliation_required')\n  RETURNING execution.*\n)\nSELECT recorded.*, execution_update.state AS execution_state,\n       execution_update.effect_receipt_refs, execution_update.last_error,\n       decision.output_payload AS v3_decision\nFROM recorded\nJOIN execution_update\n  ON execution_update.decision_id = recorded.request_payload#>>'{v3,decision_id}'\nJOIN advisor_decisions decision ON decision.id = execution_update.advisor_decision_id;\n",
         "additionalFields": {
           "mode": "transaction",
-          "queryParams": "operation_key,v3_effect_payload_digest,v3_effect_claim_token,v3_effect_outcome,v3_effect_response,v3_effect_external_id,v3_effect_error"
+          "queryParams": "operation_key,v3_effect_payload_digest,v3_effect_claim_token,v3_effect_outcome,v3_effect_receipt,v3_effect_external_id,v3_effect_error"
         }
       },
       "id": "v3-18",
@@ -869,6 +869,130 @@
         1840,
         500
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-effect-type-create-lead-condition",
+              "leftValue": "={{ $json.v3_effect_command?.type === 'create_lead' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-effect-type-create-lead",
+      "name": "V3 Effect Is Create Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3320,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const buildV3LeadEffect = (row) => ({\n  ...row,\n  operation_key: row.operation_key,\n  source_number_id: row.source_number_id,\n  phone_number: row.phone_number,\n  external_contact_id: row.external_contact_id ?? null,\n  whatsapp_name: row.whatsapp_name ?? null,\n  service: row.qualification_context?.service ?? null,\n  city: row.qualification_context?.city ?? null,\n  requirement: row.qualification_context?.requirement ?? null,\n  is_partial: false,\n  conversation_id: row.conversation_id,\n  qualification_context: row.qualification_context ?? {},\n  qualification_context_json: JSON.stringify(row.qualification_context ?? {}),\n  commercial_missing_fields: [],\n});\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { buildV3LeadEffect };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: buildV3LeadEffect(item.json ?? {}) }));\n}\n"
+      },
+      "id": "v3-build-lead-effect",
+      "name": "Build V3 Lead Effect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "CRM - Lead Creation And Assignment"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "v3-execute-lead-effect",
+      "name": "Execute V3 Lead Effect",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3760,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "v3-merge-lead-effect",
+      "name": "Merge V3 Lead Effect Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3980,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Execute one authorized normal handoff from its exact external-operation\n-- claim. The contingency-only internal_handoff type is intentionally excluded.\nWITH target AS MATERIALIZED (\n  SELECT operation.*, execution.decision_id, execution.inbound_event_id,\n         conversation.id AS conversation_id, conversation.phone_number,\n         conversation.source_number_id\n  FROM external_operations operation\n  JOIN conversation_turn_executions execution\n    ON operation.entity_type = 'conversation_turn_execution'\n   AND operation.entity_id = execution.id\n  JOIN conversations conversation ON conversation.id = execution.conversation_id\n  WHERE operation.operation_key = $1::TEXT\n    AND operation.operation_type = 'handoff'\n    AND operation.status = 'processing'\n    AND operation.request_payload#>>'{v3,decision_id}' = $2::TEXT\n    AND operation.request_payload#>>'{v3,payload_digest}' = $3::TEXT\n    AND operation.request_payload#>>'{v3,claim_token}' = $4::TEXT\n  FOR UPDATE OF operation, execution, conversation\n), inserted AS (\n  INSERT INTO handoffs (\n    idempotency_key, conversation_id, phone_number, source_number_id,\n    inbound_event_id, motivo, area, area_label, prioridad, responsable,\n    trigger, escalation_reason, escalation_area, intent, metadata\n  )\n  SELECT target.operation_key, target.conversation_id, target.phone_number,\n         target.source_number_id, target.inbound_event_id,\n         'v3_authorized_handoff', 'sales', 'Ventas', 'alta', 'Equipo Ventas',\n         'v3_effect', 'v3_authorized_handoff', 'sales', 'v3_handoff',\n         jsonb_build_object(\n           'decision_id', target.decision_id,\n           'payload_digest', $3::TEXT,\n           'effect_payload', target.request_payload->'payload'\n         )\n  FROM target\n  ON CONFLICT (idempotency_key) WHERE deleted_at IS NULL DO NOTHING\n  RETURNING *\n), fixed AS MATERIALIZED (\n  SELECT inserted.* FROM inserted\n  UNION ALL\n  SELECT handoff.*\n  FROM handoffs handoff\n  JOIN target ON target.operation_key = handoff.idempotency_key\n  WHERE handoff.deleted_at IS NULL\n    AND NOT EXISTS (SELECT 1 FROM inserted)\n)\nSELECT\n  target.operation_key,\n  target.operation_type,\n  $3::TEXT AS payload_digest,\n  $4::TEXT AS claim_token,\n  fixed.id AS handoff_id,\n  jsonb_build_object(\n    'version', 'v3_effect_receipt/v1',\n    'operation_key', target.operation_key,\n    'payload_digest', $3::TEXT,\n    'effect_type', 'handoff',\n    'status', 'succeeded',\n    'handoff_id', fixed.id\n  ) AS v3_effect_receipt\nFROM target\nCROSS JOIN fixed;\n",
+        "additionalFields": {
+          "mode": "transaction",
+          "queryParams": "operation_key,decision_id,v3_effect_command.payload_digest,claim_token"
+        }
+      },
+      "id": "v3-persist-handoff-effect",
+      "name": "Persist V3 Handoff Effect",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        3540,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const pick = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');\n\nconst normalizeV3EffectReceipt = (row) => {\n  const effectType = pick(row.operation_type, row.operation_type_1, row.v3_effect_command?.type);\n  const operationKey = pick(row.operation_key, row.operation_key_1, row.v3_effect_command?.operation_key);\n  const payloadDigest = pick(row.payload_digest, row.payload_digest_1, row.v3_effect_command?.payload_digest);\n  const claimToken = pick(row.claim_token, row.claim_token_1);\n  const error = pick(row.error, row.error_message, row.execution_error);\n\n  if (error) {\n    return {\n      ...row,\n      operation_key: operationKey,\n      v3_effect_payload_digest: payloadDigest,\n      v3_effect_claim_token: claimToken,\n      v3_effect_outcome: 'failed',\n      v3_effect_receipt: {\n        version: 'v3_effect_receipt/v1', operation_key: operationKey,\n        payload_digest: payloadDigest, effect_type: effectType,\n        status: 'failed', error: String(error),\n      },\n      v3_effect_external_id: null,\n      v3_effect_error: String(error),\n    };\n  }\n\n  const provided = row.v3_effect_receipt && typeof row.v3_effect_receipt === 'object'\n    ? row.v3_effect_receipt\n    : {};\n  const leadId = pick(row.lead_id_1, row.lead_id, provided.lead_id);\n  const handoffId = pick(row.handoff_id, row.handoff_id_1, provided.handoff_id);\n  if (effectType === 'create_lead' && !leadId) throw new Error('create_lead_receipt_missing_lead_id');\n  if (effectType === 'handoff' && !handoffId) throw new Error('handoff_receipt_missing_handoff_id');\n  if (!['create_lead', 'handoff'].includes(effectType)) throw new Error('unsupported_v3_effect_type');\n\n  const receipt = {\n    version: 'v3_effect_receipt/v1',\n    operation_key: operationKey,\n    payload_digest: payloadDigest,\n    effect_type: effectType,\n    status: 'succeeded',\n    ...(effectType === 'create_lead' ? { lead_id: leadId } : {}),\n    ...(effectType === 'handoff' ? { handoff_id: handoffId } : {}),\n  };\n  return {\n    ...row,\n    operation_key: operationKey,\n    v3_effect_payload_digest: payloadDigest,\n    v3_effect_claim_token: claimToken,\n    v3_effect_outcome: 'succeeded',\n    v3_effect_receipt: receipt,\n    v3_effect_external_id: String(leadId ?? handoffId),\n    v3_effect_error: null,\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { normalizeV3EffectReceipt };\n}\n\nif (typeof items !== 'undefined') {\n  return items.map((item) => ({ json: normalizeV3EffectReceipt(item.json ?? {}) }));\n}\n"
+      },
+      "id": "v3-normalize-effect-receipt",
+      "name": "Normalize V3 Effect Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4200,
+        240
+      ]
     }
   ],
   "pinData": {},
@@ -1084,7 +1208,7 @@
       "main": [
         [
           {
-            "node": "V3 Effect Result Present?",
+            "node": "V3 Effect Should Execute?",
             "type": "main",
             "index": 0
           }
@@ -1176,24 +1300,6 @@
         [
           {
             "node": "Commit V3 Contingency",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "V3 Effect Result Present?": {
-      "main": [
-        [
-          {
-            "node": "Record V3 Effect Result",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "V3 Effect Needs Reconciliation?",
             "type": "main",
             "index": 0
           }
@@ -1368,6 +1474,102 @@
         [
           {
             "node": "Evaluate Conversation Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Effect Should Execute?": {
+      "main": [
+        [
+          {
+            "node": "V3 Effect Is Create Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "V3 Effect Needs Reconciliation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Effect Is Create Lead?": {
+      "main": [
+        [
+          {
+            "node": "Build V3 Lead Effect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist V3 Handoff Effect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build V3 Lead Effect": {
+      "main": [
+        [
+          {
+            "node": "Execute V3 Lead Effect",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge V3 Lead Effect Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute V3 Lead Effect": {
+      "main": [
+        [
+          {
+            "node": "Merge V3 Lead Effect Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge V3 Lead Effect Context": {
+      "main": [
+        [
+          {
+            "node": "Normalize V3 Effect Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist V3 Handoff Effect": {
+      "main": [
+        [
+          {
+            "node": "Normalize V3 Effect Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize V3 Effect Receipt": {
+      "main": [
+        [
+          {
+            "node": "Record V3 Effect Result",
             "type": "main",
             "index": 0
           }

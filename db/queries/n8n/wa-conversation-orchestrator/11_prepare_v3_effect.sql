@@ -3,9 +3,21 @@
 WITH operation_lock AS MATERIALIZED (
   SELECT pg_advisory_xact_lock(hashtextextended('v3-effect:' || $2::TEXT, 0))
 ), command AS MATERIALIZED (
-  SELECT execution.id AS execution_id, execution.decision_id, effect.value AS effect
+  SELECT execution.id AS execution_id,
+         execution.decision_id,
+         execution.conversation_id,
+         conversation.qualification_context,
+         conversation.source_number_id,
+         conversation.phone_number,
+         event.id AS inbound_event_id,
+         COALESCE(event.normalized_payload->>'whatsapp_name', event.raw_payload#>>'{data,pushName}') AS whatsapp_name,
+         COALESCE(event.normalized_payload->>'external_contact_id', event.raw_payload#>>'{data,key,remoteJid}') AS external_contact_id,
+         decision.output_payload AS v3_decision,
+         effect.value AS effect
   FROM conversation_turn_executions execution
   JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+  JOIN conversations conversation ON conversation.id = execution.conversation_id
+  JOIN inbound_events event ON event.id = execution.inbound_event_id
   CROSS JOIN LATERAL jsonb_array_elements(
     COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)
   ) effect(value)
@@ -14,6 +26,7 @@ WITH operation_lock AS MATERIALIZED (
     AND execution.state IN ('effects_pending', 'reconciliation_required')
     AND effect.value->>'operation_key' = $2::TEXT
     AND effect.value->>'type' = $3::TEXT
+    AND effect.value->>'type' IN ('create_lead', 'handoff')
     AND effect.value->'payload' = $4::JSONB
     AND effect.value->>'payload_digest' = $5::TEXT
     AND COALESCE((effect.value->>'required_before_reply')::BOOLEAN, FALSE)
@@ -78,5 +91,15 @@ WITH operation_lock AS MATERIALIZED (
 )
 SELECT fixed.*,
        fixed.request_payload#>>'{v3,claim_token}' AS claim_token,
+       command.conversation_id,
+       command.qualification_context,
+       command.source_number_id,
+       command.phone_number,
+       command.inbound_event_id,
+       command.whatsapp_name,
+       command.external_contact_id,
+       command.effect AS v3_effect_command,
+       command.v3_decision,
        TRUE AS operation_matches
-FROM fixed;
+FROM fixed
+JOIN command ON command.execution_id = fixed.entity_id;

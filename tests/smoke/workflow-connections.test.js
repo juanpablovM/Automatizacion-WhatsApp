@@ -196,5 +196,21 @@ describe('Smoke — Workflow connection graph', () => {
       ]);
       expect(branchTargets(workflow, 'V3 Proposal Valid?', 1)).toEqual(['Build V3 Repair']);
     });
+
+    test('executes canonical v3 effects and converges both receipts before commit', () => {
+      expect(branchTargets(workflow, 'Prepare V3 Effect', 0)).toEqual(['V3 Effect Should Execute?']);
+      expect(branchTargets(workflow, 'V3 Effect Should Execute?', 0)).toEqual(['V3 Effect Is Create Lead?']);
+      expect(branchTargets(workflow, 'V3 Effect Should Execute?', 1)).toEqual(['V3 Effect Needs Reconciliation?']);
+      expect(branchTargets(workflow, 'V3 Effect Is Create Lead?', 0)).toEqual(['Build V3 Lead Effect']);
+      expect(branchTargets(workflow, 'V3 Effect Is Create Lead?', 1)).toEqual(['Persist V3 Handoff Effect']);
+      expect(branchTargets(workflow, 'Merge V3 Lead Effect Context', 0)).toEqual(['Normalize V3 Effect Receipt']);
+      expect(branchTargets(workflow, 'Persist V3 Handoff Effect', 0)).toEqual(['Normalize V3 Effect Receipt']);
+      expect(branchTargets(workflow, 'Normalize V3 Effect Receipt', 0)).toEqual(['Record V3 Effect Result']);
+      expect(branchTargets(workflow, 'Record V3 Effect Result', 0)).toEqual(['Prepare V3 Effects']);
+      const executor = workflow.nodes.find(({ name }) => name === 'Execute V3 Lead Effect');
+      expect(executor.type).toBe('n8n-nodes-base.executeWorkflow');
+      expect(executor.parameters.workflowId.cachedResultName).toBe('CRM - Lead Creation And Assignment');
+      expect(executor.parameters.options.waitForSubWorkflow).toBe(true);
+    });
   });
 });

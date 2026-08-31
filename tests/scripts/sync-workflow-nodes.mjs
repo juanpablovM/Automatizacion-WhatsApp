@@ -79,6 +79,16 @@ const NODES = [
   },
   {
     workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Build V3 Lead Effect',
+    fixture: 'wa-conversation-orchestrator/build-v3-lead-effect.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
+    node: 'Normalize V3 Effect Receipt',
+    fixture: 'wa-conversation-orchestrator/normalize-v3-effect-receipt.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
     node: 'Validate And Authorize V3',
     fixture: 'wa-conversation-orchestrator/validate-and-authorize-v3.js',
     runtimes: ['shared/v3-contract-runtime.js'],
@@ -104,6 +114,7 @@ const NODES = [
     ['Commit V3 State And Outbox', '09_commit_v3_turn.sql'],
     ['Record V3 Delivery', '10_transition_v3_execution.sql'],
     ['Record V3 Effect Result', '12_record_v3_effect_result.sql'],
+    ['Persist V3 Handoff Effect', '17_persist_v3_handoff_effect.sql'],
     ['Prepare V3 Contingency Decision', '15_prepare_v3_contingency.sql'],
     ['Commit V3 Contingency', '14_commit_v3_contingency.sql'],
   ].map(([node, file]) => ({

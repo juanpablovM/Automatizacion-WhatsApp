@@ -1,41 +1,16 @@
--- Attach an immutable authorized decision to the previously fixed route.
--- Replays with the same identities return the existing row unchanged.
-WITH locked AS (
-  SELECT execution.id
-  FROM conversation_turn_executions execution
-  WHERE execution.inbound_event_id = $1::BIGINT
-  FOR UPDATE
-), prepared AS (
-  UPDATE conversation_turn_executions execution
-  SET advisor_decision_id = $2::BIGINT,
-      decision_id = $3::TEXT,
-      state = $4::TEXT,
-      policy_digest = $5::TEXT,
-      proposal_digest = $6::TEXT,
-      decision_digest = $7::TEXT,
-      delivery_key = $8::TEXT,
-      attempt = GREATEST(execution.attempt, 1),
-      updated_at = NOW()
-  FROM locked
-  WHERE execution.id = locked.id
-    AND execution.state = 'routed'
-    AND execution.decision_id IS NULL
-    AND $4::TEXT IN ('prepared', 'effects_pending', 'ready_to_commit')
-  RETURNING execution.*
-), fixed AS (
-  SELECT prepared.* FROM prepared
-  UNION ALL
-  SELECT execution.*
-  FROM conversation_turn_executions execution
-  WHERE execution.inbound_event_id = $1::BIGINT
-    AND NOT EXISTS (SELECT 1 FROM prepared)
-)
-SELECT execution.*,
-  execution.advisor_decision_id = $2::BIGINT
-    AND execution.decision_id = $3::TEXT
-    AND execution.state = $4::TEXT
-    AND execution.policy_digest = $5::TEXT
-    AND execution.proposal_digest = $6::TEXT
-    AND execution.decision_digest = $7::TEXT
-    AND execution.delivery_key = $8::TEXT AS decision_matches
-FROM fixed execution;
+-- Recover the immutable advisor decision already attached by Persist V3 Turn
+-- Authority. This is a read boundary, not a second authority writer.
+SELECT
+  execution.*,
+  decision.output_payload AS v3_decision,
+  decision.input_payload->'policy' AS v3_policy,
+  TRUE AS decision_matches
+FROM conversation_turn_executions execution
+JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+WHERE execution.inbound_event_id = $1::BIGINT
+  AND execution.decision_id = decision.output_payload->>'decision_id'
+  AND decision.output_payload->>'version' = 'validated_conversation_decision/v3'
+  AND execution.state IN (
+    'effects_pending', 'reconciliation_required', 'ready_to_commit',
+    'delivery_pending', 'delivered'
+  );

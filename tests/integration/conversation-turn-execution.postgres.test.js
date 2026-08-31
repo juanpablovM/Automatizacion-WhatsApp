@@ -40,6 +40,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
   const contingencySql = query('14_commit_v3_contingency');
   const prepareContingencySql = query('15_prepare_v3_contingency');
   const persistAuthoritySql = query('16_persist_v3_turn_authority');
+  const persistHandoffEffectSql = query('17_persist_v3_handoff_effect');
 
   let sourceNumberId;
   let activeStatusId;
@@ -259,6 +260,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       snapshotDigest,
       qualification,
       replyText,
+      decision: outputPayload,
     };
   };
 
@@ -380,20 +382,11 @@ describeIntegration('v3 conversation turn execution saga', () => {
     expect(losingWrites.rows[0]).toEqual({ ledger_rows: 0, incoming_rows: 0 });
   });
 
-  test('keeps preparation and the authorized decision immutable on replay', async () => {
+  test('recovers the immutable authorized decision from the prepared execution', async () => {
     const turn = await seedTurn();
-    const replay = await client.query(prepareSql, [
-      turn.inboundEventId, turn.advisorDecisionId, turn.decisionId,
-      'ready_to_commit', 'policy-turn-' + sequence, 'proposal-turn-' + sequence,
-      'decision-digest-turn-' + sequence, turn.deliveryKey,
-    ]);
+    const replay = await client.query(prepareSql, [turn.inboundEventId]);
     expect(replay.rows[0].decision_matches).toBe(true);
-
-    const conflict = await client.query(prepareSql, [
-      turn.inboundEventId, turn.advisorDecisionId, `${turn.decisionId}-changed`,
-      'ready_to_commit', 'changed', 'changed', 'changed', `${turn.deliveryKey}-changed`,
-    ]);
-    expect(conflict.rows[0].decision_matches).toBe(false);
+    expect(replay.rows[0].v3_decision).toEqual(turn.decision);
     await expect(client.query(
       "UPDATE advisor_decisions SET output_payload = '{\"changed\":true}' WHERE id = $1",
       [turn.advisorDecisionId],
@@ -678,7 +671,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
 
   test('records effect receipts and never retries an unknown outcome blindly', async () => {
     const effect = {
-      type: 'quote_create', operation_key: `effect-${sequence + 1}`,
+      type: 'create_lead', operation_key: `effect-${sequence + 1}`,
       payload: { sku: 'svc-1' }, payload_digest: `payload-${sequence + 1}`,
       required_before_reply: true,
     };
@@ -703,10 +696,131 @@ describeIntegration('v3 conversation turn execution saga', () => {
     ])).rows).toHaveLength(0);
   });
 
+  test('claims one canonical create_lead effect with its durable decision and executor context', async () => {
+    const effect = {
+      type: 'create_lead',
+      operation_key: `create-lead-${sequence + 1}`,
+      payload: { conversation_id: 'pending', turn_id: 'pending', reason_observation_ids: [] },
+      payload_digest: `create-lead-payload-${sequence + 1}`,
+      required_before_reply: true,
+    };
+    const turn = await seedTurn({
+      qualification: {
+        service: 'installation',
+        city: 'Santiago',
+        requirement: '25 square meters',
+      },
+      effectCommands: [effect],
+    });
+    const claimed = await client.query(prepareEffectSql, [
+      turn.decisionId,
+      effect.operation_key,
+      effect.type,
+      effect.payload,
+      effect.payload_digest,
+    ]);
+
+    expect(claimed.rows).toHaveLength(1);
+    expect(claimed.rows[0]).toMatchObject({
+      should_execute: true,
+      operation_type: 'create_lead',
+      conversation_id: turn.conversationId,
+      qualification_context: {
+        service: 'installation',
+        city: 'Santiago',
+        requirement: '25 square meters',
+      },
+      v3_effect_command: effect,
+    });
+    expect(claimed.rows[0].v3_decision.decision_id).toBe(turn.decisionId);
+    const replay = await client.query(prepareEffectSql, [
+      turn.decisionId,
+      effect.operation_key,
+      effect.type,
+      effect.payload,
+      effect.payload_digest,
+    ]);
+    expect(replay.rows[0].should_execute).toBe(false);
+  });
+
+  test('executes one canonical handoff effect and records its handoff_id receipt once', async () => {
+    const effect = {
+      type: 'handoff',
+      operation_key: `handoff-effect-${sequence + 1}`,
+      payload: { conversation_id: 'pending', turn_id: 'pending', reason_observation_ids: [] },
+      payload_digest: `handoff-effect-payload-${sequence + 1}`,
+      required_before_reply: true,
+    };
+    const turn = await seedTurn({ effectCommands: [effect] });
+    const claimed = await client.query(prepareEffectSql, [
+      turn.decisionId,
+      effect.operation_key,
+      effect.type,
+      effect.payload,
+      effect.payload_digest,
+    ]);
+
+    const execute = () => client.query(persistHandoffEffectSql, [
+      effect.operation_key,
+      turn.decisionId,
+      effect.payload_digest,
+      claimed.rows[0].claim_token,
+    ]);
+    const first = await execute();
+    const replay = await execute();
+    expect(first.rows[0].handoff_id).toBe(replay.rows[0].handoff_id);
+    expect(first.rows[0].v3_effect_receipt).toMatchObject({
+      version: 'v3_effect_receipt/v1',
+      operation_key: effect.operation_key,
+      effect_type: 'handoff',
+      status: 'succeeded',
+    });
+    expect(String(first.rows[0].v3_effect_receipt.handoff_id)).toBe(first.rows[0].handoff_id);
+    expect(first.rows[0].v3_effect_receipt).not.toHaveProperty('id');
+
+    const invalidReceipt = await client.query(recordEffectSql, [
+      effect.operation_key,
+      effect.payload_digest,
+      claimed.rows[0].claim_token,
+      'succeeded',
+      {
+        ...first.rows[0].v3_effect_receipt,
+        id: first.rows[0].handoff_id,
+        handoff_id: undefined,
+      },
+      first.rows[0].handoff_id,
+      null,
+    ]);
+    expect(invalidReceipt.rows).toHaveLength(0);
+
+    const recorded = await client.query(recordEffectSql, [
+      effect.operation_key,
+      effect.payload_digest,
+      claimed.rows[0].claim_token,
+      'succeeded',
+      first.rows[0].v3_effect_receipt,
+      first.rows[0].handoff_id,
+      null,
+    ]);
+    expect(recorded.rows[0]).toMatchObject({ execution_state: 'ready_to_commit' });
+    expect(recorded.rows[0].v3_decision).toEqual(turn.decision);
+    expect(recorded.rows[0].effect_receipt_refs[0]).toMatchObject({
+      operation_key: effect.operation_key,
+      status: 'succeeded',
+    });
+    expect(String(recorded.rows[0].effect_receipt_refs[0].handoff_id)).toBe(first.rows[0].handoff_id);
+
+    const count = await client.query(
+      'SELECT COUNT(*)::int AS count FROM handoffs WHERE idempotency_key = $1',
+      [effect.operation_key],
+    );
+    expect(count.rows[0].count).toBe(1);
+  });
+
   test('requires recovery for inconclusive or duplicate exact-key reconciliation', async () => {
     for (const resolution of ['inconclusive', 'duplicate']) {
       const effect = {
-        type: 'quote_create', operation_key: `effect-${resolution}-${sequence + 1}`,
+        type: 'create_lead', operation_key: `effect-${resolution}-${sequence + 1}`,
         payload: { resolution }, payload_digest: `payload-${resolution}-${sequence + 1}`,
         required_before_reply: true,
       };
@@ -732,7 +846,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
 
   test('permits one retry only after exact-key proof of no effect', async () => {
     const effect = {
-      type: 'quote_create', operation_key: `effect-noop-${sequence + 1}`,
+      type: 'create_lead', operation_key: `effect-noop-${sequence + 1}`,
       payload: { sku: 'svc-2' }, payload_digest: `payload-noop-${sequence + 1}`,
       required_before_reply: true,
     };

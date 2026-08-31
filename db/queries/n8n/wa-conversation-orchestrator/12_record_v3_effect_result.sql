@@ -26,15 +26,39 @@ WITH target AS MATERIALIZED (
   FROM target
   WHERE operation.id = target.id
     AND $4::TEXT IN ('succeeded', 'failed', 'unknown')
+    AND (
+      $4::TEXT <> 'succeeded'
+      OR (
+        $5::JSONB->>'version' = 'v3_effect_receipt/v1'
+        AND $5::JSONB->>'operation_key' = target.operation_key
+        AND $5::JSONB->>'payload_digest' = target.request_payload#>>'{v3,payload_digest}'
+        AND $5::JSONB->>'effect_type' = target.operation_type
+        AND $5::JSONB->>'status' = 'succeeded'
+        AND (
+          (target.operation_type = 'create_lead' AND NULLIF($5::JSONB->>'lead_id', '') IS NOT NULL)
+          OR (
+            target.operation_type = 'handoff'
+            AND NULLIF($5::JSONB->>'handoff_id', '') IS NOT NULL
+            AND NOT ($5::JSONB ? 'id')
+          )
+        )
+      )
+    )
   RETURNING operation.*
 ), receipt AS MATERIALIZED (
-  SELECT jsonb_build_object(
-    'operation_key', recorded.operation_key,
-    'payload_digest', recorded.request_payload#>>'{v3,payload_digest}',
-    'status', recorded.status,
-    'external_id', recorded.external_id,
-    'recorded_at', recorded.updated_at
-  ) AS value,
+  SELECT CASE
+    WHEN recorded.status = 'succeeded' THEN
+      COALESCE($5::JSONB, '{}'::JSONB) || jsonb_build_object('recorded_at', recorded.updated_at)
+    ELSE jsonb_build_object(
+      'version', 'v3_effect_receipt/v1',
+      'operation_key', recorded.operation_key,
+      'payload_digest', recorded.request_payload#>>'{v3,payload_digest}',
+      'effect_type', recorded.operation_type,
+      'status', recorded.status,
+      'error', NULLIF($7::TEXT, ''),
+      'recorded_at', recorded.updated_at
+    )
+  END AS value,
   recorded.request_payload#>>'{v3,decision_id}' AS decision_id,
   recorded.status
   FROM recorded
@@ -59,6 +83,12 @@ WITH target AS MATERIALIZED (
           WHERE decision.id = execution.advisor_decision_id
             AND COALESCE((command.value->>'required_before_reply')::BOOLEAN, FALSE)
             AND NOT EXISTS (
+              SELECT 1 FROM recorded current_operation
+              WHERE current_operation.operation_key = command.value->>'operation_key'
+                AND current_operation.status = 'succeeded'
+                AND current_operation.request_payload#>>'{v3,payload_digest}' = command.value->>'payload_digest'
+            )
+            AND NOT EXISTS (
               SELECT 1 FROM external_operations operation
               WHERE operation.operation_key = command.value->>'operation_key'
                 AND operation.status = 'succeeded'
@@ -79,7 +109,9 @@ WITH target AS MATERIALIZED (
   RETURNING execution.*
 )
 SELECT recorded.*, execution_update.state AS execution_state,
-       execution_update.effect_receipt_refs, execution_update.last_error
+       execution_update.effect_receipt_refs, execution_update.last_error,
+       decision.output_payload AS v3_decision
 FROM recorded
 JOIN execution_update
-  ON execution_update.decision_id = recorded.request_payload#>>'{v3,decision_id}';
+  ON execution_update.decision_id = recorded.request_payload#>>'{v3,decision_id}'
+JOIN advisor_decisions decision ON decision.id = execution_update.advisor_decision_id;
