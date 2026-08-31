@@ -51,7 +51,7 @@ WITH execution_lock AS MATERIALIZED (
            'reply_sha256', target.output_payload#>>'{reply,sha256}'
          ),
          target.instance_name, target.delivery_key, target.inbound_event_id,
-         'claimed', md5(random()::TEXT || clock_timestamp()::TEXT || target.delivery_key), NOW()
+         'reserved', NULL, NULL
   FROM target
   JOIN mutated ON mutated.execution_id = target.id
   ON CONFLICT (idempotency_key)
@@ -108,6 +108,7 @@ WITH execution_lock AS MATERIALIZED (
   WHERE target.state IN ('delivery_pending', 'delivered')
 )
 SELECT result_execution.*, fixed_message.text_body, fixed_message.raw_payload,
+       fixed_message.raw_payload->>'reply_sha256' AS reply_sha256,
        fixed_message.dispatch_token
 FROM result_execution
 JOIN fixed_message ON fixed_message.id = result_execution.delivery_message_id;

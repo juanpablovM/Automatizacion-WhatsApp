@@ -212,5 +212,23 @@ describe('Smoke — Workflow connection graph', () => {
       expect(executor.parameters.workflowId.cachedResultName).toBe('CRM - Lead Creation And Assignment');
       expect(executor.parameters.options.waitForSubWorkflow).toBe(true);
     });
+
+    test('leaves delivery pending in the orchestrator until the provider returns', () => {
+      expect(branchTargets(workflow, 'Commit V3 State And Outbox', 0)).toEqual(['Prepare V3 Saga Result']);
+      expect(branchTargets(workflow, 'Commit V3 Contingency', 0)).toEqual(['Prepare V3 Saga Result']);
+      expect(workflow.nodes.some(({ name }) => name === 'V3 Has Delivery Receipt?')).toBe(false);
+      expect(workflow.nodes.some(({ name }) => name === 'Record V3 Delivery')).toBe(false);
+    });
+  });
+
+  describe('v3 post-provider delivery topology', () => {
+    const workflow = readWorkflow('wa-inbound-downstream-dispatcher.json');
+
+    test('records the v3 receipt only after the outbound subworkflow result is merged', () => {
+      expect(branchTargets(workflow, 'Merge Outbound Context', 0)).toEqual(['V3 Delivery Result?']);
+      expect(branchTargets(workflow, 'V3 Delivery Result?', 0)).toEqual(['Record V3 Delivery Receipt']);
+      expect(branchTargets(workflow, 'V3 Delivery Result?', 1)).toEqual(['Outbound Lane Complete']);
+      expect(branchTargets(workflow, 'Record V3 Delivery Receipt', 0)).toEqual(['Outbound Lane Complete']);
+    });
   });
 });

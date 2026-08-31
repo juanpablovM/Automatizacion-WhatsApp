@@ -92,6 +92,11 @@ return [
       next_question_key: pick(row.next_question_key, row.next_question_key_1),
       advisor_reasoning_summary: pick(row.advisor_reasoning_summary, row.advisor_reasoning_summary_1),
       quotation_data: pick(row.quotation_data, row.quotation_data_1, null),
+      v3_saga: Boolean(pick(row.v3_saga, row.v3_saga_1, false)),
+      decision_id: pick(row.decision_id, row.decision_id_1),
+      delivery_key: pick(row.delivery_key, row.delivery_key_1),
+      delivery_message_id: pick(row.delivery_message_id, row.delivery_message_id_1),
+      reply_sha256: pick(row.reply_sha256, row.reply_sha256_1),
     },
   },
 ];

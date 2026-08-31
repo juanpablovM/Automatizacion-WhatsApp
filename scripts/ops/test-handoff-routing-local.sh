@@ -33,7 +33,7 @@ assert(link && link.parameters.workflowId.value === schedulerId);
 assert(!dispatcher.nodes.some(n => ['Prepare Handoff Notification','Dispatch Handoff Notification','Mark Handoff Attempt'].includes(n.name)));
 for (const name of [
   'Prepare V3 Execution', 'Prepare V3 Effects', 'Record V3 Effect Result', 'Reconcile V3 Effect',
-  'Commit V3 State And Outbox', 'Record V3 Delivery', 'Build V3 Repair',
+  'Commit V3 State And Outbox', 'Build V3 Repair',
   'Prepare V3 Contingency Decision', 'Commit V3 Contingency',
 ]) {
   assert(orchestrator.nodes.some(node => node.name === name), `missing v3 saga node ${name}`);
@@ -44,12 +44,15 @@ assert(orchestratorEdge('Build V3 Repair', 0, 'V3 Recovery Is Contingency?'));
 assert(orchestratorEdge('V3 Recovery Is Contingency?', 0, 'Prepare V3 Contingency Decision'));
 assert(orchestratorEdge('V3 Recovery Is Contingency?', 1, 'Execute AI Lead Qualification'));
 assert(orchestratorEdge('Prepare V3 Contingency Decision', 0, 'Commit V3 Contingency'));
-assert(orchestratorEdge('Commit V3 State And Outbox', 0, 'V3 Has Delivery Receipt?'));
-assert(orchestratorEdge('Commit V3 Contingency', 0, 'V3 Has Delivery Receipt?'));
-assert(orchestratorEdge('V3 Has Delivery Receipt?', 0, 'Record V3 Delivery'));
-assert(orchestratorEdge('V3 Has Delivery Receipt?', 1, 'Prepare V3 Saga Result'));
+assert(orchestratorEdge('Commit V3 State And Outbox', 0, 'Prepare V3 Saga Result'));
+assert(orchestratorEdge('Commit V3 Contingency', 0, 'Prepare V3 Saga Result'));
+assert(!orchestrator.nodes.some(node => ['V3 Has Delivery Receipt?', 'Record V3 Delivery'].includes(node.name)));
 const edge = (source, lane, target, index = 0) =>
   dispatcher.connections[source]?.main?.[lane]?.some(connection => connection.node === target && connection.index === index);
+assert(edge('Merge Outbound Context', 0, 'V3 Delivery Result?'));
+assert(edge('V3 Delivery Result?', 0, 'Record V3 Delivery Receipt'));
+assert(edge('V3 Delivery Result?', 1, 'Outbound Lane Complete'));
+assert(edge('Record V3 Delivery Receipt', 0, 'Outbound Lane Complete'));
 assert(edge('Ensure Escalation Handoff', 0, 'Handoff Write Required?'));
 assert(edge('Handoff Write Required?', 0, 'Upsert Escalation Handoff'));
 assert(edge('Handoff Write Required?', 1, 'Escalation Lane Complete'));
@@ -155,7 +158,7 @@ const policy = {
   failure_policy: { max_complete_repairs: 1 },
 };
 const rejected = {
-  schema: 'conversation_validation_result/v3',
+  version: 'conversation_validation_result/v3',
   valid: false,
   errors: [{ code: 'unsupported_claim', path: '/reply_text', disposition: 'repair' }],
 };
@@ -193,7 +196,7 @@ const outage = saga.planV3Recovery({
   preTurnState, expectedSnapshotDigest: 'snapshot-before-v3',
 });
 assert.equal(outage.action, 'contingency');
-assert.deepEqual(outage.decision.mutations, []);
+assert.deepEqual(outage.decision.state_mutations, []);
 assert.deepEqual(outage.preserved_state, preTurnState);
 assert.equal(outage.decision.effect_commands[0].type, 'internal_handoff');
 const unreleased = saga.releaseV3Contingency({ decision: outage.decision, handoffReceipt: null });

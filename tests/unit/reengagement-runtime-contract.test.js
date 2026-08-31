@@ -147,6 +147,27 @@ describe('re-engagement runtime contract', () => {
     expect(prepared[0].json.target_conversation_id).toBe(101);
   });
 
+  test('output preparation preserves the v3 post-provider authority fields', () => {
+    const [prepared] = runCodeNode(fs.readFileSync(preparePath, 'utf8'), [{ json: {
+      ...base,
+      v3_saga: true,
+      decision_id: 'decision-v3-output',
+      delivery_key: 'v3-delivery:output',
+      delivery_message_id: 991,
+      reply_sha256: 'sha256-output',
+      response_text: 'Respuesta v3',
+      message_id: 991,
+    } }]);
+
+    expect(prepared.json).toMatchObject({
+      v3_saga: true,
+      decision_id: 'decision-v3-output',
+      delivery_key: 'v3-delivery:output',
+      delivery_message_id: 991,
+      reply_sha256: 'sha256-output',
+    });
+  });
+
   test('source SQL is the exact embedded query and encodes one temporal contract', () => {
     const sql = fs.readFileSync(sqlPath, 'utf8');
     const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));

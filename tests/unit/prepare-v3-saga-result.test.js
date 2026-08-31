@@ -46,6 +46,31 @@ describe('Prepare V3 Saga Result rejoins the saga with the turn context', () => 
     expect(out.json.state).toBe('delivered');
   });
 
+  test('maps the durable v3 outbox row to the downstream delivery contract', () => {
+    const [out] = runCodeNode([{ json: {
+      decision_id: 'decision-v3-1',
+      delivery_key: 'v3-delivery:exact',
+      delivery_message_id: 901,
+      text_body: 'Respuesta autorizada',
+      raw_payload: { reply_sha256: 'sha256-exact' },
+      state: 'delivery_pending',
+    } }], {
+      ...turnContext,
+      should_create_lead: true,
+      should_escalate: true,
+    });
+
+    expect(out.json).toMatchObject({
+      response_text: 'Respuesta autorizada',
+      message_id: 901,
+      delivery_key: 'v3-delivery:exact',
+      decision_id: 'decision-v3-1',
+      reply_sha256: 'sha256-exact',
+      should_create_lead: false,
+      should_escalate: false,
+    });
+  });
+
   test('an empty saga still emits one turn instead of losing it', () => {
     // Emitting nothing is exactly how the lane used to drop items in silence.
     const out = runCodeNode([], turnContext);

@@ -38,13 +38,25 @@ const prepareV3SagaResult = (sagaItems, context) => {
     // nothing here is how the lane used to lose items silently.
     return [{ json: { ...base, v3_saga: true, v3_saga_empty: true } }];
   }
-  return items.map((item) => ({
-    json: {
-      ...base,
-      ...asObject(item.json ?? item),
-      v3_saga: true,
-    },
-  }));
+  return items.map((item) => {
+    const saga = asObject(item.json ?? item);
+    const rawPayload = asObject(saga.raw_payload);
+    return {
+      json: {
+        ...base,
+        ...saga,
+        response_text: saga.text_body ?? base.response_text ?? null,
+        response_kind: 'v3_advisor_reply',
+        message_id: saga.delivery_message_id ?? base.message_id ?? null,
+        delivery_key: saga.delivery_key ?? null,
+        decision_id: saga.decision_id ?? null,
+        reply_sha256: saga.reply_sha256 ?? rawPayload.reply_sha256 ?? null,
+        should_create_lead: false,
+        should_escalate: false,
+        v3_saga: true,
+      },
+    };
+  });
 };
 
 if (typeof module !== 'undefined' && module.exports) {

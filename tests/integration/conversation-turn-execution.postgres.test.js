@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -41,6 +42,14 @@ describeIntegration('v3 conversation turn execution saga', () => {
   const prepareContingencySql = query('15_prepare_v3_contingency');
   const persistAuthoritySql = query('16_persist_v3_turn_authority');
   const persistHandoffEffectSql = query('17_persist_v3_handoff_effect');
+  const recordDeliverySql = fs.readFileSync(
+    'db/queries/n8n/wa-inbound-downstream-dispatcher/01_record_v3_delivery_result.sql',
+    'utf8',
+  );
+  const persistDeliverySql = fs.readFileSync(
+    'db/queries/n8n/wa-outbound-messages/04_persist_delivery_result.sql',
+    'utf8',
+  );
 
   let sourceNumberId;
   let activeStatusId;
@@ -170,6 +179,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const policyDigest = `policy-${suffix}`;
     const proposalDigest = `proposal-${suffix}`;
     const decisionDigest = `decision-digest-${suffix}`;
+    const replySha256 = createHash('sha256').update(replyText, 'utf8').digest('hex');
     const policy = {
       version: 'ai_prd_turn_policy/v3',
       policy_digest: policyDigest,
@@ -181,7 +191,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       expected_snapshot_digest: snapshotDigest,
       policy_digest: policyDigest,
       decision_digest: decisionDigest,
-      reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
+      reply: { text: replyText, sha256: replySha256, delivery_key: deliveryKey },
       state_mutations: [],
       effect_commands: [{
         type: 'internal_handoff',
@@ -202,7 +212,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       expected_snapshot_digest: snapshotDigest,
       policy_digest: policyDigest,
       proposal_digest: proposalDigest,
-      reply: { text: replyText, sha256: `reply-${suffix}`, delivery_key: deliveryKey },
+      reply: { text: replyText, sha256: replySha256, delivery_key: deliveryKey },
       state_mutations: stateMutations,
       effect_commands: effectCommands,
     };
@@ -260,6 +270,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       snapshotDigest,
       qualification,
       replyText,
+      replySha256,
       decision: outputPayload,
     };
   };
@@ -440,6 +451,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       expect(replay.rows[0].replayed).toBe(true);
       expect(replay.rows[0].delivery_message_id).toBe(winners[0].delivery_message_id);
       expect(replay.rows[0].text_body).toBe(turn.replyText);
+      expect(replay.rows[0].reply_sha256).toBe(turn.replySha256);
 
       const persisted = await client.query(`
         SELECT c.qualification_context, e.state, e.state_receipt,
@@ -883,6 +895,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     const replay = await client.query(contingencySql, [turn.decisionId, turn.token]);
     expect(first.rows[0].handoff_id).toBe(replay.rows[0].handoff_id);
     expect(first.rows[0].delivery_message_id).toBe(replay.rows[0].delivery_message_id);
+    expect(first.rows[0].reply_sha256).toBe(turn.replySha256);
     expect(first.rows[0].text_body).toBe(replyText);
     expect(String(first.rows[0].handoff_receipt.handoff_id)).toBe(first.rows[0].handoff_id);
     expect(first.rows[0].handoff_receipt).not.toHaveProperty('id');
@@ -1049,7 +1062,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
   test('stores one delivery receipt through the legal terminal transition', async () => {
     const turn = await seedTurn({ stateMutations: [] });
     const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
-    const receipt = { provider_message_id: 'wamid.v3.1', delivered_bytes_sha256: `reply-turn-${sequence}` };
+    const receipt = { provider_message_id: 'wamid.v3.1', delivered_bytes_sha256: turn.replySha256 };
     const delivered = await client.query(transitionSql, [
       turn.decisionId, 'delivery_pending', 'delivered', false, null,
       committed.rows[0].delivery_message_id, receipt, null,
@@ -1060,4 +1073,109 @@ describeIntegration('v3 conversation turn execution saga', () => {
       committed.rows[0].delivery_message_id, receipt, null,
     ])).rows).toHaveLength(0);
   });
+
+  test('claims the reserved v3 outbox once and records the exact post-provider receipt', async () => {
+    const turn = await seedTurn({ stateMutations: [] });
+    const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    const messageId = committed.rows[0].delivery_message_id;
+    expect(committed.rows[0]).toMatchObject({ state: 'delivery_pending' });
+
+    const claimArgs = [
+      turn.conversationId, null, 'text', turn.replyText,
+      { number: 'unused' }, 'v3_advisor_reply', 'v3-test', turn.deliveryKey, 300,
+    ];
+    const firstClaim = await client.query('SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', claimArgs);
+    const replayClaim = await client.query('SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', claimArgs);
+    expect(firstClaim.rows[0]).toMatchObject({ id: messageId, should_send: true, dispatch_phase: 'claimed' });
+    expect(firstClaim.rows[0].outbound_body).toMatchObject({ text: turn.replyText });
+    expect(replayClaim.rows[0]).toMatchObject({ id: messageId, should_send: false });
+
+    const providerId = `wamid-${turn.decisionId}`;
+    const persistedProviderResult = await client.query(persistDeliverySql, [
+      messageId, 'sent', providerId, 'evolution_outbound_delivery', 'sent', '{}', '{}',
+      'sent', false, null,
+    ]);
+    expect(persistedProviderResult.rows[0]).toMatchObject({
+      message_id: messageId,
+      delivery_status: 'sent',
+      external_message_id: providerId,
+      provider_external_message_id: providerId,
+      text_body: turn.replyText,
+      idempotency_key: turn.deliveryKey,
+      delivery_key: turn.deliveryKey,
+    });
+    const delivered = await client.query(recordDeliverySql, [
+      turn.decisionId, messageId, 'sent', providerId, turn.deliveryKey,
+    ]);
+    expect(delivered.rows[0]).toMatchObject({ state: 'delivered', replayed: false });
+    expect(delivered.rows[0].v3_delivery_receipt).toMatchObject({
+      schema: 'v3_delivery_receipt/v1',
+      decision_id: turn.decisionId,
+      delivery_message_id: Number(messageId),
+      delivery_key: turn.deliveryKey,
+      provider_message_id: providerId,
+      delivery_status: 'sent',
+      delivered_bytes_sha256: turn.replySha256,
+    });
+
+    const replayed = await client.query(recordDeliverySql, [
+      turn.decisionId, messageId, 'sent', providerId, turn.deliveryKey,
+    ]);
+    expect(replayed.rows[0]).toMatchObject({ state: 'delivered', replayed: true });
+    const postDeliveryClaim = await client.query(
+      'SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', claimArgs,
+    );
+    expect(postDeliveryClaim.rows[0]).toMatchObject({ id: messageId, already_sent: true, should_send: false });
+    const count = await client.query(
+      "SELECT COUNT(*)::int AS count FROM messages WHERE direction = 'outgoing' AND idempotency_key = $1",
+      [turn.deliveryKey],
+    );
+    expect(count.rows[0].count).toBe(1);
+  });
+
+  test.each(['failed', 'unknown'])(
+    'moves a post-provider %s v3 result to reconciliation without authorizing replay',
+    async (deliveryStatus) => {
+      const turn = await seedTurn({ stateMutations: [] });
+      const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      const messageId = committed.rows[0].delivery_message_id;
+      const claimArgs = [
+        turn.conversationId, null, 'text', turn.replyText,
+        { number: 'unused' }, 'v3_advisor_reply', 'v3-test', turn.deliveryKey, 300,
+      ];
+      const firstClaim = await client.query(
+        'SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', claimArgs,
+      );
+      expect(firstClaim.rows[0].should_send).toBe(true);
+      const persistedProviderResult = await client.query(persistDeliverySql, [
+        messageId, deliveryStatus, null, 'evolution_outbound_delivery', deliveryStatus,
+        '{}', '{}', deliveryStatus, true, 'provider_result',
+      ]);
+      expect(persistedProviderResult.rows[0]).toMatchObject({
+        message_id: messageId,
+        delivery_status: deliveryStatus,
+        text_body: turn.replyText,
+        delivery_key: turn.deliveryKey,
+        reconciliation_required: true,
+      });
+
+      const recorded = await client.query(recordDeliverySql, [
+        turn.decisionId, messageId, deliveryStatus, null, turn.deliveryKey,
+      ]);
+      expect(recorded.rows[0]).toMatchObject({
+        state: 'reconciliation_required',
+        replayed: false,
+        delivery_status: deliveryStatus,
+      });
+      expect(recorded.rows[0].v3_delivery_receipt).toMatchObject({
+        delivery_status: deliveryStatus,
+        delivery_message_id: Number(messageId),
+        delivered_bytes_sha256: turn.replySha256,
+      });
+      const replayClaim = await client.query(
+        'SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', claimArgs,
+      );
+      expect(replayClaim.rows[0]).toMatchObject({ id: messageId, should_send: false });
+    },
+  );
 });

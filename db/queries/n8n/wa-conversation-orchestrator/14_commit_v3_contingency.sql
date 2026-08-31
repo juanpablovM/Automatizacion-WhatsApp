@@ -79,7 +79,7 @@ WITH execution_lock AS MATERIALIZED (
            'handoff_receipt', handoff_receipt.value
          ),
          target.instance_name, target.delivery_key, target.inbound_event_id,
-         'claimed', md5(random()::TEXT || clock_timestamp()::TEXT || target.delivery_key), NOW()
+         'reserved', NULL, NULL
   FROM target
   CROSS JOIN handoff_receipt
   WHERE target.state = 'prepared'
@@ -145,7 +145,8 @@ WITH execution_lock AS MATERIALIZED (
 )
 SELECT result_execution.*, fixed_handoff.id AS handoff_id,
        handoff_receipt.value AS handoff_receipt,
-       fixed_message.text_body
+       fixed_message.text_body, fixed_message.raw_payload,
+       fixed_message.raw_payload->>'reply_sha256' AS reply_sha256
 FROM result_execution
 CROSS JOIN fixed_handoff
 CROSS JOIN handoff_receipt

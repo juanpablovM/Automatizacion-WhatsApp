@@ -112,7 +112,6 @@ const NODES = [
     ['Prepare V3 Effect', '11_prepare_v3_effect.sql'],
     ['Reconcile V3 Effect', '13_reconcile_v3_effect.sql'],
     ['Commit V3 State And Outbox', '09_commit_v3_turn.sql'],
-    ['Record V3 Delivery', '10_transition_v3_execution.sql'],
     ['Record V3 Effect Result', '12_record_v3_effect_result.sql'],
     ['Persist V3 Handoff Effect', '17_persist_v3_handoff_effect.sql'],
     ['Prepare V3 Contingency Decision', '15_prepare_v3_contingency.sql'],
@@ -153,6 +152,40 @@ const NODES = [
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
     node: 'Outbound Lane Complete',
     fixture: 'wa-inbound-downstream-dispatcher/outbound-lane-complete.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-outbound-messages.json',
+    node: 'Build Outbound Payload',
+    fixture: 'wa-outbound-messages/build-outbound-payload.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-outbound-messages.json',
+    node: 'Normalize Delivery Result',
+    fixture: 'wa-outbound-messages/normalize-delivery-result.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-outbound-messages.json',
+    node: 'Return Already Sent',
+    fixture: 'wa-outbound-messages/return-already-sent.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-outbound-messages.json',
+    node: 'Send Evolution Message',
+    fixture: 'wa-outbound-messages/send-evolution-message.js',
+  },
+  {
+    workflow: 'n8n/workflows/wa-outbound-messages.json',
+    node: 'Persist Delivery Result',
+    fixture: 'db/queries/n8n/wa-outbound-messages/04_persist_delivery_result.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
+  },
+  {
+    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
+    node: 'Record V3 Delivery Receipt',
+    fixture: 'db/queries/n8n/wa-inbound-downstream-dispatcher/01_record_v3_delivery_result.sql',
+    type: 'n8n-nodes-base.postgres',
+    parameter: 'query',
   },
   {
     workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
