@@ -249,6 +249,9 @@ post_event() {
   output_file=$2
   n8n_execution_floor=$(compose exec -T postgres psql -U test -d testdb -At -c \
     'SELECT COALESCE(MAX(id::BIGINT), 0) FROM execution_entity;')
+  case "$n8n_execution_floor" in
+    ''|*[!0-9]*) fail "n8n execution floor was not numeric: $n8n_execution_floor" ;;
+  esac
   status=$(curl -sS -o "$output_file" -w '%{http_code}' \
     -X POST \
     -H 'Content-Type: application/json' \
@@ -264,11 +267,11 @@ wait_for_delivered_turn() {
   attempt=0
   while [ "$attempt" -lt 90 ]; do
     n8n_error=$(compose exec -T postgres psql -U test -d testdb -At -F '|' \
-      -v execution_floor="$n8n_execution_floor" -c \
+      -c \
       "SELECT execution.id, COALESCE(workflow.name, execution.\"workflowId\"), execution.status
        FROM execution_entity execution
        LEFT JOIN workflow_entity workflow ON workflow.id=execution.\"workflowId\"
-       WHERE execution.id::BIGINT > :'execution_floor'::BIGINT
+       WHERE execution.id::BIGINT > $n8n_execution_floor
          AND execution.status='error'
        ORDER BY execution.id::BIGINT DESC
        LIMIT 1;")

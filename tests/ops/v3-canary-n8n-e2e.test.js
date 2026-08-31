@@ -77,6 +77,8 @@ describe('v3 canary E2E binding contract', () => {
     const harness = source(harnessPath);
 
     expect(harness).toContain('n8n_execution_floor');
+    expect(harness).toContain("''|*[!0-9]*)");
+    expect(harness).not.toContain(":'execution_floor'");
     expect(harness).toContain("execution.status='error'");
     expect(harness).toContain('capture_n8n_failure_evidence');
     expect(harness).toContain('n8n-execution-summary.tsv');
