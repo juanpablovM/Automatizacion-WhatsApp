@@ -230,6 +230,10 @@ WITH inserted_source AS (
 SELECT id FROM inserted_source;
 SQL
 )
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -U test -d testdb -At <<'SQL' >/dev/null
+INSERT INTO catalog_items (sku, name, item_type, applicable_cities, is_active)
+VALUES ('H25', 'hormigon H25', 'product', ARRAY['Santiago'], TRUE);
+SQL
 # WU4_SEED_END
 [ -n "$source_number_id" ] || fail "synthetic source-number seed failed"
 
@@ -276,6 +280,8 @@ turn_one_payload=$(build_payload synthetic-v3-canary-001 \
   'Hola, necesito baldosas para un patio en Santiago.')
 turn_two_payload=$(build_payload synthetic-v3-canary-002 \
   'Gracias, quiero continuar con la solicitud.')
+turn_three_payload=$(build_payload synthetic-v3-canary-003 \
+  'Confirmo: 20 m3 de hormigon H25 para Santiago con despacho.')
 
 post_event() {
   event_payload=$1
@@ -527,6 +533,75 @@ SELECT jsonb_build_object(
 SQL
 }
 
+capture_valid_turn_evidence() {
+  external_message_id=$1
+  output_file=$2
+  compose exec -T postgres psql -v ON_ERROR_STOP=1 -v external_message_id="$external_message_id" \
+    -U test -d testdb -At > "$output_file" <<'SQL'
+WITH target AS MATERIALIZED (
+  SELECT * FROM inbound_events WHERE external_message_id=:'external_message_id'
+), execution AS MATERIALIZED (
+  SELECT execution.* FROM conversation_turn_executions execution
+  JOIN target ON target.id=execution.inbound_event_id
+), decision AS MATERIALIZED (
+  SELECT decision.* FROM advisor_decisions decision
+  JOIN execution ON execution.advisor_decision_id=decision.id
+), outgoing AS MATERIALIZED (
+  SELECT outgoing.* FROM messages outgoing
+  JOIN execution ON execution.delivery_message_id=outgoing.id
+), effect_receipt AS (
+  SELECT value FROM execution, jsonb_array_elements(execution.effect_receipt_refs) AS value LIMIT 1
+)
+SELECT jsonb_pretty(jsonb_build_object(
+  'inbound_status', target.processing_status,
+  'inbound_phase', target.processing_phase,
+  'contract_version', execution.contract_version,
+  'execution_state', execution.state,
+  'decision_id', execution.decision_id,
+  'decision_type', decision.decision_type,
+  'decision_version', decision.output_payload->>'version',
+  'decision_validation_result', decision.validation_result,
+  'decision_reply_text', decision.output_payload#>>'{reply,text}',
+  'state_receipt_schema', execution.state_receipt->>'schema',
+  'effect_receipt_schema', (SELECT value->>'schema' FROM effect_receipt),
+  'effect_receipt_status', (SELECT value->>'status' FROM effect_receipt),
+  'effect_receipt_count', jsonb_array_length(execution.effect_receipt_refs),
+  'outgoing_text', outgoing.text_body,
+  'outgoing_delivery_status', outgoing.delivery_status,
+  'delivery_receipt_status', execution.delivery_receipt_ref->>'delivery_status',
+  'leads_for_conversation', (
+    SELECT COUNT(*) FROM leads lead
+    JOIN conversations conversation ON conversation.lead_id=lead.id
+    WHERE conversation.id=execution.conversation_id AND lead.deleted_at IS NULL
+  ),
+  'authorized_effects', jsonb_array_length(COALESCE(decision.output_payload->'effect_commands', '[]'::jsonb))
+))
+FROM target, execution, decision, outgoing;
+SQL
+}
+
+assert_valid_turn_evidence() {
+  evidence_file=$1
+  jq -e '
+    .inbound_status == "processed"
+    and .inbound_phase == "completed"
+    and .contract_version == "v3"
+    and .execution_state == "delivered"
+    and .decision_type == "conversation_v3_authorized"
+    and .decision_version == "validated_conversation_decision/v3"
+    and (.decision_id | startswith("v3-contingency:") | not)
+    and .state_receipt_schema == "conversation_state_receipt/v3"
+    and .effect_receipt_schema == "v3_effect_receipt/v1"
+    and .effect_receipt_status == "succeeded"
+    and .effect_receipt_count == 1
+    and .authorized_effects == 1
+    and .leads_for_conversation == 1
+    and .outgoing_text == .decision_reply_text
+    and .outgoing_delivery_status == "sent"
+    and .delivery_receipt_status == "sent"
+  ' "$evidence_file" >/dev/null || fail "v3 valid-lane evidence was incomplete: $(cat "$evidence_file")"
+}
+
 capture_totals() {
   output_file=$1
   compose exec -T postgres psql -v ON_ERROR_STOP=1 -U test -d testdb -At > "$output_file" <<'SQL'
@@ -632,6 +707,35 @@ curl -fsS "http://127.0.0.1:${TEST_MOCK_EVOLUTION_PORT}/requests" > "$EVIDENCE_D
 cmp -s "$EVIDENCE_DIR/mock-evolution-before-replay.json" "$EVIDENCE_DIR/mock-evolution-after-replay.json" \
   || fail "turn-two replay sent another provider message"
 
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data-binary @- "http://127.0.0.1:${TEST_MOCK_AI_PORT}/plan" >/dev/null <<'PLAN'
+{
+  "reply_text": "Confirmado: 20 m3 de hormigon H25 para Santiago con despacho. Coordinamos la entrega.",
+  "observations": [
+    { "id": "obs-product", "concept": "product", "quote": "hormigon H25",
+      "normalized_value": "hormigon H25", "grounding_ref": "product:H25",
+      "resolves_goal_ids": ["product"] },
+    { "id": "obs-commune", "concept": "commune", "quote": "Santiago",
+      "normalized_value": "Santiago", "grounding_ref": "commune:santiago",
+      "resolves_goal_ids": ["commune"] },
+    { "id": "obs-quantity", "concept": "quantity", "quote": "20 m3",
+      "normalized_value": "20 m3", "grounding_ref": null,
+      "resolves_goal_ids": ["quantity"] },
+    { "id": "obs-modality", "concept": "modality", "quote": "despacho",
+      "normalized_value": "delivery", "grounding_ref": "modality:delivery",
+      "resolves_goal_ids": ["modality"] }
+  ],
+  "effects": ["create_lead"]
+}
+PLAN
+
+post_event "$turn_three_payload" "$EVIDENCE_DIR/turn-3-response.json"
+jq -e '.status == "accepted" and .duplicate == false' "$EVIDENCE_DIR/turn-3-response.json" >/dev/null \
+  || fail "turn three was not accepted as a new event"
+wait_for_delivered_turn synthetic-v3-canary-003 "$EVIDENCE_DIR/turn-3-terminal.json"
+capture_valid_turn_evidence synthetic-v3-canary-003 "$EVIDENCE_DIR/turn-3-evidence.json"
+assert_valid_turn_evidence "$EVIDENCE_DIR/turn-3-evidence.json"
+
 cat > "$EVIDENCE_DIR/result.txt" <<EOF_RESULT
 source_number_id=$source_number_id
 turn_one_inbound_event_id=$turn_one_id
@@ -639,7 +743,7 @@ turn_two_inbound_event_id=$turn_two_id
 turn_one_provider_message_id=$turn_one_provider_id
 turn_two_provider_message_id=$turn_two_provider_id
 contract_mode=canary
-scenario=new_contact -> invalid_initial -> complete_repair -> invalid_repair -> contingency -> exact_delivery -> second_turn -> duplicate_replay
+scenario=new_contact -> invalid_initial -> complete_repair -> invalid_repair -> contingency -> exact_delivery -> second_turn -> duplicate_replay -> valid_proposal -> lead_effect -> state_commit
 EOF_RESULT
 
-echo "n8n v3 canary E2E OK: two receipted contingency turns plus duplicate replay"
+echo "n8n v3 canary E2E OK: two receipted contingency turns, duplicate replay, and one authorized turn with a real lead effect"

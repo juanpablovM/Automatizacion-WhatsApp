@@ -624,7 +624,12 @@ describe('Smoke — Workflow connection graph', () => {
       };
       const expectedBindings = {
         'Fix V3 Route': '={{ [$json.inbound_event_id, $json.processing_token, $json.conversation_id, $json.input_source_number_id, $json.phone_number, $json.contract_mode, $json.route_rule_id, $json.current_step, $json.message_type, $json.input_external_message_id, $json.input_external_timestamp, $json.text_body, $json.raw_payload_json] }}',
-        'Persist V3 Turn Authority': '={{ [$json.inbound_event_id, $json.processing_token, $json.conversation_id, $json.source_number_id, $json.phone_number, $json.message_type, $json.external_message_id, $json.text_body, $json.raw_payload_json, $json.current_step, $json.decision_id, $json.turn_policy, $json.ai_proposal, $json.v3_validation, $json.v3_decision, $json.ai_provider, $json.ai_model, $json.decision_digest] }}',
+        // This node runs after `Merge AI Assistance`, which combines with
+        // `addSuffix`: ten of these eighteen fields exist only as `_1` by the
+        // time it binds them. Bound bare they arrived NULL, the statement matched
+        // no execution, and `Merge V3 Authority Context` starved on the empty
+        // result — the whole authorized turn vanished with nothing reported.
+        'Persist V3 Turn Authority': "={{ [$json.inbound_event_id ?? $json.inbound_event_id_1, $json.processing_token ?? $json.processing_token_1, $json.conversation_id ?? $json.conversation_id_1, $json.source_number_id ?? $json.source_number_id_1, $json.phone_number ?? $json.phone_number_1, $json.message_type ?? $json.message_type_1, $json.external_message_id ?? $json.external_message_id_1, $json.text_body ?? $json.text_body_1, $json.raw_payload_json ?? $json.raw_payload_json_1, $json.current_step ?? $json.current_step_1, $json.decision_id ?? $json.decision_id_1, $json.turn_policy ?? $json.turn_policy_1, $json.ai_proposal ?? $json.ai_proposal_1, $json.v3_validation ?? $json.v3_validation_1, $json.v3_decision ?? $json.v3_decision_1, $json.ai_provider ?? $json.ai_provider_1, $json.ai_model ?? $json.ai_model_1, $json.decision_digest ?? $json.decision_digest_1] }}",
       };
 
       for (const [name, queryReplacement] of Object.entries(expectedBindings)) {

@@ -35,6 +35,36 @@ describe('v3 canary E2E binding contract', () => {
     expect(harness).not.toMatch(/curl[^\n]+https?:\/\/(?!127\.0\.0\.1)/);
   });
 
+  test('drives the valid lane, not only contingency', () => {
+    // Two contingency turns prove the failure path and nothing else: thirteen
+    // nodes of the valid lane — authority, execution, the effect loop, the lead
+    // executor, the state commit — never run. A third turn installs a plan on
+    // the AI mock so the proposal is valid, and asserts what only that lane
+    // produces: a persisted authority, an executed effect and a real lead.
+    const harness = source(harnessPath);
+    const seed = harness.match(/# WU4_SEED_BEGIN([\s\S]*?)# WU4_SEED_END/)?.[1] || '';
+
+    // Grounding authority comes from the catalog, so the valid turn needs one.
+    expect(seed).toContain('INSERT INTO catalog_items');
+    expect(harness).toContain('synthetic-v3-canary-003');
+    expect(harness).toContain('/plan');
+
+    for (const invariant of [
+      // Authorized, not a fallback: the contingency lane writes a different
+      // decision type and never leaves an effect or state receipt behind.
+      '.decision_type == "conversation_v3_authorized"',
+      '.decision_version == "validated_conversation_decision/v3"',
+      '.state_receipt_schema == "conversation_state_receipt/v3"',
+      '.effect_receipt_schema == "v3_effect_receipt/v1"',
+      '.effect_receipt_status == "succeeded"',
+      // The point of the lane: a real lead, created by the effect executor.
+      '.leads_for_conversation == 1',
+      '.outgoing_text == .decision_reply_text',
+    ]) {
+      expect(harness, `missing valid-lane invariant: ${invariant}`).toContain(invariant);
+    }
+  });
+
   test('audits the delivery transition where the transition happens', () => {
     // `db/queries/.../10_transition_v3_execution.sql` is a generic compare-and-set
     // that audits `v3_turn_transitioned` with from/to state. It is orphaned: not

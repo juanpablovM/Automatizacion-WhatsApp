@@ -52,6 +52,21 @@ describe('the contract route survives step evaluation', () => {
     expect(out.contract_route).toEqual(canaryRoute.contract_route);
   });
 
+  test('the grounding authority survives too, or no claim can be evidenced', () => {
+    // Same trap, one field further along. `Load Conversation State` publishes
+    // the catalog as `v3_grounding`, and `Compile V3 Turn Policy` turns it into
+    // the authority every grounded observation is checked against. Dropped
+    // here, the policy compiles with an empty catalog: product, service and
+    // commune observations all fail `grounding_invalid`, and `create_lead` —
+    // which needs product and commune resolved — becomes unreachable.
+    const v3Grounding = {
+      catalog: [{ ref: 'product:H25', concept: 'product', value: 'hormigon H25' }],
+    };
+    const out = outputOf(turn({ ...canaryRoute, v3_grounding: v3Grounding }));
+
+    expect(out.v3_grounding).toEqual(v3Grounding);
+  });
+
   test('every field the route emits is carried, none silently dropped', () => {
     const out = outputOf(turn(canaryRoute));
 

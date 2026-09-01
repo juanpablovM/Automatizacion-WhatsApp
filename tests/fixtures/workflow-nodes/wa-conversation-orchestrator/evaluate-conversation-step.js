@@ -910,6 +910,10 @@ function evaluateConversationStep(row) {
         contract_mode: row.contract_mode ?? null,
         route_mode: row.route_mode ?? null,
         route_rule_id: row.route_rule_id ?? null,
+        // The catalog `Load Conversation State` publishes is the grounding
+        // authority the v3 policy compiles from. Dropped here it never reaches
+        // `Compile V3 Turn Policy`, and every grounded observation fails.
+        v3_grounding: row.v3_grounding ?? null,
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
