@@ -25,6 +25,31 @@ WITH input_payload AS (
     NULLIF($18::text, '')::bigint AS inbound_event_id,
     NULLIF($19::text, '') AS processing_token
 ),
+v3_grounding_entries AS (
+  SELECT jsonb_build_object(
+           'ref', CASE WHEN ci.item_type = 'service' THEN 'service:' ELSE 'product:' END
+                  || COALESCE(NULLIF(ci.sku, ''), ci.id::text),
+           'concept', CASE WHEN ci.item_type = 'service' THEN 'service' ELSE 'product' END,
+           'value', ci.name
+         ) AS entry
+  FROM catalog_items ci
+  WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL
+  UNION
+  SELECT jsonb_build_object(
+           'ref', 'commune:' || lower(regexp_replace(city, '[^a-zA-Z0-9]+', '-', 'g')),
+           'concept', 'commune',
+           'value', city
+         )
+  FROM catalog_items ci
+  CROSS JOIN LATERAL UNNEST(ci.applicable_cities) AS city
+  WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(city, '') IS NOT NULL
+),
+v3_grounding AS (
+  SELECT jsonb_build_object(
+    'catalog', COALESCE(jsonb_agg(entry ORDER BY entry->>'ref'), '[]'::jsonb)
+  ) AS value
+  FROM v3_grounding_entries
+),
 valid_claim AS (
   SELECT ie.id, ie.processing_token
   FROM inbound_events ie
@@ -231,7 +256,8 @@ SELECT
   COALESCE(fs.pending_count, 0) > 0 AS has_pending_followups,
   COALESCE(lcs.state_service, ll.service) AS last_known_service,
   COALESCE(lcs.state_city, ll.city) AS last_known_city,
-  COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement
+  COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement,
+  vg.value AS v3_grounding
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
 LEFT JOIN active_contract_route acr ON TRUE
@@ -241,4 +267,5 @@ LEFT JOIN latest_conversation_state lcs ON TRUE
 LEFT JOIN recent_messages rm ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
-LEFT JOIN follow_up_status fs ON TRUE;
+LEFT JOIN follow_up_status fs ON TRUE
+LEFT JOIN v3_grounding vg ON TRUE;
