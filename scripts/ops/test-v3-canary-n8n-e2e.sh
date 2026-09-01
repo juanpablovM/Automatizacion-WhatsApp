@@ -563,7 +563,7 @@ SELECT jsonb_pretty(jsonb_build_object(
   'decision_validation_result', decision.validation_result,
   'decision_reply_text', decision.output_payload#>>'{reply,text}',
   'state_receipt_schema', execution.state_receipt->>'schema',
-  'effect_receipt_schema', (SELECT value->>'schema' FROM effect_receipt),
+  'effect_receipt_version', (SELECT value->>'version' FROM effect_receipt),
   'effect_receipt_status', (SELECT value->>'status' FROM effect_receipt),
   'effect_receipt_count', jsonb_array_length(execution.effect_receipt_refs),
   'outgoing_text', outgoing.text_body,
@@ -591,7 +591,7 @@ assert_valid_turn_evidence() {
     and .decision_version == "validated_conversation_decision/v3"
     and (.decision_id | startswith("v3-contingency:") | not)
     and .state_receipt_schema == "conversation_state_receipt/v3"
-    and .effect_receipt_schema == "v3_effect_receipt/v1"
+    and .effect_receipt_version == "v3_effect_receipt/v1"
     and .effect_receipt_status == "succeeded"
     and .effect_receipt_count == 1
     and .authorized_effects == 1

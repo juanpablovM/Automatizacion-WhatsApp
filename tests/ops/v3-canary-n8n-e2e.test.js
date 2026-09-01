@@ -55,7 +55,7 @@ describe('v3 canary E2E binding contract', () => {
       '.decision_type == "conversation_v3_authorized"',
       '.decision_version == "validated_conversation_decision/v3"',
       '.state_receipt_schema == "conversation_state_receipt/v3"',
-      '.effect_receipt_schema == "v3_effect_receipt/v1"',
+      '.effect_receipt_version == "v3_effect_receipt/v1"',
       '.effect_receipt_status == "succeeded"',
       // The point of the lane: a real lead, created by the effect executor.
       '.leads_for_conversation == 1',

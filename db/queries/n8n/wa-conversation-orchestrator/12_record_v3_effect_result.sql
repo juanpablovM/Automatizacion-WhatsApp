@@ -110,8 +110,12 @@ WITH target AS MATERIALIZED (
 )
 SELECT recorded.*, execution_update.state AS execution_state,
        execution_update.effect_receipt_refs, execution_update.last_error,
+       execution_update.decision_id,
+       execution_update.expected_snapshot_digest,
+       event.processing_token,
        decision.output_payload AS v3_decision
 FROM recorded
 JOIN execution_update
   ON execution_update.decision_id = recorded.request_payload#>>'{v3,decision_id}'
-JOIN advisor_decisions decision ON decision.id = execution_update.advisor_decision_id;
+JOIN advisor_decisions decision ON decision.id = execution_update.advisor_decision_id
+JOIN inbound_events event ON event.id = execution_update.inbound_event_id;

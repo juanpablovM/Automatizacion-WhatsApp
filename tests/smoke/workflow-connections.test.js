@@ -610,6 +610,33 @@ describe('Smoke — Workflow connection graph', () => {
       });
     });
 
+    test('carries the commit parameters back around the effect loop', () => {
+      // The effect loop runs `Prepare V3 Effects -> ... -> Record V3 Effect
+      // Result -> Prepare V3 Effects`, and a Postgres node replaces the item
+      // with its result set. Whatever that last query does not project is gone
+      // by the time the loop exits, so `Commit V3 State And Outbox` bound its
+      // three parameters to nothing: the statement matched no execution, the
+      // turn stopped at `ready_to_commit`, and nothing reported a failure.
+      const commit = workflow.nodes.find(({ name }) => name === 'Commit V3 State And Outbox');
+      const bound = String(commit.parameters.additionalFields.queryParams)
+        .split(',')
+        .map((param) => param.trim());
+      expect(bound).toEqual(['decision_id', 'processing_token', 'expected_snapshot_digest']);
+
+      // Only the final SELECT survives into the item; a name mentioned in a
+      // WHERE further up is still dropped.
+      const recorder = workflow.nodes.find(({ name }) => name === 'Record V3 Effect Result');
+      const query = String(recorder.parameters.query);
+      const tail = query.slice(query.lastIndexOf('SELECT'));
+      const projection = tail.slice(0, tail.search(/\bFROM\b/));
+      for (const param of bound) {
+        expect(
+          projection,
+          `the effect loop drops ${param} before the commit binds it`,
+        ).toMatch(new RegExp(`\\b${param}\\b`));
+      }
+    });
+
     test('leaves delivery pending in the orchestrator until the provider returns', () => {
       expect(branchTargets(workflow, 'Commit V3 State And Outbox', 0)).toEqual(['Prepare V3 Saga Result']);
       expect(branchTargets(workflow, 'Commit V3 Contingency', 0)).toEqual(['Prepare V3 Saga Result']);
