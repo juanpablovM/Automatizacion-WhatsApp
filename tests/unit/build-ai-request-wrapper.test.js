@@ -83,4 +83,44 @@ describe('Build AI Request — real n8n Code node wrapper', () => {
     expect(output[0].json.v3_repair_attempt).toBe(1);
     expect(output[0].json.ai_repair_request).toEqual(repairRequest);
   });
+
+  test('sends the repair request that arrives suffixed by the commercial merge', () => {
+    // `Merge Commercial Context` combines with `addSuffix`, so on the repair
+    // cycle this node receives `ai_repair_request_1`, never the bare name. Every
+    // other v3 field here already reads through `pickMerged`; this one did not,
+    // so the second provider call went out identical to the first — no
+    // `repair_request` in the prompt — and the model had nothing to repair from.
+    // Asserting the field survives on the output is not enough: what matters is
+    // what reaches the provider.
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const turnPolicy = {
+      version: 'ai_prd_turn_policy/v3',
+      policy_digest: 'b'.repeat(64),
+      state_authority: { allowed_mutations: [] },
+      effect_authority: { permissions: [] },
+    };
+    const repairRequest = {
+      schema: 'ai_conversation_repair_request/v3',
+      policy_digest: turnPolicy.policy_digest,
+      complete_repair: true,
+      repair_attempt: 1,
+      errors: [{ code: 'proposal_shape_invalid', path: '$' }],
+    };
+    const output = runCodeNode(source, [{
+      json: {
+        contract_version_1: 'v3',
+        turn_policy_1: turnPolicy,
+        v3_repair_attempt_1: 1,
+        ai_repair_request_1: repairRequest,
+      },
+    }], {
+      AI_DIRECT_API_KEY: 'fake-key-123',
+      AI_DIRECT_API_MODEL: 'test-model',
+    });
+
+    expect(output[0].json.ai_request_error).toBeUndefined();
+    const userPrompt = output[0].json.ai_request.messages
+      .find(({ role }) => role === 'user').content;
+    expect(JSON.parse(userPrompt).repair_request).toEqual(repairRequest);
+  });
 });

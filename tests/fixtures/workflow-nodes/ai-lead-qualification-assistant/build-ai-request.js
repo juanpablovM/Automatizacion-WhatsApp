@@ -215,7 +215,7 @@ if (usesV3Contract) {
   if (v3ConfigError) {
     return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: v3ConfigError, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
   }
-  const repairRequest = parseJsonObject(row.ai_repair_request);
+  const repairRequest = parseJsonObject(pickMerged(row.ai_repair_request, row.ai_repair_request_1));
   const hasRepairRequest = Object.keys(repairRequest).length > 0;
   const repairRequestValid = !hasRepairRequest || (
     repairRequest.schema === 'ai_conversation_repair_request/v3'

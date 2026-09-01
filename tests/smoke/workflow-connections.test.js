@@ -44,9 +44,12 @@ const ALLOWED_TERMINALS = {
   ],
   'wa-inbound-downstream-dispatcher.json': [
     // Genuinely parallel lanes, each ending in its own completion node.
-    'Dispatch Next Inbox Event', 'Upsert Early Opportunity', 'Follow-Up Lane Complete',
-    // The v3 shadow evaluation is a fourth lane, dispatched after outbound
-    // delivery and closed like the others.
+    // `Follow-Up Lane Complete` used to be one of them and no longer is: it
+    // writes `downstream_payload`, which `Mark Inbox Processed` requires to be
+    // non-empty, so the completion gate has to wait for it.
+    'Dispatch Next Inbox Event', 'Upsert Early Opportunity',
+    // The v3 shadow evaluation is a lane, dispatched after outbound delivery
+    // and closed like the others.
     'Shadow Lane Complete',
   ],
   'wa-inbound-entry.json': [
@@ -606,6 +609,46 @@ describe('Smoke — Workflow connection graph', () => {
         });
         expect(node.parameters.additionalFields).toBeUndefined();
       }
+    });
+  });
+
+  describe('inbound completion gate', () => {
+    const workflow = readWorkflow('wa-inbound-downstream-dispatcher.json');
+
+    test('waits for the lane that writes downstream_payload before closing the inbox', () => {
+      // `Mark Inbox Processed` refuses to close an event whose
+      // `downstream_payload` is still `{}`, and `Apply Inbound Follow-Up Policy`
+      // is the only node that writes it. That lane used to run in parallel with
+      // the completion gate, so whether the inbound event closed came down to
+      // which one won the race — the canary lost it, leaving a delivered turn
+      // stuck in `processing/orchestrating` with nothing reported as failed.
+      const writers = workflow.nodes.filter(
+        (node) => /downstream_payload\s*=/.test(String(node.parameters?.query || '')),
+      );
+      expect(writers.map(({ name }) => name)).toEqual(['Apply Inbound Follow-Up Policy']);
+
+      expect(branchTargets(workflow, 'Apply Inbound Follow-Up Policy', 0))
+        .toEqual(['Follow-Up Lane Complete']);
+      expect(branchTargets(workflow, 'Follow-Up Lane Complete', 0))
+        .toEqual(['Merge Dispatch Completion']);
+      expect(branchTargets(workflow, 'Merge Dispatch Completion', 0))
+        .toEqual(['Mark Inbox Processed']);
+    });
+
+    test('declares one merge input per lane it waits for', () => {
+      // combineByPosition emits nothing unless every input carries an item, so
+      // the declared count and the wired inputs have to agree exactly.
+      const merge = workflow.nodes.find(({ name }) => name === 'Merge Dispatch Completion');
+      const wired = new Set();
+      for (const [, connection] of Object.entries(workflow.connections)) {
+        for (const branch of connection.main || []) {
+          for (const target of branch || []) {
+            if (target.node === 'Merge Dispatch Completion') wired.add(target.index || 0);
+          }
+        }
+      }
+      expect(merge.parameters.numberInputs).toBe(4);
+      expect([...wired].sort()).toEqual([0, 1, 2, 3]);
     });
   });
 

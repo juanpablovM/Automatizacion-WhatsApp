@@ -377,7 +377,7 @@ SELECT jsonb_build_object(
   'execution_state', execution.state,
   'decision_id', execution.decision_id,
   'decision_type', decision.decision_type,
-  'decision_schema', decision.output_payload->>'schema',
+  'decision_version', decision.output_payload->>'version',
   'decision_validation_result', decision.validation_result,
   'decision_reply_text', decision.output_payload#>>'{reply,text}',
   'decision_reply_sha256', decision.output_payload#>>'{reply,sha256}',
@@ -401,7 +401,7 @@ SELECT jsonb_build_object(
   'handoff_metadata_decision_id', handoff.metadata->>'decision_id',
   'handoff_count', (SELECT COUNT(*) FROM handoffs item WHERE item.inbound_event_id=target.id AND item.deleted_at IS NULL),
   'contingency_commit_audit_count', (SELECT COUNT(*) FROM audit_logs audit WHERE audit.entity_type='conversation_turn_execution' AND audit.entity_id=execution.id AND audit.event_name='v3_contingency_committed'),
-  'delivery_transition_audit_count', (SELECT COUNT(*) FROM audit_logs audit WHERE audit.entity_type='conversation_turn_execution' AND audit.entity_id=execution.id AND audit.event_name='v3_turn_transitioned' AND audit.metadata->>'to_state'='delivered'),
+  'delivery_transition_audit_count', (SELECT COUNT(*) FROM audit_logs audit WHERE audit.entity_type='conversation_turn_execution' AND audit.entity_id=execution.id AND audit.event_name='v3_delivery_recorded' AND audit.metadata->>'to_state'='delivered'),
   'legacy_outgoing_count', (SELECT COUNT(*) FROM messages legacy WHERE legacy.conversation_id=execution.conversation_id AND legacy.direction='outgoing' AND legacy.idempotency_key LIKE 'evolution:%' AND legacy.deleted_at IS NULL)
 )
 FROM target
@@ -415,7 +415,7 @@ WHERE execution.contract_version = 'v3'
   AND execution.route_rule_id = 'rollout:canary'
   AND execution.state = 'delivered'
   AND decision.decision_type = 'v3_system_contingency'
-  AND decision.output_payload->>'schema' = 'system_contingency_decision/v3'
+  AND decision.output_payload->>'version' = 'system_contingency_decision/v3'
   AND execution.delivery_message_id = outgoing.id
   AND outgoing.idempotency_key = execution.delivery_key
   AND execution.delivery_receipt_ref->>'provider_message_id' = outgoing.external_message_id
@@ -437,7 +437,7 @@ assert_turn_evidence() {
     and .execution_state == "delivered"
     and (.decision_id | startswith("v3-contingency:"))
     and .decision_type == "v3_system_contingency"
-    and .decision_schema == "system_contingency_decision/v3"
+    and .decision_version == "system_contingency_decision/v3"
     and .decision_validation_result == "fallback"
     and .decision_delivery_key == .delivery_key
     and .delivery_message_id == .outgoing_id

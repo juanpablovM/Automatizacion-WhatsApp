@@ -35,6 +35,36 @@ describe('v3 canary E2E binding contract', () => {
     expect(harness).not.toMatch(/curl[^\n]+https?:\/\/(?!127\.0\.0\.1)/);
   });
 
+  test('audits the delivery transition where the transition happens', () => {
+    // `db/queries/.../10_transition_v3_execution.sql` is a generic compare-and-set
+    // that audits `v3_turn_transitioned` with from/to state. It is orphaned: not
+    // in the sync manifest, not embedded in any node, and no workflow emits that
+    // event. The runtime moved the transition inline, into the same statement
+    // that writes the receipt, so the effect and the state change commit
+    // together — a stronger guarantee than a second round trip. The canary must
+    // assert the audit that lane actually writes, and that audit must still
+    // carry the state it moved to.
+    const harness = source(harnessPath);
+
+    expect(harness).not.toContain('v3_turn_transitioned');
+    expect(harness).toContain("audit.event_name='v3_delivery_recorded'");
+    expect(harness).toContain("audit.metadata->>'to_state'='delivered'");
+  });
+
+  test('reads decisions by version and receipts by schema', () => {
+    // The v3 contracts split the two deliberately: a decision declares
+    // `version` (`buildV3ContingencyDecision` emits it, and `Commit V3
+    // Contingency` filters on `output_payload->>'version'`), while a receipt
+    // declares `schema` (`internal_handoff_receipt/v3`, `v3_delivery_receipt/v1`).
+    // The canary read decisions by `schema`, which is always NULL, so the whole
+    // assertion could only ever be false once a turn reached it.
+    const harness = source(harnessPath);
+
+    expect(harness).not.toContain("decision.output_payload->>'schema'");
+    expect(harness).toContain("decision.output_payload->>'version'");
+    expect(harness).toContain("receipt->>'schema' = 'internal_handoff_receipt/v3'");
+  });
+
   test('captures the v3 ledger rows when the turn never reaches delivered', () => {
     // The stack is torn down with `compose down -v` on the way out, so anything
     // not written to the evidence directory is gone. The n8n execution data
@@ -77,7 +107,7 @@ describe('v3 canary E2E binding contract', () => {
       "execution.route_rule_id = 'rollout:canary'",
       "execution.state = 'delivered'",
       "decision.decision_type = 'v3_system_contingency'",
-      "decision.output_payload->>'schema' = 'system_contingency_decision/v3'",
+      "decision.output_payload->>'version' = 'system_contingency_decision/v3'",
       'execution.delivery_message_id = outgoing.id',
       'outgoing.idempotency_key = execution.delivery_key',
       "execution.delivery_receipt_ref->>'provider_message_id' = outgoing.external_message_id",

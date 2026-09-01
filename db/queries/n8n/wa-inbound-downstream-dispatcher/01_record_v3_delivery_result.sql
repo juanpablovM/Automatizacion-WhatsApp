@@ -71,7 +71,11 @@ WITH target AS MATERIALIZED (
          jsonb_build_object(
            'decision_id', transitioned.decision_id,
            'delivery_message_id', transitioned.delivery_message_id,
-           'delivery_receipt_ref', transitioned.delivery_receipt_ref
+           'delivery_receipt_ref', transitioned.delivery_receipt_ref,
+           -- The WHERE above admits only `delivery_pending`, so the lifecycle
+           -- audit can name both ends of the move it just made.
+           'from_state', 'delivery_pending',
+           'to_state', transitioned.state
          )
   FROM transitioned
   RETURNING id
