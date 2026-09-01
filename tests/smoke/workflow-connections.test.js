@@ -269,6 +269,30 @@ export const nestedQueryParamIssues = (workflow, file, allowlist = RUNTIME_NODE_
     .sort()
 );
 
+// `Mark Outbound Sending` projects `raw_payload AS outbound_body` and
+// `raw_payload->>'number' AS phone_number`: for an outgoing message that column
+// *is* the provider request body. A v3 commit that fills it with decision
+// provenance instead ships a POST with no `text`, and the provider answers 200
+// to a message that says nothing.
+export const outboxBodyIssues = (workflow, file) => (
+  (workflow.nodes || [])
+    .filter((node) => node.type === 'n8n-nodes-base.postgres')
+    .filter((node) => {
+      const query = String(node.parameters?.query || '');
+      return /INSERT INTO messages/i.test(query) && /'outgoing'/.test(query);
+    })
+    .flatMap((node) => {
+      const query = String(node.parameters?.query || '');
+      return [
+        ["'number'", /'number',\s*target\.phone_number/],
+        ["'text'", /'text',\s*target\.output_payload#>>'\{reply,text\}'/],
+      ]
+        .filter(([, pattern]) => !pattern.test(query))
+        .map(([key]) => `${file}::${node.name} omits ${key} from the outbound body`);
+    })
+    .sort()
+);
+
 const branchTargets = (workflow, source, branch) => (
   workflow.connections?.[source]?.main?.[branch] || []
 ).map((target) => target.node).sort();
@@ -317,6 +341,10 @@ describe('Smoke — Workflow connection graph', () => {
 
     test(`${file} uses the Postgres v2 binding schema`, () => {
       expect(postgresV2BindingIssues(workflow, file)).toEqual([]);
+    });
+
+    test(`${file} queues outgoing messages with a sendable provider body`, () => {
+      expect(outboxBodyIssues(workflow, file)).toEqual([]);
     });
 
     test(`${file} binds every Postgres parameter as a flat field`, () => {

@@ -73,6 +73,9 @@ WITH execution_lock AS MATERIALIZED (
          target.output_payload#>>'{reply,text}',
          jsonb_build_object(
            'number', target.phone_number,
+           -- `Mark Outbound Sending` posts this column verbatim, so the
+           -- reply text belongs in it, not only in `text_body`.
+           'text', target.output_payload#>>'{reply,text}',
            'version', 'system_contingency_decision/v3',
            'decision_id', target.decision_id,
            'reply_sha256', target.output_payload#>>'{reply,sha256}',
