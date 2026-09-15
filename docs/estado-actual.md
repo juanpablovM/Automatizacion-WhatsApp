@@ -181,6 +181,13 @@ ese directorio declara la verdad vigente del sistema, y la capacidad que describ
   detección vive en la lista de keywords de `evaluate-conversation-step.js`.
 - **B2B se deriva a ClickUp.** La configuración, y no un nombre en el código, decide qué
   áreas son entregables.
+- **Un pedido fuera del catálogo no deriva: vuelve a preguntar.** Si el cliente pide un
+  material que Hormiglass no vende, el asesor dice que no está en el catálogo y pregunta
+  cuál de los productos vigentes le interesa. No cotiza, no inventa una alternativa y no
+  abre un handoff por ese motivo. Decidido el 2026-09-15 tras verlo en la aceptación:
+  `hormigón armado` se clasifica como producto por la regla del PRD, pero el anclaje al
+  catálogo manda y ninguno de los 28 ítems vigentes lo cubre. La aceptación del 2026-08-29
+  todavía creaba un lead con ese pedido; ese comportamiento quedó atrás a propósito.
 
 ## Evidencia de este corte
 
