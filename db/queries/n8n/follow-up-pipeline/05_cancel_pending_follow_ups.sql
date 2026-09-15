@@ -132,11 +132,12 @@ WITH raw_input AS (
     AND i.scheduled_at IS NOT NULL
     AND i.idempotency_key IS NOT NULL
     AND EXISTS (SELECT 1 FROM policy_claim)
-    AND NOT EXISTS (
-      SELECT 1
-      FROM follow_up_preferences p
-      WHERE p.conversation_id = i.conversation_id
-        AND p.opted_out = TRUE
+    AND NOT follow_up_contact_opted_out(i.conversation_id)
+    -- This inbound may be the very message that closed the conversation or
+    -- handed it to a seller. Re-read the persisted state instead of trusting
+    -- the payload that started this turn.
+    AND follow_up_is_eligible(
+      i.conversation_id, i.motivo, i.phone_number, i.source_number_id
     )
   ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING
   RETURNING id

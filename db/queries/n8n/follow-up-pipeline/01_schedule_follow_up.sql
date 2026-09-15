@@ -17,17 +17,23 @@ WITH input AS (
     jsonb_build_object('cycle_key', i.cycle_key)
   FROM input i
   WHERE i.cycle_key IS NOT NULL
-    AND NOT EXISTS (
-      SELECT 1 FROM follow_up_preferences p
-      WHERE p.conversation_id = i.conversation_id AND p.opted_out = TRUE
+    AND NOT follow_up_contact_opted_out(i.conversation_id)
+    AND follow_up_is_eligible(
+      i.conversation_id, i.motivo, i.phone_number, i.source_number_id
     )
   ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING
   RETURNING id
 )
 SELECT CASE
   WHEN EXISTS (SELECT 1 FROM inserted) THEN 'scheduled'
-  WHEN EXISTS (SELECT 1 FROM follow_up_preferences p, input i
-               WHERE p.conversation_id = i.conversation_id AND p.opted_out = TRUE)
+  WHEN EXISTS (SELECT 1 FROM input i
+               WHERE follow_up_contact_opted_out(i.conversation_id))
     THEN 'opted_out_blocked'
+  WHEN EXISTS (
+    SELECT 1 FROM input i
+    WHERE NOT follow_up_is_eligible(
+      i.conversation_id, i.motivo, i.phone_number, i.source_number_id
+    )
+  ) THEN 'ineligible_blocked'
   ELSE 'duplicate_skipped'
 END result, (SELECT id FROM inserted LIMIT 1) follow_up_id;
