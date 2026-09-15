@@ -192,4 +192,147 @@ describe('Normalize ClickUp Closure — inbound webhook contract', () => {
       expect(output.estado).toBe('resolved');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // The same signed webhook now also drives commercial lead chat ownership: a
+  // task moving into 'in progress' hands the chat to the salesperson, and any
+  // transition away from it hands the chat back. The closure lane keeps its
+  // exact meaning; these fields ride alongside it.
+  // ---------------------------------------------------------------------------
+  describe('lead chat ownership fields', () => {
+    // A complete ClickUp status history entry. The closure lane only ever read
+    // `after.status`; the ownership lane also needs the entry identity, its
+    // timestamp and the status the task is coming from.
+    const leadBody = (before, after, overrides = {}) => statusBody(after, {
+      history_items: [{
+        id: 'hist-abc-1',
+        field: 'status',
+        date: '1568036964079',
+        before: { status: before },
+        after: { status: after },
+      }],
+      ...overrides,
+    });
+
+    test('captures the previous ClickUp status verbatim, casing and accents intact', () => {
+      const output = run(delivery(leadBody('Revisión Comercial', 'in progress')));
+
+      // This exact string is what a expired lease will write back to ClickUp,
+      // so a lowercased or trimmed copy would restore a status that does not
+      // exist in the space.
+      expect(output.clickup_previous_status).toBe('Revisión Comercial');
+      expect(output.clickup_new_status).toBe('in progress');
+      expect(output.clickup_history_id).toBe('hist-abc-1');
+    });
+
+    test('converts the ClickUp epoch-millisecond date to an ISO-8601 timestamp', () => {
+      const output = run(delivery(leadBody('open', 'in progress')));
+
+      expect(output.clickup_history_at).toBe('2019-09-09T13:49:24.079Z');
+    });
+
+    test('routes an unmapped new status to the lead lane even though the handoff mapping failed', () => {
+      const output = run(delivery(leadBody('in progress', 'waiting on client')));
+
+      // The regression this guards: ownership must be released on ANY exit from
+      // 'in progress', including one the handoff mapping does not know. Reading
+      // `actionable` alone would silently drop the release.
+      expect(output.actionable).toBe(false);
+      expect(output.estado).toBeNull();
+      expect(output.reason).toBe('unmapped_status:waiting on client');
+      expect(output.lead_routable).toBe(true);
+      expect(output.is_ownership_acquisition).toBe(false);
+      expect(output.clickup_task_id).toBe('clickup-task-1');
+      expect(output.clickup_new_status).toBe('waiting on client');
+      expect(output.clickup_previous_status).toBe('in progress');
+    });
+
+    test('marks a transition to complete as a release, not an acquisition', () => {
+      const output = run(delivery(leadBody('in progress', 'complete')));
+
+      expect(output.lead_routable).toBe(true);
+      expect(output.is_ownership_acquisition).toBe(false);
+      expect(output.estado).toBe('resolved');
+    });
+
+    test('marks a transition to in progress as an acquisition', () => {
+      const output = run(delivery(leadBody('open', 'In Progress')));
+
+      expect(output.lead_routable).toBe(true);
+      expect(output.is_ownership_acquisition).toBe(true);
+      expect(output.estado).toBe('acknowledged');
+    });
+
+    test('honours CLICKUP_STATUS_ACKNOWLEDGED when deciding an acquisition', () => {
+      const env = {
+        CLICKUP_WEBHOOK_SECRET: SECRET,
+        CLICKUP_STATUS_ACKNOWLEDGED: 'atendiendo, en curso',
+      };
+
+      expect(run(delivery(leadBody('nuevo', 'Atendiendo')), env).is_ownership_acquisition)
+        .toBe(true);
+      // The default list stops applying once the override is in force.
+      expect(run(delivery(leadBody('nuevo', 'in progress')), env).is_ownership_acquisition)
+        .toBe(false);
+    });
+
+    test('does not route a ClickUp event that is not a status change', () => {
+      const output = run(delivery(leadBody('open', 'in progress', { event: 'taskCommentPosted' })));
+
+      expect(output.authorized).toBe(true);
+      expect(output.lead_routable).toBe(false);
+      expect(output.is_ownership_acquisition).toBe(false);
+    });
+
+    test('does not route a delivery carrying no status transition', () => {
+      const output = run(delivery(statusBody('complete', { history_items: [] })));
+
+      expect(output.lead_routable).toBe(false);
+      expect(output.clickup_previous_status).toBeNull();
+      expect(output.clickup_new_status).toBeNull();
+      expect(output.clickup_history_id).toBeNull();
+      expect(output.clickup_history_at).toBeNull();
+    });
+
+    test('leaves the previous status null for a task with no prior state', () => {
+      const output = run(delivery(statusBody('in progress', {
+        history_items: [
+          { id: 'hist-1', field: 'status', date: '1568036964079', after: { status: 'in progress' } },
+        ],
+      })));
+
+      expect(output.clickup_previous_status).toBeNull();
+      expect(output.lead_routable).toBe(true);
+    });
+
+    test('takes the identity of the last status entry when ClickUp batches several', () => {
+      const output = run(delivery(statusBody('complete', {
+        history_items: [
+          { id: 'hist-1', field: 'status', date: '1568036964079', before: { status: 'open' }, after: { status: 'in progress' } },
+          { id: 'hist-2', field: 'assignee', date: '1568036965000', after: { status: 'ignored' } },
+          { id: 'hist-3', field: 'status', date: '1568036966000', before: { status: 'In Progress' }, after: { status: 'Cerrado' } },
+        ],
+      })));
+
+      expect(output.clickup_history_id).toBe('hist-3');
+      expect(output.clickup_history_at).toBe('2019-09-09T13:49:26.000Z');
+      expect(output.clickup_previous_status).toBe('In Progress');
+      expect(output.clickup_new_status).toBe('Cerrado');
+    });
+
+    test('an invalid signature stays unauthorized and emits no lead fields', () => {
+      const output = run(delivery(leadBody('Revisión Comercial', 'in progress'), {
+        secret: 'not-the-secret',
+      }));
+
+      expect(output.authorized).toBe(false);
+      expect(output.reason).toBe('invalid_signature');
+      expect(output).not.toHaveProperty('lead_routable');
+      expect(output).not.toHaveProperty('is_ownership_acquisition');
+      expect(output).not.toHaveProperty('clickup_previous_status');
+      expect(output).not.toHaveProperty('clickup_new_status');
+      expect(output).not.toHaveProperty('clickup_history_id');
+      expect(output).not.toHaveProperty('clickup_history_at');
+    });
+  });
 });
