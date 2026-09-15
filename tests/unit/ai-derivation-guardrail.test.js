@@ -68,9 +68,9 @@ describe('AI derivation guardrail (memoria #762)', () => {
     const output = runApply({
       should_create_lead: true,
       // modality 'pickup' resolves to the 'retiro' profile, which only
-      // requires 'product' (satisfied below) — the commercial gate must not
+      // requires product and quantity (satisfied below) — the commercial gate must not
       // silently downgrade should_create_lead to false for this scenario.
-      qualification_context: { modality: 'pickup', product: 'Baldosas' },
+      qualification_context: { modality: 'pickup', product: 'Baldosas', quantity: '100 unidades' },
       reply_text: 'Perfecto, voy a derivar tu caso a un asesor para que te contacte.',
     });
     // PRIORITY 1 always discards ai.reply_text once validation passes; a

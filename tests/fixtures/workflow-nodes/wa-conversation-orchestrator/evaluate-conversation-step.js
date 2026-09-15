@@ -28,7 +28,7 @@ const FIXTURE_VERSION = "2026-08-20-v4";
 // Se evalua sobre texto ya normalizado por normalizeText, que elimina los
 // simbolos: "100 m²" llega como "100 m" y "1.000 m2" llega como "1 000 m2".
 const MEASURE_UNITS = [
-  'm2', 'mts', 'mt', 'ml', 'metros', 'metro',
+  'm2', 'mts', 'mtl', 'mt', 'ml', 'metros', 'metro',
   'centimetros', 'centimetro', 'milimetros', 'milimetro',
   'cm', 'mm', 'km', 'kg', 'lt',
   'litros', 'litro', 'toneladas', 'tonelada', 'kilos', 'kilo',
@@ -149,6 +149,7 @@ function evaluateConversationStep(row) {
     'la granja',
     'san bernardo',
     'cerrillos',
+    'chicureo',
     'colina',
     'lampa',
     'til til',
@@ -303,7 +304,8 @@ function evaluateConversationStep(row) {
   const messageType = row.message_type || 'unknown';
   const rawText = String(row.text_body || '').trim();
   const normalizedText = normalizeText(rawText);
-  const isGreetingOnly = greetingOnly.includes(normalizedText);
+  const isGreetingOnly = greetingOnly.includes(normalizedText)
+    || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(normalizedText);
   const usefulText = rawText.length > 0 && !isGreetingOnly;
   const textHasIntent = intentKeywords.some((keyword) => normalizedText.includes(keyword));
 
@@ -339,7 +341,7 @@ function evaluateConversationStep(row) {
     return a || b || '';
   };
 
-  const activeStep = (row.has_active_conversation || isReengagement)
+  const activeStep = (row.has_active_conversation || isReengagement || (isRecentConversation && row.conversation_status_code === 'handed_to_sales'))
     ? (pickRicherStep(row.state_current_step, row.current_step) || 'city')
     : 'city';
   const stepInfo = parseStep(activeStep);
@@ -380,7 +382,7 @@ function evaluateConversationStep(row) {
   // Model C: B2B detection function
   const detectB2bSignal = (text) => {
     const normalized = normalizeText(text);
-    return b2bKeywords.some(kw => normalized.includes(normalizeText(kw)));
+    return b2bKeywords.some(kw => new RegExp('\\b' + normalizeText(kw) + '\\b').test(normalized));
   };
 
   const isLikelyCityAnswer = (text, originalText) => {
@@ -409,11 +411,11 @@ function evaluateConversationStep(row) {
     if (extractProductAfterAction(text)) return true;
     if (detectCity(text) && wordCount(originalText) <= 4) return false;
     if (detectActionIntent(text) && isGenericIntentOnly(text)) return false;
-    return originalText.length >= 3 && originalText.length <= 80 && wordCount(originalText) <= 8 && !isVagueAnswer(text);
+    return knownProducts.some((product) => new RegExp('\\b' + product + '\\b').test(text));
   };
 
   const detectService = (text, originalText, forceFromAnswer = false) => {
-    const productHit = knownProducts.find((product) => text.includes(product));
+    const productHit = knownProducts.find((product) => new RegExp('\\b' + product + '\\b').test(text));
     if (productHit) return toTitleCase(productHit);
 
     const hit = knownServices.find((service) => text.includes(service));
@@ -422,12 +424,7 @@ function evaluateConversationStep(row) {
     const productAfterAction = extractProductAfterAction(text);
     if (productAfterAction) return productAfterAction;
 
-    if (forceFromAnswer && isLikelyServiceAnswer(text, originalText)) return originalText;
-    if (isGenericIntentOnly(text)) return null;
-
-    const candidate = stripIntentWords(stripCity(text));
-    if (!candidate || candidate.length < 3 || candidate.split(' ').filter(Boolean).length > 8) return null;
-    return toTitleCase(candidate);
+    return null;
   };
 
   const isConcreteRequirement = (text) => {
@@ -479,6 +476,11 @@ function evaluateConversationStep(row) {
     city: row.previous_city || null,
     requirement: row.previous_requirement || null,
   };
+
+  // PostgreSQL already resolved the cross-system ownership before this code
+  // runs. While the seller owns the chat we still persist the customer turn,
+  // but we must not advance qualification state or emit automated effects.
+  const humanControlActive = Boolean(row.bot_suppressed);
 
   const stepState = stepInfo.state || {};
   const current = {
@@ -548,7 +550,7 @@ function evaluateConversationStep(row) {
   const isConfirmation = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
   const isRejection = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
-  const wantsNew = (text) => /\b(nueva|nuevo|iniciar|empezar|otra|otro|desde cero|partir de cero)\b(?:.*\b(cotizacion|solicitud|pedido|proyecto)\b)?/.test(text);
+  const wantsNew = (text) => /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/.test(text);
   const wantsHuman = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
   const operationalPatterns = [
     /\b(reclamo|queja|postventa|post venta)\b/,
@@ -679,6 +681,27 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'escalation_required';
   }
 
+  // A registered recent quote is not a new request merely because the client
+  // greets, thanks us, or asks for an update before commercial review.
+  else if (hasExistingConversation && isRecentConversation
+    && row.conversation_status_code === 'handed_to_sales'
+    && row.lead_id
+    && !row.human_arbitration_required && !wantsNew(normalizedText)
+    && (humanControlActive || isGreetingOnly
+      || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$|^(?:como va (?:mi|la) cotizacion|hay novedades|que (?:paso|pasa) con (?:mi|la) cotizacion|sigo esperando|alguna novedad)$/.test(normalizedText))) {
+    resetConversationLead = false;
+    current.service = row.state_service || stepState.service || lastKnownService || previous.service;
+    current.city = row.state_city || stepState.city || lastKnownCity || previous.city;
+    current.requirement = row.state_requirement || stepState.requirement || lastKnownRequirement || previous.requirement;
+    currentStepField = 'complete';
+    pendingQuestionKey = null;
+    conversationStatusCode = 'handed_to_sales';
+    shouldCreateLead = false;
+    shouldEscalate = false;
+    responseKind = 'commercial_review_pending';
+    responseText = 'Tu solicitud ya está registrada y pendiente de revisión por el equipo comercial.';
+  }
+
   // 4. TERMINAL: una conversación cerrada no puede reaparecer como re-engagement.
   else if (isTerminalConversation) {
     current.service = null;
@@ -704,11 +727,25 @@ function evaluateConversationStep(row) {
     responseText = '';
   }
 
+  // Explicit new-request consent precedes temporal re-engagement and old retries.
+  else if (wantsNew(normalizedText)) {
+    current.service = null;
+    current.city = null;
+    current.requirement = null;
+    resetConversationLead = true;
+    pendingQuestionKey = null;
+    currentStepField = 'city';
+    applyDetectedFields();
+    currentStepField = nextMissingField();
+    responseKind = 'new_request_started';
+    responseText = currentStepField === 'confirm' ? confirmationText() : nextQuestionForMissingField(currentStepField, current, 0, actionIntent);
+  }
+
   // 5. Retomar contexto anterior de forma explícita conserva identidad.
-  else if (hasExistingConversation && row.previous_lead_id && wantsPrevious(normalizedText)) {
-    current.service = previous.service;
-    current.city = previous.city;
-    current.requirement = previous.requirement;
+  else if (hasExistingConversation && (isReengagement || stepInfo.field === 'previous_context' || pendingQuestionKey === 'previous_context_choice' || row.previous_lead_id) && (wantsPrevious(normalizedText) || (stepInfo.field === 'previous_context' && /^(continuar|seguir|retomar)$/.test(normalizedText)))) {
+    current.service = row.last_known_service || row.state_service || stepState.service || previous.service;
+    current.city = row.last_known_city || row.state_city || stepState.city || previous.city;
+    current.requirement = row.last_known_requirement || row.state_requirement || stepState.requirement || previous.requirement;
     usedPreviousContext = true;
     resetConversationLead = false;
     currentStepField = nextMissingField();
@@ -723,7 +760,7 @@ function evaluateConversationStep(row) {
   }
 
   // 7. RE-ENGAGEMENT: pedir consentimiento antes de recuperar datos anteriores.
-  else if (isReengagement && targetConversationId) {
+  else if ((isReengagement && targetConversationId) || stepInfo.field === 'previous_context' || pendingQuestionKey === 'previous_context_choice') {
     current.service = null;
     current.city = null;
     current.requirement = null;
@@ -732,7 +769,15 @@ function evaluateConversationStep(row) {
     usedPreviousContext = false;
     pendingQuestionKey = 'previous_context_choice';
     responseKind = 'previous_context_choice';
-    responseText = '¡Hola de nuevo! ¿Preferís continuar con la solicitud anterior o iniciar una nueva?';
+    const tomorrowPostponement = /^(?:gracias(?: por todo)?\s+)?(?:(?:hablame|escribeme|contactame|hablemos|hablamos|retomamos|seguimos|continuamos|lo vemos)\s+manana|manana(?:\s+(?:hablamos|seguimos|retomamos))?)(?:\s+por favor)?$/.test(normalizedText);
+    const unsupportedPostponement = /^(?:hablame\s+)?pasado manana$/.test(normalizedText);
+    const courtesy = /^(?:muchas )?gracias(?: por (?:todo|la ayuda|tu ayuda|su ayuda))?$|^(?:chao|chau|hasta luego|adios|hasta manana|nos vemos)$/.test(normalizedText);
+    const passiveNonText = ['reaction', 'sticker'].includes(messageType) || !normalizedText;
+    responseText = passiveNonText ? ''
+      : tomorrowPostponement ? 'De acuerdo, dejamos la conversación pendiente para mañana. Cuando retomes, seguimos con tu solicitud.'
+      : unsupportedPostponement ? 'De acuerdo, lo dejamos pendiente. Cuando quieras retomar, seguimos con tu solicitud.'
+      : courtesy ? 'Gracias. Aquí estaremos cuando quieras retomar.'
+      : '¡Hola de nuevo! ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?';
   }
 
   // 6. NUEVA SOLICITUD: handoff ya hecho O firstInteraction + quiere nueva
@@ -776,6 +821,20 @@ function evaluateConversationStep(row) {
   else if (isB2bSignal && !shouldCreateLead) {
     responseKind = 'b2b_redirect';
     responseText = 'Detecto que eres de una empresa o constructora. Para atenderte mejor, necesito algunos datos adicionales:\n\n- Nombre de la empresa\n- RUT\n- Obra o proyecto\n- Comuna\n- Producto que necesitas\n- Cantidad aproximada\n- Plazo requerido\n- Si tienen Orden de Compra o condicion de pago definida\n\nCon esa informacion te puedo derivar con el area B2B de Hormiglass.';
+  }
+
+  // Measurement assistance is human review, never a fabricated quote quantity.
+  else if ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
+    && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
+      || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText))) {
+    shouldEscalate = true;
+    shouldCreateLead = false;
+    escalationReason = 'measurement_assistance_requested';
+    currentStepField = 'escalation';
+    pendingQuestionKey = null;
+    conversationStatusCode = 'escalation_required';
+    responseKind = 'escalation_routing';
+    responseText = 'Te derivaré con una persona del equipo para revisar cómo obtener las medidas, sin asumir una cantidad ni confirmar una visita.';
   }
 
   // 8. CONFIRMACIÓN EXPLÍCITA
@@ -828,7 +887,9 @@ function evaluateConversationStep(row) {
       recontactGreeting += 'En que te puedo ayudar?';
       responseText = recontactGreeting;
     } else {
+      const beforeDetection = JSON.stringify(current);
       applyDetectedFields();
+      const detectedProgress = beforeDetection !== JSON.stringify(current);
       const missing = nextMissingField();
       missingField = missing;
 
@@ -838,9 +899,9 @@ function evaluateConversationStep(row) {
         responseText = confirmationText();
       } else {
         const sameField = missing === stepInfo.field;
-        const nextRetry = sameField ? stepInfo.retry + 1 : 0;
+        const nextRetry = sameField && !detectedProgress ? stepInfo.retry + 1 : 0;
         // conversation-flow-v2: Escalation on loop (3+ turns without progress) or frustration
-        const isStuck = sameField && stepInfo.retry >= 2;
+        const isStuck = sameField && !detectedProgress && stepInfo.retry >= 2;
         const isFrustrated = detectFrustration(rawText);
         if (isStuck || isFrustrated) {
           // PRECEDENCIA: escalación/terminal (frustración o loop)
@@ -866,6 +927,22 @@ function evaluateConversationStep(row) {
 
   if (shouldEscalate) shouldCreateLead = false;
   if (shouldCreateLead) shouldEscalate = false;
+
+  if (humanControlActive) {
+    shouldCreateLead = false;
+    shouldEscalate = false;
+    escalationReason = '';
+    responseText = '';
+    responseKind = 'human_control_suppressed';
+    pendingQuestionKey = resetConversationLead ? null : row.pending_question_key || null;
+    currentStepField = resetConversationLead ? 'service' : stepInfo.field;
+    conversationStatusCode = resetConversationLead
+      ? 'active'
+      : row.conversation_status_code || 'waiting_user';
+    current.service = resetConversationLead ? null : row.state_service || stepState.service || null;
+    current.city = resetConversationLead ? null : row.state_city || stepState.city || null;
+    current.requirement = resetConversationLead ? null : row.state_requirement || stepState.requirement || null;
+  }
 
   const finalCompletedFields = completedFields();
   const completedCount = finalCompletedFields.length;
@@ -897,6 +974,15 @@ function evaluateConversationStep(row) {
 
   return {
       json: {
+        contract_route: row.contract_route ?? null,
+        contract_version: row.contract_version ?? null,
+        contract_mode: row.contract_mode ?? null,
+        route_mode: row.route_mode ?? null,
+        route_rule_id: row.route_rule_id ?? null,
+        v3_grounding: row.v3_grounding ?? null,
+        previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
+        previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'b2b_redirect'].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
@@ -926,6 +1012,11 @@ function evaluateConversationStep(row) {
               ? null
               : row.conversation_id || null,
         lead_id: resetConversationLead ? null : row.lead_id || null,
+        ownership_id: row.ownership_id || null,
+        ownership_lead_id: row.ownership_lead_id || null,
+        bot_suppressed: humanControlActive,
+        human_response_due_at: row.human_response_due_at || null,
+        human_arbitration_required: Boolean(row.human_arbitration_required),
         reset_conversation_lead: resetConversationLead,
         previous_lead_id: usedPreviousContext ? row.previous_lead_id || null : null,
         service: current.service || null,
@@ -937,7 +1028,7 @@ function evaluateConversationStep(row) {
             ? row.qualification_context
             : {},
         pending_question_key: pendingQuestionKey,
-        recent_messages: resetConversationLead
+        recent_messages: resetConversationLead || responseKind === 'previous_context_choice'
           ? []
           : (Array.isArray(row.recent_messages) ? row.recent_messages : []),
         current_step: currentStepField,
@@ -956,16 +1047,22 @@ function evaluateConversationStep(row) {
             used_previous_context: usedPreviousContext,
             current_step_field: currentStepField,
             audit_event_name: 'conversation_state_evaluated',
-        audit_result: shouldCreateLead ? 'handed_to_sales' : 'waiting_user',
+        audit_result: humanControlActive
+          ? 'human_control_suppressed'
+          : shouldCreateLead ? 'handed_to_sales' : 'waiting_user',
         before_payload_json: JSON.stringify(beforePayload),
         after_payload_json: JSON.stringify(afterPayload),
         metadata_json: JSON.stringify({
+          previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
+          previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
           first_interaction: firstInteraction,
           step_field: stepInfo.field,
           next_step_field: currentStepField,
           retry: stepInfo.retry,
           message_type: messageType,
           response_kind: responseKind,
+          human_control_active: humanControlActive,
+          human_response_due_at: row.human_response_due_at || null,
           has_intent: hasIntent,
           used_previous_context: usedPreviousContext,
       reengagement_triggered: isReengagement && row.conversation_id,

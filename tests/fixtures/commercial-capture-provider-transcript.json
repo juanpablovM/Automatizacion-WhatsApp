@@ -1,0 +1,130 @@
+[
+  {
+    "message": "Necesito 1000 pastelones en Las condes",
+    "model": {
+      "intent": "quote_request",
+      "lead_quality": "high",
+      "customer_type": "b2c",
+      "lead_class": "B",
+      "modality": "delivery",
+      "service": "material",
+      "city": "Las Condes",
+      "requirement": "1000 pastelones",
+      "missing_fields": [],
+      "commercial_missing_fields": [],
+      "confirmation_status": "confirmed",
+      "should_create_lead": true,
+      "needs_confirmation": false,
+      "confidence": 0.95,
+      "objection_detected": "none",
+      "escalation_area": "sales",
+      "escalation_reason": "lead_ready_for_human_contact",
+      "field_updates": {
+        "service": "material",
+        "city": "Las Condes",
+        "requirement": "1000 pastelones"
+      },
+      "answered_question_key": "product",
+      "next_question_key": "none"
+    }
+  },
+  {
+    "message": "Son pastelones no baldosas",
+    "model": {
+      "intent": "correction",
+      "lead_quality": "high",
+      "customer_type": "b2c",
+      "lead_class": "B",
+      "modality": "delivery",
+      "service": "suministro",
+      "city": "Las Condes",
+      "requirement": "1000 pastelones",
+      "missing_fields": [
+        "confirmation"
+      ],
+      "commercial_missing_fields": [
+        "confirmation"
+      ],
+      "confirmation_status": "requested",
+      "should_create_lead": false,
+      "needs_confirmation": true,
+      "confidence": 0.95,
+      "objection_detected": "none",
+      "escalation_area": "none",
+      "escalation_reason": "none",
+      "field_updates": {
+        "service": "suministro",
+        "city": "Las Condes",
+        "requirement": "1000 pastelones"
+      },
+      "answered_question_key": "quantity",
+      "next_question_key": "final_confirmation"
+    }
+  },
+  {
+    "message": "1000 pastelones",
+    "model": {
+      "intent": "quote_request",
+      "lead_quality": "high",
+      "customer_type": "b2c",
+      "lead_class": "B",
+      "modality": "delivery",
+      "service": "suministro",
+      "city": "Las Condes",
+      "requirement": "1000 pastelones",
+      "missing_fields": [
+        "confirmation"
+      ],
+      "commercial_missing_fields": [
+        "confirmation"
+      ],
+      "confirmation_status": "requested",
+      "should_create_lead": false,
+      "needs_confirmation": true,
+      "confidence": 0.95,
+      "objection_detected": "none",
+      "escalation_area": "none",
+      "escalation_reason": "none",
+      "field_updates": {
+        "service": "suministro",
+        "city": "Las Condes",
+        "requirement": "1000 pastelones"
+      },
+      "answered_question_key": "quantity",
+      "next_question_key": "final_confirmation"
+    }
+  },
+  {
+    "message": "Necesito 1000 unidades",
+    "model": {
+      "intent": "quote_request",
+      "lead_quality": "high",
+      "customer_type": "b2c",
+      "lead_class": "B",
+      "modality": "delivery",
+      "service": "suministro",
+      "city": "Las Condes",
+      "requirement": "1000 pastelones",
+      "missing_fields": [
+        "confirmation"
+      ],
+      "commercial_missing_fields": [
+        "confirmation"
+      ],
+      "confirmation_status": "requested",
+      "should_create_lead": false,
+      "needs_confirmation": true,
+      "confidence": 0.95,
+      "objection_detected": "none",
+      "escalation_area": "none",
+      "escalation_reason": "none",
+      "field_updates": {
+        "service": "suministro",
+        "city": "Las Condes",
+        "requirement": "1000 pastelones"
+      },
+      "answered_question_key": "quantity",
+      "next_question_key": "final_confirmation"
+    }
+  }
+]

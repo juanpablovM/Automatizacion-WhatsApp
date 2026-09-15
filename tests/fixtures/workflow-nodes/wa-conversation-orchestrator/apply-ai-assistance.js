@@ -180,21 +180,25 @@ const userMentionedField = (field, userText) => {
 // Terminos del catalogo + hormigon/armado/losas/vigas/muros/cierres (el nombre
 // "Hormigon Armado Losa" es un PRODUCTO, no un servicio).
 const PRODUCT_TERM_RE = /\b(adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|armado|losa|loseta|viga|muro|solera|cierre|cierro|tapa)\w*\b/i;
-const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material']);
+const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material', 'no', 'actualmente', 'actual', 'existente', 'sino']);
 const productPhraseFromClient = (text, catalogMatches) => {
   const normalized = normalizeText(text);
-  const match = normalized.match(PRODUCT_TERM_RE);
+  const requestedText = normalized
+    .replace(/\b(?:tiene|tengo|hay)\b.*?\b(?:actualmente|actual|existente)\b/g, ' ')
+    .replace(/\b(?:retirar|sacar|demoler|quitar)\b.*?(?=\b(?:quiero|necesito|instalar|cotizar|comprar)\b|$)/g, ' ')
+    .replace(/\b(?:no|no es|no son)\s+(?:una?\s+)?(?:adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|losa|viga|muro|solera|cierre|cierro|tapa)\w*(?:\s+de hormigon)?/g, ' ');
+  const match = requestedText.match(PRODUCT_TERM_RE);
   if (!match) return null;
   const grounded = (Array.isArray(catalogMatches) ? catalogMatches : [])
     .map((item) => safe(item.name))
     .filter(Boolean)
     .find((name) => {
       const head = String(name).toLowerCase().split(/\s+/)[0];
-      return head && normalized.includes(head);
+      return head && requestedText.includes(head);
     });
   if (grounded) return safe(grounded);
   const tail = [];
-  for (const word of normalized.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
+  for (const word of requestedText.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
     if (/\d|[.,/]/.test(word) || word.endsWith('m2')) break;
     if (PRODUCT_PHRASE_STOPWORDS.has(word)) break;
     tail.push(word);
@@ -202,6 +206,30 @@ const productPhraseFromClient = (text, catalogMatches) => {
   }
   const phrase = [match[0], ...tail].join(' ');
   return phrase.replace(/(^|\s)\S/g, (character) => character.toUpperCase());
+};
+
+// Counts are client evidence only when a positive integer is attached to a
+// count unit or requested product. Never mine model summaries, identifiers,
+// dimensions, addresses, negations, or quantities of material already on site.
+const countFromClient = (text) => {
+  const raw = String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const countUnits = new Set(['unidad', 'unidades', 'pieza', 'piezas', 'saco', 'sacos', 'pallet', 'pallets', 'palet', 'palets', 'bolsa', 'bolsas', 'caja', 'cajas']);
+  const pattern = /(\d{1,3}(?:\.\d{3})+|\d+)\s*([a-zñ]+)\b/g;
+  for (const match of raw.matchAll(pattern)) {
+    const previousChar = raw[match.index - 1] || '';
+    if (/[a-z0-9.,x-]/.test(previousChar)) continue;
+    const number = Number(match[1].replace(/\./g, ''));
+    if (!Number.isSafeInteger(number) || number <= 0) continue;
+    const unit = match[2];
+    if (!countUnits.has(unit) && !PRODUCT_TERM_RE.test(unit)) continue;
+    const before = raw.slice(0, match.index).split(/[;!?]|,\s+|\b(?:pero|sino|y)\b/).pop();
+    if (/\b(?:sku|codigo|rut|direccion|calle|avenida|av|pasaje)\b/.test(before)) continue;
+    if (/\bno\s*$|\bno\s+(?:son?|es|necesito|quiero|requiero|comprar|cotizar)\b/.test(before)) continue;
+    const after = raw.slice(match.index + match[0].length).split(/[;!?]|,\s+|\b(?:pero|sino|y)\b/)[0];
+    if (/\b(?:tengo|tiene|hay|retirar|sacar|demoler|quitar)\b/.test(before) || /\b(?:actualmente|actual|existentes?|retirar|sacar|demoler|quitar)\b/.test(after)) continue;
+    return `${match[1]} ${countUnits.has(unit) ? unit : 'unidades'}`;
+  }
+  return null;
 };
 
 const decodeStepState = (encoded) => {
@@ -264,6 +292,15 @@ const missingFieldsFor = (state) => {
 
 const aiEnabled = String($env.AI_LEAD_ASSISTANT_ENABLED || 'true').toLowerCase() === 'true';
 const deterministicFields = [
+  'contract_route',
+  'contract_version',
+  'contract_mode',
+  'route_mode',
+  'route_rule_id',
+  'v3_grounding',
+  'v3_control_only',
+  'previous_commercial_pending_question_key',
+  'previous_commercial_question_retry',
   'phone_number',
   'source_number_id',
   'instance_name',
@@ -307,6 +344,11 @@ const deterministicFields = [
   'normalized_text',
   'completed_fields_count',
   'has_intent',
+  'ownership_id',
+  'ownership_lead_id',
+  'bot_suppressed',
+  'human_response_due_at',
+  'human_arbitration_required',
   'audit_event_name',
   'audit_result',
   'before_payload_json',
@@ -328,6 +370,54 @@ deterministic.should_escalate = Boolean(deterministic.should_escalate);
 deterministic.escalation_reason = safe(deterministic.escalation_reason);
 deterministic.is_partial = Boolean(deterministic.is_partial);
 deterministic.reset_conversation_lead = Boolean(deterministic.reset_conversation_lead);
+
+// Registered quote acknowledgments must not reopen qualification or duplicate
+// effects, even if a stale assistant result is present in the merged item.
+if (deterministic.response_kind === 'commercial_review_pending'
+  || (deterministic.bot_suppressed && deterministic.conversation_status_code === 'handed_to_sales'
+      && !deterministic.reset_conversation_lead)) {
+  const silent = Boolean(deterministic.bot_suppressed);
+  const responseText = silent ? '' : deterministic.deterministic_reply;
+  return [{ json: {
+    ...deterministic, response_text: responseText,
+    should_create_lead: false, should_escalate: false, is_partial: false,
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: silent ? 'human_control_active' : 'commercial_review_pending',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    metadata_json: JSON.stringify({ ...parseJsonObject(deterministic.metadata_json),
+      pending_question_key: deterministic.pending_question_key || null,
+      commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
+    after_payload_json: JSON.stringify({ ...parseJsonObject(deterministic.after_payload_json),
+      conversation_status_code: 'handed_to_sales', qualification_context: deterministic.qualification_context,
+      should_create_lead: false, should_escalate: false }),
+  } }];
+}
+
+// A pending temporal choice is policy-only. Preserve the saved request for an
+// explicit resume, but do not extract current-turn fields or run commercial gates.
+if (!deterministic.bot_suppressed && (deterministic.pending_question_key === 'previous_context_choice'
+  || parseStep(deterministic.current_step).field === 'previous_context')) {
+  const savedContext = asObject(deterministic.qualification_context);
+  const savedBase = parseJsonObject(deterministic.before_payload_json);
+  const encodedState = parseStep(deterministic.current_step).state;
+  const choiceStep = encodeStep('previous_context', { service: savedBase.state_service || encodedState.service, city: savedBase.state_city || encodedState.city, requirement: savedBase.state_requirement || encodedState.requirement });
+  const metadata = { ...parseJsonObject(deterministic.metadata_json), pending_question_key: 'previous_context_choice', commercial_question_retry: 0, ai_invoked: false, ai_applied: false, ai_skipped: true, ai_fallback_reason: 'previous_context_choice' };
+  return [{ json: {
+    ...deterministic, service: null, city: null, requirement: null,
+    current_step: choiceStep, pending_question_key: 'previous_context_choice',
+    should_create_lead: false, should_escalate: false, escalation_reason: null,
+    response_text: deterministic.deterministic_reply, response_kind: 'previous_context_choice',
+    qualification_context: savedContext, qualification_context_json: jsonString(savedContext, {}),
+    completed_fields_count: 0, ai_invoked: false, ai_applied: false, ai_skipped: true,
+    ai_fallback_reason: 'previous_context_choice', ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    commercial_missing_fields: [], commercial_missing_fields_json: '[]', commercial_field_evidence: {}, commercial_field_evidence_json: '{}',
+    confirmation_status: 'none', needs_confirmation: false, confirmation_summary: {},
+    field_updates: {}, field_updates_json: '{}', diagnostic_datos: {}, diagnostic_datos_json: '{}',
+    catalog_matches: [], catalog_matches_json: '[]', price_context: {}, price_context_json: '{}',
+    commercial_context_counts_json: '{}', metadata_json: JSON.stringify(metadata),
+    after_payload_json: JSON.stringify({ ...parseJsonObject(deterministic.after_payload_json), current_step: choiceStep, qualification_context: savedContext, pending_question_key: 'previous_context_choice', should_create_lead: false, should_escalate: false }),
+  } }];
+}
 
 const aiMetadataFromAssistant = parseJsonObject(pick(row.metadata_json, row.metadata_json_1, '{}'));
 const ai = {
@@ -375,12 +465,15 @@ const ai = {
   commercial_context_counts: asObject(aiMetadataFromAssistant.commercial_context_counts),
   per_field_confidence: asObject(pick(row.per_field_confidence, row.per_field_confidence_1, {})),
 };
+const humanControlActive = Boolean(deterministic.bot_suppressed)
+  || ai.skip_reason === 'human_control_active';
 
 const currentStepInfo = parseStep(deterministic.current_step);
 const normalizedText = normalizeText(deterministic.normalized_text || deterministic.text_body);
 const explicitCorrection = ai.intent === 'correction'
   || ai.intent === 'new_request'
-  || /\b(no es|no una|no un|sino|corregir|corrijo|correccion|corrección|cambiar|cambio|modificar|modifico|quise decir|me equivoque|me equivoqué)\b/.test(normalizedText);
+  || /\b(no es|no una|no un|sino|corregir|corrijo|correccion|corrección|cambiar|cambio|modificar|modifico|quise decir|me equivoque|me equivoqué)\b/.test(normalizedText)
+  || /\b(?:no|sino)\s+(?:adocreto|adoquin|baldos|pastelon|cierro|cierre)\w*\b/.test(normalizedText);
 const deterministicResolvedClearly = deterministic.should_create_lead || ['handoff_ready', 'confirmation_question', 'previous_context_choice', 'confirmation_rejected'].includes(safe(deterministic.response_kind));
 
 const modelCEnabled = String($env.AI_MODEL_C_ENABLED || 'true').toLowerCase() === 'true';
@@ -444,9 +537,13 @@ const pendingQuestionToField = {
   email: 'email', purchase_order: 'purchase_order', invoice: 'invoice_required', address: 'address',
   access_restrictions: 'access_restrictions', issue_description: 'issue_description', payment_details: 'payment_amount',
 };
+const currentTextContains = (value) => {
+  const literal = normalizeText(value);
+  return Boolean(literal) && (` ${normalizedCurrentText} `).includes(` ${literal} `);
+};
 const secondaryFieldHasDirectEvidence = (key, text) => {
   const patterns = {
-    product: PRODUCT_TERM_RE,
+    product: { test: (value) => Boolean(productPhraseFromClient(value, [])) },
     commune: /\b(comuna|ciudad|en|desde)\s+[a-zñ]+/,
     quantity: /\b\d+(?:[.,]\d+)?\s*(?:unidades?|piezas?|sacos?|palets?)\b/,
     measurements: /\b\d+(?:[.,]\d+)?\s*(?:m2|m²|metros?|cm|mm)\b/,
@@ -487,9 +584,10 @@ if (aiFieldsAcceptable) {
   const pendingField = pendingQuestionToField[deterministic.pending_question_key] || null;
   for (const [key, value] of Object.entries(ai.field_updates)) {
     if (!allowedQualificationKeys.has(key) || value === null || value === '') continue;
-    const evidenced = key === pendingField || secondaryFieldHasDirectEvidence(key, normalizedCurrentText);
-    if (evidenced && (typeof value === 'string' || typeof value === 'boolean')) {
-      qualificationContext[key] = value;
+    const evidenced = key === 'commune' ? currentTextContains(value)
+      : key === pendingField || secondaryFieldHasDirectEvidence(key, normalizedCurrentText);
+    if (evidenced && (typeof value === 'string' || typeof value === 'boolean' || (['quantity', 'measurements'].includes(key) && typeof value === 'number' && Number.isFinite(value)))) {
+      qualificationContext[key] = key === 'product' ? productPhraseFromClient(normalizedCurrentText, ai.catalog_matches) || qualificationContext.product : value;
     }
   }
 }
@@ -497,10 +595,12 @@ if (aiFieldsAcceptable) {
 // Solo se completa cuando el modelo no lo aporto; nunca se inventa producto
 // (sin mencion no hay relleno, y el gate sigue listando product como faltante).
 // Corre incluso con reset: se basa solo en text_body del turno actual.
-if (!hasValue(qualificationContext.product) && !hasValue(ai.field_updates && ai.field_updates.product)) {
-  const directProduct = productPhraseFromClient(String(deterministic.text_body || ''), ai.catalog_matches);
-  if (directProduct) qualificationContext.product = directProduct;
+const directProduct = productPhraseFromClient(String(deterministic.text_body || ''), ai.catalog_matches);
+if (directProduct) {
+  qualificationContext.product = directProduct;
+  if (explicitCorrection) state.service = directProduct;
 }
+if (hasValue(state.city) && !qualificationContext.commune) qualificationContext.commune = state.city;
 const modalityAnsweredByClient = deterministic.pending_question_key === 'modality'
   || secondaryFieldHasDirectEvidence('modality', normalizedCurrentText);
 const booleanByQuestion = {
@@ -514,8 +614,8 @@ const pendingBooleanField = booleanByQuestion[deterministic.pending_question_key
 if (pendingBooleanField && /^(si|sí|s|no|nop)$/.test(normalizedCurrentText)) {
   qualificationContext[pendingBooleanField] = /^(si|sí|s)$/.test(normalizedCurrentText);
 }
-const measurementMatch = String(deterministic.text_body || '').match(/\b\d+(?:[.,]\d+)?\s*(?:m2|m²|metros?\s+cuadrados?|metros?\s+lineales?|metros?)\b/i);
-if (measurementMatch && !qualificationContext.measurements) {
+const measurementMatch = String(deterministic.text_body || '').match(/\b\d+(?:[.,]\d+)?\s*(?:m2|m²|mtl|mts|mt|ml|m|metros?\s+cuadrados?|metros?\s+lineales?|metros?)\b/i);
+if (measurementMatch) {
   qualificationContext.measurements = measurementMatch[0];
 }
 
@@ -535,6 +635,7 @@ const directFieldEvidenceFromText = (key, text) => {
     return null;
   }
   if (key === 'debris_removal') {
+    if (/\b(?:si requiere|si necesita|si hay que retirar)\b/.test(text) && deterministic.pending_question_key === 'debris_removal') return true;
     if (/\b(no necesito retiro|sin retiro|no retiro|sin escombros|no hay escombros)\b/.test(text)) return false;
     if (/\b(con retiro|necesito retiro|retiro de escombro|retirar escombro|retiro del material|retiro de material)\b/.test(text)) return true;
     return null;
@@ -574,9 +675,13 @@ if (!resetQualificationContext) {
 // Fuera del bloque reset: la evidencia es del turno ACTUAL, no contexto previo.
 // Sin esto, el primer turno (reset=true) perdia modality y el siguiente turno
 // volvia a preguntarla pese a que el cliente ya la menciono.
-const modalityFromAi = modalityAnsweredByClient
+const deliveryEvidenceText = normalizedCurrentText.replace(/\b(?:no|sin)\s+(?:(?:necesito|quiero|requiero)\s+)?(?:a\s+)?(?:despacho|domicilio|delivery)\b/g, ' ');
+const directModality = /\b(?:instalacion|instalar)\b/.test(normalizedCurrentText) ? 'installation'
+  : /\b(?:despacho|domicilio|delivery)\b/.test(deliveryEvidenceText) ? 'delivery'
+  : /\b(?:solo material|suministro)\b/.test(normalizedCurrentText) ? 'material' : null;
+const modalityFromAi = directModality || (modalityAnsweredByClient
   ? meaningfulEnum(ai.modality, new Set(['none', 'unknown']))
-  : null;
+  : null);
 if (modalityFromAi) {
   qualificationContext.modality = modalityFromAi;
 } else if (!qualificationContext.modality) {
@@ -590,9 +695,12 @@ const acceptedAiFields = [];
 const maybeApply = (field) => {
   const value = safe(ai[field]);
   if (!value || deterministic.response_kind === 'escalation_already_required') return;
+  if (field === 'service' && PRODUCT_TERM_RE.test(normalizedCurrentText) && !directProduct) return;
   const directUserEvidence = userMentionedField(field, deterministic.text_body);
-  const explicitlyMentioned = directUserEvidence
-    && (ai.explicitly_mentioned_fields.includes(field) || explicitCorrection);
+  const literalCurrentEvidence = ['city', 'requirement'].includes(field) && currentTextContains(value);
+  const explicitlyMentioned = literalCurrentEvidence
+    || (directUserEvidence && (ai.explicitly_mentioned_fields.includes(field) || explicitCorrection));
+  if (field === 'city' && !literalCurrentEvidence) return;
   if (deterministic.reset_conversation_lead && !hasValue(state[field])) return;
   const fieldConfidence = Number(perFieldConfidence[field] ?? ai.confidence ?? 0);
   const fieldOk = (aiFieldsAcceptable && fieldConfidence >= 0.75) || explicitlyMentioned;
@@ -614,6 +722,22 @@ if (aiHealthy) {
   maybeApply('requirement');
 }
 
+if (!humanControlActive) {
+  if (hasValue(qualificationContext.product)) state.service = qualificationContext.product;
+  if (aiFieldsAcceptable && currentTextContains(ai.field_updates.commune)) state.city = safe(ai.field_updates.commune);
+  if (hasValue(state.city)) qualificationContext.commune = state.city;
+  const currentCount = countFromClient(deterministic.text_body);
+  if (currentCount) {
+    const currentNumber = Number(currentCount.split(' ')[0].replace(/\./g, ''));
+    const validNumericModelCount = aiFieldsAcceptable && typeof ai.field_updates.quantity === 'number' && ai.field_updates.quantity === currentNumber;
+    qualificationContext.quantity = validNumericModelCount ? ai.field_updates.quantity : currentCount;
+    // A replaced area must not keep winning the summary over the new count.
+    const measurePrefix = measurementMatch ? normalizeText(String(deterministic.text_body || '').slice(0, measurementMatch.index)) : '';
+    const freshMeasurement = measurementMatch && !/\bno\s+(?:son?|es|necesito|quiero)\s*$/.test(measurePrefix);
+    if (!freshMeasurement) delete qualificationContext.measurements;
+  }
+}
+
 // Regla PRD 6.10 (anti-repeticion): si la misma pregunta comercial queda
 // pendiente sin avance nuevo del cliente, el bot primero aclara con voz propia
 // y luego escala a una persona. El conteo vive en metadata_json para sobrevivir
@@ -621,17 +745,18 @@ if (aiHealthy) {
 // diagnostic_datos) NO cuentan como progreso del cliente.
 const ANTI_REPEAT_CLARIFY_THRESHOLD = 2;
 const ANTI_REPEAT_HANDOFF_THRESHOLD = 3;
-const ANTI_REPEAT_CLARIFY_TEXT = 'Disculpa, no quiero insistir en lo mismo, pero necesito ese dato para preparar bien la cotización. ¿Me lo confirmas?';
+const addressClarification = () => 'Ya tengo ' + (qualificationContext.commune || state.city || 'la comuna') + '. Me falta calle y número aproximado del lugar de entrega. ¿Me los indicas?';
+const ANTI_REPEAT_CLARIFY_TEXT = deterministic.pending_question_key === 'address' ? addressClarification() : 'Disculpa, no quiero insistir en lo mismo, pero necesito ese dato para preparar bien la cotización. ¿Me lo confirmas?';
 const COMMERCIAL_PROGRESS_KEYS = [...allowedQualificationKeys].filter((key) => !['customer_type', 'lead_class', 'objection_detected', 'diagnostic_datos', 'executive_summary'].includes(key));
 const contextValueAt = (ctx, key) => {
   const value = ctx[key];
   return value === undefined || value === null ? '' : JSON.stringify(value);
 };
-const hasNewCommercialEvidence = acceptedAiFields.length > 0
+const hasNewCommercialEvidence = acceptedAiFields.some((field) => safe(state[field]) !== safe(deterministic[field]))
   || COMMERCIAL_PROGRESS_KEYS.some((key) => contextValueAt(qualificationContext, key) !== contextValueAt(ctxBeforeEvidence, key));
 const previousTurnMetadata = parseJsonObject(deterministic.metadata_json);
-const previousTurnPendingKey = previousTurnMetadata.pending_question_key || null;
-const previousTurnRetry = Number(previousTurnMetadata.commercial_question_retry || 0) || 0;
+const previousTurnPendingKey = previousTurnMetadata.previous_commercial_pending_question_key || previousTurnMetadata.pending_question_key || null;
+const previousTurnRetry = Number(previousTurnMetadata.previous_commercial_question_retry ?? previousTurnMetadata.commercial_question_retry ?? 0) || 0;
 const dbPendingKey = safe(deterministic.pending_question_key);
 const antiRepeatExcludedPending = !dbPendingKey || ['final_confirmation', 'confirmation_correction'].includes(dbPendingKey);
 const noProgressTurn = !resetQualificationContext && !antiRepeatExcludedPending && !hasNewCommercialEvidence
@@ -704,8 +829,8 @@ const COMMERCIAL_FIELD_POLICY = {
   },
   retiro: {
     profile: 'Retiro en planta (PRD 13.5)',
-    compulsory: ['product'],
-    conditional: ['quantity', 'desired_date', 'reception_contact', 'payment_validation'],
+    compulsory: ['product', 'quantity'],
+    conditional: ['desired_date', 'reception_contact', 'payment_validation'],
     satisfiedByWhatsApp: ['name', 'phone'],
     payment: ['payment_validation'],
   },
@@ -996,6 +1121,7 @@ const escalationRoutingText = () => {
   if (deterministic.escalation_reason === 'human_requested') {
     return 'Por supuesto. Te derivaré con una persona del equipo para que continúe contigo.';
   }
+  if (deterministic.escalation_reason === 'measurement_assistance_requested') return deterministic.deterministic_reply;
   return 'Voy a derivarte con una persona del equipo para que revise tu caso en detalle.';
 };
 
@@ -1057,7 +1183,9 @@ const selectResponseText = () => {
     // PRD violation - use fallback
     if (!validation.passed) {
       return {
-        text: validation.fallback,
+        text: validation.rule === 'NO_FALSE_DERIVATION_PROMISE' && missingFieldsFor(state) !== 'confirm'
+          ? `${validation.fallback} ${nextQuestion(missingFieldsFor(state))}`
+          : validation.fallback,
         kind: 'prd_validated_fallback',
         metadata: { prd_rule_violated: validation.rule },
       };
@@ -1138,7 +1266,7 @@ const advisorQuestion = (key) => {
   if (key === 'truck_access') return 'Gracias, eso ayuda a evaluar la instalación. ¿Hay acceso para que ingrese un camión al lugar?';
   if (key === 'debris_removal') return 'Con eso ya tenemos una buena base técnica. ¿La instalación requiere retirar escombros o material antiguo?';
   if (key === 'quantity') return `Para dimensionar correctamente la cotización de ${project}, ¿qué cantidad aproximada necesitas?`;
-  if (key === 'address') return 'Para revisar la factibilidad del despacho, ¿cuál es la dirección aproximada de entrega?';
+  if (key === 'address') return addressClarification();
   if (key === 'access_restrictions') return '¿Hay alguna restricción de acceso para el camión en el lugar de entrega?';
   if (key === 'company') return 'Para preparar correctamente la solicitud B2B, ¿cuál es el nombre de la empresa?';
   if (key === 'contact') return '¿Cuál es el nombre y cargo de la persona de contacto para esta cotización?';
@@ -1160,7 +1288,7 @@ const advisorQuestion = (key) => {
   }
   return responseText;
 };
-if (!shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && requiredQuestionKey) {
+if (!humanControlActive && !shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && requiredQuestionKey) {
   // PRD 6.10 (anti-repeticion): al alcanzar el umbral de clarify, el bot
   // aclara con voz propia antes de volver a preguntar lo mismo.
   if (antiRepeatClarify) {
@@ -1170,6 +1298,11 @@ if (!shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && requi
     responseText = advisorQuestion(requiredQuestionKey);
     responseKind = 'advisor_guardrail_question';
   }
+}
+
+if (humanControlActive) {
+  responseText = '';
+  responseKind = 'human_control_suppressed';
 }
 
 // Model C: Step management
@@ -1187,11 +1320,16 @@ const escalationReason = isEscalation
       ? 'no_progress_commercial_question_loop'
       : (deterministic.escalation_reason || ai.escalation_area || null))
   : null;
-const conversationStatusCode = shouldCreateLead
-  ? 'handed_to_sales'
+const conversationStatusCode = deterministic.conversation_status_code === 'closed'
+  ? 'closed'
+  : shouldCreateLead
+    ? 'handed_to_sales'
   : isEscalation
     ? 'escalation_required'
     : deterministic.conversation_status_code;
+const effectiveShouldCreateLead = humanControlActive ? false : shouldCreateLead;
+const effectiveShouldEscalate = humanControlActive ? false : isEscalation;
+const effectiveEscalationReason = humanControlActive ? null : escalationReason;
 const completedFieldsCount = ['service', 'city', 'requirement'].filter((field) => hasValue(state[field])).length;
 
 const originalMetadata = (() => {
@@ -1217,9 +1355,9 @@ const afterPayload = {
   current_step: currentStep,
   current_step_field: effectiveCurrentStepField,
   conversation_status_code: conversationStatusCode,
-  should_create_lead: shouldCreateLead,
-  should_escalate: isEscalation,
-  escalation_reason: escalationReason,
+  should_create_lead: effectiveShouldCreateLead,
+  should_escalate: effectiveShouldEscalate,
+  escalation_reason: effectiveEscalationReason,
   qualification_context: qualificationContext,
   pending_question_key: pendingQuestionKey,
   commercial_missing_fields: commercialMissingFields,
@@ -1232,8 +1370,10 @@ const aiMetadata = {
   ...originalMetadata,
   target_conversation_id: deterministic.target_conversation_id || deterministic.original_conversation_id || null,
   ai_enabled: aiEnabled,
-  ai_invoked: aiEnabled,
-  ai_applied: acceptedAiFields.length > 0 || (aiReplyAcceptable && Boolean(ai.reply_text)) || aiCanCreateLead,
+  ai_invoked: humanControlActive ? false : aiEnabled,
+  ai_applied: humanControlActive
+    ? false
+    : acceptedAiFields.length > 0 || (aiReplyAcceptable && Boolean(ai.reply_text)) || aiCanCreateLead,
   ai_eligible: aiHealthy,
   ai_autonomous_create_lead: aiCanCreateLead,
   ai_intent: ai.intent || null,
@@ -1253,7 +1393,7 @@ const aiMetadata = {
   commercial_confirmation_cancelled: commercialGateBlocked && ai.intent === 'confirmation_yes',
   // PRD 13.4 (B06): per-field evidence snapshot for audit (client_evidence|missing).
   commercial_field_evidence: commercialFieldEvidence,
-  ai_escalation_requested: isEscalation,
+  ai_escalation_requested: effectiveShouldEscalate,
   ai_provider: ai.provider || null,
   ai_model: ai.model || null,
   ai_status_code: ai.status_code || null,
@@ -1311,24 +1451,28 @@ return [
       requirement: state.requirement || null,
       current_step: currentStep,
       conversation_status_code: conversationStatusCode,
-      should_create_lead: shouldCreateLead,
+      should_create_lead: effectiveShouldCreateLead,
       qualification_context: qualificationContext,
       qualification_context_json: jsonString(qualificationContext, {}),
       pending_question_key: pendingQuestionKey,
       response_text: responseText,
       response_kind: responseKind,
       completed_fields_count: completedFieldsCount,
-      audit_result: shouldCreateLead ? 'handed_to_sales' : isEscalation ? 'escalation_required' : 'waiting_user',
+      audit_result: humanControlActive
+        ? 'human_control_suppressed'
+        : shouldCreateLead ? 'handed_to_sales' : isEscalation ? 'escalation_required' : 'waiting_user',
       after_payload_json: JSON.stringify(afterPayload),
       metadata_json: JSON.stringify(aiMetadata),
-      ai_invoked: aiEnabled,
+      ai_invoked: humanControlActive ? false : aiEnabled,
       ai_skipped: ai.skipped,
       ai_provider: ai.provider || null,
       ai_model: ai.model || null,
       ai_status_code: ai.status_code || null,
       ai_parse_error: ai.parse_error || null,
       ai_request_error: ai.request_error || null,
-      ai_applied: acceptedAiFields.length > 0 || (aiReplyAcceptable && Boolean(ai.reply_text)) || aiCanCreateLead,
+      ai_applied: humanControlActive
+        ? false
+        : acceptedAiFields.length > 0 || (aiReplyAcceptable && Boolean(ai.reply_text)) || aiCanCreateLead,
       ai_accepted_fields: acceptedAiFields,
       ai_accepted_fields_json: jsonString(acceptedAiFields, []),
       ai_fallback_reason: ai.fallback_reason || ai.request_error || ai.skip_reason || ai.parse_error || null,
@@ -1363,7 +1507,7 @@ return [
       commercial_context_counts_json: jsonString(ai.commercial_context_counts, {}),
       objection_detected: ai.objection_detected || null,
       escalation_area: ai.escalation_area || null,
-      should_escalate: isEscalation,
+      should_escalate: effectiveShouldEscalate,
       escalation_reason: escalationReason,
       next_best_action: ai.next_best_action || null,
       handoff_reason: ai.handoff_reason || null,

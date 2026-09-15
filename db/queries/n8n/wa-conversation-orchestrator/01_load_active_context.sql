@@ -25,6 +25,22 @@ WITH input_payload AS (
     NULLIF($18::text, '')::bigint AS inbound_event_id,
     NULLIF($19::text, '') AS processing_token
 ),
+v3_grounding_entries AS (
+  SELECT jsonb_build_object(
+           'ref', CASE WHEN ci.item_type = 'service' THEN 'service:' ELSE 'product:' END
+                  || COALESCE(NULLIF(ci.sku, ''), ci.id::text),
+           'concept', CASE WHEN ci.item_type = 'service' THEN 'service' ELSE 'product' END,
+           'value', ci.name
+         ) AS entry
+  FROM catalog_items ci
+  WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL
+),
+v3_grounding AS (
+  SELECT jsonb_build_object(
+    'catalog', COALESCE(jsonb_agg(entry ORDER BY entry->>'ref'), '[]'::jsonb)
+  ) AS value
+  FROM v3_grounding_entries
+),
 valid_claim AS (
   SELECT ie.id, ie.processing_token
   FROM inbound_events ie
@@ -33,6 +49,17 @@ valid_claim AS (
     AND ie.processing_token = ip.processing_token
     AND ie.source_number_id = ip.source_number_id
     AND ie.phone_number = ip.phone_number
+),
+active_contract_route AS (
+  SELECT
+    execution.contract_version AS active_contract_version,
+    execution.route_mode AS active_route_mode,
+    execution.route_rule_id AS active_route_rule_id,
+    execution.state AS active_v3_execution_state
+  FROM conversation_turn_executions execution
+  JOIN input_payload ip ON execution.inbound_event_id = ip.inbound_event_id
+  ORDER BY execution.id DESC
+  LIMIT 1
 ),
 latest_conversation AS (
   SELECT
@@ -77,12 +104,32 @@ latest_conversation_state AS (
     al.after_payload->>'service' AS state_service,
     al.after_payload->>'city' AS state_city,
     al.after_payload->>'requirement' AS state_requirement,
-    al.after_payload->>'current_step' AS state_current_step
+    al.after_payload->>'current_step' AS state_current_step,
+    al.metadata->>'pending_question_key' AS previous_commercial_pending_question_key,
+    CASE WHEN al.metadata->>'commercial_question_retry' ~ '^[0-9]{1,6}$'
+      THEN (al.metadata->>'commercial_question_retry')::integer ELSE 0 END AS previous_commercial_question_retry
   FROM audit_logs al
   JOIN latest_conversation lc ON TRUE
   WHERE al.entity_type = 'conversation'
     AND al.entity_id = lc.conversation_id
     AND al.event_name = 'conversation_state_evaluated'
+  ORDER BY al.created_at DESC, al.id DESC
+  LIMIT 1
+),
+latest_commercial_question_audit AS (
+  SELECT al.metadata->>'pending_question_key' AS pending_question_key,
+    CASE WHEN al.metadata->>'commercial_question_retry' ~ '^[0-9]{1,6}$'
+      THEN (al.metadata->>'commercial_question_retry')::integer ELSE 0 END AS retry_count
+  FROM audit_logs al
+  JOIN latest_conversation lc ON TRUE
+  LEFT JOIN conversation_turn_executions execution
+    ON al.entity_type = 'conversation_turn_execution' AND execution.id = al.entity_id
+  WHERE (
+    (al.entity_type = 'conversation' AND al.entity_id = lc.conversation_id
+      AND al.event_name = 'conversation_state_evaluated')
+    OR (execution.conversation_id = lc.conversation_id
+      AND al.event_name = 'v3_turn_committed')
+  )
   ORDER BY al.created_at DESC, al.id DESC
   LIMIT 1
 ),
@@ -142,6 +189,53 @@ latest_lead AS (
   ORDER BY l.created_at DESC, l.id DESC
   LIMIT 1
 ),
+latest_chat_ownership AS (
+  SELECT
+    o.id AS ownership_id,
+    o.lead_id AS ownership_lead_id,
+    o.acquired_at,
+    o.response_due_at,
+    o.released_at,
+    o.release_reason,
+    COALESCE(o.released_at, o.response_due_at) AS effective_release_at
+  FROM lead_chat_ownerships o
+  JOIN latest_lead ll ON ll.previous_lead_id = o.lead_id
+  WHERE o.deleted_at IS NULL
+  ORDER BY o.id DESC
+  LIMIT 1
+),
+chat_authority AS (
+  SELECT
+    o.*,
+    (
+      o.released_at IS NULL
+      AND (o.response_due_at IS NULL OR o.response_due_at > NOW())
+    ) AS bot_suppressed,
+    (
+      COALESCE(o.release_reason = 'sla_expired', FALSE)
+      OR (
+        o.released_at IS NULL
+        AND o.response_due_at IS NOT NULL
+        AND o.response_due_at <= NOW()
+      )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM messages m
+      JOIN conversations history_conversation
+        ON history_conversation.id = m.conversation_id
+      JOIN latest_lead ll ON TRUE
+      WHERE m.deleted_at IS NULL
+        AND m.direction = 'outgoing'
+        AND m.sender_type = 'bot'
+        AND m.delivery_status = 'sent'
+        AND history_conversation.deleted_at IS NULL
+        AND history_conversation.phone_number = ll.phone_number
+        AND history_conversation.source_number_id = ll.previous_source_number_id
+        AND m.created_at >= o.effective_release_at
+    ) AS human_arbitration_required
+  FROM latest_chat_ownership o
+),
 follow_up_status AS (
   SELECT COUNT(*) FILTER (WHERE f.estado IN ('pending', 'sending', 'error')) AS pending_count
   FROM follow_ups f
@@ -155,6 +249,10 @@ SELECT
   ip.instance_name,
   ip.inbound_event_id,
   ip.processing_token,
+  acr.active_contract_version,
+  acr.active_route_mode,
+  acr.active_route_rule_id,
+  acr.active_v3_execution_state,
   ip.whatsapp_name AS input_whatsapp_name,
   ip.external_contact_id AS input_external_contact_id,
   ip.external_message_id AS input_external_message_id,
@@ -206,6 +304,8 @@ SELECT
   lcs.state_city,
   lcs.state_requirement,
   lcs.state_current_step,
+  lcqa.pending_question_key AS previous_commercial_pending_question_key,
+  COALESCE(lcqa.retry_count, 0) AS previous_commercial_question_retry,
   COALESCE(rm.recent_messages, '[]'::jsonb) AS recent_messages,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.previous_lead_id END AS previous_lead_id,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.whatsapp_name END AS previous_whatsapp_name,
@@ -213,16 +313,26 @@ SELECT
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.city END AS previous_city,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.requirement END AS previous_requirement,
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code,
+  ca.ownership_id,
+  ca.ownership_lead_id,
+  COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed,
+  ca.response_due_at AS human_response_due_at,
+  COALESCE(ca.human_arbitration_required, FALSE) AS human_arbitration_required,
   COALESCE(fs.pending_count, 0) > 0 AS has_pending_followups,
   COALESCE(lcs.state_service, ll.service) AS last_known_service,
   COALESCE(lcs.state_city, ll.city) AS last_known_city,
-  COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement
+  COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement,
+  vg.value AS v3_grounding
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
+LEFT JOIN active_contract_route acr ON TRUE
 LEFT JOIN latest_conversation lc ON TRUE
 LEFT JOIN last_persisted_inbound lpi ON TRUE
 LEFT JOIN latest_conversation_state lcs ON TRUE
+LEFT JOIN latest_commercial_question_audit lcqa ON TRUE
 LEFT JOIN recent_messages rm ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
-LEFT JOIN follow_up_status fs ON TRUE;
+LEFT JOIN chat_authority ca ON TRUE
+LEFT JOIN follow_up_status fs ON TRUE
+LEFT JOIN v3_grounding vg ON TRUE;

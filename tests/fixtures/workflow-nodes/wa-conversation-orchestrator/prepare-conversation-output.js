@@ -35,6 +35,15 @@ return [
       target_conversation_id: pick(row.target_conversation_id, row.target_conversation_id_1, row.original_conversation_id, row.original_conversation_id_1),
       original_conversation_id: pick(row.original_conversation_id, row.original_conversation_id_1, row.target_conversation_id, row.target_conversation_id_1),
       lead_id: pick(row.lead_id_1, row.lead_id),
+      ownership_id: pick(row.ownership_id, row.ownership_id_1),
+      ownership_lead_id: pick(row.ownership_lead_id, row.ownership_lead_id_1),
+      bot_suppressed: Boolean(pick(row.bot_suppressed, row.bot_suppressed_1, false)),
+      human_response_due_at: pick(row.human_response_due_at, row.human_response_due_at_1),
+      human_arbitration_required: Boolean(pick(
+        row.human_arbitration_required,
+        row.human_arbitration_required_1,
+        false,
+      )),
       previous_lead_id: pick(row.previous_lead_id, row.previous_lead_id_1),
       service: pick(row.service, row.service_1),
       city: pick(row.city, row.city_1),
@@ -48,7 +57,9 @@ return [
       conversation_status_code: pick(row.conversation_status_code, row.conversation_status_code_1),
       should_create_lead: Boolean(pick(row.should_create_lead, row.should_create_lead_1, false)),
       is_partial: Boolean(pick(row.is_partial, row.is_partial_1, false)),
-      response_text: pick(row.response_text, row.response_text_1),
+      response_text: Object.prototype.hasOwnProperty.call(row, 'response_text')
+        ? row.response_text || null
+        : pick(row.response_text_1),
       response_kind: pick(row.response_kind, row.response_kind_1),
       normalized_text: pick(row.normalized_text, row.normalized_text_1),
       completed_fields_count: Number(pick(row.completed_fields_count, row.completed_fields_count_1, 0)),
@@ -92,6 +103,24 @@ return [
       next_question_key: pick(row.next_question_key, row.next_question_key_1),
       advisor_reasoning_summary: pick(row.advisor_reasoning_summary, row.advisor_reasoning_summary_1),
       quotation_data: pick(row.quotation_data, row.quotation_data_1, null),
+      // This node is the orchestrator terminal, so its output is the item the
+      // downstream dispatcher receives. The dispatcher gates its shadow lane on
+      // the route mode, and nothing between here and there resolves a route:
+      // dropping these left `shadow_dispatch` false on every turn.
+      // The shadow evaluator recompiles the v3 policy from this payload, and
+      // the policy's grounding authority is what lets a product, service or
+      // commune observation validate at all. Dropped here it compiles empty.
+      v3_grounding: pick(row.v3_grounding, row.v3_grounding_1),
+      contract_route: pick(row.contract_route, row.contract_route_1),
+      contract_version: pick(row.contract_version, row.contract_version_1),
+      contract_mode: pick(row.contract_mode, row.contract_mode_1),
+      route_mode: pick(row.route_mode, row.route_mode_1),
+      route_rule_id: pick(row.route_rule_id, row.route_rule_id_1),
+      v3_saga: Boolean(pick(row.v3_saga, row.v3_saga_1, false)),
+      decision_id: pick(row.decision_id, row.decision_id_1),
+      delivery_key: pick(row.delivery_key, row.delivery_key_1),
+      delivery_message_id: pick(row.delivery_message_id, row.delivery_message_id_1),
+      reply_sha256: pick(row.reply_sha256, row.reply_sha256_1),
     },
   },
 ];
