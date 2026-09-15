@@ -46,10 +46,24 @@ Estado recomendado: `preproduccion / validacion controlada`.
 - El grafo de conexiones de los workflows está bajo gate: terminales esperadas, ambas ramas de cada IF cableadas, y referencias solo a nodos existentes.
 - Los 7 salientes históricos en `unknown` y las operaciones 89 y 90 con marcador `preserved_test_artifact_closed_no_replay` se conservan como evidencia. **No deben reejecutarse (`replay`) ni reintentarse.**
 - Queda pendiente configurar el asignado de ClickUp para `b2b`: el área está declarada con cero asignados, así que un handoff B2B difiere y termina visible en lugar de entregarse.
-- El contrato conversacional v3 está congelado: implementado y verificado, pero su carril no está conectado a la salida.
+- El contrato conversacional **v3 es el predeterminado** (`AI_PRD_CONTRACT_MODE=enforce`) para todos los turnos nuevos. El orquestador conserva autoridad, reparación, efectos y recibos de entrega v3; `legacy` queda como rollback explícito.
 - U4, U7, U8 y U9 permanecen pendientes por decisión. La certificación vigente no demuestra todavía el cierre del PRD.
 
 El corte canónico y la separación entre repositorio, runtime y certificación están en [`docs/estado-actual.md`](./docs/estado-actual.md).
+
+## Despliegue del contrato v3
+
+La configuración y los workflows deben desplegarse juntos desde este checkout. Cambiar solo la variable no instala el pipeline.
+
+La desactivación verificada ocurrió en el despliegue de takeover del **9 de septiembre de 2026, a las 16:11 de Chile**: el mismo orquestador pasó de 44 nodos v3 a 11 nodos legacy al importar las fuentes de la raíz, mientras v3 estaba en un worktree separado. No se encontró una decisión de rollback de v3 por fallas. Los snapshots `backups/n8n-workflows-pre-takeover-20260909-160935/` y `backups/n8n-workflows-pre-lead-link-fix-20260909-163136/` conservan el antes y el después.
+
+1. Ejecutar `scripts/dev/sync-n8n-workflows.sh --preflight`: valida localmente que el carril v3 siga conectado, sin cargar credenciales ni usar Docker.
+2. Ejecutar `npm run test:v3`: prueba n8n y PostgreSQL aislados, con proveedores AI, WhatsApp y ClickUp simulados; no envía mensajes reales.
+3. Después del despliegue autorizado, verificar `--verify-remote` y comprobar turnos `contract_version=v3` con recibos `sent`; una respuesta del bot por sí sola no demuestra v3.
+
+El preflight rechaza un conjunto de workflows legacy aunque sus nombres y enlaces sean válidos. Esto evita volver a reemplazar v3 al importar fuentes de otro checkout. Compose de pruebas conserva `legacy` por defecto; el harness aislado prueba `canary` y después `enforce` con un número nuevo sin allowlist. Usa proveedores simulados, URLs calculadas redirigidas a mocks y una red interna sin salida externa.
+
+El runtime vigente quedó verificado con `enforce`, 48 nodos en el orquestador y 46 en el dispatcher, preservando los 19 IDs y su activación/publicación. Una aceptación real detectó un binding faltante del handoff normal; el fix ya está desplegado y pasaron **641 pruebas en 60 archivos**, la E2E aislada, paridad y readiness. El turno afectado fue abortado sin efectos ni salida y solo se archivó la sesión controlada configurada. Falta una nueva aceptación por WhatsApp real posterior al fix; esto no certifica el cierre del PRD. Ver [estado actual y evidencia](./docs/estado-actual.md#verificación-vigente-al-15-de-septiembre).
 
 ## Alcance actual
 
