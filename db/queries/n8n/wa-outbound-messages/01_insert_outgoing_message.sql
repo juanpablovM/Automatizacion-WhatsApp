@@ -9,6 +9,7 @@ INSERT INTO messages (
   conversation_id,
   lead_id,
   direction,
+  sender_type,
   message_type,
   delivery_status,
   text_body,
@@ -18,10 +19,10 @@ VALUES (
   :conversation_id,
   :lead_id,
   'outgoing',
+  'bot',
   :message_type,
   'queued',
   :text_body,
   :raw_payload_json::jsonb
 )
 RETURNING *;
-

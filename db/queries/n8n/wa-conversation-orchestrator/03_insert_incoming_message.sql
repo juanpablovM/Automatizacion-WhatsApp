@@ -11,6 +11,7 @@ INSERT INTO messages (
   conversation_id,
   lead_id,
   direction,
+  sender_type,
   message_type,
   external_message_id,
   external_timestamp,
@@ -22,6 +23,7 @@ VALUES (
   :conversation_id,
   :lead_id,
   'incoming',
+  'customer',
   :message_type,
   :external_message_id,
   :external_timestamp,
@@ -30,4 +32,3 @@ VALUES (
   :raw_payload_json::jsonb
 )
 RETURNING *;
-
