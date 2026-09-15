@@ -35,10 +35,18 @@ const ALLOWED_TERMINALS = {
   'wa-inbound-downstream-dispatcher.json': [
     // Genuinely parallel lanes, each ending in its own completion node.
     'Dispatch Next Inbox Event', 'Upsert Early Opportunity', 'Follow-Up Lane Complete',
+    // Optional post-delivery rehearsal is fire-and-forget and never holds delivery.
+    'Shadow Lane Complete',
   ],
   'wa-inbound-entry.json': [
-    // The health-check GET replies and stops; the POST hands off downstream.
-    'Respond Health Check', 'Execute Durable Downstream Dispatcher',
+    // The health-check GET replies and stops; customer POSTs hand off
+    // downstream; own-message POSTs terminate explicitly after durable handling.
+    'Respond Health Check', 'Execute Durable Downstream Dispatcher', 'Finish Own Message',
+  ],
+  'wa-inbound-recovery.json': [
+    // Customer events resume the durable dispatcher. Recovered own-message
+    // events execute the entry processor, which deliberately returns no item.
+    'Resume Durable Downstream', 'Execute Recovered Own Message',
   ],
 };
 

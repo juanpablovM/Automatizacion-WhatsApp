@@ -34,6 +34,11 @@
       "targetWorkflow": "WA - Inbound Downstream Dispatcher"
     },
     {
+      "sourceWorkflow": "WA - Inbound Recovery",
+      "node": "Execute Recovered Own Message",
+      "targetWorkflow": "WA - Inbound Entry"
+    },
+    {
       "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
       "node": "Execute Outbound Response",
       "targetWorkflow": "WA - Outbound Messages"
@@ -74,9 +79,29 @@
       "targetWorkflow": "WA - Inbound Recovery"
     },
     {
+      "sourceWorkflow": "WA - Inbound Entry",
+      "node": "Dispatch Next Own-Message Event",
+      "targetWorkflow": "WA - Inbound Recovery"
+    },
+    {
       "sourceWorkflow": "OPS - Follow-Up Scheduler",
       "node": "Send Via Outbound Rail",
       "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Conversation Orchestrator",
+      "node": "Execute V3 Lead Effect",
+      "targetWorkflow": "CRM - Lead Creation And Assignment"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Dispatch AI PRD Shadow",
+      "targetWorkflow": "AI - PRD Shadow Evaluator"
+    },
+    {
+      "sourceWorkflow": "AI - PRD Shadow Evaluator",
+      "node": "Execute Shadow AI Advisor",
+      "targetWorkflow": "AI - Lead Qualification Assistant"
     }
   ]
 }

@@ -69,6 +69,7 @@ manifest_link_exists() {
 
 validate_local() {
   require_command jq
+  require_command node
 
   if [ ! -d "$WORKFLOW_DIR" ]; then
     echo "ERROR: no existe $WORKFLOW_DIR" >&2
@@ -169,6 +170,10 @@ validate_local() {
       exit 1
     fi
   done
+
+  # Project policy is v3 by default. Validate source capabilities independently
+  # of live credentials, global environment overrides, or runtime access.
+  node "$PROJECT_ROOT/scripts/dev/validate-v3-workflow-contract.mjs" "$WORKFLOW_DIR"
 
   rm -f "$tmp_names"
   trap - EXIT

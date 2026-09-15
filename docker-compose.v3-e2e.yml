@@ -1,0 +1,5 @@
+# Only the dedicated v3 harness uses this override. Containers cannot route
+# outward; host clients use inspected private bridge IPs, not published ports.
+networks:
+  default:
+    internal: true

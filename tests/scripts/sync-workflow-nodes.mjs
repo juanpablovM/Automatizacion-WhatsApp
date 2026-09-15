@@ -32,126 +32,457 @@ const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'workflow-nodes');
 const INDENT = 2;
 
 const NODES = [
+{"workflow": "n8n/workflows/wa-conversation-orchestrator.json", "node": "Persist V3 Durable Dispatch", "fixture": "db/queries/n8n/wa-conversation-orchestrator/18_persist_v3_durable_dispatch.sql", "type": "n8n-nodes-base.postgres", "parameter": "query"},{"workflow": "n8n/workflows/wa-conversation-orchestrator.json", "node": "Return Conversation Output", "fixture": "wa-conversation-orchestrator/return-conversation-output.js"},
   {
-    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
-    node: 'Load Conversation State',
-    fixture: 'db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql',
-    type: 'n8n-nodes-base.postgres',
-    parameter: 'query',
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Normalize Evolution Payload",
+    "fixture": "wa-inbound-entry/normalize-evolution-payload.js"
   },
   {
-    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
-    node: 'Apply AI Assistance',
-    fixture: 'wa-conversation-orchestrator/apply-ai-assistance.js',
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Persist Durable Inbox",
+    "fixture": "db/queries/n8n/inbound-events/01_claim_inbound_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
-    node: 'Evaluate Conversation Step',
-    fixture: 'wa-conversation-orchestrator/evaluate-conversation-step.js',
-    transform: 'n8n-explicit-return',
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Persist Own Evolution Message",
+    "fixture": "db/queries/n8n/lead-chat-ownership/08_persist_own_message_from_evolution.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/wa-conversation-orchestrator.json',
-    node: 'Prepare Conversation Output',
-    fixture: 'wa-conversation-orchestrator/prepare-conversation-output.js',
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Register Human Reply",
+    "fixture": "db/queries/n8n/lead-chat-ownership/04_register_human_reply.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/ai-lead-qualification-assistant.json',
-    node: 'Build AI Request',
-    fixture: 'ai-lead-qualification-assistant/build-ai-request.js',
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Finish Own Message",
+    "fixture": "wa-inbound-entry/finish-own-message.js"
   },
   {
-    workflow: 'n8n/workflows/ai-lead-qualification-assistant.json',
-    node: 'Normalize AI Result',
-    fixture: 'ai-lead-qualification-assistant/normalize-ai-result.js',
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Load Conversation State",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/01_load_active_context.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/crm-lead-creation-and-assignment.json',
-    node: 'Prepare Lead Assignment',
-    fixture: 'crm-lead-creation-and-assignment/prepare-lead-assignment.js',
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist Conversation State",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/07_persist_conversation_state.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Ensure Early Opportunity',
-    fixture: 'wa-inbound-downstream-dispatcher/ensure-early-opportunity.js',
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Apply AI Assistance",
+    "fixture": "wa-conversation-orchestrator/apply-ai-assistance.js"
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Ensure Escalation Handoff',
-    fixture: 'wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js',
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Evaluate Conversation Step",
+    "fixture": "wa-conversation-orchestrator/evaluate-conversation-step.js",
+    "transform": "n8n-explicit-return"
   },
   {
-    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
-    node: 'Prepare Handoff ClickUp Task',
-    fixture: 'ops-handoff-notification-scheduler/prepare-handoff-clickup-task.js',
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Prepare Conversation Output",
+    "fixture": "wa-conversation-orchestrator/prepare-conversation-output.js"
   },
   {
-    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
-    node: 'Dispatch Handoff ClickUp Task',
-    fixture: 'ops-handoff-notification-scheduler/dispatch-handoff-clickup-task.js',
+    "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
+    "node": "Build AI Request",
+    "fixture": "ai-lead-qualification-assistant/build-ai-request.js"
   },
   {
-    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
-    node: 'Claim Pending Handoff Notifications',
-    fixture: 'db/queries/n8n/handoff-routing/02_claim_notification.sql',
-    type: 'n8n-nodes-base.postgres',
-    parameter: 'query',
+    "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
+    "node": "Normalize AI Result",
+    "fixture": "ai-lead-qualification-assistant/normalize-ai-result.js"
   },
   {
-    // The completion query was an unregistered second copy: the file and the
-    // node held the same bytes by hand, with nothing checking they stayed that
-    // way. Registering it puts the deferral window under the parity gate.
-    workflow: 'n8n/workflows/ops-handoff-notification-scheduler.json',
-    node: 'Complete Handoff Notification',
-    fixture: 'db/queries/n8n/handoff-routing/03_complete_notification.sql',
-    type: 'n8n-nodes-base.postgres',
-    parameter: 'query',
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Build Outbound Payload",
+    "fixture": "wa-outbound-messages/build-outbound-payload.js"
   },
   {
-    workflow: 'n8n/workflows/ops-handoff-clickup-closure.json',
-    node: 'Normalize ClickUp Closure',
-    fixture: 'ops-handoff-clickup-closure/normalize-clickup-closure.js',
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Queue Outbound Message",
+    "fixture": "db/queries/n8n/wa-outbound-messages/04_claim_outbound_message.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/ops-handoff-clickup-closure.json',
-    node: 'Close Handoff From ClickUp',
-    fixture: 'db/queries/n8n/handoff-routing/05_close_handoff_from_clickup.sql',
-    type: 'n8n-nodes-base.postgres',
-    parameter: 'query',
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Apply Human Arbitration Delay",
+    "fixture": "wa-outbound-messages/apply-human-arbitration-delay.js"
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Apply Inbound Follow-Up Policy',
-    fixture: 'db/queries/n8n/follow-up-pipeline/05_cancel_pending_follow_ups.sql',
-    type: 'n8n-nodes-base.postgres',
-    parameter: 'query',
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Mark Outbound Sending",
+    "fixture": "db/queries/n8n/wa-outbound-messages/05_authorize_outbound_send.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Ensure Media Attachment',
-    fixture: 'wa-inbound-downstream-dispatcher/ensure-media-attachment.js',
+    "workflow": "n8n/workflows/crm-lead-creation-and-assignment.json",
+    "node": "Prepare Lead Assignment",
+    "fixture": "crm-lead-creation-and-assignment/prepare-lead-assignment.js"
   },
   {
-    workflow: 'n8n/workflows/ops-media-download-scheduler.json',
-    node: 'Download and Persist Media',
-    fixture: 'ops-media-download-scheduler/download-and-persist-media.js',
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Ensure Early Opportunity",
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-early-opportunity.js"
   },
   {
-    workflow: 'n8n/workflows/wa-inbound-downstream-dispatcher.json',
-    node: 'Ensure Follow-Up Cancellation',
-    fixture: 'wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js',
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Ensure Escalation Handoff",
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js"
   },
   {
-    workflow: 'n8n/workflows/ops-followup-scheduler.json',
-    node: 'Prepare Follow-Up Message',
-    fixture: 'ops-followup-scheduler/prepare-follow-up-message.js',
+    "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
+    "node": "Prepare Handoff ClickUp Task",
+    "fixture": "ops-handoff-notification-scheduler/prepare-handoff-clickup-task.js"
   },
   {
-    workflow: 'n8n/workflows/ops-followup-scheduler.json',
-    node: 'Normalize Follow-Up Delivery',
-    fixture: 'ops-followup-scheduler/normalize-follow-up-delivery.js',
+    "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
+    "node": "Dispatch Handoff ClickUp Task",
+    "fixture": "ops-handoff-notification-scheduler/dispatch-handoff-clickup-task.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
+    "node": "Claim Pending Handoff Notifications",
+    "fixture": "db/queries/n8n/handoff-routing/02_claim_notification.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
+    "node": "Complete Handoff Notification",
+    "fixture": "db/queries/n8n/handoff-routing/03_complete_notification.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Claim Expired Lead Chat Leases",
+    "fixture": "db/queries/n8n/lead-chat-ownership/06_claim_expired_ownerships.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Prepare Lead Chat Restoration",
+    "fixture": "ops-lead-chat-lease-scheduler/prepare-lead-chat-restoration.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Dispatch Lead Chat Restoration",
+    "fixture": "ops-lead-chat-lease-scheduler/dispatch-lead-chat-restoration.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Complete Lead Chat Restoration",
+    "fixture": "db/queries/n8n/lead-chat-ownership/07_complete_restoration.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Claim Pending ClickUp Reacquisitions",
+    "fixture": "db/queries/n8n/lead-chat-ownership/09_claim_clickup_reacquisitions.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Dispatch Lead Chat Reacquisition",
+    "fixture": "ops-lead-chat-lease-scheduler/dispatch-lead-chat-reacquisition.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Complete ClickUp Reacquisition",
+    "fixture": "db/queries/n8n/lead-chat-ownership/10_complete_clickup_reacquisition.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Finalize Lease Scheduler Branch",
+    "fixture": "ops-lead-chat-lease-scheduler/finalize-scheduler-branch.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
+    "node": "Normalize ClickUp Closure",
+    "fixture": "ops-handoff-clickup-closure/normalize-clickup-closure.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
+    "node": "Close Handoff From ClickUp",
+    "fixture": "db/queries/n8n/handoff-routing/05_close_handoff_from_clickup.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
+    "node": "Acquire Lead Chat Ownership",
+    "fixture": "db/queries/n8n/lead-chat-ownership/01_acquire_ownership_from_clickup.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
+    "node": "Release Lead Chat Ownership",
+    "fixture": "db/queries/n8n/lead-chat-ownership/02_release_ownership_from_clickup.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Apply Inbound Follow-Up Policy",
+    "fixture": "db/queries/n8n/follow-up-pipeline/05_cancel_pending_follow_ups.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Ensure Media Attachment",
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-media-attachment.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-media-download-scheduler.json",
+    "node": "Download and Persist Media",
+    "fixture": "ops-media-download-scheduler/download-and-persist-media.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Ensure Follow-Up Cancellation",
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-followup-scheduler.json",
+    "node": "Prepare Follow-Up Message",
+    "fixture": "ops-followup-scheduler/prepare-follow-up-message.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-followup-scheduler.json",
+    "node": "Normalize Follow-Up Delivery",
+    "fixture": "ops-followup-scheduler/normalize-follow-up-delivery.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Build V3 Repair",
+    "fixture": "wa-conversation-orchestrator/build-v3-repair.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Resolve Conversation Contract Route",
+    "fixture": "wa-conversation-orchestrator/resolve-conversation-contract-route.js",
+    "runtimes": [
+      "shared/v3-rollout-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Compile V3 Turn Policy",
+    "fixture": "wa-conversation-orchestrator/compile-v3-turn.js",
+    "runtimes": [
+      "shared/v3-contract-runtime.js",
+      "shared/v3-rollout-runtime.js",
+      "shared/v3-policy-builder.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Prepare V3 Saga Result",
+    "fixture": "wa-conversation-orchestrator/prepare-v3-saga-result.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Build V3 Lead Effect",
+    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Normalize V3 Effect Receipt",
+    "fixture": "wa-conversation-orchestrator/normalize-v3-effect-receipt.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Validate And Authorize V3",
+    "fixture": "wa-conversation-orchestrator/validate-and-authorize-v3.js",
+    "runtimes": [
+      "shared/v3-contract-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Fix V3 Route",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/07_route_v3_turn.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist V3 Turn Authority",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/16_persist_v3_turn_authority.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Prepare V3 Execution",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/08_prepare_v3_decision.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Prepare V3 Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/11_prepare_v3_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Reconcile V3 Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/13_reconcile_v3_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Commit V3 State And Outbox",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/09_commit_v3_turn.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Record V3 Effect Result",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/12_record_v3_effect_result.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist V3 Handoff Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/17_persist_v3_handoff_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Prepare V3 Contingency Decision",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/15_prepare_v3_contingency.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Commit V3 Contingency",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/14_commit_v3_contingency.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Outbound Lane Complete",
+    "fixture": "wa-inbound-downstream-dispatcher/outbound-lane-complete.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Normalize Delivery Result",
+    "fixture": "wa-outbound-messages/normalize-delivery-result.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Return Already Sent",
+    "fixture": "wa-outbound-messages/return-already-sent.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Send Evolution Message",
+    "fixture": "wa-outbound-messages/send-evolution-message.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-outbound-messages.json",
+    "node": "Persist Delivery Result",
+    "fixture": "db/queries/n8n/wa-outbound-messages/04_persist_delivery_result.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Record V3 Delivery Receipt",
+    "fixture": "db/queries/n8n/wa-inbound-downstream-dispatcher/01_record_v3_delivery_result.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-followup-scheduler.json",
+    "node": "Claim Due Follow-Ups",
+    "fixture": "db/queries/n8n/follow-up-pipeline/02_claim_due_follow_ups.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-followup-scheduler.json",
+    "node": "Complete Follow-Up Delivery",
+    "fixture": "db/queries/n8n/follow-up-pipeline/03_apply_send_result.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Prepare AI PRD Shadow",
+    "fixture": "wa-inbound-downstream-dispatcher/prepare-ai-prd-shadow.js",
+    "runtimes": [
+      "shared/v3-rollout-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/ai-prd-shadow-evaluator.json",
+    "node": "Prepare Shadow Evaluation",
+    "fixture": "ai-prd-shadow-evaluator/prepare-shadow-evaluation.js",
+    "runtimes": [
+      "shared/v3-contract-runtime.js",
+      "shared/v3-rollout-runtime.js",
+      "shared/v3-policy-builder.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/ai-prd-shadow-evaluator.json",
+    "node": "Record Shadow Evaluation",
+    "fixture": "ai-prd-shadow-evaluator/record-shadow-evaluation.js",
+    "runtimes": [
+      "shared/v3-rollout-runtime.js",
+      "shared/v3-contract-runtime.js"
+    ]
+  }
+];const V3_CONTRACT_WRAPPERS = [
+  {
+    fixture: 'wa-conversation-orchestrator/compile-v3-turn-policy.js',
+    exportName: 'compileV3TurnPolicy',
+  },
+  {
+    fixture: 'wa-conversation-orchestrator/validate-v3-ai-proposal.js',
+    exportName: 'validateV3AiProposal',
+  },
+  {
+    fixture: 'wa-conversation-orchestrator/authorize-v3-conversation-decision.js',
+    exportName: 'authorizeV3ConversationDecision',
   },
 ];
+const V3_CONTRACT_RUNTIME = 'shared/v3-contract-runtime.js';
+const V3_SAGA_RUNTIME = 'shared/v3-saga-runtime.js';
+const V3_SAGA_FIXTURE = 'wa-conversation-orchestrator/build-v3-repair.js';
+const v3WrapperSource = (exportName) =>
+  `const { ${exportName} } = require('../shared/v3-contract-runtime.js');\n\nmodule.exports = { ${exportName} };\n`;
 
 const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--backup-only') ? 'backup' : 'patch';
 
@@ -160,6 +491,88 @@ const loadFixture = (fixture) => fs.readFileSync(path.join(fixturesRoot, fixture
 
 let patchedCount = 0;
 let checkedCount = 0;
+
+const validateV3ContractLibrary = () => {
+  const runtimePath = path.join(fixturesRoot, V3_CONTRACT_RUNTIME);
+  const runtime = fs.readFileSync(runtimePath, 'utf8');
+  const requiredCanonicalSymbols = [
+    'V3_CONTRACTS',
+    'CONCEPT_TO_FIELD',
+    'GROUNDED_CONCEPTS',
+    'canonicalJson',
+    'sha256',
+    'digestObject',
+    'compileV3TurnPolicy',
+    'validateV3AiProposal',
+    'authorizeV3ConversationDecision',
+  ];
+  for (const symbol of requiredCanonicalSymbols) {
+    if (!runtime.includes(symbol)) {
+      console.error(`[ERROR] ${V3_CONTRACT_RUNTIME} no contiene el simbolo canonico ${symbol}`);
+      process.exitCode = 1;
+    }
+  }
+  try {
+    new Function(runtime);
+  } catch (error) {
+    console.error(`[ERROR] ${V3_CONTRACT_RUNTIME} no compila: ${error.message}`);
+    process.exitCode = 1;
+  }
+
+  for (const entry of V3_CONTRACT_WRAPPERS) {
+    const wrapperPath = path.join(fixturesRoot, entry.fixture);
+    const expected = v3WrapperSource(entry.exportName);
+    const actual = fs.existsSync(wrapperPath) ? fs.readFileSync(wrapperPath, 'utf8') : '';
+    checkedCount += 1;
+    if (actual === expected) {
+      console.log(`[OK]    tests/fixtures/workflow-nodes/${entry.fixture}`);
+    } else if (mode === 'check') {
+      console.log(`[DRIFT] tests/fixtures/workflow-nodes/${entry.fixture} difiere del wrapper v3 canonico`);
+      process.exitCode = 1;
+    } else if (mode === 'patch') {
+      fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+      fs.writeFileSync(wrapperPath, expected, 'utf8');
+      patchedCount += 1;
+      console.log(`[PATCH] tests/fixtures/workflow-nodes/${entry.fixture}`);
+    }
+  }
+};
+
+validateV3ContractLibrary();
+
+const validateV3SagaLibrary = () => {
+  const runtime = loadFixture(V3_SAGA_RUNTIME);
+  for (const symbol of [
+    'canonicalizeMergedTurnItem',
+    'buildV3RepairRequest',
+    'buildV3ContingencyDecision',
+    'planV3Recovery',
+    'releaseV3Contingency',
+    'reconcileV3Operation',
+  ]) {
+    if (!runtime.includes(symbol)) {
+      console.error(`[ERROR] ${V3_SAGA_RUNTIME} no contiene el simbolo canonico ${symbol}`);
+      process.exitCode = 1;
+    }
+  }
+  const adapter = `${runtime}\n\nconst mergedInput = items[0]?.json ?? {};\nconst rejectedProposal = mergedInput.ai_proposal ?? mergedInput.ai_proposal_2 ?? mergedInput.ai_proposal_1 ?? null;\nconst input = canonicalizeMergedTurnItem(mergedInput);\nconst policy = input.v3_policy || input.turn_policy;\nconst v3Recovery = planV3Recovery({\n  policy,\n  validation: input.v3_validation ?? null,\n  repairAttempt: Number(input.v3_repair_attempt || 0),\n  providerOutcome: input.v3_provider_outcome || 'accepted',\n  preTurnState: input.qualification_context || {},\n  expectedSnapshotDigest: input.expected_snapshot_digest || null,\n  proposal: rejectedProposal,\n});\nreturn [{ json: {\n  ...input,\n  v3_recovery: v3Recovery,\n  v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),\n  ai_repair_request: v3Recovery.repair_request || null,\n  turn_policy: v3Recovery.repair_request?.policy || policy,\n  v3_policy: v3Recovery.repair_request?.policy || policy,\n  v3_recovery_decision: v3Recovery.decision || null,\n  decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,\n  delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,\n} }];\n`;
+  const fixturePath = path.join(fixturesRoot, V3_SAGA_FIXTURE);
+  const actual = fs.existsSync(fixturePath) ? fs.readFileSync(fixturePath, 'utf8') : '';
+  checkedCount += 1;
+  if (actual === adapter) {
+    console.log(`[OK]    tests/fixtures/workflow-nodes/${V3_SAGA_FIXTURE}`);
+  } else if (mode === 'check') {
+    console.log(`[DRIFT] tests/fixtures/workflow-nodes/${V3_SAGA_FIXTURE} difiere del runtime saga v3 canonico`);
+    process.exitCode = 1;
+  } else if (mode === 'patch') {
+    fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
+    fs.writeFileSync(fixturePath, adapter, 'utf8');
+    patchedCount += 1;
+    console.log(`[PATCH] tests/fixtures/workflow-nodes/${V3_SAGA_FIXTURE}`);
+  }
+};
+
+validateV3SagaLibrary();
 
 // =============================================================================
 // Timeout validation helpers (memoria #679, #686)
@@ -239,9 +652,10 @@ for (const entry of NODES) {
   const canonicalSource = entry.fixture.startsWith('db/')
     ? fs.readFileSync(path.join(repoRoot, entry.fixture), 'utf8')
     : loadFixture(entry.fixture);
+  const composedSource = [...(entry.runtimes || []).map((runtime) => loadFixture(runtime)), canonicalSource].join('\n\n');
   const source = entry.transform === 'n8n-explicit-return'
-    ? canonicalSource + '\nreturn runN8nCode(items);\n'
-    : canonicalSource;
+    ? composedSource + '\nreturn runN8nCode(items);\n'
+    : composedSource;
   const parameter = entry.parameter || 'jsCode';
   if (mode === 'check') {
     checkedCount += 1;
