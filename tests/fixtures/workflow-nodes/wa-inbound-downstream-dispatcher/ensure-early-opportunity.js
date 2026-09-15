@@ -14,7 +14,8 @@ const phoneNumber = String(row.phone_number || '').trim();
 const intent = String(row.intent || '').trim();
 const isOperational = OPERATIONAL_INTENTS.has(intent);
 
-const shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational;
+const shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational
+  && !row.bot_suppressed && row.response_kind !== 'commercial_review_pending' && row.pending_question_key !== 'previous_context_choice';
 
 const commercialBlocked = Array.isArray(row.commercial_missing_fields)
   && row.commercial_missing_fields.length > 0;

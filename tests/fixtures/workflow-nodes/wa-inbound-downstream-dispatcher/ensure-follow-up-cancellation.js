@@ -19,7 +19,8 @@ const LOST_PATTERNS = [
   /cerremos el tema/i,
 ];
 
-const matches = (patterns, text) => patterns.some((pattern) => pattern.test(String(text || '').trim()));
+const normalizeText = (text) => String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+const matches = (patterns, text) => patterns.some((pattern) => pattern.test(normalizeText(text)));
 const detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);
 const detectLostIntent = (text) => matches(LOST_PATTERNS, text);
 
@@ -71,6 +72,17 @@ const resolveCancellationAction = (row, explicitEpochMs = 0) => {
   const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));
   const optOut = detectOptOut(customerText);
   const lost = detectLostIntent(customerText);
+  const normalizedText = normalizeText(customerText);
+  const pendingChoice = row.pending_question_key === 'previous_context_choice'
+    || String(row.current_step || '').split('|')[0] === 'previous_context';
+  const tomorrowPostponement = pendingChoice && /^(?:gracias(?: por todo)?\s+)?(?:(?:hablame|escribeme|contactame|hablemos|hablamos|retomamos|seguimos|continuamos|lo vemos)\s+manana|manana(?:\s+(?:hablamos|seguimos|retomamos))?)(?:\s+por favor)?$/.test(normalizedText);
+  const unsupportedPostponement = pendingChoice && /^(?:hablame\s+)?pasado manana$/.test(normalizedText);
+  const passiveChoice = pendingChoice && (['reaction', 'sticker'].includes(row.message_type) || !normalizedText
+    || /^(?:muchas )?gracias(?: por (?:todo|la ayuda|tu ayuda|su ayuda))?$|^(?:chao|chau|hasta luego|adios|hasta manana|nos vemos)$/.test(normalizedText));
+  const windowStart = String(row.follow_up_window_start || '09:00').trim();
+  const windowEnd = String(row.follow_up_window_end || '20:00').trim();
+  const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+  const validWindow = timePattern.test(windowStart) && timePattern.test(windowEnd) && windowStart < windowEnd;
 
   let action = validConversation ? 'cancel' : 'none';
   let cancelReason = validConversation ? 'client_replied' : 'no_conversation';
@@ -80,24 +92,39 @@ const resolveCancellationAction = (row, explicitEpochMs = 0) => {
   } else if (lost) {
     action = 'cancel';
     cancelReason = 'lost';
+  } else if (row.bot_suppressed) {
+    action = 'none';
+    cancelReason = 'human_control_active';
+  } else if (row.response_kind === 'commercial_review_pending') {
+    action = 'none';
+    cancelReason = 'commercial_review_pending';
   } else if (escalated) {
     action = 'cancel';
     cancelReason = 'escalated';
   } else if (closed) {
     action = 'cancel';
     cancelReason = 'closed';
+
+  } else if (passiveChoice) {
+    action = 'none';
+    cancelReason = 'non_commercial_context_reply';
+  } else if (tomorrowPostponement) {
+    cancelReason = 'postponed_until_tomorrow';
   }
 
   const responseText = String(row.response_text || '').trim();
   const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));
   const scheduleCandidate = validConversation
     && action === 'cancel'
-    && cancelReason === 'client_replied'
+    && ['client_replied', 'postponed_until_tomorrow'].includes(cancelReason)
+    && !unsupportedPostponement
+    && (!tomorrowPostponement || validWindow)
     && responseText.length > 0
     && String(row.conversation_status_code || '') === 'waiting_user';
   const databaseCanResolveTimestamp = inboundIdentity?.type === 'event';
   const shouldSchedule = scheduleCandidate
     && Boolean(inboundIdentity)
+    && (!tomorrowPostponement || databaseCanResolveTimestamp)
     && (Boolean(inboundCreatedEpochMs) || databaseCanResolveTimestamp);
   const cycleKey = inboundIdentity
     ? `inbound:${inboundIdentity.type}:${inboundIdentity.id}`
@@ -113,10 +140,14 @@ const resolveCancellationAction = (row, explicitEpochMs = 0) => {
     follow_up_cycle_key: cycleKey,
     follow_up_motivo: 'lead_sin_respuesta',
     follow_up_scheduled_at: shouldSchedule
+      && !tomorrowPostponement
       && inboundCreatedEpochMs
       ? new Date(inboundCreatedEpochMs + firstDelayHours * 3600000).toISOString()
       : null,
-    follow_up_schedule_skipped_reason: scheduleCandidate && !shouldSchedule
+    follow_up_window_start: validWindow ? windowStart : null,
+    follow_up_window_end: validWindow ? windowEnd : null,
+    follow_up_schedule_skipped_reason: tomorrowPostponement && !validWindow ? 'invalid_send_window'
+      : scheduleCandidate && !shouldSchedule
       ? 'missing_persisted_inbound_identity_or_timestamp'
       : null,
     follow_up_cancel_decided: Boolean(action && action !== 'none'),
@@ -142,12 +173,16 @@ if (typeof module !== 'undefined' && module.exports) {
 
 if (typeof items !== 'undefined') {
   const firstDelayHours = Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24);
+  const windowStart = String($env.FOLLOW_UP_WINDOW_START || '09:00');
+  const windowEnd = String($env.FOLLOW_UP_WINDOW_END || '20:00');
   return items.map((item) => ({
     json: {
       ...item.json,
       ...resolveCancellationAction({
         ...item.json,
         follow_up_first_delay_hours: firstDelayHours,
+        follow_up_window_start: windowStart,
+        follow_up_window_end: windowEnd,
       }),
     },
   }));

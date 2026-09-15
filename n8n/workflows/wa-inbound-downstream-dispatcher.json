@@ -85,7 +85,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{ json: { outbound_lane_complete: true } }];"
+        "jsCode": "// PostgreSQL receipt nodes replace the item. Restore the single claimed event\n// context before merging completion lanes so the strict inbox token survives.\nlet dispatchContext = {};\nif (typeof $ === 'function') {\n  try { dispatchContext = $('Normalize Durable Dispatch').first().json || {}; }\n  catch (_error) { /* Direct fixture callers carry their own context. */ }\n}\nreturn items.map((item) => {\n  const receipt = item.json || {};\n  return { json: {\n    ...dispatchContext, ...receipt,\n    inbound_event_id: dispatchContext.inbound_event_id ?? receipt.inbound_event_id ?? null,\n    processing_token: dispatchContext.processing_token ?? receipt.processing_token ?? null,\n    outbound_lane_complete: true,\n  } };\n});\n"
       },
       "id": "50000000-0000-0000-0000-000000000014",
       "name": "Outbound Lane Complete",
@@ -497,7 +497,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const row = items[0]?.json ?? {};\n\nconst OPERATIONAL_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n]);\n\nconst conversationId = Number(row.conversation_id);\nconst hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\nconst phoneNumber = String(row.phone_number || '').trim();\n\nconst intent = String(row.intent || '').trim();\nconst isOperational = OPERATIONAL_INTENTS.has(intent);\n\nconst shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational;\n\nconst commercialBlocked = Array.isArray(row.commercial_missing_fields)\n  && row.commercial_missing_fields.length > 0;\n\nconst qualified = Boolean(row.should_create_lead)\n  && !commercialBlocked\n  && row.confirmation_status === 'confirmed';\n\nconst requestedStatus = qualified ? 'qualified' : 'new';\n\nreturn [\n  {\n    json: {\n      ...row,\n      opportunity_scope: {\n        conversation_id: conversationId,\n        phone_number: phoneNumber,\n        source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n        external_contact_id: row.external_contact_id || null,\n        whatsapp_name: row.whatsapp_name || null,\n        service: row.service || null,\n        city: row.city || null,\n        requirement: row.requirement || null,\n        intent_code: intent || null,\n        inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n      },\n      opportunity_write: shouldWrite,\n      opportunity_status: requestedStatus,\n      opportunity_skipped: !shouldWrite,\n    },\n  },\n];\n"
+        "jsCode": "const row = items[0]?.json ?? {};\n\nconst OPERATIONAL_INTENTS = new Set([\n  'complaint',\n  'warranty_inquiry',\n  'payment_proof',\n  'invoice_request',\n]);\n\nconst conversationId = Number(row.conversation_id);\nconst hasConversation = Number.isSafeInteger(conversationId) && conversationId > 0;\nconst phoneNumber = String(row.phone_number || '').trim();\n\nconst intent = String(row.intent || '').trim();\nconst isOperational = OPERATIONAL_INTENTS.has(intent);\n\nconst shouldWrite = hasConversation && Boolean(phoneNumber) && !isOperational\n  && !row.bot_suppressed && row.response_kind !== 'commercial_review_pending' && row.pending_question_key !== 'previous_context_choice';\n\nconst commercialBlocked = Array.isArray(row.commercial_missing_fields)\n  && row.commercial_missing_fields.length > 0;\n\nconst qualified = Boolean(row.should_create_lead)\n  && !commercialBlocked\n  && row.confirmation_status === 'confirmed';\n\nconst requestedStatus = qualified ? 'qualified' : 'new';\n\nreturn [\n  {\n    json: {\n      ...row,\n      opportunity_scope: {\n        conversation_id: conversationId,\n        phone_number: phoneNumber,\n        source_number_id: Number(row.source_number_id) > 0 ? Number(row.source_number_id) : null,\n        external_contact_id: row.external_contact_id || null,\n        whatsapp_name: row.whatsapp_name || null,\n        service: row.service || null,\n        city: row.city || null,\n        requirement: row.requirement || null,\n        intent_code: intent || null,\n        inbound_event_id: Number(row.inbound_event_id) > 0 ? Number(row.inbound_event_id) : null,\n      },\n      opportunity_write: shouldWrite,\n      opportunity_status: requestedStatus,\n      opportunity_skipped: !shouldWrite,\n    },\n  },\n];\n"
       },
       "id": "50000000-0000-0000-0000-000000000035",
       "name": "Ensure Early Opportunity",
@@ -679,7 +679,7 @@
         840
       ],
       "parameters": {
-        "jsCode": "const OPT_OUT_PATTERNS = [\n  /no me escribas mas/i,\n  /escribas mas/i,\n  /baja.*(de la lista|pas|mensajes|programa)/i,\n  /\\bstop\\b/i,\n  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,\n  /dej(?:a|en) de escribirme/i,\n  /no me envies mas mensajes/i,\n  /darme de baja/i,\n  /quitarme de la lista/i,\n  /no me molestes/i,\n];\n\nconst LOST_PATTERNS = [\n  /ya no (me interesa|necesito|quiero)/i,\n  /lo pense y no (voy a|quiero)/i,\n  /estoy con (otra|la competencia)/i,\n  /no voy a (comprar|avanzar)/i,\n  /cerremos el tema/i,\n];\n\nconst matches = (patterns, text) => patterns.some((pattern) => pattern.test(String(text || '').trim()));\nconst detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);\nconst detectLostIntent = (text) => matches(LOST_PATTERNS, text);\n\nconst asPositiveInteger = (value) => {\n  const parsed = Number(value);\n  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundCreatedEpochMs = (row, explicitEpochMs = 0) => {\n  const numeric = Number(explicitEpochMs || row.inbound_created_epoch_ms || 0);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric;\n\n  const parsed = Date.parse(String(row.inbound_created_at || ''));\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundIdentity = (row) => {\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  if (inboundEventId) return { type: 'event', id: inboundEventId };\n\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  if (inboundMessageId) return { type: 'message', id: inboundMessageId };\n\n  return null;\n};\n\n// One persisted inbound applies the follow-up policy at most once to its target\n// conversation. The action is intentionally absent from the key: a replay must\n// not create another policy event if downstream classification changes.\nconst buildIdempotencyKey = (targetConversationId, inboundIdentity) => {\n  if (!targetConversationId || !inboundIdentity) return null;\n  return `follow-up-policy:${targetConversationId}:${inboundIdentity.type}:${inboundIdentity.id}`;\n};\n\nconst resolveCancellationAction = (row, explicitEpochMs = 0) => {\n  const targetConversationId = asPositiveInteger(\n    row.target_conversation_id\n      || row.follow_up_target_conversation_id\n      || row.conversation_id,\n  );\n  const validConversation = Boolean(targetConversationId);\n  const customerText = String(row.text_body || '').trim();\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  const inboundIdentity = resolveInboundIdentity(row);\n  const inboundCreatedEpochMs = resolveInboundCreatedEpochMs(row, explicitEpochMs);\n  const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);\n  const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);\n  const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));\n  const optOut = detectOptOut(customerText);\n  const lost = detectLostIntent(customerText);\n\n  let action = validConversation ? 'cancel' : 'none';\n  let cancelReason = validConversation ? 'client_replied' : 'no_conversation';\n  if (optOut) {\n    action = 'opt_out';\n    cancelReason = 'opt_out';\n  } else if (lost) {\n    action = 'cancel';\n    cancelReason = 'lost';\n  } else if (escalated) {\n    action = 'cancel';\n    cancelReason = 'escalated';\n  } else if (closed) {\n    action = 'cancel';\n    cancelReason = 'closed';\n  }\n\n  const responseText = String(row.response_text || '').trim();\n  const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));\n  const scheduleCandidate = validConversation\n    && action === 'cancel'\n    && cancelReason === 'client_replied'\n    && responseText.length > 0\n    && String(row.conversation_status_code || '') === 'waiting_user';\n  const databaseCanResolveTimestamp = inboundIdentity?.type === 'event';\n  const shouldSchedule = scheduleCandidate\n    && Boolean(inboundIdentity)\n    && (Boolean(inboundCreatedEpochMs) || databaseCanResolveTimestamp);\n  const cycleKey = inboundIdentity\n    ? `inbound:${inboundIdentity.type}:${inboundIdentity.id}`\n    : null;\n\n  return {\n    follow_up_target_conversation_id: targetConversationId,\n    follow_up_cancel_action: action,\n    follow_up_cancel_reason: cancelReason,\n    follow_up_source_text: customerText || null,\n    follow_up_source_message_id: inboundMessageId,\n    follow_up_should_schedule: shouldSchedule,\n    follow_up_cycle_key: cycleKey,\n    follow_up_motivo: 'lead_sin_respuesta',\n    follow_up_scheduled_at: shouldSchedule\n      && inboundCreatedEpochMs\n      ? new Date(inboundCreatedEpochMs + firstDelayHours * 3600000).toISOString()\n      : null,\n    follow_up_schedule_skipped_reason: scheduleCandidate && !shouldSchedule\n      ? 'missing_persisted_inbound_identity_or_timestamp'\n      : null,\n    follow_up_cancel_decided: Boolean(action && action !== 'none'),\n    follow_up_idempotency_key: buildIdempotencyKey(targetConversationId, inboundIdentity),\n    follow_up_inbound_created_epoch_ms: inboundCreatedEpochMs,\n    follow_up_source_event_id: inboundEventId,\n    follow_up_first_delay_hours: firstDelayHours,\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    OPT_OUT_PATTERNS,\n    LOST_PATTERNS,\n    detectOptOut,\n    detectLostIntent,\n    resolveCancellationAction,\n    resolveInboundCreatedEpochMs,\n    resolveInboundIdentity,\n    buildIdempotencyKey,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const firstDelayHours = Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24);\n  return items.map((item) => ({\n    json: {\n      ...item.json,\n      ...resolveCancellationAction({\n        ...item.json,\n        follow_up_first_delay_hours: firstDelayHours,\n      }),\n    },\n  }));\n}\n"
+        "jsCode": "const OPT_OUT_PATTERNS = [\n  /no me escribas mas/i,\n  /escribas mas/i,\n  /baja.*(de la lista|pas|mensajes|programa)/i,\n  /\\bstop\\b/i,\n  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,\n  /dej(?:a|en) de escribirme/i,\n  /no me envies mas mensajes/i,\n  /darme de baja/i,\n  /quitarme de la lista/i,\n  /no me molestes/i,\n];\n\nconst LOST_PATTERNS = [\n  /ya no (me interesa|necesito|quiero)/i,\n  /lo pense y no (voy a|quiero)/i,\n  /estoy con (otra|la competencia)/i,\n  /no voy a (comprar|avanzar)/i,\n  /cerremos el tema/i,\n];\n\nconst normalizeText = (text) => String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9ñ\\s]/g, ' ').replace(/\\s+/g, ' ').trim();\nconst matches = (patterns, text) => patterns.some((pattern) => pattern.test(normalizeText(text)));\nconst detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);\nconst detectLostIntent = (text) => matches(LOST_PATTERNS, text);\n\nconst asPositiveInteger = (value) => {\n  const parsed = Number(value);\n  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundCreatedEpochMs = (row, explicitEpochMs = 0) => {\n  const numeric = Number(explicitEpochMs || row.inbound_created_epoch_ms || 0);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric;\n\n  const parsed = Date.parse(String(row.inbound_created_at || ''));\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst resolveInboundIdentity = (row) => {\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  if (inboundEventId) return { type: 'event', id: inboundEventId };\n\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  if (inboundMessageId) return { type: 'message', id: inboundMessageId };\n\n  return null;\n};\n\n// One persisted inbound applies the follow-up policy at most once to its target\n// conversation. The action is intentionally absent from the key: a replay must\n// not create another policy event if downstream classification changes.\nconst buildIdempotencyKey = (targetConversationId, inboundIdentity) => {\n  if (!targetConversationId || !inboundIdentity) return null;\n  return `follow-up-policy:${targetConversationId}:${inboundIdentity.type}:${inboundIdentity.id}`;\n};\n\nconst resolveCancellationAction = (row, explicitEpochMs = 0) => {\n  const targetConversationId = asPositiveInteger(\n    row.target_conversation_id\n      || row.follow_up_target_conversation_id\n      || row.conversation_id,\n  );\n  const validConversation = Boolean(targetConversationId);\n  const customerText = String(row.text_body || '').trim();\n  const inboundMessageId = asPositiveInteger(row.message_id);\n  const inboundEventId = asPositiveInteger(row.inbound_event_id);\n  const inboundIdentity = resolveInboundIdentity(row);\n  const inboundCreatedEpochMs = resolveInboundCreatedEpochMs(row, explicitEpochMs);\n  const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);\n  const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);\n  const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));\n  const optOut = detectOptOut(customerText);\n  const lost = detectLostIntent(customerText);\n  const normalizedText = normalizeText(customerText);\n  const pendingChoice = row.pending_question_key === 'previous_context_choice'\n    || String(row.current_step || '').split('|')[0] === 'previous_context';\n  const tomorrowPostponement = pendingChoice && /^(?:gracias(?: por todo)?\\s+)?(?:(?:hablame|escribeme|contactame|hablemos|hablamos|retomamos|seguimos|continuamos|lo vemos)\\s+manana|manana(?:\\s+(?:hablamos|seguimos|retomamos))?)(?:\\s+por favor)?$/.test(normalizedText);\n  const unsupportedPostponement = pendingChoice && /^(?:hablame\\s+)?pasado manana$/.test(normalizedText);\n  const passiveChoice = pendingChoice && (['reaction', 'sticker'].includes(row.message_type) || !normalizedText\n    || /^(?:muchas )?gracias(?: por (?:todo|la ayuda|tu ayuda|su ayuda))?$|^(?:chao|chau|hasta luego|adios|hasta manana|nos vemos)$/.test(normalizedText));\n  const windowStart = String(row.follow_up_window_start || '09:00').trim();\n  const windowEnd = String(row.follow_up_window_end || '20:00').trim();\n  const timePattern = /^(?:[01]\\d|2[0-3]):[0-5]\\d$/;\n  const validWindow = timePattern.test(windowStart) && timePattern.test(windowEnd) && windowStart < windowEnd;\n\n  let action = validConversation ? 'cancel' : 'none';\n  let cancelReason = validConversation ? 'client_replied' : 'no_conversation';\n  if (optOut) {\n    action = 'opt_out';\n    cancelReason = 'opt_out';\n  } else if (lost) {\n    action = 'cancel';\n    cancelReason = 'lost';\n  } else if (row.bot_suppressed) {\n    action = 'none';\n    cancelReason = 'human_control_active';\n  } else if (row.response_kind === 'commercial_review_pending') {\n    action = 'none';\n    cancelReason = 'commercial_review_pending';\n  } else if (escalated) {\n    action = 'cancel';\n    cancelReason = 'escalated';\n  } else if (closed) {\n    action = 'cancel';\n    cancelReason = 'closed';\n\n  } else if (passiveChoice) {\n    action = 'none';\n    cancelReason = 'non_commercial_context_reply';\n  } else if (tomorrowPostponement) {\n    cancelReason = 'postponed_until_tomorrow';\n  }\n\n  const responseText = String(row.response_text || '').trim();\n  const firstDelayHours = Math.max(1, Number(row.follow_up_first_delay_hours || 24));\n  const scheduleCandidate = validConversation\n    && action === 'cancel'\n    && ['client_replied', 'postponed_until_tomorrow'].includes(cancelReason)\n    && !unsupportedPostponement\n    && (!tomorrowPostponement || validWindow)\n    && responseText.length > 0\n    && String(row.conversation_status_code || '') === 'waiting_user';\n  const databaseCanResolveTimestamp = inboundIdentity?.type === 'event';\n  const shouldSchedule = scheduleCandidate\n    && Boolean(inboundIdentity)\n    && (!tomorrowPostponement || databaseCanResolveTimestamp)\n    && (Boolean(inboundCreatedEpochMs) || databaseCanResolveTimestamp);\n  const cycleKey = inboundIdentity\n    ? `inbound:${inboundIdentity.type}:${inboundIdentity.id}`\n    : null;\n\n  return {\n    follow_up_target_conversation_id: targetConversationId,\n    follow_up_cancel_action: action,\n    follow_up_cancel_reason: cancelReason,\n    follow_up_source_text: customerText || null,\n    follow_up_source_message_id: inboundMessageId,\n    follow_up_should_schedule: shouldSchedule,\n    follow_up_cycle_key: cycleKey,\n    follow_up_motivo: 'lead_sin_respuesta',\n    follow_up_scheduled_at: shouldSchedule\n      && !tomorrowPostponement\n      && inboundCreatedEpochMs\n      ? new Date(inboundCreatedEpochMs + firstDelayHours * 3600000).toISOString()\n      : null,\n    follow_up_window_start: validWindow ? windowStart : null,\n    follow_up_window_end: validWindow ? windowEnd : null,\n    follow_up_schedule_skipped_reason: tomorrowPostponement && !validWindow ? 'invalid_send_window'\n      : scheduleCandidate && !shouldSchedule\n      ? 'missing_persisted_inbound_identity_or_timestamp'\n      : null,\n    follow_up_cancel_decided: Boolean(action && action !== 'none'),\n    follow_up_idempotency_key: buildIdempotencyKey(targetConversationId, inboundIdentity),\n    follow_up_inbound_created_epoch_ms: inboundCreatedEpochMs,\n    follow_up_source_event_id: inboundEventId,\n    follow_up_first_delay_hours: firstDelayHours,\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    OPT_OUT_PATTERNS,\n    LOST_PATTERNS,\n    detectOptOut,\n    detectLostIntent,\n    resolveCancellationAction,\n    resolveInboundCreatedEpochMs,\n    resolveInboundIdentity,\n    buildIdempotencyKey,\n  };\n}\n\nif (typeof items !== 'undefined') {\n  const firstDelayHours = Number($env.FOLLOW_UP_FIRST_DELAY_HOURS || 24);\n  const windowStart = String($env.FOLLOW_UP_WINDOW_START || '09:00');\n  const windowEnd = String($env.FOLLOW_UP_WINDOW_END || '20:00');\n  return items.map((item) => ({\n    json: {\n      ...item.json,\n      ...resolveCancellationAction({\n        ...item.json,\n        follow_up_first_delay_hours: firstDelayHours,\n        follow_up_window_start: windowStart,\n        follow_up_window_end: windowEnd,\n      }),\n    },\n  }));\n}\n"
       },
       "id": "50000000-0000-0000-0000-000000000066"
     },
@@ -757,10 +757,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Apply one persisted inbound to the follow-up policy atomically.\n-- $1 target_conversation_id, $2 action, $3 cancel_reason, $4 source_text,\n-- $5 source_message_id, $6 should_schedule, $7 phone_number,\n-- $8 source_number_id, $9 cycle_key, $10 motivo, $11 scheduled_at,\n-- $12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),\n-- $13 inbound_event_id, $14 first_delay_hours.\nWITH raw_input AS (\n  SELECT\n    $1::bigint conversation_id,\n    NULLIF($2::text, '') action,\n    NULLIF($3::text, '') cancel_reason,\n    NULLIF($4::text, '') source_text,\n    NULLIF($5::text, '')::bigint source_message_id,\n    COALESCE(NULLIF($6::text, '')::boolean, FALSE) should_schedule,\n    NULLIF($7::text, '') phone_number,\n    NULLIF($8::text, '')::bigint source_number_id,\n    NULLIF($9::text, '') cycle_key,\n    COALESCE(NULLIF($10::text, ''), 'lead_sin_respuesta') motivo,\n    NULLIF($11::text, '')::timestamptz requested_scheduled_at,\n    NULLIF($12::text, '') idempotency_key,\n    NULLIF($13::text, '')::bigint inbound_event_id,\n    GREATEST(1, COALESCE(NULLIF($14::text, '')::integer, 24)) first_delay_hours\n), input AS (\n  SELECT\n    r.conversation_id,\n    r.action,\n    r.cancel_reason,\n    r.source_text,\n    r.source_message_id,\n    r.should_schedule,\n    r.phone_number,\n    r.source_number_id,\n    r.cycle_key,\n    r.motivo,\n    COALESCE(\n      r.requested_scheduled_at,\n      ie.created_at + make_interval(hours => r.first_delay_hours)\n    ) scheduled_at,\n    r.idempotency_key,\n    r.inbound_event_id\n  FROM raw_input r\n  LEFT JOIN inbound_events ie ON ie.id = r.inbound_event_id\n), policy_claim AS MATERIALIZED (\n  UPDATE inbound_events ie\n  SET downstream_payload = jsonb_set(\n        COALESCE(ie.downstream_payload, '{}'::jsonb),\n        '{follow_up_policy_receipt}',\n        jsonb_build_object(\n          'idempotency_key', i.idempotency_key,\n          'conversation_id', i.conversation_id,\n          'claimed_at', NOW()\n        ),\n        TRUE\n      ),\n      updated_at = NOW()\n  FROM input i\n  WHERE ie.id = i.inbound_event_id\n    AND i.idempotency_key IS NOT NULL\n    AND NOT (COALESCE(ie.downstream_payload, '{}'::jsonb) ? 'follow_up_policy_receipt')\n  RETURNING ie.id\n), preference AS (\n  INSERT INTO follow_up_preferences (\n    conversation_id, opted_out, opted_out_at, source_message_id, source_text\n  )\n  SELECT i.conversation_id, TRUE, NOW(), i.source_message_id, i.source_text\n  FROM input i\n  WHERE i.action = 'opt_out'\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  ON CONFLICT (conversation_id) DO UPDATE SET\n    opted_out = TRUE,\n    opted_out_at = COALESCE(follow_up_preferences.opted_out_at, EXCLUDED.opted_out_at),\n    source_message_id = EXCLUDED.source_message_id,\n    source_text = EXCLUDED.source_text,\n    updated_at = NOW()\n  RETURNING conversation_id\n), cancelled AS (\n  UPDATE follow_ups f SET\n    estado = CASE WHEN i.action = 'opt_out' THEN 'opted_out' ELSE 'cancelled' END,\n    opted_out = (i.action = 'opt_out'),\n    result = CASE WHEN i.cancel_reason = 'lost' THEN 'lost' ELSE COALESCE(f.result, 'responded') END,\n    lost_reason = CASE WHEN i.cancel_reason = 'lost' THEN i.source_text ELSE f.lost_reason END,\n    claim_token = NULL,\n    claimed_at = NULL,\n    next_retry_at = NULL,\n    updated_at = NOW()\n  FROM input i\n  WHERE f.conversation_id = i.conversation_id\n    AND f.deleted_at IS NULL\n    AND f.estado IN ('pending', 'sending', 'error')\n    AND i.action IN ('opt_out', 'cancel')\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING f.id\n), scheduled AS (\n  INSERT INTO follow_ups (\n    idempotency_key, cycle_key, conversation_id, phone_number, source_number_id,\n    motivo, step_dia, scheduled_at, metadata\n  )\n  SELECT\n    i.conversation_id || ':' || i.cycle_key || ':1',\n    i.cycle_key,\n    i.conversation_id,\n    i.phone_number,\n    i.source_number_id,\n    i.motivo,\n    1,\n    i.scheduled_at,\n    jsonb_build_object(\n      'cycle_key', i.cycle_key,\n      'source_message_id', i.source_message_id,\n      'policy_idempotency_key', i.idempotency_key\n    )\n  FROM input i\n  WHERE i.should_schedule\n    AND i.cycle_key IS NOT NULL\n    AND i.phone_number IS NOT NULL\n    AND i.scheduled_at IS NOT NULL\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n    AND NOT EXISTS (\n      SELECT 1\n      FROM follow_up_preferences p\n      WHERE p.conversation_id = i.conversation_id\n        AND p.opted_out = TRUE\n    )\n  ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING\n  RETURNING id\n), audit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'follow_up_inbound_policy',\n    'conversation',\n    i.conversation_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    CASE\n      WHEN i.action = 'opt_out' THEN 'opted_out'\n      WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'cancelled_and_scheduled'\n      WHEN i.action = 'cancel' THEN 'cancelled'\n      ELSE 'no_action'\n    END,\n    '{}'::jsonb,\n    jsonb_build_object(\n      'cancelled', (SELECT COUNT(*) FROM cancelled),\n      'scheduled', (SELECT COUNT(*) FROM scheduled),\n      'action', i.action,\n      'idempotency_key', i.idempotency_key\n    ),\n    jsonb_build_object('cycle_key', i.cycle_key)\n  FROM input i\n  WHERE i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING id\n)\nSELECT\n  (SELECT COUNT(*) FROM cancelled) cancelled_count,\n  (SELECT COUNT(*) FROM scheduled) scheduled_count,\n  EXISTS(SELECT 1 FROM preference) opted_out_persisted,\n  (\n    EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n    AND NOT EXISTS(SELECT 1 FROM policy_claim)\n  ) replayed,\n  CASE\n    WHEN EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n      AND NOT EXISTS(SELECT 1 FROM policy_claim) THEN 'replayed'\n    WHEN EXISTS(SELECT 1 FROM preference) THEN 'opted_out'\n    WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'scheduled'\n    WHEN EXISTS(SELECT 1 FROM cancelled) THEN 'cancelled'\n    ELSE 'no_action'\n  END result;\n",
+        "query": "-- Apply one persisted inbound to the follow-up policy atomically.\n-- $1 target_conversation_id, $2 action, $3 cancel_reason, $4 source_text,\n-- $5 source_message_id, $6 should_schedule, $7 phone_number,\n-- $8 source_number_id, $9 cycle_key, $10 motivo, $11 scheduled_at,\n-- $12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),\n-- $13 inbound_event_id, $14 first_delay_hours, $15 window_start, $16 window_end.\nWITH raw_input AS (\n  SELECT\n    $1::bigint conversation_id,\n    NULLIF($2::text, '') action,\n    NULLIF($3::text, '') cancel_reason,\n    NULLIF($4::text, '') source_text,\n    NULLIF($5::text, '')::bigint source_message_id,\n    COALESCE(NULLIF($6::text, '')::boolean, FALSE) should_schedule,\n    NULLIF($7::text, '') phone_number,\n    NULLIF($8::text, '')::bigint source_number_id,\n    NULLIF($9::text, '') cycle_key,\n    COALESCE(NULLIF($10::text, ''), 'lead_sin_respuesta') motivo,\n    NULLIF($11::text, '')::timestamptz requested_scheduled_at,\n    NULLIF($12::text, '') idempotency_key,\n    NULLIF($13::text, '')::bigint inbound_event_id,\n    GREATEST(1, COALESCE(NULLIF($14::text, '')::integer, 24)) first_delay_hours,\n    CASE WHEN COALESCE(NULLIF($15::text, ''), '09:00') ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'\n      THEN COALESCE(NULLIF($15::text, ''), '09:00')::time END window_start,\n    CASE WHEN COALESCE(NULLIF($16::text, ''), '20:00') ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'\n      THEN COALESCE(NULLIF($16::text, ''), '20:00')::time END window_end\n), input AS (\n  SELECT\n    r.conversation_id,\n    r.action,\n    r.cancel_reason,\n    r.source_text,\n    r.source_message_id,\n    r.should_schedule,\n    r.phone_number,\n    r.source_number_id,\n    r.cycle_key,\n    r.motivo,\n    CASE WHEN r.cancel_reason = 'postponed_until_tomorrow' THEN\n      CASE WHEN r.window_start < r.window_end THEN\n        -- A calendar day in Chile, not 24 elapsed hours. Preserve the local\n        -- clock only inside the configured half-open send window [start,end).\n        (((ie.created_at AT TIME ZONE 'America/Santiago')::date + 1)\n          + CASE WHEN (ie.created_at AT TIME ZONE 'America/Santiago')::time >= r.window_start\n                   AND (ie.created_at AT TIME ZONE 'America/Santiago')::time < r.window_end\n                 THEN (ie.created_at AT TIME ZONE 'America/Santiago')::time\n                 ELSE r.window_start END) AT TIME ZONE 'America/Santiago'\n      END\n    ELSE COALESCE(\n      r.requested_scheduled_at,\n      ie.created_at + make_interval(hours => r.first_delay_hours)\n    ) END scheduled_at,\n    r.idempotency_key,\n    r.inbound_event_id\n  FROM raw_input r\n  LEFT JOIN inbound_events ie ON ie.id = r.inbound_event_id\n), policy_claim AS MATERIALIZED (\n  UPDATE inbound_events ie\n  SET downstream_payload = jsonb_set(\n        COALESCE(ie.downstream_payload, '{}'::jsonb),\n        '{follow_up_policy_receipt}',\n        jsonb_build_object(\n          'idempotency_key', i.idempotency_key,\n          'conversation_id', i.conversation_id,\n          'claimed_at', NOW()\n        ),\n        TRUE\n      ),\n      updated_at = NOW()\n  FROM input i\n  WHERE ie.id = i.inbound_event_id\n    AND i.idempotency_key IS NOT NULL\n    AND NOT (COALESCE(ie.downstream_payload, '{}'::jsonb) ? 'follow_up_policy_receipt')\n  RETURNING ie.id\n), preference AS (\n  INSERT INTO follow_up_preferences (\n    conversation_id, opted_out, opted_out_at, source_message_id, source_text\n  )\n  SELECT i.conversation_id, TRUE, NOW(), i.source_message_id, i.source_text\n  FROM input i\n  WHERE i.action = 'opt_out'\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  ON CONFLICT (conversation_id) DO UPDATE SET\n    opted_out = TRUE,\n    opted_out_at = COALESCE(follow_up_preferences.opted_out_at, EXCLUDED.opted_out_at),\n    source_message_id = EXCLUDED.source_message_id,\n    source_text = EXCLUDED.source_text,\n    updated_at = NOW()\n  RETURNING conversation_id\n), cancelled AS (\n  UPDATE follow_ups f SET\n    estado = CASE WHEN i.action = 'opt_out' THEN 'opted_out' ELSE 'cancelled' END,\n    opted_out = (i.action = 'opt_out'),\n    result = CASE WHEN i.cancel_reason = 'lost' THEN 'lost' ELSE COALESCE(f.result, 'responded') END,\n    lost_reason = CASE WHEN i.cancel_reason = 'lost' THEN i.source_text ELSE f.lost_reason END,\n    claim_token = NULL,\n    claimed_at = NULL,\n    next_retry_at = NULL,\n    updated_at = NOW()\n  FROM input i\n  WHERE f.conversation_id = i.conversation_id\n    AND f.deleted_at IS NULL\n    AND f.estado IN ('pending', 'sending', 'error')\n    AND i.action IN ('opt_out', 'cancel')\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING f.id\n), scheduled AS (\n  INSERT INTO follow_ups (\n    idempotency_key, cycle_key, conversation_id, phone_number, source_number_id,\n    motivo, step_dia, scheduled_at, metadata\n  )\n  SELECT\n    i.conversation_id || ':' || i.cycle_key || ':1',\n    i.cycle_key,\n    i.conversation_id,\n    i.phone_number,\n    i.source_number_id,\n    i.motivo,\n    1,\n    i.scheduled_at,\n    jsonb_build_object(\n      'cycle_key', i.cycle_key,\n      'source_message_id', i.source_message_id,\n      'policy_idempotency_key', i.idempotency_key\n    )\n  FROM input i\n  WHERE i.should_schedule\n    AND i.cycle_key IS NOT NULL\n    AND i.phone_number IS NOT NULL\n    AND i.scheduled_at IS NOT NULL\n    AND i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n    AND NOT EXISTS (\n      SELECT 1\n      FROM follow_up_preferences p\n      WHERE p.conversation_id = i.conversation_id\n        AND p.opted_out = TRUE\n    )\n  ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING\n  RETURNING id\n), audit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'follow_up_inbound_policy',\n    'conversation',\n    i.conversation_id,\n    'system',\n    'wa-inbound-downstream-dispatcher',\n    CASE\n      WHEN i.action = 'opt_out' THEN 'opted_out'\n      WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'cancelled_and_scheduled'\n      WHEN i.action = 'cancel' THEN 'cancelled'\n      ELSE 'no_action'\n    END,\n    '{}'::jsonb,\n    jsonb_build_object(\n      'cancelled', (SELECT COUNT(*) FROM cancelled),\n      'scheduled', (SELECT COUNT(*) FROM scheduled),\n      'action', i.action,\n      'idempotency_key', i.idempotency_key\n    ),\n    jsonb_build_object('cycle_key', i.cycle_key)\n  FROM input i\n  WHERE i.idempotency_key IS NOT NULL\n    AND EXISTS (SELECT 1 FROM policy_claim)\n  RETURNING id\n)\nSELECT\n  (SELECT COUNT(*) FROM cancelled) cancelled_count,\n  (SELECT COUNT(*) FROM scheduled) scheduled_count,\n  EXISTS(SELECT 1 FROM preference) opted_out_persisted,\n  (\n    EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n    AND NOT EXISTS(SELECT 1 FROM policy_claim)\n  ) replayed,\n  CASE\n    WHEN EXISTS(SELECT 1 FROM input WHERE idempotency_key IS NOT NULL AND inbound_event_id IS NOT NULL)\n      AND NOT EXISTS(SELECT 1 FROM policy_claim) THEN 'replayed'\n    WHEN EXISTS(SELECT 1 FROM preference) THEN 'opted_out'\n    WHEN EXISTS(SELECT 1 FROM scheduled) THEN 'scheduled'\n    WHEN EXISTS(SELECT 1 FROM cancelled) THEN 'cancelled'\n    ELSE 'no_action'\n  END result;\n",
         "options": {
           "queryBatching": "transaction",
-          "queryReplacement": "={{ [$json.follow_up_target_conversation_id || $json.target_conversation_id || $json.conversation_id, $json.follow_up_cancel_action || '', $json.follow_up_cancel_reason || '', $json.follow_up_source_text || '', $json.follow_up_source_message_id || '', $json.follow_up_should_schedule, $json.phone_number || '', $json.source_number_id || '', $json.follow_up_cycle_key || '', $json.follow_up_motivo || '', $json.follow_up_scheduled_at || '', $json.follow_up_idempotency_key || '', $json.follow_up_source_event_id || $json.inbound_event_id || '', $json.follow_up_first_delay_hours || 24] }}"
+          "queryReplacement": "={{ [$json.follow_up_target_conversation_id || $json.target_conversation_id || $json.conversation_id, $json.follow_up_cancel_action || '', $json.follow_up_cancel_reason || '', $json.follow_up_source_text || '', $json.follow_up_source_message_id || '', $json.follow_up_should_schedule, $json.phone_number || '', $json.source_number_id || '', $json.follow_up_cycle_key || '', $json.follow_up_motivo || '', $json.follow_up_scheduled_at || '', $json.follow_up_idempotency_key || '', $json.follow_up_source_event_id || $json.inbound_event_id || '', $json.follow_up_first_delay_hours || 24, $json.follow_up_window_start || '09:00', $json.follow_up_window_end || '20:00'] }}"
         }
       },
       "id": "apply-inbound-follow-up-policy",
@@ -777,6 +777,160 @@
           "name": "Postgres CRM App Local"
         }
       }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "v3-shadow-00",
+      "name": "Merge Outbound Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1060,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-provider-result-condition",
+              "leftValue": "={{ Boolean($json.v3_saga && $json.decision_id && $json.delivery_message_id && ['sent', 'failed', 'unknown', 'cancelled'].includes(String($json.delivery_status || ''))) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-delivery-result-condition",
+      "name": "V3 Delivery Result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1260,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Close a v3 execution only from the provider result persisted on its exact\n-- outbox message. The reply bytes, decision, delivery key and provider id must\n-- all agree; any mismatch returns no row and fails closed.\nWITH target AS MATERIALIZED (\n  SELECT execution.*, decision.output_payload, message.delivery_status,\n         message.external_message_id, message.text_body, message.idempotency_key,\n         encode(sha256(convert_to(message.text_body, 'UTF8')), 'hex') AS reply_sha256\n  FROM conversation_turn_executions execution\n  JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\n  JOIN messages message ON message.id = $2::BIGINT\n  WHERE execution.decision_id = $1::TEXT\n    AND (execution.delivery_message_id = $2::BIGINT\n      OR (execution.state = 'aborted' AND execution.delivery_receipt_ref->>'delivery_message_id' = $2::TEXT))\n    AND execution.delivery_key = $5::TEXT\n    AND execution.state IN ('delivery_pending', 'delivered', 'reconciliation_required', 'aborted', 'aborted')\n    AND message.direction = 'outgoing'\n    AND message.idempotency_key = execution.delivery_key\n    AND message.delivery_status = $3::TEXT\n    AND $3::TEXT IN ('sent', 'failed', 'unknown', 'cancelled')\n    AND decision.output_payload->>'decision_id' = execution.decision_id\n    AND decision.output_payload#>>'{reply,delivery_key}' = execution.delivery_key\n    AND decision.output_payload#>>'{reply,text}' = message.text_body\n    AND decision.output_payload#>>'{reply,sha256}' =\n        encode(sha256(convert_to(message.text_body, 'UTF8')), 'hex')\n    AND (\n      ($3::TEXT = 'sent'\n        AND NULLIF($4::TEXT, '') IS NOT NULL\n        AND message.external_message_id = NULLIF($4::TEXT, ''))\n      OR ($3::TEXT IN ('failed', 'unknown', 'cancelled'))\n    )\n  FOR UPDATE OF execution, decision, message\n), receipt AS MATERIALIZED (\n  SELECT jsonb_build_object(\n    'schema', 'v3_delivery_receipt/v1',\n    'decision_id', target.decision_id,\n    'delivery_message_id', $2::BIGINT,\n    'delivery_key', target.delivery_key,\n    'provider_message_id', target.external_message_id,\n    'delivery_status', target.delivery_status,\n    'delivered_bytes_sha256', target.reply_sha256\n  ) AS value\n  FROM target\n), transitioned AS (\n  UPDATE conversation_turn_executions execution\n  SET state = CASE\n        WHEN target.delivery_status = 'cancelled' THEN 'aborted'\n        WHEN target.delivery_status = 'sent' THEN 'delivered'\n        ELSE 'reconciliation_required'\n      END,\n      delivery_message_id = CASE WHEN target.delivery_status = 'cancelled' THEN NULL ELSE execution.delivery_message_id END,\n      delivery_receipt_ref = receipt.value,\n      last_error = CASE\n        WHEN target.delivery_status = 'sent' THEN NULL\n        ELSE jsonb_build_object(\n          'code', 'v3_delivery_provider_outcome',\n          'delivery_status', target.delivery_status,\n          'delivery_message_id', target.delivery_message_id,\n          'delivery_key', target.delivery_key\n        )\n      END,\n      updated_at = NOW()\n  FROM target\n  CROSS JOIN receipt\n  WHERE execution.id = target.id\n    AND target.state = 'delivery_pending'\n  RETURNING execution.*\n), audit_insert AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id, result, metadata\n  )\n  SELECT 'v3_delivery_recorded', 'conversation_turn_execution', transitioned.id,\n         'system', 'wa-inbound-downstream-dispatcher',\n         CASE WHEN transitioned.state = 'aborted' THEN 'human_control_cancelled'\n              WHEN transitioned.state = 'delivered' THEN 'success' ELSE 'reconciliation_required' END,\n         jsonb_build_object(\n           'decision_id', transitioned.decision_id,\n           'delivery_message_id', transitioned.delivery_message_id,\n           'delivery_receipt_ref', transitioned.delivery_receipt_ref,\n           -- The WHERE above admits only `delivery_pending`, so the lifecycle\n           -- audit can name both ends of the move it just made.\n           'from_state', 'delivery_pending',\n           'to_state', transitioned.state\n         )\n  FROM transitioned\n  RETURNING id\n), result_execution AS MATERIALIZED (\n  SELECT transitioned.*, FALSE AS replayed FROM transitioned\n  UNION ALL\n  SELECT execution.*, TRUE AS replayed\n  FROM conversation_turn_executions execution\n  JOIN target ON target.id = execution.id\n  CROSS JOIN receipt\n  WHERE execution.state IN ('delivered', 'reconciliation_required', 'aborted')\n    AND execution.delivery_receipt_ref = receipt.value\n)\nSELECT result_execution.*, receipt.value AS v3_delivery_receipt,\n       target.text_body, target.idempotency_key AS delivery_key,\n       target.external_message_id AS provider_external_message_id,\n       target.delivery_status\nFROM result_execution\nCROSS JOIN target\nCROSS JOIN receipt;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.decision_id, $json.delivery_message_id, $json.delivery_status, $json.provider_external_message_id, $json.delivery_key] }}"
+        }
+      },
+      "id": "v3-record-delivery-receipt",
+      "name": "Record V3 Delivery Receipt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1460,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const CONTRACT_MODES = new Set(['legacy', 'shadow', 'canary', 'enforce']);\n\nconst asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst modeVersion = (mode) => ['canary', 'enforce'].includes(mode) ? 'v3' : 'legacy';\nconst normalizeMode = (value) => {\n  const mode = safe(value, 'enforce').toLowerCase();\n  return CONTRACT_MODES.has(mode) ? mode : 'legacy';\n};\n\nconst normalizeActiveRoute = (value) => {\n  const route = asObject(value);\n  const mode = normalizeMode(route.mode ?? route.route_mode);\n  const ruleId = safe(route.rule_id ?? route.route_rule_id);\n  if (!ruleId) return null;\n  return {\n    mode,\n    contract_version: safe(route.contract_version, modeVersion(mode)),\n    rule_id: ruleId,\n  };\n};\n\nconst resolveConversationContractRoute = (turn, configuration = {}) => {\n  const input = asObject(turn);\n  const requestedMode = normalizeMode(configuration.mode);\n  const requestedRuleId = safe(configuration.rule_id, `rollout:${requestedMode}`);\n  const activeRoute = normalizeActiveRoute(input.active_route);\n  const fixed = activeRoute || {\n    mode: requestedMode,\n    contract_version: modeVersion(requestedMode),\n    rule_id: requestedRuleId,\n  };\n  const isV3 = fixed.contract_version === 'v3';\n  return {\n    schema: 'conversation_contract_route/v1',\n    turn_id: safe(input.turn_id ?? input.inbound_event_id),\n    mode: fixed.mode,\n    contract_version: fixed.contract_version,\n    rule_id: fixed.rule_id,\n    route_replayed: Boolean(activeRoute),\n    route_drift_detected: Boolean(activeRoute)\n      && (activeRoute.mode !== requestedMode || activeRoute.rule_id !== requestedRuleId),\n    shadow_requested: fixed.mode === 'shadow',\n    visible_contract: fixed.mode === 'shadow' ? 'legacy' : fixed.contract_version,\n    recovery_contract: isV3 ? 'v3' : 'legacy',\n    legacy_reinterpretation_allowed: !isV3,\n  };\n};\n\nconst planShadowEvaluation = ({ route, legacy_delivery: legacyDelivery, payload }) => {\n  const fixedRoute = asObject(route);\n  const delivery = asObject(legacyDelivery);\n  const source = asObject(payload);\n  const dispatch = fixedRoute.mode === 'shadow' && delivery.delivered === true\n    && Boolean(safe(delivery.receipt_ref));\n  return {\n    schema: 'ai_prd_shadow_dispatch/v1',\n    dispatch,\n    reason: dispatch ? 'post_delivery' : 'not_eligible',\n    turn_id: safe(fixedRoute.turn_id),\n    route_rule_id: safe(fixedRoute.rule_id),\n    legacy_delivery_receipt_ref: safe(delivery.receipt_ref) || null,\n    wait_for_completion: false,\n    visible_latency_ms: 0,\n    allow_mutations: false,\n    allow_effects: false,\n    payload: {\n      ...source,\n      shadow_mode: true,\n      state_mutations: [],\n      effect_requests: [],\n      authorized_mutations: [],\n      authorized_effect_requests: [],\n    },\n  };\n};\n\nconst recordShadowEvaluation = (plan, outcome) => {\n  const dispatch = asObject(plan);\n  const result = asObject(outcome);\n  const ok = result.ok === true;\n  return {\n    schema: 'ai_prd_shadow_audit/v1',\n    turn_id: safe(dispatch.turn_id),\n    route_rule_id: safe(dispatch.route_rule_id),\n    legacy_delivery_receipt_ref: safe(dispatch.legacy_delivery_receipt_ref) || null,\n    status: ok ? 'completed' : 'failed',\n    error: ok ? null : safe(result.error, 'shadow_failed'),\n    duration_ms: Math.max(0, Number(result.duration_ms || 0)),\n    visible_delivery_affected: false,\n    mutations_applied: 0,\n    effects_executed: 0,\n  };\n};\n\nmodule.exports = {\n  CONTRACT_MODES,\n  resolveConversationContractRoute,\n  planShadowEvaluation,\n  recordShadowEvaluation,\n  get buildV3PolicyInput() { return require('./v3-policy-builder.js').buildV3PolicyInput; },\n};\n\n\n// This node runs after outbound delivery, so by the time it sees an item the\n// lane has been through `Merge Outbound Context` and `text_body` holds the reply\n// we sent, not the message the customer wrote. The shadow evaluator compiles its\n// v3 policy from this payload, so taking the turn context from here asks the\n// model to evidence observations against our own words: production compiled\n// three policies whose `turn.message.text` was the bot's question, and every\n// proposal failed on observation shape.\n//\n// `Workflow Input` is the dispatcher trigger, holding the orchestrator's output\n// before any outbound processing touched it. Take the turn from there and keep\n// only the delivery signals from the current item, which is the one lane that\n// knows whether the customer was actually served.\nreturn items.map((item) => {\n  const delivery = item.json || {};\n  let turn = delivery;\n  try {\n    turn = $('Workflow Input').first().json || delivery;\n  } catch (_error) {\n    // A replay or a recovery path may not expose the trigger item. Degrading to\n    // the current item keeps the lane alive; the gate below still refuses to\n    // dispatch anything that was not delivered.\n    turn = delivery;\n  }\n  const input = { ...turn, ...delivery, text_body: turn.text_body ?? delivery.text_body };\n  const plan = planShadowEvaluation({\n    route: input.contract_route || {\n      turn_id: input.inbound_event_id,\n      mode: input.contract_mode || input.route_mode,\n      rule_id: input.route_rule_id,\n    },\n    legacy_delivery: {\n      delivered: delivery.outbound_lane_complete === true\n        && (delivery.delivery_status === 'sent' || delivery.outbound_dispatch_status === 'already_sent'),\n      receipt_ref: delivery.delivery_receipt_ref || delivery.outbound_message_id || delivery.external_message_id,\n    },\n    payload: input,\n  });\n  return { json: { ...delivery, shadow_plan: plan, shadow_dispatch: plan.dispatch, shadow_payload: plan.payload } };\n});\n"
+      },
+      "id": "v3-shadow-01",
+      "name": "Prepare AI PRD Shadow",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-shadow-02-condition",
+              "leftValue": "={{ $json.shadow_dispatch === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-shadow-02",
+      "name": "Should Dispatch AI PRD Shadow?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1460,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "__PENDIENTE_AI_PRD_SHADOW__",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "v3-shadow-03",
+      "name": "Dispatch AI PRD Shadow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = (items || []).map((i) => ({ json: { ...i.json, shadow_lane: \"complete\" } })); return out;"
+      },
+      "id": "1",
+      "name": "Shadow Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        40
+      ]
     }
   ],
   "connections": {
@@ -823,6 +977,11 @@
             "node": "Ensure Media Attachment",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge Outbound Context",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -849,9 +1008,9 @@
       "main": [
         [
           {
-            "node": "Outbound Lane Complete",
+            "node": "Merge Outbound Context",
             "type": "main",
-            "index": 0
+            "index": 1
           }
         ]
       ]
@@ -863,6 +1022,11 @@
             "node": "Merge Dispatch Completion",
             "type": "main",
             "index": 1
+          },
+          {
+            "node": "Prepare AI PRD Shadow",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -1235,6 +1399,86 @@
         [
           {
             "node": "Follow-Up Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record V3 Delivery Receipt": {
+      "main": [
+        [
+          {
+            "node": "Outbound Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Delivery Result?": {
+      "main": [
+        [
+          {
+            "node": "Record V3 Delivery Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outbound Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Outbound Context": {
+      "main": [
+        [
+          {
+            "node": "V3 Delivery Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch AI PRD Shadow": {
+      "main": [
+        [
+          {
+            "node": "Shadow Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Dispatch AI PRD Shadow?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch AI PRD Shadow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Shadow Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI PRD Shadow": {
+      "main": [
+        [
+          {
+            "node": "Should Dispatch AI PRD Shadow?",
             "type": "main",
             "index": 0
           }

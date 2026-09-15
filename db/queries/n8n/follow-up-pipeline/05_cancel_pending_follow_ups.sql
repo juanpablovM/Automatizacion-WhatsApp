@@ -3,7 +3,7 @@
 -- $5 source_message_id, $6 should_schedule, $7 phone_number,
 -- $8 source_number_id, $9 cycle_key, $10 motivo, $11 scheduled_at,
 -- $12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),
--- $13 inbound_event_id, $14 first_delay_hours.
+-- $13 inbound_event_id, $14 first_delay_hours, $15 window_start, $16 window_end.
 WITH raw_input AS (
   SELECT
     $1::bigint conversation_id,
@@ -19,7 +19,11 @@ WITH raw_input AS (
     NULLIF($11::text, '')::timestamptz requested_scheduled_at,
     NULLIF($12::text, '') idempotency_key,
     NULLIF($13::text, '')::bigint inbound_event_id,
-    GREATEST(1, COALESCE(NULLIF($14::text, '')::integer, 24)) first_delay_hours
+    GREATEST(1, COALESCE(NULLIF($14::text, '')::integer, 24)) first_delay_hours,
+    CASE WHEN COALESCE(NULLIF($15::text, ''), '09:00') ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'
+      THEN COALESCE(NULLIF($15::text, ''), '09:00')::time END window_start,
+    CASE WHEN COALESCE(NULLIF($16::text, ''), '20:00') ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'
+      THEN COALESCE(NULLIF($16::text, ''), '20:00')::time END window_end
 ), input AS (
   SELECT
     r.conversation_id,
@@ -32,10 +36,20 @@ WITH raw_input AS (
     r.source_number_id,
     r.cycle_key,
     r.motivo,
-    COALESCE(
+    CASE WHEN r.cancel_reason = 'postponed_until_tomorrow' THEN
+      CASE WHEN r.window_start < r.window_end THEN
+        -- A calendar day in Chile, not 24 elapsed hours. Preserve the local
+        -- clock only inside the configured half-open send window [start,end).
+        (((ie.created_at AT TIME ZONE 'America/Santiago')::date + 1)
+          + CASE WHEN (ie.created_at AT TIME ZONE 'America/Santiago')::time >= r.window_start
+                   AND (ie.created_at AT TIME ZONE 'America/Santiago')::time < r.window_end
+                 THEN (ie.created_at AT TIME ZONE 'America/Santiago')::time
+                 ELSE r.window_start END) AT TIME ZONE 'America/Santiago'
+      END
+    ELSE COALESCE(
       r.requested_scheduled_at,
       ie.created_at + make_interval(hours => r.first_delay_hours)
-    ) scheduled_at,
+    ) END scheduled_at,
     r.idempotency_key,
     r.inbound_event_id
   FROM raw_input r

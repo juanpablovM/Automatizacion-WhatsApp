@@ -101,6 +101,8 @@ describeIntegration('follow-up policy replay in PostgreSQL', () => {
       policyKey,
       inboundEventId,
       policy.follow_up_first_delay_hours,
+      policy.follow_up_window_start,
+      policy.follow_up_window_end,
     ];
 
     const [first, second] = await Promise.all(
@@ -132,4 +134,60 @@ describeIntegration('follow-up policy replay in PostgreSQL', () => {
     });
     expect(persisted.rows[0].scheduled_at.toISOString()).toBe('2026-08-21T10:30:00.000Z');
   });
+  const applyPolicy = async (text, createdAt, extra = {}) => {
+    const identity = `${text}:${createdAt}:${JSON.stringify(extra)}`;
+    const inbound = await clients[0].query(`
+      INSERT INTO inbound_events (
+        instance_name, event_fingerprint, dedupe_key, source_number_id,
+        phone_number, processing_status, created_at
+      ) VALUES ('integration-test', $1, $1, $2, 'test-contact-followup', 'processed', $3)
+      RETURNING id
+    `, [identity, sourceNumberId, createdAt]);
+    const policy = resolveCancellationAction({
+      conversation_id: conversationId, inbound_event_id: inbound.rows[0].id,
+      pending_question_key: 'previous_context_choice', current_step: 'previous_context',
+      text_body: text, response_text: 'We can resume tomorrow.',
+      conversation_status_code: 'waiting_user', ...extra,
+    });
+    const result = await clients[0].query(policySql, [
+      policy.follow_up_target_conversation_id, policy.follow_up_cancel_action,
+      policy.follow_up_cancel_reason, policy.follow_up_source_text,
+      policy.follow_up_source_message_id, policy.follow_up_should_schedule,
+      'test-contact-followup', sourceNumberId, policy.follow_up_cycle_key,
+      policy.follow_up_motivo, policy.follow_up_scheduled_at, policy.follow_up_idempotency_key,
+      inbound.rows[0].id, policy.follow_up_first_delay_hours,
+      policy.follow_up_window_start, policy.follow_up_window_end,
+    ]);
+    return { policy, result: result.rows[0] };
+  };
+
+  test.each([
+    { label: 'inside-window', inbound: '2026-09-13T14:00:00Z', expected: '2026-09-14T14:00:00.000Z' },
+    { label: 'evening-outside-window', inbound: '2026-09-13T00:30:00Z', expected: '2026-09-13T12:00:00.000Z' },
+    { label: 'end-exclusive', inbound: '2026-09-13T23:00:00Z', expected: '2026-09-14T12:00:00.000Z' },
+    { label: 'DST-preserves-local-clock', inbound: '2026-09-05T15:00:00Z', expected: '2026-09-06T14:00:00.000Z' },
+    { label: 'custom-window', inbound: '2026-09-14T00:30:00Z', expected: '2026-09-14T13:00:00.000Z', extra: { follow_up_window_start: '10:00', follow_up_window_end: '18:00' } },
+  ])('tomorrow uses Chile calendar and configured window: $label', async ({ inbound, expected, extra = {} }) => {
+    const { policy, result } = await applyPolicy('Háblame mañana', inbound, extra);
+    expect(Number(result.scheduled_count)).toBe(1);
+    const scheduled = await clients[0].query('SELECT scheduled_at FROM follow_ups WHERE conversation_id=$1 AND cycle_key=$2', [conversationId, policy.follow_up_cycle_key]);
+    expect(scheduled.rows[0].scheduled_at.toISOString()).toBe(expected);
+  });
+
+  test('courtesy preserves an already scheduled requested reminder', async () => {
+    const first = await applyPolicy('Mañana', '2026-09-15T14:00:00Z');
+    const before = await clients[0].query('SELECT id, scheduled_at, estado FROM follow_ups WHERE conversation_id=$1 AND cycle_key=$2', [conversationId, first.policy.follow_up_cycle_key]);
+    const courtesy = await applyPolicy('Gracias', '2026-09-15T14:01:00Z');
+    expect(Number(courtesy.result.cancelled_count)).toBe(0);
+    expect(Number(courtesy.result.scheduled_count)).toBe(0);
+    const after = await clients[0].query('SELECT id, scheduled_at, estado FROM follow_ups WHERE id=$1', [before.rows[0].id]);
+    expect(after.rows[0]).toEqual(before.rows[0]);
+  });
+
+  test('opt-out wins over tomorrow and prevents new reminders', async () => {
+    const { result } = await applyPolicy('No me escribas más, háblame mañana', '2026-09-16T14:00:00Z');
+    expect(result.opted_out_persisted).toBe(true);
+    expect(Number(result.scheduled_count)).toBe(0);
+  });
+
 });
