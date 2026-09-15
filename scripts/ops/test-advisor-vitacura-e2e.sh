@@ -32,7 +32,7 @@ send_message() {
       instance: $instance_name,
       data: {
         key: { remoteJid: $phone, fromMe: false, id: $message_id },
-        messageTimestamp: (now | tostring),
+        messageTimestamp: (now | floor),
         message: { conversation: $message_text }
       }
     }')

@@ -108,7 +108,7 @@ send_message() {
           fromMe: false,
           id: $message_id
         },
-        messageTimestamp: (now | tostring),
+        messageTimestamp: (now | floor),
         message: {
           conversation: $message_text
         }
