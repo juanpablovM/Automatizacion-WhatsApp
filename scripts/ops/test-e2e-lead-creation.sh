@@ -52,7 +52,9 @@ fi
 
 timestamp=$(date +%s)
 PHONE_NUMBER="$1"
-TEST_MESSAGE="Quiero cotizar hormigón armado para una losa de 100 m2 en Santiago, con instalación. El terreno es plano, hay acceso para camión y no necesito retiro de escombros"
+# The advisor only quotes what the official catalogue carries. Ask for a real
+# product, or the run cannot reach a lead no matter how healthy the pipeline is.
+TEST_MESSAGE="Quiero cotizar 100 m2 de pastelones para una terraza en Santiago, con instalación. El terreno es plano, hay acceso para camión y no necesito retiro de escombros"
 CONFIRM_MESSAGE="Si, correcto"
 
 [ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$E2E_WEBHOOK_PATH" in
