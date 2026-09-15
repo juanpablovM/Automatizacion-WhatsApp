@@ -171,8 +171,19 @@ E2E_ALLOW_EXTERNAL_EFFECTS=yes sh scripts/ops/test-e2e-lead-creation.sh TELEFONO
 ```
 
 `--rollback` pausa antes de importar, restaura y verifica el snapshot completo.
-`--deploy` aísla Evolution durante la aceptación, exige teléfono controlado y
-opt-in, y activa definitivamente solo después del E2E y replay idempotente.
+`--deploy` activa definitivamente solo después del E2E y replay idempotente.
+
+Conviene ser preciso sobre qué aísla la aceptación, porque el aislamiento es de
+entrada y no de salida. Mientras corre, el webhook de Evolution queda desactivado
+y se restaura al terminar: eso impide que mensajes reales de clientes entren a
+medio despliegue y contaminen la evidencia. El mensaje entrante de la prueba es
+sintético, inyectado por `curl` a un webhook temporal.
+
+La salida, en cambio, es real. No hay redirección del servidor de Evolution: la
+respuesta del bot sale por WhatsApp, y el turno crea lead, asignación por round
+robin y tarea de ClickUp. Por eso `--deploy` exige `E2E_ALLOW_EXTERNAL_EFFECTS=yes`
+y rechaza cualquier número que no coincida exactamente con
+`CONTROLLED_TEST_PHONE_NUMBER` del `.env`, antes de tocar Docker o n8n.
 
 ## Servicios locales
 
