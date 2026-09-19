@@ -52,10 +52,14 @@ fi
 
 timestamp=$(date +%s)
 PHONE_NUMBER="$1"
-# The advisor only quotes what the official catalogue carries. Ask for a real
-# product, or the run cannot reach a lead no matter how healthy the pipeline is.
-TEST_MESSAGE="Quiero cotizar 100 m2 de pastelones para una terraza en Santiago, con instalación. El terreno es plano, hay acceso para camión y no necesito retiro de escombros"
+# The advisor only quotes what the official catalogue carries. This scenario
+# also protects the factory-pickup rule: a private material pickup needs a
+# quantity, but never a client commune or project address.
+TEST_MESSAGE="Quiero cotizar 100 unidades de pastelones, solo material, para retirar en fábrica"
 CONFIRM_MESSAGE="Si, correcto"
+E2E_WAIT_SECONDS=${E2E_WAIT_SECONDS:-240}
+case "$E2E_WAIT_SECONDS" in *[!0-9]*|'') echo "ERROR: E2E_WAIT_SECONDS debe ser un entero positivo" >&2; exit 1 ;; esac
+[ "$E2E_WAIT_SECONDS" -gt 0 ] || { echo "ERROR: E2E_WAIT_SECONDS debe ser mayor que cero" >&2; exit 1; }
 
 [ -z "${E2E_WEBHOOK_PATH:-}" ] || case "$E2E_WEBHOOK_PATH" in
   *[!A-Za-z0-9._-]*) echo "ERROR: E2E_WEBHOOK_PATH contiene caracteres invalidos" >&2; exit 1 ;;
@@ -145,24 +149,52 @@ send_message "e2e-test-${timestamp}-complete" "$TEST_MESSAGE" /tmp/e2e-lead-comp
 echo "Esperando estado de confirmacion..."
 attempt=0
 confirm_ready=0
-while [ $attempt -lt 30 ]; do
+confirm_state=""
+while [ "$attempt" -lt "$E2E_WAIT_SECONDS" ]; do
   sleep 1
-  confirm_count=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+  confirm_state=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
     psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
-    -c "SELECT COUNT(*) FROM conversations WHERE phone_number = '${PHONE_NUMBER}' AND current_step LIKE 'confirm%' AND updated_at >= NOW() - INTERVAL '2 minutes';" 2>/dev/null || echo "0")
+    -c "SELECT CONCAT_WS('|', ie.processing_status, ie.processing_phase, COALESCE(c.current_step, ''), COALESCE(ad.validation_result, ''))
+        FROM inbound_events ie
+        LEFT JOIN messages m ON m.inbound_event_id = ie.id AND m.direction = 'incoming'
+        LEFT JOIN conversations c ON c.id = m.conversation_id
+        LEFT JOIN conversation_turn_executions turn ON turn.inbound_event_id = ie.id
+        LEFT JOIN advisor_decisions ad ON ad.id = turn.advisor_decision_id
+        WHERE ie.external_message_id = 'e2e-test-${timestamp}-complete'
+        ORDER BY ie.id DESC LIMIT 1;" 2>/dev/null || echo "")
 
-  if [ "$confirm_count" -gt 0 ]; then
-    confirm_ready=1
+  old_ifs=$IFS; IFS='|'; set -- $confirm_state; IFS=$old_ifs
+  if [ "${1:-}" = processed ] && [ "${2:-}" = completed ]; then
+    if [ "${4:-}" = accepted ]; then
+      case "${3:-}" in confirm*) confirm_ready=1 ;; esac
+    fi
     break
   fi
+  [ "${1:-}" != failed ] || break
   attempt=$((attempt + 1))
 done
 
 if [ $confirm_ready -eq 0 ]; then
-  echo "ERROR: La conversacion no llego a confirmacion despues de 30 segundos" >&2
+  echo "ERROR: La conversacion no llego a una confirmacion v3 aceptada dentro de ${E2E_WAIT_SECONDS} segundos (status|phase|step|validation: $confirm_state)" >&2
   docker compose --env-file "$ROOT_DIR/.env" logs --tail=20 n8n >&2
   exit 1
 fi
+
+pickup_reply_valid=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
+  -c "SELECT COUNT(*)
+      FROM messages m
+      JOIN inbound_events ie ON ie.id = m.inbound_event_id
+      WHERE ie.external_message_id = 'e2e-test-${timestamp}-complete'
+        AND m.direction = 'outgoing'
+        AND m.text_body ILIKE '%Portezuelo 1502%'
+        AND m.text_body ILIKE '%San Bernardo%'
+        AND m.text_body NOT ILIKE '%qué comuna%'
+        AND m.text_body NOT ILIKE '%indicarme%comuna%';" 2>/dev/null || echo "0")
+[ "$pickup_reply_valid" -eq 1 ] || {
+  echo "ERROR: La confirmacion de retiro no informó Portezuelo 1502, San Bernardo o volvió a pedir comuna" >&2
+  exit 1
+}
 
 echo "Enviando confirmacion final..."
 send_message "e2e-test-${timestamp}-confirm" "$CONFIRM_MESSAGE" /tmp/e2e-lead-confirm-response.json
@@ -170,7 +202,8 @@ send_message "e2e-test-${timestamp}-confirm" "$CONFIRM_MESSAGE" /tmp/e2e-lead-co
 echo "Esperando a que se cree el lead..."
 attempt=0
 lead_found=0
-while [ $attempt -lt 30 ]; do
+confirm_event_state=""
+while [ "$attempt" -lt "$E2E_WAIT_SECONDS" ]; do
   sleep 1
   lead_count=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
     psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
@@ -180,11 +213,15 @@ while [ $attempt -lt 30 ]; do
     lead_found=1
     break
   fi
+  confirm_event_state=$(docker compose --env-file "$ROOT_DIR/.env" exec -T postgres \
+    psql -U "${POSTGRES_USER:-postgres}" -d "${APP_POSTGRES_DB:-crm_whatsapp_app}" -At \
+    -c "SELECT CONCAT_WS('|', processing_status, processing_phase) FROM inbound_events WHERE external_message_id = 'e2e-test-${timestamp}-confirm' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
+  case "$confirm_event_state" in processed\|completed|failed\|*) break ;; esac
   attempt=$((attempt + 1))
 done
 
 if [ $lead_found -eq 0 ]; then
-  echo "ERROR: No se encontró el lead en la base de datos después de 30 segundos" >&2
+  echo "ERROR: No se encontró el lead dentro de ${E2E_WAIT_SECONDS} segundos (confirm status|phase: $confirm_event_state)" >&2
   echo "Últimos logs de n8n para depuración:" >&2
   docker compose --env-file "$ROOT_DIR/.env" logs --tail=20 n8n >&2
   exit 1
@@ -208,19 +245,15 @@ echo "$lead_data"
 # Verificar que los campos esperados estén presentes (con valores no vacíos)
 # Dividimos la línea por el separador '|' (por defecto de psql -At)
 lead_fields=$(printf '%s\n' "$lead_data" | sed -n '1p')
-old_ifs=$IFS
-IFS='|'
-set -- $lead_fields
-IFS=$old_ifs
-lead_id=${1:-}
-servicio=${2:-}
-ciudad=${3:-}
-requerimiento=${4:-}
-estado=${5:-}
-created_at=${6:-}
+lead_id=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 1)
+servicio=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 2)
+ciudad=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 3)
+requerimiento=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 4)
+estado=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 5)
+created_at=$(printf '%s\n' "$lead_fields" | cut -d '|' -f 6)
 
-if [ -z "$servicio" ] || [ -z "$ciudad" ] || [ -z "$requerimiento" ]; then
-  echo "ERROR: Algunos campos esenciales del lead están vacíos" >&2
+if [ "$servicio" != retiro ] || [ -n "$ciudad" ] || [ -z "$requerimiento" ]; then
+  echo "ERROR: El lead de retiro no conservó la semántica esperada" >&2
   echo "servicio: '$servicio'"
   echo "ciudad: '$ciudad'"
   echo "requerimiento: '$requerimiento'"
@@ -233,13 +266,29 @@ query_app() {
 }
 
 conversation_id=$(query_app "SELECT source_conversation_id FROM leads WHERE id=${lead_id};")
+pickup_context_valid=$(query_app "SELECT COUNT(*) FROM conversations
+  WHERE id=${conversation_id}
+    AND qualification_context->>'service_scope'='material'
+    AND qualification_context->>'fulfillment'='pickup'
+    AND NULLIF(qualification_context->>'commune','') IS NULL
+    AND NULLIF(qualification_context->>'address','') IS NULL
+    AND NULLIF(qualification_context->>'debris_removal','') IS NULL;")
+[ "$pickup_context_valid" -eq 1 ] || {
+  echo "ERROR: El contexto pickup contiene comuna, dirección de proyecto, retiro de escombros o modalidad incorrecta" >&2
+  exit 1
+}
 attempt=0
 acceptance=""
-while [ $attempt -lt 30 ]; do
+while [ "$attempt" -lt "$E2E_WAIT_SECONDS" ]; do
   acceptance=$(query_app "SELECT CONCAT_WS('|',
     COALESCE(l.assigned_seller_id::text,''), COALESCE(l.clickup_task_id,''),
     (SELECT COUNT(*) FROM advisor_decisions ad WHERE ad.conversation_id=c.id),
-    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.direction='outgoing' AND m.text_body LIKE '%quedó asignada%'),
+    (SELECT COUNT(*) FROM messages m
+      WHERE m.conversation_id=c.id
+        AND m.inbound_event_id=ie.id
+        AND m.direction='outgoing'
+        AND m.delivery_status='sent'
+        AND m.idempotency_key IS NOT NULL),
     COALESCE(ie.processing_status,''), COALESCE(ie.processing_phase,'')
   ) FROM conversations c JOIN leads l ON l.id=${lead_id}
     LEFT JOIN inbound_events ie ON ie.external_message_id='e2e-test-${timestamp}-confirm'
@@ -251,8 +300,8 @@ while [ $attempt -lt 30 ]; do
   sleep 1
   attempt=$((attempt + 1))
 done
-if [ $attempt -eq 30 ]; then
-  echo "ERROR: acceptance incompleta (assignment|clickup|ai|handoff|status|phase): $acceptance" >&2
+if [ "$attempt" -eq "$E2E_WAIT_SECONDS" ]; then
+  echo "ERROR: acceptance incompleta (assignment|clickup|ai|reply|status|phase): $acceptance" >&2
   exit 1
 fi
 
@@ -271,7 +320,7 @@ before_replay=$(effect_counts)
 echo "Reproduciendo el mismo evento para validar idempotencia..."
 send_message "e2e-test-${timestamp}-confirm" "$CONFIRM_MESSAGE" /tmp/e2e-lead-replay-response.json
 attempt=0; stable=0; after_replay=""
-while [ "$attempt" -lt 30 ]; do
+while [ "$attempt" -lt "$E2E_WAIT_SECONDS" ]; do
   sleep 1
   after_replay=$(effect_counts)
   terminal=$(query_app "SELECT COUNT(*) FROM inbound_events WHERE external_message_id='e2e-test-${timestamp}-confirm' AND processing_status='processed' AND processing_phase='completed';")

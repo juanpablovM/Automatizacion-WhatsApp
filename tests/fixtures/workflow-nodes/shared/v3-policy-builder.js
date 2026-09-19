@@ -83,17 +83,18 @@ const buildV3PolicyInput = (row, options = {}) => {
   const allowedMutations = [];
   const scope = context.service_scope ?? legacyServiceScope;
   const fulfillment = context.fulfillment ?? legacyFulfillment;
-  const requiredGoals = new Set(['product', 'commune', 'quantity', 'service_scope']);
+  const requiredGoals = new Set(['product', 'quantity', 'service_scope']);
   if (scope === 'material' || scope === 'both') requiredGoals.add('fulfillment');
   if (scope === 'installation' || scope === 'both') {
-    for (const field of ['address', 'terrain', 'truck_access', 'debris_removal']) requiredGoals.add(field);
+    for (const field of ['commune', 'address', 'terrain', 'truck_access', 'debris_removal']) requiredGoals.add(field);
   }
   if (fulfillment === 'delivery') {
+    requiredGoals.add('commune');
     requiredGoals.add('address');
     requiredGoals.add('access_restrictions');
   }
   if (context.customer_type === 'b2b' || context.lead_class === 'D') {
-    for (const field of ['company', 'contact_name', 'purchase_order']) requiredGoals.add(field);
+    for (const field of ['commune', 'company', 'contact_name', 'purchase_order']) requiredGoals.add(field);
   }
   let previousMetadata = asObject(input.metadata_json);
   if (typeof input.metadata_json === 'string') {

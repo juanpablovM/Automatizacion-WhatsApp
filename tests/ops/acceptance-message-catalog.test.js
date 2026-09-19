@@ -58,6 +58,48 @@ describe('the acceptance message asks for something Hormiglass actually sells', 
     ).toBeGreaterThan(0);
   });
 
+  test('TEST_MESSAGE exercises private factory pickup with an explicit quantity', () => {
+    const source = fs.readFileSync(harness, 'utf8');
+    const match = source.match(/^TEST_MESSAGE="([^"]+)"/m);
+
+    expect(match, 'the harness defines no TEST_MESSAGE').not.toBeNull();
+    expect(match[1]).toMatch(/\b100\s+unidades\b/i);
+    expect(match[1]).toMatch(/\bsolo material\b/i);
+    expect(match[1]).toMatch(/\bretirar en fábrica\b/i);
+    expect(match[1]).not.toMatch(/\b(?:comuna|dirección|avenida|calle|pasaje|camino)\b/i);
+  });
+
+  test('the harness waits for the exact first inbound event to finish', () => {
+    const source = fs.readFileSync(harness, 'utf8');
+
+    expect(source).toContain("ie.external_message_id = 'e2e-test-${timestamp}-complete'");
+    expect(source).toContain("[ \"${1:-}\" = processed ] && [ \"${2:-}\" = completed ]");
+    expect(source).toContain('[ "${4:-}" = accepted ]');
+    expect(source).toContain('LEFT JOIN conversation_turn_executions turn ON turn.inbound_event_id = ie.id');
+    expect(source).toContain('LEFT JOIN advisor_decisions ad ON ad.id = turn.advisor_decision_id');
+    expect(source).toContain('E2E_WAIT_SECONDS=${E2E_WAIT_SECONDS:-240}');
+  });
+
+  test('the harness verifies the pickup address without persisting a client location', () => {
+    const source = fs.readFileSync(harness, 'utf8');
+
+    expect(source).toContain("m.text_body ILIKE '%Portezuelo 1502%'");
+    expect(source).toContain("m.text_body ILIKE '%San Bernardo%'");
+    expect(source).toContain('[ "$servicio" != retiro ] || [ -n "$ciudad" ]');
+    expect(source).toContain("qualification_context->>'fulfillment'='pickup'");
+    expect(source).toContain("NULLIF(qualification_context->>'commune','') IS NULL");
+    expect(source).toContain("NULLIF(qualification_context->>'debris_removal','') IS NULL");
+  });
+
+  test('the final acceptance proves durable delivery without coupling to AI wording', () => {
+    const source = fs.readFileSync(harness, 'utf8');
+
+    expect(source).toContain('m.inbound_event_id=ie.id');
+    expect(source).toContain("m.delivery_status='sent'");
+    expect(source).toContain('m.idempotency_key IS NOT NULL');
+    expect(source).not.toContain("m.text_body LIKE '%quedó asignada%'");
+  });
+
   test('the message that stalled the deploy would be rejected by this test', () => {
     const stale = normalise('Quiero cotizar hormigón armado para una losa de 100 m2 en Santiago');
     const named = [...catalogueNames()].filter((name) => stale.includes(normalise(name)));

@@ -1196,15 +1196,17 @@ describe('v3 runtime contract compatibility', () => {
     const policy = compileV3TurnPolicy({
       ...policyFor(message),
       facts: [
+        ['commune', 'Santiago'],
         ['terrain', 'Plano'], ['truck_access', true], ['debris_removal', false],
         ['access_restrictions', 'Sin restricciones'],
       ].map(([field, value]) => ({ fact_id: `fact:${field}`, field, value,
         mutability: 'customer_correctable', source: { message_id: 'previous', evidence_digest: 'previous-evidence' } })),
       reference_context: { prior_request: {
         lead_id: '404',
-        values: { service_scope: 'both', fulfillment: 'delivery', address: 'Pismonte 124' },
+        values: { service_scope: 'both', fulfillment: 'delivery', commune: 'Santiago', address: 'Pismonte 124' },
       } },
       goals: [
+        { goal_id: 'commune', status: 'resolved' },
         { goal_id: 'service_scope', status: 'unresolved' },
         { goal_id: 'fulfillment', status: 'unresolved' },
         { goal_id: 'address', status: 'unresolved' },

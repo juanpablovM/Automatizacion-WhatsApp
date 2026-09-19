@@ -49,4 +49,28 @@ describe('Build AI Request — real n8n Code node wrapper', () => {
     expect(output[0].json.ai_request.messages).toBeInstanceOf(Array);
     expect(output[0].json.ai_request.messages[1].content).toContain('"message_current":"Hola, necesito baldosas para mi patio"');
   });
+
+  test('legacy prompt knows the fixed pickup address and excludes customer location fields', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const output = runCodeNode(source, [{ json: { text_body: '¿Dónde retiro?' } }], {
+      AI_DIRECT_API_KEY: 'fake-key-123', AI_DIRECT_API_MODEL: 'test-model',
+    });
+    const prompt = output[0].json.ai_request.messages[0].content;
+    expect(prompt).toContain('Portezuelo 1502, San Bernardo');
+    expect(prompt).toContain('Comuna es obligatoria solo con despacho o B2B');
+  });
+
+  test('v3 prompt knows the fixed pickup address and forbids pickup location questions', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const turnPolicy = {
+      version: 'ai_prd_turn_policy/v3', policy_digest: 'a'.repeat(64), facts: [], goals: [],
+      state_authority: { allowed_mutations: [] }, effect_authority: { permissions: [] }, grounding: {},
+    };
+    const output = runCodeNode(source, [{ json: { contract_version: 'v3', turn_policy: turnPolicy } }], {
+      AI_DIRECT_API_KEY: 'fake-key-123', AI_DIRECT_API_MODEL: 'test-model',
+    });
+    const prompt = output[0].json.ai_request.messages[0].content;
+    expect(prompt).toContain('Portezuelo 1502, San Bernardo');
+    expect(prompt).toContain('commune, address y la ubicación del proyecto son inaplicables');
+  });
 });

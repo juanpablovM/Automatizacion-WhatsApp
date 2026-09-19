@@ -126,7 +126,7 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 | Campo | Contenido |
 |---|---|
 | Requisito PRD | `#9.3`, `#13`, `#33.5` |
-| Implementación | Máquina de pasos: `baseQuestions` (city / service / requirement) en `Evaluate Conversation Step`; preguntas factibles por campo (`measurements`, `quantity`, `address`, etc.) en `Apply AI Assistance`; gate real en `crm-lead-creation-and-assignment.json` nodo `Prepare Lead Qualification` — exige 3 campos completos (`completedFieldsCount<3` lanza error «faltan servicio, ciudad o requerimiento») |
+| Implementación | Máquina de pasos: `baseQuestions` (city / service / requirement) en `Evaluate Conversation Step`; preguntas factibles por campo (`measurements`, `quantity`, `address`, etc.) en `Apply AI Assistance`; gate real en `crm-lead-creation-and-assignment.json` nodo `Prepare Lead Qualification` — exige servicio y requerimiento, además de ciudad para despacho, instalación y B2B; ciudad es inaplicable para retiro particular de material en fábrica. |
 | IMP | SI |
 | Prueba | `test-conversation-regression-local.sh`: CP-05 (datos incompletos) + fixture `lead_creation_gate` = [servicio, ciudad, requerimiento, confirmación]; `test-e2e-lead-creation.sh` |
 | Evidencia runtime | `leads.service/city/requirement`; `leads.lead_status_id` = `qualified_complete`; `conversations.qualification_context` poblado; auditoría de rechazo por el gate |

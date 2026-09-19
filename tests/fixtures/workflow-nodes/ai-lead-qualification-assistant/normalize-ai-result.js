@@ -350,13 +350,22 @@ const contextualIntent = contextualBooleanAnswer && ['confirmation_yes', 'confir
 const confirmationSatisfied = pendingQuestionKey === 'final_confirmation'
   && confirmationStatus === 'confirmed'
   && parsed.intent === 'confirmation_yes';
-const baseMissingFields = requiredMissingFromFields(acceptedFields);
+const existingQualificationContext = compactObject(row.ai_context?.qualification_context);
+const pickupWithoutProjectLocation = (parsed.modality === 'pickup' || existingQualificationContext.modality === 'pickup')
+  && parsed.customer_type !== 'b2b'
+  && existingQualificationContext.customer_type !== 'b2b'
+  && parsed.lead_class !== 'D'
+  && existingQualificationContext.lead_class !== 'D';
+const baseMissingFields = requiredMissingFromFields(acceptedFields)
+  .filter((field) => field !== 'city' || !pickupWithoutProjectLocation);
 const missingFields = uniqueMissing([
   ...baseMissingFields,
   ...parsedMissingFields.filter((field) => field === 'confirmation' || baseMissingFields.includes(field)),
   ...(confirmationSatisfied ? [] : ['confirmation']),
 ]);
-const hasRequiredLeadFields = Boolean(acceptedFields.service && acceptedFields.city && acceptedFields.requirement);
+const hasRequiredLeadFields = Boolean(acceptedFields.service
+  && (acceptedFields.city || pickupWithoutProjectLocation)
+  && acceptedFields.requirement);
 const modelShouldCreateLead = Boolean(parsed.should_create_lead);
 const guardedShouldCreateLead = modelShouldCreateLead && hasRequiredLeadFields && confirmationSatisfied && confidence >= 0.75 && !parseError;
 
@@ -523,4 +532,3 @@ return [
     },
   },
 ];
-

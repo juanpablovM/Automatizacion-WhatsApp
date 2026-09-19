@@ -292,16 +292,27 @@ const effectiveRequiredGoalIds = (configuredGoalIds, policy, observations) => {
   const required = new Set(Array.isArray(configuredGoalIds) ? configuredGoalIds : []);
   const serviceScope = projectedValueFor(policy, observations, 'service_scope');
   const fulfillment = projectedValueFor(policy, observations, 'fulfillment');
+  const customerType = projectedValueFor(policy, observations, 'customer_type');
+  const b2bRequired = customerType === 'b2b'
+    || ['company', 'contact_name', 'purchase_order'].some((goalId) => required.has(goalId));
+  // Commune/address describe the customer's project or delivery destination.
+  // They are inapplicable to a material pickup at the single factory location.
+  if (serviceScope === 'material' && fulfillment === 'pickup' && !b2bRequired) {
+    required.delete('commune');
+    required.delete('address');
+    required.delete('access_restrictions');
+  }
   if (serviceScope === 'material' || serviceScope === 'both') required.add('fulfillment');
   if (serviceScope === 'installation' || serviceScope === 'both') {
-    for (const goalId of ['address', 'terrain', 'truck_access', 'debris_removal']) required.add(goalId);
+    for (const goalId of ['commune', 'address', 'terrain', 'truck_access', 'debris_removal']) required.add(goalId);
   }
   if (fulfillment === 'delivery') {
+    required.add('commune');
     required.add('address');
     required.add('access_restrictions');
   }
-  if (projectedValueFor(policy, observations, 'customer_type') === 'b2b') {
-    for (const goalId of ['company', 'contact_name', 'purchase_order']) required.add(goalId);
+  if (b2bRequired) {
+    for (const goalId of ['commune', 'company', 'contact_name', 'purchase_order']) required.add(goalId);
   }
   return [...required];
 };
@@ -750,6 +761,26 @@ const validateV3AiProposal = (policy, proposal) => {
   }
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
+  const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
+  const normalizedReplyText = String(proposalObject.reply_text || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+  const normalizedTurnText = String(messageText || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+  const asksPickupLocation = /\b(?:donde|direccion|ubicacion|lugar)\b/.test(normalizedTurnText)
+    && /\b(?:retir\w*|retiro|planta|fabrica|tienda)\b/.test(normalizedTurnText);
+  const pickupAddressRequired = serviceScope === 'material' && fulfillment === 'pickup'
+    && (requestedGoal === FINAL_CONFIRMATION_GOAL || asksPickupLocation);
+  if (pickupAddressRequired
+      && (!normalizedReplyText.includes('portezuelo 1502')
+        || !normalizedReplyText.includes('san bernardo'))) {
+    errors.push(validationError(
+      'pickup_factory_address_required',
+      'reply_text',
+      ['fulfillment'],
+      ['Portezuelo 1502, San Bernardo'],
+      'State the single official factory pickup address exactly: Portezuelo 1502, San Bernardo. Do not store it as the customer commune or project address.',
+    ));
+  }
   if (requestedGoal === 'fulfillment' && serviceScope === 'installation') {
     errors.push(validationError(
       'primary_request_goal_inapplicable',

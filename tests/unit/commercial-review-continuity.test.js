@@ -7,7 +7,7 @@ const root = 'tests/fixtures/workflow-nodes/';
 const run = (path, row, env = {}) => new Function('items', '$env', fs.readFileSync(root + path, 'utf8'))([{ json: row }], env)[0].json;
 const apply = (row, model = {}) => {
   const normalized = run('ai-lead-qualification-assistant/normalize-ai-result.js', {
-    ai_context: { message_current: row.text_body, current_step: row.current_step, pending_question_key: row.pending_question_key, existing_fields: { service: row.service, city: row.city, requirement: row.requirement } },
+    ai_context: { message_current: row.text_body, current_step: row.current_step, pending_question_key: row.pending_question_key, qualification_context: row.qualification_context, existing_fields: { service: row.service, city: row.city, requirement: row.requirement } },
     ai_status_code: 200, ai_response: { choices: [{ message: { content: JSON.stringify({ intent: 'quote_request', confidence: .95, ...model }) } }] },
   });
   return run('wa-conversation-orchestrator/apply-ai-assistance.js', { ...row, ...normalized,
@@ -100,6 +100,30 @@ describe('pickup quantity and contextual address question', () => {
     expect(out.should_create_lead).toBe(false);
     const confirmed = apply({ ...base, qualification_context: out.qualification_context }, { intent: 'confirmation_yes', confirmation_status: 'confirmed', should_create_lead: true });
     expect(confirmed.should_create_lead).toBe(true);
+  });
+  test('pickup without commune reaches final confirmation and can create the lead', () => {
+    const context = { product: 'Pastelones', quantity: '100 unidades', modality: 'pickup' };
+    const ready = apply({ ...base, city: null, qualification_context: context, text_body: 'listo' });
+    expect(ready.pending_question_key).toBe('final_confirmation');
+    expect(ready.response_text).not.toContain('comuna');
+    const confirmed = apply({ ...base, city: null, qualification_context: context }, { intent: 'confirmation_yes', confirmation_status: 'confirmed', should_create_lead: true });
+    expect(confirmed.should_create_lead).toBe(true);
+  });
+  test('pickup location answer uses the single official factory address and never asks commune', () => {
+    const out = apply({ ...base, city: null, qualification_context: { product: 'Pastelones', quantity: '100 unidades', commune: 'Vitacura', modality: 'pickup' }, text_body: '¿Dónde retiro?' });
+    expect(out.response_kind).toBe('pickup_location_answer');
+    expect(out.response_text).toContain('Portezuelo 1502, San Bernardo');
+    expect(out.response_text).not.toContain('Vitacura');
+    expect(out.response_text).not.toMatch(/¿En qué comuna/i);
+  });
+  test('pickup final confirmation omits a residual customer commune', () => {
+    const out = apply({ ...base, city: 'Vitacura', qualification_context: { product: 'Pastelones', quantity: '100 unidades', commune: 'Vitacura', modality: 'pickup' }, text_body: 'listo' });
+    expect(out.response_text).toContain('Portezuelo 1502, San Bernardo');
+    expect(out.response_text).not.toContain('Vitacura');
+  });
+  test('pickup phrase does not set debris_removal', () => {
+    const out = apply({ ...base, city: null, qualification_context: { product: 'Pastelones', quantity: '100 unidades', modality: 'pickup' }, text_body: 'Material con retiro en fábrica' }, { field_updates: { debris_removal: true } });
+    expect(out.qualification_context.debris_removal).toBeUndefined();
   });
   test('address request distinguishes a known commune from street and approximate number', () => {
     const out = apply({ ...base, pending_question_key: 'address', text_body: 'Vitacura', qualification_context: { ...base.qualification_context, modality: 'delivery', quantity: '100 unidades' } });

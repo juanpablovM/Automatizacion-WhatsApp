@@ -34,9 +34,23 @@ const completedCount = countCompleted(lead);
 const commercialMissingFields = Array.isArray(row.commercial_missing_fields)
   ? row.commercial_missing_fields.filter((field) => String(field || '').trim().length > 0)
   : [];
+const context = lead.qualification_context;
+const isB2b = context.customer_type === 'b2b'
+  || context.lead_class === 'D'
+  || row.commercial_policy_profile === 'b2b';
+const isPrivateMaterialPickup = !isB2b && (
+  (context.service_scope === 'material' && context.fulfillment === 'pickup')
+  || context.modality === 'pickup'
+  || lead.service === 'retiro'
+);
+const missingBaseFields = [
+  !String(lead.service || '').trim() ? 'servicio' : null,
+  !isPrivateMaterialPickup && !String(lead.city || '').trim() ? 'ciudad' : null,
+  !String(lead.requirement || '').trim() ? 'requerimiento concreto confirmado' : null,
+].filter(Boolean);
 
-if (completedCount < 3) {
-  throw new Error('No se puede crear lead: faltan servicio, ciudad o requerimiento concreto confirmado');
+if (missingBaseFields.length > 0) {
+  throw new Error(`No se puede crear lead: faltan ${missingBaseFields.join(', ')}`);
 }
 if (commercialMissingFields.length > 0) {
   const validationErrors = {
@@ -64,4 +78,3 @@ return [
     },
   },
 ];
-

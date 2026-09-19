@@ -534,7 +534,7 @@ El agente debe reconocer al menos estas intenciones:
 
 ### 13.1 Cotizacion de material
 
-Campos: nombre, telefono, producto, cantidad, comuna, retiro o despacho, fecha estimada, cliente particular o empresa.
+Campos comunes: nombre, telefono, producto, cantidad, retiro o despacho, fecha estimada, cliente particular o empresa. La comuna es obligatoria para despacho y para clientes B2B; es inaplicable para retiro particular en fabrica.
 
 ### 13.2 Cotizacion con instalacion
 
@@ -551,6 +551,8 @@ Campos: comuna, direccion, producto, cantidad, fecha tentativa, restricciones de
 ### 13.5 Retiro cliente
 
 Campos: producto, cantidad, fecha estimada de retiro, nombre del retirador, vehiculo si aplica, confirmacion de pago validado por Finanzas cuando corresponda.
+
+Existe una sola ubicacion oficial de retiro: **Portezuelo 1502, San Bernardo**. En retiro particular de material, comuna, direccion y ubicacion del proyecto no se solicitan, no bloquean la confirmacion y no deben interpretarse como lugar de retiro. Si el cliente pregunta donde retirar, el agente debe informar esta direccion exacta.
 
 ### 13.6 Reclamo
 
@@ -574,7 +576,7 @@ El agente no debe inventar precios.
 
 Puede responder precios solo si existe base de datos configurada, el producto esta identificado, la unidad esta clara, la moneda esta clara, los valores estan actualizados y la empresa autorizo mostrar precios.
 
-Si no existe precio configurado, debe responder: "Para darte un valor correcto necesito revisar producto, cantidad, comuna y si buscas solo material, despacho o instalacion. Te ayudo con esos datos y te derivo para cotizacion."
+Si no existe precio configurado, debe pedir producto, cantidad y modalidad. Debe pedir comuna solo para despacho, instalacion o B2B; nunca para retiro particular en fabrica.
 
 El agente debe evitar responder "Sale $X" sin contexto. Debe favorecer: "Depende de la cantidad, comuna y modalidad. No es lo mismo solo material que material con despacho o instalacion. Para orientarte bien, te hago unas preguntas rapidas."
 
@@ -696,7 +698,7 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 
 ### 24.2 Solicitud de datos para cotizar
 
-"Para cotizarte bien necesito algunos datos: producto que buscas, cantidad o medidas aproximadas, comuna y si necesitas solo material, despacho, retiro o instalacion."
+"Para cotizarte bien necesito algunos datos: producto que buscas, cantidad o medidas aproximadas y si necesitas despacho, retiro o instalacion. Si corresponde despacho, instalacion o B2B, tambien necesito la comuna."
 
 ### 24.3 Instalacion
 

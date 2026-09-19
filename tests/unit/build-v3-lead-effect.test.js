@@ -1,9 +1,9 @@
-// `Prepare Lead Assignment` refuses to create a lead unless `service`, `city`
-// and `requirement` all carry a value. This node fed it from
+// `Prepare Lead Assignment` requires `service` and `requirement`, plus `city`
+// whenever the profile uses a project/delivery location. This node feeds it from
 // `qualification_context`, which a v3 turn never fills: v3 names its facts
 // `product`, `commune`, `quantity` and `modality`, and commits them to the
-// context only *after* the effect has run. So the first authorized turn to
-// reach the real executor died on "faltan servicio, ciudad o requerimiento".
+// context only *after* the effect has run. Material pickup is the sole
+// location-free exception.
 //
 // The mapping is the PRD's, not an invention:
 //   - PRD §25.1 lists the commercial fields as Producto de interés, Comuna,
@@ -186,7 +186,7 @@ describe('Build V3 Lead Effect — the v3 decision reaches the lead contract', (
   });
 
   test('leaves the lead incomplete rather than inventing a requirement', () => {
-    // `Prepare Lead Assignment` counts these three and blocks below three. A
+    // `Prepare Lead Assignment` validates the profile-specific base fields. A
     // fabricated value would buy a lead the PRD says must not exist.
     const lead = buildV3LeadEffect(authorizedTurn({
       v3_decision: decision([mutation('commune', 'Santiago')]),

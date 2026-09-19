@@ -264,14 +264,19 @@ const commercialSummaryParts = (qctx) => {
   const parts = [];
   if (hasValue(qctx.product)) parts.push('Producto: ' + qctx.product);
   if (hasValue(qctx.quantity) || hasValue(qctx.measurements)) parts.push('Cantidad: ' + (qctx.quantity || qctx.measurements));
-  if (hasValue(qctx.commune)) parts.push('Comuna: ' + qctx.commune);
+  if (!isPrivateMaterialPickup(qctx) && hasValue(qctx.commune)) parts.push('Comuna: ' + qctx.commune);
   if (hasValue(qctx.modality)) parts.push('Modalidad: ' + qctx.modality);
   return parts;
 };
+const PICKUP_FACTORY_ADDRESS = 'Portezuelo 1502, San Bernardo';
+const isPrivateMaterialPickup = (qctx) => (qctx?.modality === 'pickup'
+    || (qctx?.service_scope === 'material' && qctx?.fulfillment === 'pickup'))
+  && qctx?.customer_type !== 'b2b'
+  && qctx?.lead_class !== 'D';
 const confirmationText = (state, qctx) => [
   'Tengo esto:',
   'Servicio: ' + state.service,
-  'Ciudad: ' + state.city,
+  ...(isPrivateMaterialPickup(qctx) ? ['Retiro en fábrica: ' + PICKUP_FACTORY_ADDRESS] : ['Ciudad: ' + state.city]),
   'Requerimiento: ' + state.requirement,
   ...commercialSummaryParts(qctx),
   '',
@@ -283,8 +288,8 @@ const nextQuestion = (missing) => {
   if (missing === 'requirement') return 'Cuéntame brevemente qué necesitas resolver, instalar, reparar o comprar.';
   return '¿Está correcto?';
 };
-const missingFieldsFor = (state) => {
-  if (!hasValue(state.city)) return 'city';
+const missingFieldsFor = (state, qctx = {}) => {
+  if (!isPrivateMaterialPickup(qctx) && !hasValue(state.city)) return 'city';
   if (!hasValue(state.service)) return 'service';
   if (!hasValue(state.requirement)) return 'requirement';
   return 'confirm';
@@ -553,7 +558,7 @@ const secondaryFieldHasDirectEvidence = (key, text) => {
     photos: /\b(foto|imagen)\w*\b/,
     terrain: /\b(terreno|plano|pendiente|nivelado)\b/,
     truck_access: /\b(camion|acceso vehicular)\b/,
-    debris_removal: /\b(escombro|retiro de material)\w*\b/,
+    debris_removal: /\b(escombros?|material antiguo)\b/,
     customer_type: /\b(empresa|constructora|particular|contratista)\b/,
     company: /\b(empresa|constructora|sociedad)\b/,
     company_rut: /\b\d{1,2}\.?\d{3}\.?\d{3}-[0-9k]\b/,
@@ -637,7 +642,7 @@ const directFieldEvidenceFromText = (key, text) => {
   if (key === 'debris_removal') {
     if (/\b(?:si requiere|si necesita|si hay que retirar)\b/.test(text) && deterministic.pending_question_key === 'debris_removal') return true;
     if (/\b(no necesito retiro|sin retiro|no retiro|sin escombros|no hay escombros)\b/.test(text)) return false;
-    if (/\b(con retiro|necesito retiro|retiro de escombro|retirar escombro|retiro del material|retiro de material)\b/.test(text)) return true;
+    if (/\b(retiro de escombros?|retirar escombros?|retiro de material antiguo|retirar material antiguo)\b/.test(text)) return true;
     return null;
   }
   return null;
@@ -774,7 +779,9 @@ const executiveSummary = [
   `Clasificacion: ${qualificationContext.lead_class || ai.lead_class || 'No informada'}`,
   `Producto: ${state.service || qualificationContext.product || 'No informado'}`,
   `Modalidad: ${qualificationContext.modality || ai.modality || 'No informada'}`,
-  `Comuna: ${state.city || qualificationContext.commune || 'No informada'}`,
+  ...(isPrivateMaterialPickup(qualificationContext)
+    ? [`Retiro en fabrica: ${PICKUP_FACTORY_ADDRESS}`]
+    : [`Comuna: ${state.city || qualificationContext.commune || 'No informada'}`]),
   `Cantidad/medidas: ${displayValue(qualificationContext.measurements || qualificationContext.quantity)}`,
   `Urgencia: ${displayValue(qualificationContext.urgency || qualificationContext.desired_date)}`,
   `Terreno: ${displayValue(qualificationContext.terrain)}`,
@@ -786,7 +793,9 @@ const executiveSummary = [
 ].join('\n');
 if (!resetQualificationContext) qualificationContext.executive_summary = executiveSummary;
 
-const hasRequiredLeadFields = hasValue(state.service) && hasValue(state.city) && hasValue(state.requirement);
+const hasRequiredLeadFields = hasValue(state.service)
+  && (isPrivateMaterialPickup(qualificationContext) || hasValue(state.city))
+  && hasValue(state.requirement);
 
 // =============================================================================
 // PRD Unit 1: Gate determinista de campos obligatorios por intencion.
@@ -1004,13 +1013,14 @@ const commercialFieldEvidence = (() => {
 const confirmationSummary = (() => {
   const summary = {};
   if (hasValue(state.service)) summary.service = state.service;
-  if (hasValue(state.city)) summary.city = state.city;
+  if (!isPrivateMaterialPickup(qualificationContext) && hasValue(state.city)) summary.city = state.city;
   if (hasValue(state.requirement)) summary.requirement = state.requirement;
   if (hasValue(qualificationContext.product)) summary.product = qualificationContext.product;
   if (hasValue(qualificationContext.quantity) || hasValue(qualificationContext.measurements)) {
     summary.quantity = qualificationContext.quantity || qualificationContext.measurements;
   }
-  if (hasValue(qualificationContext.commune)) summary.commune = qualificationContext.commune;
+  if (!isPrivateMaterialPickup(qualificationContext) && hasValue(qualificationContext.commune)) summary.commune = qualificationContext.commune;
+  if (isPrivateMaterialPickup(qualificationContext)) summary.pickup_address = PICKUP_FACTORY_ADDRESS;
   if (hasValue(qualificationContext.modality)) summary.modality = qualificationContext.modality;
   return summary;
 })();
@@ -1099,7 +1109,7 @@ const pendingQuestionKey = shouldCreateLead || isEscalation
     ? 'confirmation_correction'
     : requiredQuestionKey
       || (ai.next_question_key && ai.next_question_key !== 'none' ? ai.next_question_key : deterministic.pending_question_key || null);
-const missing = missingFieldsFor(state);
+const missing = missingFieldsFor(state, qualificationContext);
 // conversation-flow-v2: If fields were accepted but with low per-field confidence, ask field-level confirmation
 const nextStepField = shouldCreateLead ? 'complete'
   : missing === 'confirm' ? 'confirm'
@@ -1183,8 +1193,8 @@ const selectResponseText = () => {
     // PRD violation - use fallback
     if (!validation.passed) {
       return {
-        text: validation.rule === 'NO_FALSE_DERIVATION_PROMISE' && missingFieldsFor(state) !== 'confirm'
-          ? `${validation.fallback} ${nextQuestion(missingFieldsFor(state))}`
+        text: validation.rule === 'NO_FALSE_DERIVATION_PROMISE' && missingFieldsFor(state, qualificationContext) !== 'confirm'
+          ? `${validation.fallback} ${nextQuestion(missingFieldsFor(state, qualificationContext))}`
           : validation.fallback,
         kind: 'prd_validated_fallback',
         metadata: { prd_rule_violated: validation.rule },
@@ -1260,7 +1270,7 @@ let responseKind = selectedResponse.kind;
 const responseMetadata = selectedResponse.metadata || {};
 const advisorQuestion = (key) => {
   const project = state.service || 'tu proyecto';
-  const city = state.city ? ' en ' + state.city : '';
+  const city = !isPrivateMaterialPickup(qualificationContext) && state.city ? ' en ' + state.city : '';
   if (key === 'measurements') return `Para orientar bien ${project}${city}, ¿qué medidas aproximadas necesitas cubrir?`;
   if (key === 'terrain') return `Perfecto, ya tengo las medidas. Para evaluar correctamente la instalación, ¿el terreno está plano o tiene pendiente?`;
   if (key === 'truck_access') return 'Gracias, eso ayuda a evaluar la instalación. ¿Hay acceso para que ingrese un camión al lugar?';
@@ -1284,10 +1294,15 @@ const advisorQuestion = (key) => {
   if (key === 'final_confirmation') {
     const detail = commercialSummaryParts(qualificationContext);
     const detailSentence = detail.length > 0 ? ` Detalle: ${detail.join('; ')}.` : '';
-    return `Tengo registrado ${project}${city} para ${state.requirement}.${detailSentence} ¿Confirmas que estos datos están correctos para derivar la cotización?`;
+    const pickupLocation = isPrivateMaterialPickup(qualificationContext)
+      ? ` El retiro es en ${PICKUP_FACTORY_ADDRESS}.`
+      : '';
+    return `Tengo registrado ${project}${city} para ${state.requirement}.${detailSentence}${pickupLocation} ¿Confirmas que estos datos están correctos para derivar la cotización?`;
   }
   return responseText;
 };
+const asksPickupLocation = isPrivateMaterialPickup(qualificationContext)
+  && /\b(?:donde|direccion|ubicacion|lugar)\b.{0,45}\b(?:retiro|retirar|fabrica|planta)\b|\b(?:retiro|retirar|fabrica|planta)\b.{0,45}\b(?:donde|direccion|ubicacion|lugar)\b/.test(normalizedCurrentText);
 if (!humanControlActive && !shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && requiredQuestionKey) {
   // PRD 6.10 (anti-repeticion): al alcanzar el umbral de clarify, el bot
   // aclara con voz propia antes de volver a preguntar lo mismo.
@@ -1298,6 +1313,14 @@ if (!humanControlActive && !shouldCreateLead && !isConfirmationCorrectionTurn &&
     responseText = advisorQuestion(requiredQuestionKey);
     responseKind = 'advisor_guardrail_question';
   }
+}
+
+if (!humanControlActive && !shouldCreateLead && !isConfirmationCorrectionTurn && !isEscalation && asksPickupLocation) {
+  const next = requiredQuestionKey && requiredQuestionKey !== 'final_confirmation'
+    ? ` ${advisorQuestion(requiredQuestionKey)}`
+    : '';
+  responseText = `El retiro en fábrica es exclusivamente en ${PICKUP_FACTORY_ADDRESS}.${next}`;
+  responseKind = 'pickup_location_answer';
 }
 
 if (humanControlActive) {

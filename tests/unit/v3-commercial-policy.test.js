@@ -37,8 +37,28 @@ describe('v3 commercial profile requirements', () => {
   });
 
   test('complete pickup material is not blocked by delivery or installation data', () => {
-    const policy = policyFor({ ...baseContext, service_scope: 'material', fulfillment: 'pickup' });
+    const policy = policyFor({ product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'pickup' });
+    expect(requiredFor(buildV3PolicyInput(rowFor({ product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'pickup' })))).not.toContain('commune');
     expect(validateV3AiProposal(policy, proposalFor(policy)).valid).toBe(true);
+  });
+
+  test('pickup final confirmation must state the single factory address', () => {
+    const context = { product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'pickup' };
+    const policy = policyFor(context, { text_body: 'Quiero retirar en fábrica', pending_question_key: null });
+    const withoutAddress = validateV3AiProposal(policy, proposalFor(policy, {
+      reply_text: 'Confirmá los datos para retirar en fábrica.',
+      primary_request: { goal_id: 'final_confirmation' },
+      effect_requests: [],
+    }));
+    expect(withoutAddress.valid).toBe(false);
+    expect(withoutAddress.errors).toContainEqual(expect.objectContaining({ code: 'pickup_factory_address_required' }));
+
+    const withAddress = validateV3AiProposal(policy, proposalFor(policy, {
+      reply_text: 'Confirmá los datos para retirar en Portezuelo 1502, San Bernardo.',
+      primary_request: { goal_id: 'final_confirmation' },
+      effect_requests: [],
+    }));
+    expect(withAddress.valid).toBe(true);
   });
 
   test('committed delivery requires an address and access restrictions', () => {
@@ -73,7 +93,19 @@ describe('v3 commercial profile requirements', () => {
 
   test('B2B retains company, contact, and purchase order requirements', () => {
     const input = buildV3PolicyInput(rowFor({ ...baseContext, service_scope: 'material', fulfillment: 'pickup', customer_type: 'b2b' }));
-    expect(requiredFor(input)).toEqual(expect.arrayContaining(['company', 'contact_name', 'purchase_order']));
+    expect(requiredFor(input)).toEqual(expect.arrayContaining(['commune', 'company', 'contact_name', 'purchase_order']));
+  });
+
+  test('lead class D retains commune and B2B requirements even for pickup', () => {
+    const input = buildV3PolicyInput(rowFor({ product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'pickup', lead_class: 'D' }));
+    expect(requiredFor(input)).toEqual(expect.arrayContaining(['commune', 'company', 'contact_name', 'purchase_order']));
+  });
+
+  test.each([
+    [{ product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'delivery' }, 'delivery'],
+    [{ product: 'Bloques', quantity: '120 unidades', service_scope: 'installation' }, 'installation'],
+  ])('%s still requires commune', (context) => {
+    expect(requiredFor(buildV3PolicyInput(rowFor(context)))).toContain('commune');
   });
 
   test('current-turn legacy heuristic fields never become committed commercial facts', () => {
@@ -83,6 +115,17 @@ describe('v3 commercial profile requirements', () => {
 });
 
 describe('v3 current-turn profile projection', () => {
+  test('same-turn pickup removes commune and address from effective create-lead requirements', () => {
+    const context = { product: 'Bloques', quantity: '120 unidades', service_scope: 'material' };
+    const policy = policyFor(context, { text_body: 'retiro' });
+    const validation = validateV3AiProposal(policy, proposalFor(policy, {
+      observations: [observation('fulfillment', 'retiro', 'pickup', 'fulfillment:pickup')],
+      state_mutations: [mutation('fulfillment')],
+      effect_requests: [{ type: 'create_lead', reason_observation_ids: ['obs-fulfillment'] }],
+    }));
+    expect(unresolved(validation)).not.toEqual(expect.arrayContaining(['commune', 'address']));
+    expect(validation.valid).toBe(true);
+  });
   test.each([
     ['service_scope', 'instalación', 'installation', 'service_scope:installation', ['address', 'terrain', 'truck_access', 'debris_removal'], baseContext],
     ['fulfillment', 'despacho', 'delivery', 'fulfillment:delivery', ['address', 'access_restrictions'], { ...baseContext, service_scope: 'material' }],

@@ -145,7 +145,7 @@ describe('the contract route survives step evaluation', () => {
 
     expect(policyInput.effect_requirements).toContainEqual({
       effect_type: 'create_lead',
-      required_goal_ids: ['product', 'commune', 'quantity', 'service_scope'],
+      required_goal_ids: ['product', 'quantity', 'service_scope'],
       trigger: 'explicit_confirmation_when_ready',
     });
   });
