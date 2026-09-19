@@ -376,6 +376,25 @@ deterministic.escalation_reason = safe(deterministic.escalation_reason);
 deterministic.is_partial = Boolean(deterministic.is_partial);
 deterministic.reset_conversation_lead = Boolean(deterministic.reset_conversation_lead);
 
+// A reply the deterministic step decided to withhold — a contentless inbound,
+// or a terminal canned line already sent inside its cooldown — is a settled
+// outcome for this turn. It rides the same no-send branch as
+// human_control_suppressed: `Should Send Response` in
+// wa-inbound-downstream-dispatcher.json only dispatches a non-empty
+// response_text. Returning here is what keeps the fallback copy further down
+// (escalationRoutingText, the deterministic fallback) from refilling it.
+if (deterministic.response_kind === 'reply_suppressed') {
+  return [{ json: {
+    ...deterministic, response_text: '', response_kind: 'reply_suppressed',
+    should_create_lead: false, should_escalate: deterministic.should_escalate, is_partial: false,
+    audit_result: deterministic.should_escalate ? 'escalation_required' : deterministic.audit_result,
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: 'reply_suppressed',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    qualification_context_json: jsonString(asObject(deterministic.qualification_context), {}),
+  } }];
+}
+
 // Registered quote acknowledgments must not reopen qualification or duplicate
 // effects, even if a stale assistant result is present in the merged item.
 if (deterministic.response_kind === 'commercial_review_pending'

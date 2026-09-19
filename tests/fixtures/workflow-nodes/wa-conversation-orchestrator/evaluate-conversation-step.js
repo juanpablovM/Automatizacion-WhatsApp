@@ -40,6 +40,29 @@ const MEASURE_UNITS = [
 const MEASURE_EVIDENCE_RE = new RegExp('\\b\\d+(?:\\s*\\d{3})*\\s*(?:' + MEASURE_UNITS.join('|') + ')\\b');
 const hasMeasureEvidence = (normalized) => MEASURE_EVIDENCE_RE.test(normalized);
 
+// Single silence kind for this node. `Should Send Response` in
+// wa-inbound-downstream-dispatcher.json dispatches only when response_text is
+// non-empty, so this is a sibling of human_control_suppressed: it reaches the
+// same no-send branch instead of inventing a second suppression mechanism.
+const SUPPRESSED_REPLY_KIND = 'reply_suppressed';
+
+// A terminal canned line is a statement of fact, not a conversation turn. Sent
+// once it informs; re-sent on every inbound it becomes an auto-answer that a
+// counterpart bot can drive forever — a number whose re-engagement fired every
+// ~50 minutes collected a reply within one second each time and queued 175
+// inbound events in two days. Six hours answers that counterpart exactly once
+// and still greets a real customer who comes back the next morning.
+const TERMINAL_REPLY_COOLDOWN_HOURS = 6;
+
+const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo. Si necesitas una cotización distinta, escribe "nueva cotización".';
+const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada y pendiente de revisión por el equipo comercial.';
+
+// A sticker or a reaction carries no requirement a human could quote, and the
+// pending-context branch already treats both as passive. Every other
+// attachment — an image of the terrain, a plan, a payment receipt — is content
+// even when it arrives with no caption at all.
+const PASSIVE_ATTACHMENT_TYPES = ['sticker', 'reaction'];
+
 function evaluateConversationStep(row) {
   // row is the input item (items[0]?.json in n8n context)
 
@@ -287,6 +310,29 @@ function evaluateConversationStep(row) {
     || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(normalizedText);
   const usefulText = rawText.length > 0 && !isGreetingOnly;
   const textHasIntent = intentKeywords.some((keyword) => normalizedText.includes(keyword));
+
+  // An inbound with nothing readable and nothing attached cannot answer a
+  // question, cannot state a requirement and cannot consent to anything. It is
+  // also the shape a counterpart bot keeps producing, so replying to it only
+  // feeds the loop. Normalized text is the test: an empty body, whitespace,
+  // bare punctuation and a lone emoji all reduce to ''.
+  const attachmentType = String(row.attachment_type || '').trim().toLowerCase();
+  const hasMeaningfulAttachment = attachmentType.length > 0
+    && !PASSIVE_ATTACHMENT_TYPES.includes(attachmentType);
+  const isContentlessInbound = normalizedText.length === 0 && !hasMeaningfulAttachment;
+
+  // "Was this exact line already sent, and how long ago" is read from the last
+  // outgoing message of this conversation (01_load_active_context.sql). No new
+  // column, no counter to keep in sync: the sent line is the receipt.
+  const lastOutgoingText = compact(row.last_outgoing_text);
+  const parsedHoursSinceLastOutgoing = Number(row.elapsed_hours_since_last_outbound);
+  const hoursSinceLastOutgoing = Number.isFinite(parsedHoursSinceLastOutgoing)
+    ? parsedHoursSinceLastOutgoing
+    : null;
+  const wasSentWithinCooldown = (line) => lastOutgoingText.length > 0
+    && lastOutgoingText === compact(line)
+    && hoursSinceLastOutgoing !== null
+    && hoursSinceLastOutgoing < TERMINAL_REPLY_COOLDOWN_HOURS;
 
   // ============================================================
   // RE-ENGAGEMENT DETECTION — INPUT FROM SQL (single source)
@@ -586,6 +632,10 @@ function evaluateConversationStep(row) {
   let isPartial = false;
   let responseText = '';
   let responseKind = 'question';
+  // Silence that leaves no trace is how a real customer gets ignored with
+  // nobody noticing, so every suppression names itself in the audit metadata.
+  let replySuppressionReason = null;
+  let suppressedResponseKind = null;
   let usedPreviousContext = false;
   let resetConversationLead = startsNewRequest
     && !wantsPrevious(normalizedText)
@@ -612,12 +662,25 @@ function evaluateConversationStep(row) {
   };
 
   // ============================================================
-  // PRECEDENCE ORDER — opt-out/abandono → humano → escalación/terminal
-  // → operacional → re-engagement → comercial/IA
+  // PRECEDENCE ORDER — contentless → opt-out/abandono → humano →
+  // escalación/terminal → operacional → re-engagement → comercial/IA
   // ============================================================
 
+  // 0. CONTENTLESS: a message with no readable text and no attachment cannot
+  // trigger any rule below it. The turn is still persisted and audited, but it
+  // stays silent and neither advances nor resets the conversation state.
+  if (isContentlessInbound) {
+    resetConversationLead = false;
+    currentStepField = stepInfo.field;
+    pendingQuestionKey = row.pending_question_key || null;
+    conversationStatusCode = row.conversation_status_code || 'waiting_user';
+    responseKind = SUPPRESSED_REPLY_KIND;
+    responseText = '';
+    replySuppressionReason = 'contentless_inbound';
+  }
+
   // 1. OPT-OUT / abandono: siempre gana, incluso si el mensaje también pide retomar.
-  if (detectOptOut(normalizedText) || detectLostIntent(normalizedText)) {
+  else if (detectOptOut(normalizedText) || detectLostIntent(normalizedText)) {
     shouldEscalate = true;
     shouldCreateLead = false;
     escalationReason = detectOptOut(normalizedText) ? 'opt_out' : 'abandoned';
@@ -648,9 +711,18 @@ function evaluateConversationStep(row) {
     escalationReason = row.escalation_reason || 'escalation_already_required';
     currentStepField = 'escalation';
     pendingQuestionKey = null;
-    responseKind = 'escalation_already_required';
-    responseText = 'Tu solicitud ya está derivada a una persona del equipo. Si necesitas una cotización distinta, escribe "nueva cotización".';
     conversationStatusCode = 'escalation_required';
+    // loop_detected escalates here as its remedy; without this bound the remedy
+    // is what answers the loop forever.
+    if (wasSentWithinCooldown(ESCALATION_ALREADY_REQUIRED_REPLY)) {
+      responseKind = SUPPRESSED_REPLY_KIND;
+      responseText = '';
+      replySuppressionReason = 'terminal_reply_cooldown';
+      suppressedResponseKind = 'escalation_already_required';
+    } else {
+      responseKind = 'escalation_already_required';
+      responseText = ESCALATION_ALREADY_REQUIRED_REPLY;
+    }
   }
 
   // A registered recent quote is not a new request merely because the client
@@ -670,8 +742,15 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'handed_to_sales';
     shouldCreateLead = false;
     shouldEscalate = false;
-    responseKind = 'commercial_review_pending';
-    responseText = 'Tu solicitud ya está registrada y pendiente de revisión por el equipo comercial.';
+    if (wasSentWithinCooldown(COMMERCIAL_REVIEW_PENDING_REPLY)) {
+      responseKind = SUPPRESSED_REPLY_KIND;
+      responseText = '';
+      replySuppressionReason = 'terminal_reply_cooldown';
+      suppressedResponseKind = 'commercial_review_pending';
+    } else {
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_PENDING_REPLY;
+    }
   }
 
   // 4. TERMINAL: una conversación cerrada no puede reaparecer como re-engagement.
@@ -945,7 +1024,7 @@ function evaluateConversationStep(row) {
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough'].includes(responseKind),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', SUPPRESSED_REPLY_KIND].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
@@ -1034,6 +1113,13 @@ function evaluateConversationStep(row) {
           inferred_requirement: inferredRequirement,
           anti_loop_applied: antiLoopApplied,
           missing_field: missingField,
+          // Observability for every reply this node withheld. Without it a
+          // silenced customer is indistinguishable from one nobody noticed.
+          reply_suppressed: Boolean(replySuppressionReason),
+          reply_suppression_reason: replySuppressionReason,
+          suppressed_response_kind: suppressedResponseKind,
+          terminal_reply_cooldown_hours: TERMINAL_REPLY_COOLDOWN_HOURS,
+          hours_since_last_outbound: hoursSinceLastOutgoing,
           // Re-engagement structured logging (memoria #679, #686)
           reengagement_stage: isReengagement ? 'detected' : null,
           reengagement_decision: isReengagement ? responseKind : null,
@@ -1047,5 +1133,12 @@ const runN8nCode = (inputItems) => inputItems.map((item) => evaluateConversation
 
 // Export for tests; sync-workflow-nodes appends the explicit n8n return boundary.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { evaluateConversationStep, runN8nCode };
+  module.exports = {
+    evaluateConversationStep,
+    runN8nCode,
+    SUPPRESSED_REPLY_KIND,
+    TERMINAL_REPLY_COOLDOWN_HOURS,
+    ESCALATION_ALREADY_REQUIRED_REPLY,
+    COMMERCIAL_REVIEW_PENDING_REPLY,
+  };
 }

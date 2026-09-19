@@ -168,6 +168,26 @@ recent_messages AS (
     LIMIT 8
   ) history
 ),
+-- Last line this conversation actually heard from us, and how long ago.
+-- recent_messages above cannot answer that question for the terminal states:
+-- it is scoped to active/waiting_user/out_of_flow conversations inside a 48h
+-- inbound window, so it is always empty exactly where the escalation and
+-- commercial-review canned lines live. The sent message is the receipt, so no
+-- counter column and no migration are needed to bound a repeated reply.
+last_outgoing_message AS (
+  SELECT
+    m.text_body AS last_outgoing_text,
+    m.created_at AS last_outgoing_at,
+    EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 3600 AS elapsed_hours
+  FROM messages m
+  JOIN latest_conversation lc ON lc.conversation_id = m.conversation_id
+  WHERE m.deleted_at IS NULL
+    AND m.direction = 'outgoing'
+    AND m.delivery_status = 'sent'
+    AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
+  ORDER BY m.created_at DESC, m.id DESC
+  LIMIT 1
+),
 latest_lead AS (
   SELECT
     l.id AS previous_lead_id,
@@ -300,6 +320,9 @@ SELECT
   lpi.last_inbound_event_id,
   lpi.last_inbound_at,
   lpi.elapsed_hours::numeric AS elapsed_hours_since_last_inbound,
+  lom.last_outgoing_text,
+  lom.last_outgoing_at,
+  lom.elapsed_hours::numeric AS elapsed_hours_since_last_outbound,
   lcs.state_service,
   lcs.state_city,
   lcs.state_requirement,
@@ -331,6 +354,7 @@ LEFT JOIN last_persisted_inbound lpi ON TRUE
 LEFT JOIN latest_conversation_state lcs ON TRUE
 LEFT JOIN latest_commercial_question_audit lcqa ON TRUE
 LEFT JOIN recent_messages rm ON TRUE
+LEFT JOIN last_outgoing_message lom ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
 LEFT JOIN chat_authority ca ON TRUE
