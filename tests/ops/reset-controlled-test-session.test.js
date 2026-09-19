@@ -91,24 +91,99 @@ describe('controlled test session reset contract', () => {
     expect(fs.readFileSync(fixture.sqlLog, 'utf8')).toBe(fs.readFileSync(sourceSql, 'utf8'));
   });
 
-  test('keeps the inbound check and audited archive in one locked transaction', () => {
+  test('documents the wider reset scope in its usage text', () => {
+    const fixture = createFixture();
+    const result = runFixtureScript(fixture, 'not-a-phone-number', os.tmpdir());
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('every open conversation');
+    expect(result.stderr).toContain('scheduled follow-ups');
+    expect(result.stderr).toContain('in flight');
+    expect(fs.existsSync(fixture.dockerLog)).toBe(false);
+  });
+
+  test('keeps the inbound check, follow-up guard and audited archive in one locked transaction', () => {
     const sql = fs.readFileSync(sourceSql, 'utf8');
     const beginPosition = sql.indexOf('BEGIN;');
     const lockPosition = sql.indexOf('LOCK TABLE inbound_events IN SHARE MODE;');
     const inboundCheckPosition = sql.indexOf("processing_status IN ('received', 'processing')");
+    const followUpLockPosition = sql.indexOf('FOR UPDATE;');
+    const followUpGuardPosition = sql.indexOf("controlled test session has % follow-up(s) in flight");
+    const handoffGuardPosition = sql.indexOf(
+      'controlled test session has % conversation(s) whose handoff is not notified yet',
+    );
     const archivePosition = sql.indexOf('UPDATE conversations AS conversation');
     const auditPosition = sql.indexOf('INSERT INTO audit_logs');
+    const cancelPosition = sql.indexOf('UPDATE follow_ups AS follow_up');
+    const cancelAuditPosition = sql.indexOf("'controlled_test_follow_up_cancelled'");
     const commitPosition = sql.indexOf('COMMIT;');
 
     expect(sql).toContain("SET LOCAL lock_timeout = '3s';");
     expect(sql).toContain('expected exactly one closed conversation status');
-    expect(sql).toContain('controlled test session reset did not close every active conversation');
+    expect(sql).toContain('controlled test session reset did not close every open conversation');
+    expect(sql).toContain('controlled test session reset did not cancel every scheduled follow-up');
     expect(beginPosition).toBeGreaterThanOrEqual(0);
     expect(lockPosition).toBeGreaterThan(beginPosition);
     expect(inboundCheckPosition).toBeGreaterThan(lockPosition);
-    expect(archivePosition).toBeGreaterThan(inboundCheckPosition);
+    expect(followUpLockPosition).toBeGreaterThan(inboundCheckPosition);
+    expect(followUpGuardPosition).toBeGreaterThan(followUpLockPosition);
+    expect(handoffGuardPosition).toBeGreaterThan(followUpGuardPosition);
+    expect(archivePosition).toBeGreaterThan(handoffGuardPosition);
     expect(auditPosition).toBeGreaterThan(archivePosition);
-    expect(commitPosition).toBeGreaterThan(auditPosition);
+    expect(cancelPosition).toBeGreaterThan(auditPosition);
+    expect(cancelAuditPosition).toBeGreaterThan(cancelPosition);
+    expect(commitPosition).toBeGreaterThan(cancelAuditPosition);
     expect(sql).toContain("RAISE EXCEPTION\n      'controlled test session has % queued/processing inbound event(s)'");
+    expect(sql).toContain("RAISE EXCEPTION\n      'controlled test session has % follow-up(s) in flight'");
+  });
+
+  test('closes every non-closed conversation and records the previous status', () => {
+    const sql = fs.readFileSync(sourceSql, 'utf8');
+
+    expect(sql).not.toContain("code IN ('active', 'waiting_user', 'out_of_flow')");
+    expect(sql).toContain("previous_status.code <> 'closed'");
+    expect(sql).toContain(
+      "jsonb_build_object('conversation_status_code', archived.previous_status_code)",
+    );
+    expect(sql).toContain("jsonb_build_object('conversation_status_code', 'closed')");
+  });
+
+  // The reset never mutates handoffs, so a conversation the terminal trigger
+  // would reject has to be named before the first write instead of surfacing
+  // as a raw trigger error and an opaque rollback.
+  test('mirrors both clauses of the handoff terminal trigger before any write', () => {
+    const sql = fs.readFileSync(sourceSql, 'utf8');
+    const guard = sql.slice(
+      sql.indexOf('blocked_handoff_count'),
+      sql.indexOf('UPDATE conversations AS conversation'),
+    );
+
+    expect(sql).toContain(
+      "RAISE EXCEPTION\n      'controlled test session has % conversation(s) whose handoff is not notified yet'",
+    );
+    expect(guard).toContain("handoff.estado = 'pending'");
+    expect(guard).toContain("handoff.estado IN ('notified', 'acknowledged', 'resolved')");
+    expect(guard).toContain('NOT EXISTS');
+    expect(guard).toContain("status.code = 'escalation_required'");
+    expect(guard).toContain("status.code <> 'closed'");
+    expect(guard).toContain('string_agg');
+    expect(guard).toContain('USING HINT');
+  });
+
+  test('cancels scheduled follow-ups without inventing a delivery result', () => {
+    const sql = fs.readFileSync(sourceSql, 'utf8');
+    const cancelStatement = sql.slice(
+      sql.indexOf('WITH scheduled AS MATERIALIZED'),
+      sql.indexOf("'controlled_test_follow_up_cancelled'"),
+    );
+
+    expect(cancelStatement).toContain("SET estado = 'cancelled'");
+    expect(cancelStatement).toContain('claim_token = NULL');
+    expect(cancelStatement).toContain('claimed_at = NULL');
+    expect(cancelStatement).toContain('next_retry_at = NULL');
+    expect(cancelStatement).toContain("'cancel_reason', 'controlled_test_session_reset'");
+    expect(cancelStatement).toContain("'cancelled_by', 'reset-controlled-test-session'");
+    expect(cancelStatement).toContain("estado IN ('pending', 'error')");
+    expect(cancelStatement).not.toContain('result =');
   });
 });
