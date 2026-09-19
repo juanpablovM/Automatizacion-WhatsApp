@@ -104,10 +104,19 @@ describe('contact context recovery — historical transcript regressions', () =>
     expect(out.service).toBeNull();
   });
 
-  test('adocreto is not OC, but explicit OC still routes B2B', () => {
-    expect(evaluate('Instalación de adocreto').response_kind).not.toBe('b2b_redirect');
-    expect(evaluate('Compra con OC').response_kind).toBe('b2b_redirect');
-  });
+  // There is no separate company track any more: neither a product that merely
+  // looks like "OC" nor an explicit purchase order diverts the conversation.
+  // Both follow the ordinary flow and the seller categorises the customer after
+  // the handoff.
+  test.each(['Instalación de adocreto', 'Compra con OC', 'Somos una constructora'])(
+    'no message diverts the conversation into a separate company track: %s',
+    (text) => {
+      const out = evaluate(text);
+      expect(out.response_kind).not.toBe('b2b_redirect');
+      expect(out.response_text).not.toMatch(/Orden de Compra/i);
+      expect(out.should_create_lead).toBe(false);
+    },
+  );
 
   test('numeric quantity is preserved from model fields with direct user evidence', () => {
     const text = 'Necesito 1000 unidades de pastelones';

@@ -351,11 +351,11 @@ const confirmationSatisfied = pendingQuestionKey === 'final_confirmation'
   && confirmationStatus === 'confirmed'
   && parsed.intent === 'confirmation_yes';
 const existingQualificationContext = compactObject(row.ai_context?.qualification_context);
-const pickupWithoutProjectLocation = (parsed.modality === 'pickup' || existingQualificationContext.modality === 'pickup')
-  && parsed.customer_type !== 'b2b'
-  && existingQualificationContext.customer_type !== 'b2b'
-  && parsed.lead_class !== 'D'
-  && existingQualificationContext.lead_class !== 'D';
+// Retirar material en fábrica vuelve inaplicable la ciudad del cliente, y eso
+// vale igual para una empresa: no existe una vía comercial separada que
+// reinstale la pregunta.
+const pickupWithoutProjectLocation = parsed.modality === 'pickup'
+  || existingQualificationContext.modality === 'pickup';
 const baseMissingFields = requiredMissingFromFields(acceptedFields)
   .filter((field) => field !== 'city' || !pickupWithoutProjectLocation);
 const missingFields = uniqueMissing([

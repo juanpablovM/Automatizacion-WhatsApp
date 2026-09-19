@@ -35,14 +35,12 @@ const commercialMissingFields = Array.isArray(row.commercial_missing_fields)
   ? row.commercial_missing_fields.filter((field) => String(field || '').trim().length > 0)
   : [];
 const context = lead.qualification_context;
-const isB2b = context.customer_type === 'b2b'
-  || context.lead_class === 'D'
-  || row.commercial_policy_profile === 'b2b';
-const isPrivateMaterialPickup = !isB2b && (
-  (context.service_scope === 'material' && context.fulfillment === 'pickup')
+// Una empresa que retira material sigue la misma regla de retiro que cualquier
+// otro cliente: existe una sola ubicación de retiro y la ciudad del cliente no
+// aporta nada. No hay una vía comercial separada que reinstale el requisito.
+const isPrivateMaterialPickup = (context.service_scope === 'material' && context.fulfillment === 'pickup')
   || context.modality === 'pickup'
-  || lead.service === 'retiro'
-);
+  || lead.service === 'retiro';
 const missingBaseFields = [
   !String(lead.service || '').trim() ? 'servicio' : null,
   !isPrivateMaterialPickup && !String(lead.city || '').trim() ? 'ciudad' : null,

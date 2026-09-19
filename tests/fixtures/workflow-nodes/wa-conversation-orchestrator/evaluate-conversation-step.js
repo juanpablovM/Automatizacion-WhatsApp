@@ -182,27 +182,6 @@ function evaluateConversationStep(row) {
     'hi',
   ];
 
-  // Model C: B2B keyword detection
-  const b2bKeywords = [
-    'constructora',
-    'inmobiliaria',
-    'empresa',
-    'licitacion',
-    'licitación',
-    'orden de compra',
-    'oc',
-    'proveedor',
-    'volumen',
-    'pago a 30 dias',
-    'pago a 30 días',
-    'factura empresa',
-    'rut empresa',
-    'contratista',
-    'supervisor',
-    'jefe de obra',
-    'compras',
-    'factura',
-  ];
 
   const intentKeywords = [
     'cotizar',
@@ -377,12 +356,6 @@ function evaluateConversationStep(row) {
     const withoutCity = stripCity(text);
     const withoutIntent = stripIntentWords(withoutCity);
     return withoutIntent.length === 0 || withoutIntent.split(' ').filter(Boolean).length <= 1;
-  };
-
-  // Model C: B2B detection function
-  const detectB2bSignal = (text) => {
-    const normalized = normalizeText(text);
-    return b2bKeywords.some(kw => new RegExp('\\b' + normalizeText(kw) + '\\b').test(normalized));
   };
 
   const isLikelyCityAnswer = (text, originalText) => {
@@ -562,7 +535,6 @@ function evaluateConversationStep(row) {
   const isOperationalMessage = operationalPatterns.some((pattern) => pattern.test(normalizedText));
 
   const actionIntent = detectActionIntent(normalizedText);
-  const isB2bSignal = detectB2bSignal(rawText);
   let inferredRequirement = null;
   let antiLoopApplied = false;
   let missingField = null;
@@ -817,11 +789,8 @@ function evaluateConversationStep(row) {
     }
   }
 
-  // 7. B2B / COMERCIAL: detección temprana (precedencia comercial/IA)
-  else if (isB2bSignal && !shouldCreateLead) {
-    responseKind = 'b2b_redirect';
-    responseText = 'Detecto que eres de una empresa o constructora. Para atenderte mejor, necesito algunos datos adicionales:\n\n- Nombre de la empresa\n- RUT\n- Obra o proyecto\n- Comuna\n- Producto que necesitas\n- Cantidad aproximada\n- Plazo requerido\n- Si tienen Orden de Compra o condicion de pago definida\n\nCon esa informacion te puedo derivar con el area B2B de Hormiglass.';
-  }
+  // No hay un desvío comercial temprano para empresas: una empresa sigue el
+  // flujo normal y la ejecutiva la categoriza después de la derivación.
 
   // Measurement assistance is human review, never a fabricated quote quantity.
   else if ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
@@ -852,15 +821,9 @@ function evaluateConversationStep(row) {
     } else if ((isFinalConfirmationQuestion || isCorrectionQuestion) && isRejection(normalizedText)) {
       handleConfirmationRejection();
     } else {
-      // Model C: B2B detection - redirect to B2B flow (PRECEDENCIA: comercial/IA)
-      if (isB2bSignal && !shouldCreateLead) {
-        responseKind = 'b2b_redirect';
-        responseText = 'Detecto que eres de una empresa o constructora. Para atenderte mejor, necesito algunos datos adicionales:\n\n- Nombre de la empresa\n- RUT\n- Obra o proyecto\n- Comuna\n- Producto que necesitas\n- Cantidad aproximada\n- Plazo requerido\n- Si tienen Orden de Compra o condicion de pago definida\n\nCon esa informacion te puedo derivar con el area B2B de Hormiglass.';
-      } else {
-        currentStepField = 'confirm';
-        responseKind = 'confirmation_question';
-        responseText = 'Para avanzar necesito confirmar los datos. ' + confirmationText();
-      }
+      currentStepField = 'confirm';
+      responseKind = 'confirmation_question';
+      responseText = 'Para avanzar necesito confirmar los datos. ' + confirmationText();
     }
   }
 
@@ -982,7 +945,7 @@ function evaluateConversationStep(row) {
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'b2b_redirect'].includes(responseKind),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough'].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,

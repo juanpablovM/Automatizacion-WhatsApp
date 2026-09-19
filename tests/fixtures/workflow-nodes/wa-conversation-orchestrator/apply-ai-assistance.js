@@ -269,10 +269,10 @@ const commercialSummaryParts = (qctx) => {
   return parts;
 };
 const PICKUP_FACTORY_ADDRESS = 'Portezuelo 1502, San Bernardo';
-const isPrivateMaterialPickup = (qctx) => (qctx?.modality === 'pickup'
-    || (qctx?.service_scope === 'material' && qctx?.fulfillment === 'pickup'))
-  && qctx?.customer_type !== 'b2b'
-  && qctx?.lead_class !== 'D';
+// Una empresa que retira material sigue la misma regla que cualquier cliente:
+// existe una sola ubicación de retiro, así que comuna y ciudad no aplican.
+const isPrivateMaterialPickup = (qctx) => qctx?.modality === 'pickup'
+  || (qctx?.service_scope === 'material' && qctx?.fulfillment === 'pickup');
 const confirmationText = (state, qctx) => [
   'Tengo esto:',
   'Servicio: ' + state.service,
@@ -494,9 +494,6 @@ const REPLY_TEXT_MIN = modelCEnabled
 const OBJECTION_MIN = modelCEnabled
   ? Number($env.AI_OBJECTION_MIN_CONFIDENCE || 0.50)
   : 0.75;
-const B2B_MIN = modelCEnabled
-  ? Number($env.AI_B2B_MIN_CONFIDENCE || 0.55)
-  : 0.75;
 const prdValidationEnabled = String($env.AI_PRD_VALIDATION_ENABLED || 'true').toLowerCase() === 'true';
 
 // Model C: AI Health Assessment
@@ -505,8 +502,6 @@ const aiFieldsAcceptable = aiHealthy && ai.confidence >= FIELD_ACCEPT_MIN;
 const aiReplyAcceptable = aiHealthy && ai.confidence >= REPLY_TEXT_MIN;
 const aiObjectionAcceptable = aiHealthy && ai.confidence >= OBJECTION_MIN
   && ai.objection_detected && ai.objection_detected !== 'none';
-const aiB2bAcceptable = aiHealthy && ai.confidence >= B2B_MIN
-  && (ai.customer_type === 'b2b' || ai.lead_class === 'D');
 
 // conversation-flow-v2: Per-field confidence (>0.8 auto-advance, <0.8 needs confirmation)
 const perFieldConfidence = ai.per_field_confidence || {};
@@ -843,15 +838,6 @@ const COMMERCIAL_FIELD_POLICY = {
     satisfiedByWhatsApp: ['name', 'phone'],
     payment: ['payment_validation'],
   },
-  b2b: {
-    profile: 'Cotizacion B2B (PRD 13.3)',
-    // Regla PRD (orden de preguntas): contexto comercial (producto/modalidad/
-    // cantidad/comuna) antes que los datos de la empresa/contacto/OC.
-    compulsory: ['product', 'modality', 'quantity', 'commune', 'company', 'contact', 'oc'],
-    conditional: ['rut', 'email', 'desired_date', 'invoice', 'human_review'],
-    satisfiedByWhatsApp: ['name', 'phone'],
-    payment: ['invoice', 'oc'],
-  },
   reclamo: {
     profile: 'Reclamo (PRD 13.6) ',
     compulsory: ['issue_description'],
@@ -950,13 +936,9 @@ const resolveCommercialProfile = (qctx) => {
   const profileIntent = (serviceEvidenceMention || modalityAnsweredByClient || !['installation_inquiry', 'delivery_inquiry', 'plant_pickup', 'debris_removal'].includes(intent))
     ? intent
     : 'quote_request';
-  const isB2b = !resetQualificationContext && Boolean(
-    ai.customer_type === 'b2b'
-    || ai.lead_class === 'D'
-    || qctx.customer_type === 'b2b'
-    || qctx.lead_class === 'D'
-  );
-  if (isB2b || intent === 'b2b_request' || intent === 'purchase_order') return 'b2b';
+  // No hay perfil comercial separado para empresas: una empresa cotiza con el
+  // mismo perfil que cualquier cliente según su modalidad, y la ejecutiva la
+  // categoriza después de la derivación.
   if (profileIntent === 'installation_inquiry' || profileIntent === 'debris_removal' || modality === 'installation') return 'instalacion';
   if (profileIntent === 'delivery_inquiry' || modality === 'delivery') return 'despacho';
   if (profileIntent === 'plant_pickup' || modality === 'pickup') return 'retiro';
@@ -1095,12 +1077,6 @@ const requiredQuestionKey = (() => {
     if (!qualificationContext.address) return 'address';
     if (!qualificationContext.access_restrictions) return 'access_restrictions';
   }
-  if (!resetQualificationContext && (ai.customer_type === 'b2b' || ai.lead_class === 'D')) {
-    if (!qualificationContext.company) return 'company';
-    if (!qualificationContext.contact_name) return 'contact';
-    if (!qualificationContext.quantity && !qualificationContext.measurements) return 'quantity';
-    if (qualificationContext.purchase_order === undefined || qualificationContext.purchase_order === null) return 'purchase_order';
-  }
   return hasRequiredLeadFields ? 'final_confirmation' : null;
 })();
 const pendingQuestionKey = shouldCreateLead || isEscalation
@@ -1117,7 +1093,7 @@ const nextStepField = shouldCreateLead ? 'complete'
 
 // The escalation copy has to match the route that produced it. Telling the
 // client "no quiero hacerte repetir lo mismo" is only true when a loop is what
-// escalated the turn. On a B2B enquiry or an explicit request for a human it
+// escalated the turn. On a company enquiry or an explicit request for a human it
 // describes something that never happened — observed in test conversation 150,
 // where a first-time tender enquiry was answered with that line.
 const LOOP_ESCALATION_REASONS = new Set([
@@ -1210,15 +1186,6 @@ const selectResponseText = () => {
       };
     }
 
-    // B2B detection - NEW
-    if (aiB2bAcceptable && missing !== 'confirm') {
-      return {
-        text: ai.reply_text,
-        kind: 'b2b_response',
-        metadata: { customer_type: ai.customer_type, lead_class: ai.lead_class },
-      };
-    }
-
     // Confirmation step
     if (missing === 'confirm') {
       return {
@@ -1278,7 +1245,7 @@ const advisorQuestion = (key) => {
   if (key === 'quantity') return `Para dimensionar correctamente la cotización de ${project}, ¿qué cantidad aproximada necesitas?`;
   if (key === 'address') return addressClarification();
   if (key === 'access_restrictions') return '¿Hay alguna restricción de acceso para el camión en el lugar de entrega?';
-  if (key === 'company') return 'Para preparar correctamente la solicitud B2B, ¿cuál es el nombre de la empresa?';
+  if (key === 'company') return 'Para preparar correctamente la cotización, ¿cuál es el nombre de la empresa?';
   if (key === 'contact') return '¿Cuál es el nombre y cargo de la persona de contacto para esta cotización?';
   if (key === 'purchase_order') return '¿La compra se gestionará con Orden de Compra?';
   if (key === 'commune') return '¿En qué comuna o ciudad se realizará el proyecto?';
@@ -1287,7 +1254,7 @@ const advisorQuestion = (key) => {
   if (key === 'desired_date') return '¿Para cuándo necesitarías esta fecha estimada?';
   if (key === 'urgency') return '¿Hay alguna urgencia o fecha límite para este requerimiento?';
   if (key === 'email') return '¿Cuál es el correo de contacto para enviar la cotización o documentación?';
-  if (key === 'company_rut') return '¿Cuál es el RUT de la empresa para la facturación B2B?';
+  if (key === 'company_rut') return '¿Cuál es el RUT de la empresa para la facturación?';
   if (key === 'invoice') return '¿Necesitas factura por esta compra?';
   if (key === 'issue_description') return 'Cuéntame brevemente qué problema necesitas resolver para poder ayudarte y derivarte correctamente.';
   if (key === 'payment_details') return 'Para registrar el comprobante necesito el monto y el medio de pago utilizado. ¿Me los confirmas?';
@@ -1454,11 +1421,9 @@ const aiMetadata = {
   ai_field_accept_min: FIELD_ACCEPT_MIN,
   ai_reply_text_min: REPLY_TEXT_MIN,
   ai_objection_min: OBJECTION_MIN,
-  ai_b2b_min: B2B_MIN,
   ai_fields_acceptable: aiFieldsAcceptable,
   ai_reply_acceptable: aiReplyAcceptable,
   ai_objection_acceptable: aiObjectionAcceptable,
-  ai_b2b_acceptable: aiB2bAcceptable,
   response_kind_model_c: responseKind,
   prd_rule_violated: responseMetadata.prd_rule_violated || ai.prd_rule_violated || null,
   objection_type: responseMetadata.objection_type || null,

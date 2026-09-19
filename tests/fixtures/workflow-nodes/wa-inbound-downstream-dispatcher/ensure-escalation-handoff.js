@@ -50,15 +50,21 @@ const HANDOFF_ROUTING = {
   loop: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },
   reengagement: { area: 'sales', area_label: 'Ventas', prioridad: 'media', responsable: 'Ejecutiva comercial' },
 
-  // PRECEDENCIA 6: comercial/IA (B2B)
-  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },
-  purchase_order: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },
+  // PRECEDENCIA 6: comercial/IA. No existe un área B2B separada: una empresa es
+  // un lead comercial más y la categorización comercial la hace la ejecutiva
+  // después de la derivación. El área 'b2b' no tiene responsables asignados, así
+  // que enrutar ahí difería la entrega 6 h y la dejaba morir a la vista.
+  b2b: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },
+  purchase_order: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },
 };
 
 // Fallback determinista por area declarada por la AI (contrato del advisor).
 const AREA_FALLBACK = {
   sales: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },
-  b2b: { area: 'b2b', area_label: 'B2B', prioridad: 'alta', responsable: 'Patricia / Área B2B' },
+  // 'b2b' sigue siendo un valor válido del contrato (hay decisiones históricas
+  // persistidas con esa área), pero ya no tiene un área propia: se atiende en
+  // Ventas, que sí tiene responsables reales.
+  b2b: { area: 'sales', area_label: 'Ventas', prioridad: 'alta', responsable: 'Ejecutiva comercial' },
   finance: { area: 'finance', area_label: 'Finanzas', prioridad: 'alta', responsable: 'Finanzas' },
   post_sale: { area: 'post_sale', area_label: 'Postventa', prioridad: 'media', responsable: 'Administración / Postventa' },
   claims: { area: 'claims', area_label: 'Reclamos', prioridad: 'urgente', responsable: 'Responsable de Reclamos' },

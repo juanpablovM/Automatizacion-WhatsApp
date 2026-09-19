@@ -93,9 +93,11 @@ const buildV3PolicyInput = (row, options = {}) => {
     requiredGoals.add('address');
     requiredGoals.add('access_restrictions');
   }
-  if (context.customer_type === 'b2b' || context.lead_class === 'D') {
-    for (const field of ['commune', 'company', 'contact_name', 'purchase_order']) requiredGoals.add(field);
-  }
+  // A company is an ordinary lead. The advisor's terminal goal is handing the
+  // quote to a seller, and the seller categorises the customer afterwards, so
+  // no company-shaped field gates `create_lead`. Requiring a purchase order was
+  // a deadlock in particular: that document only exists after a quote, which
+  // only exists after the handoff this effect produces.
   let previousMetadata = asObject(input.metadata_json);
   if (typeof input.metadata_json === 'string') {
     try { previousMetadata = asObject(JSON.parse(input.metadata_json)); } catch (_error) { /* No prior retry evidence. */ }

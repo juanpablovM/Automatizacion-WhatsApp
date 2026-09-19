@@ -162,3 +162,57 @@ describe('commercial capture recovery — provider contract regressions', () => 
     expect(choice.pending_question_key).toBe('previous_context_choice');
   });
 });
+
+// The advisor's terminal goal is handing the quote to a seller, and the seller
+// categorises the customer afterwards. A company is therefore an ordinary lead:
+// no company-shaped field is compulsory, and the purchase order in particular
+// can never be one — that document only exists after the quote the handoff
+// produces, so requiring it up front was a deadlock.
+describe('a company is an ordinary lead', () => {
+  const companyTurn = (text, context = {}, model = {}) => turn(text, model, {
+    service: 'Baldosas',
+    city: 'San Bernardo',
+    requirement: 'Obra, necesito solo material. Son 1000 unidades',
+    pending_question_key: 'final_confirmation',
+    qualification_context: {
+      product: 'Baldosas', quantity: '1000 unidades', modality: 'delivery',
+      commune: 'San Bernardo', address: 'Calle Uno 120', access_restrictions: 'sin restricciones',
+      ...context,
+    },
+  });
+
+  test.each([
+    ['declared company customer', { customer_type: 'b2b' }],
+    ['lead class D', { lead_class: 'D' }],
+    ['company name on record', { company: 'Constructora Ejemplo' }],
+  ])('%s keeps the ordinary commercial profile', (_case, context) => {
+    const out = companyTurn('Somos una constructora', context);
+    expect(out.commercial_policy_profile).not.toBe('b2b');
+    for (const field of ['company', 'contact', 'oc', 'rut']) {
+      expect(out.commercial_missing_fields).not.toContain(field);
+    }
+  });
+
+  test('a missing purchase order never blocks the lead or the confirmation', () => {
+    const out = companyTurn('Somos una constructora y compramos con OC', { customer_type: 'b2b' });
+    expect(out.commercial_missing_fields).not.toContain('oc');
+    expect(out.pending_question_key).not.toBe('purchase_order');
+    expect(out.pending_question_key).not.toBe('company');
+    expect(out.response_text).not.toMatch(/Orden de Compra/i);
+  });
+
+  test('a company message is not answered with a separate company track', () => {
+    const out = companyTurn('Somos una constructora', { customer_type: 'b2b' });
+    expect(out.response_kind).not.toBe('b2b_redirect');
+    expect(out.response_kind).not.toBe('b2b_response');
+    expect(out.response_text).not.toMatch(/area B2B/i);
+  });
+
+  test('a company that already confirmed reaches the seller handoff', () => {
+    const out = companyTurn('Sí, está correcto', { customer_type: 'b2b' }, {
+      intent: 'confirmation_yes', confirmation_status: 'confirmed', should_create_lead: true,
+    });
+    expect(out.commercial_missing_fields).toEqual([]);
+    expect(out.should_create_lead).toBe(true);
+  });
+});

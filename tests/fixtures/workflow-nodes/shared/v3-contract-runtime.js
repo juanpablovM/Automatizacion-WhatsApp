@@ -292,12 +292,11 @@ const effectiveRequiredGoalIds = (configuredGoalIds, policy, observations) => {
   const required = new Set(Array.isArray(configuredGoalIds) ? configuredGoalIds : []);
   const serviceScope = projectedValueFor(policy, observations, 'service_scope');
   const fulfillment = projectedValueFor(policy, observations, 'fulfillment');
-  const customerType = projectedValueFor(policy, observations, 'customer_type');
-  const b2bRequired = customerType === 'b2b'
-    || ['company', 'contact_name', 'purchase_order'].some((goalId) => required.has(goalId));
   // Commune/address describe the customer's project or delivery destination.
-  // They are inapplicable to a material pickup at the single factory location.
-  if (serviceScope === 'material' && fulfillment === 'pickup' && !b2bRequired) {
+  // They are inapplicable to a material pickup at the single factory location,
+  // and a company picking up material follows that same rule: there is no
+  // separate company track, so nothing company-shaped reinstates the question.
+  if (serviceScope === 'material' && fulfillment === 'pickup') {
     required.delete('commune');
     required.delete('address');
     required.delete('access_restrictions');
@@ -310,9 +309,6 @@ const effectiveRequiredGoalIds = (configuredGoalIds, policy, observations) => {
     required.add('commune');
     required.add('address');
     required.add('access_restrictions');
-  }
-  if (b2bRequired) {
-    for (const goalId of ['commune', 'company', 'contact_name', 'purchase_order']) required.add(goalId);
   }
   return [...required];
 };

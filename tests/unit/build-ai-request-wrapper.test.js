@@ -57,7 +57,11 @@ describe('Build AI Request — real n8n Code node wrapper', () => {
     });
     const prompt = output[0].json.ai_request.messages[0].content;
     expect(prompt).toContain('Portezuelo 1502, San Bernardo');
-    expect(prompt).toContain('Comuna es obligatoria solo con despacho o B2B');
+    expect(prompt).toContain('Comuna es obligatoria solo con despacho');
+    // A company is an ordinary lead: nothing company-shaped is a required field
+    // and the purchase order is never asked for as a prerequisite.
+    expect(prompt).not.toContain('DETECCION B2B');
+    expect(prompt).toContain('Clientes empresa: no tienen campos obligatorios propios');
   });
 
   test('v3 prompt knows the fixed pickup address and forbids pickup location questions', () => {

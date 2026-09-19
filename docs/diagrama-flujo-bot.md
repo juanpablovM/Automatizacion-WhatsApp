@@ -26,7 +26,6 @@ flowchart TD
         O -->|"Sí (sí/ok/dale)"| P[shouldCreateLead=true → handoff_ready]
         O -->|"No (no/incorrecto)"| Q[confirmation_correction_requested]
         I -->|En corrección| R[confirm_retry_N]
-        I -->|Detecta B2B keywords| S[b2b_redirect Plantilla 8 campos]
         I -->|Frustración / bucle 3+| T[escalation_routing frustration_detected / loop_detected]
         I -->|Intención + datos| U[Extrae city/service/requirement]
         
@@ -52,7 +51,6 @@ flowchart TD
         AD --> ADa{PRD Validators}
         ADa -->|Pasa| ADb{Clasifica tipo}
         ADb -->|objection_detected| ADc[kind=objection_response]
-        ADb -->|B2B| ADd[kind=b2b_response]
         ADb -->|missing=confirm| ADe[kind=confirmation_question]
         ADb -->|redirect intents| ADf[kind=ai_redirect]
         ADb -->|default| ADg[kind=ai_conversation / ai_enhancement]
@@ -179,8 +177,6 @@ sequenceDiagram
         else Usuario rechaza (no/incorrecto)
             ORQ->>ORQ: confirmation_correction_requested
         end
-    else Detecta B2B keywords
-        ORQ->>ORQ: b2b_redirect (plantilla 8 campos)
     else Frustración / bucle 3+
         ORQ->>ORQ: escalation_routing
     else Intención + datos útiles
@@ -396,13 +392,11 @@ classDiagram
         +knownServices: string[]
         +knownCities: string[]
         +greetingOnly: string[]
-        +b2bKeywords: string[]
         +intentKeywords: string[]
         +frustrationPatterns: RegExp[]
         +detectCity(text)
         +detectActionIntent(text)
         +detectService(text)
-        +detectB2bSignal(text)
         +isLikelyCityAnswer(text)
         +isLikelyServiceAnswer(text)
         +isConcreteRequirement(text)

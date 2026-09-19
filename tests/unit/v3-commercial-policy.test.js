@@ -91,14 +91,37 @@ describe('v3 commercial profile requirements', () => {
     expect(input.facts.find((fact) => fact.field === 'fulfillment').value).toBe(modality);
   });
 
-  test('B2B retains company, contact, and purchase order requirements', () => {
-    const input = buildV3PolicyInput(rowFor({ ...baseContext, service_scope: 'material', fulfillment: 'pickup', customer_type: 'b2b' }));
-    expect(requiredFor(input)).toEqual(expect.arrayContaining(['commune', 'company', 'contact_name', 'purchase_order']));
+  // A company is an ordinary lead: the advisor derives the quote and the seller
+  // categorises the customer afterwards. Requiring a purchase order to create
+  // the lead was a deadlock, because that document only exists after the quote
+  // the handoff produces.
+  test.each([
+    ['company customers', { ...baseContext, service_scope: 'material', fulfillment: 'pickup', customer_type: 'b2b' }],
+    ['lead class D', { ...baseContext, service_scope: 'material', fulfillment: 'pickup', lead_class: 'D' }],
+  ])('%s add no company-shaped requirement to create_lead', (_case, context) => {
+    const required = requiredFor(buildV3PolicyInput(rowFor(context)));
+    expect(required).not.toContain('company');
+    expect(required).not.toContain('contact_name');
+    expect(required).not.toContain('purchase_order');
+    expect(required).not.toContain('commune');
   });
 
-  test('lead class D retains commune and B2B requirements even for pickup', () => {
-    const input = buildV3PolicyInput(rowFor({ product: 'Bloques', quantity: '120 unidades', service_scope: 'material', fulfillment: 'pickup', lead_class: 'D' }));
-    expect(requiredFor(input)).toEqual(expect.arrayContaining(['commune', 'company', 'contact_name', 'purchase_order']));
+  test('company-shaped goals stay collectable but block nothing', () => {
+    const input = buildV3PolicyInput(rowFor({ ...baseContext, service_scope: 'material', fulfillment: 'pickup', customer_type: 'b2b' }));
+    for (const goalId of ['company', 'contact_name', 'purchase_order', 'company_rut']) {
+      const goal = input.goals.find((candidate) => candidate.goal_id === goalId);
+      expect(goal).toBeDefined();
+      expect(goal.importance).toBe('optional');
+      expect(goal.blocks_effects).toEqual([]);
+    }
+  });
+
+  test('a company pickup without a purchase order can create the lead', () => {
+    const policy = policyFor({
+      product: 'Bloques', quantity: '120 unidades', service_scope: 'material',
+      fulfillment: 'pickup', customer_type: 'b2b', company: 'Constructora Ejemplo',
+    });
+    expect(validateV3AiProposal(policy, proposalFor(policy)).valid).toBe(true);
   });
 
   test.each([
@@ -129,7 +152,6 @@ describe('v3 current-turn profile projection', () => {
   test.each([
     ['service_scope', 'instalación', 'installation', 'service_scope:installation', ['address', 'terrain', 'truck_access', 'debris_removal'], baseContext],
     ['fulfillment', 'despacho', 'delivery', 'fulfillment:delivery', ['address', 'access_restrictions'], { ...baseContext, service_scope: 'material' }],
-    ['customer_type', 'empresa', 'b2b', null, ['company', 'contact_name', 'purchase_order'], { ...baseContext, service_scope: 'material', fulfillment: 'pickup' }],
   ])('new %s evidence cannot bypass additional required goals', (concept, evidence, value, groundingRef, missing, context) => {
     const policy = policyFor(context, { text_body: evidence });
     const validation = validateV3AiProposal(policy, proposalFor(policy, {
@@ -139,6 +161,25 @@ describe('v3 current-turn profile projection', () => {
     }));
     expect(validation.valid).toBe(false);
     expect(unresolved(validation)).toEqual(expect.arrayContaining(missing));
+  });
+
+  // Learning mid-turn that the customer is a company is ordinary evidence: it
+  // adds nothing to the create_lead prerequisites, so a complete pickup request
+  // stays complete.
+  test('new company evidence adds no create-lead prerequisite', () => {
+    const policy = policyFor(
+      { ...baseContext, service_scope: 'material', fulfillment: 'pickup' },
+      { text_body: 'empresa' },
+    );
+    const validation = validateV3AiProposal(policy, proposalFor(policy, {
+      observations: [observation('customer_type', 'empresa', 'b2b', null)],
+      state_mutations: [mutation('customer_type')],
+      effect_requests: [{ type: 'create_lead', reason_observation_ids: ['obs-customer_type'] }],
+    }));
+    expect(unresolved(validation)).not.toEqual(
+      expect.arrayContaining(['company', 'contact_name', 'purchase_order', 'commune']),
+    );
+    expect(validation.valid).toBe(true);
   });
 });
 

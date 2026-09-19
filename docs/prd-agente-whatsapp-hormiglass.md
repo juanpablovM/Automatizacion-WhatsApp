@@ -16,6 +16,19 @@ PRD v1.0
 
 Este PRD sigue siendo la fuente normativa del comportamiento comercial. Al 18 de junio de 2026, el asesor conversacional, la memoria estructurada, D.A.T.O.S., la clasificacion, los guardrails y el handoff verificado estan implementados. El estado tecnico vigente se documenta en `docs/asesor-comercial-ai.md` y `docs/handoff-actual.md`.
 
+### Decision vigente: el asesor deriva la cotizacion, la vendedora categoriza
+
+El bot es un asesor que ayuda a **derivar la cotizacion**: su meta terminal es dejar el caso en manos de una vendedora con la informacion necesaria para cotizar. El bot **no categoriza comercialmente al cliente**; esa categorizacion la hace la vendedora despues de recibir el caso.
+
+En consecuencia, **no existe una via B2B separada**. Una empresa, constructora o inmobiliaria es un lead comercial mas y recorre el mismo flujo que cualquier cliente:
+
+- Empresa, RUT, contacto, cargo, correo y Orden de Compra siguen siendo datos **recolectables y opcionales**: se registran si el cliente los aporta, pero ninguno es obligatorio ni bloquea la creacion del lead ni la confirmacion.
+- La Orden de Compra **nunca** se pide como requisito previo: ese documento existe despues de la cotizacion, y la cotizacion la prepara la vendedora despues de la derivacion. Exigirla antes producia un bloqueo sin salida.
+- No hay area ni responsable B2B separado. Las derivaciones de empresa u Orden de Compra van al area de Ventas (Ejecutiva comercial), que si tiene responsables reales asignados.
+- Los valores `customer_type='b2b'`, `lead_class='D'`, `escalation_area='b2b'` y `enhancement_type='b2b_redirect'` siguen siendo validos como informacion para la vendedora y por compatibilidad con decisiones ya persistidas, pero dejan de abrir un flujo propio.
+
+Las secciones de este PRD que describian la via B2B como un canal aparte quedan reescritas bajo esta decision.
+
 ## Objetivo general
 
 Disenar, configurar e implementar un agente de IA para WhatsApp que ayude a Hormiglass a responder de forma rapida, clara y comercialmente inteligente a los clientes que ingresan por este canal, levantando informacion util, clasificando oportunidades, orientando al cliente, preparando el traspaso comercial y evitando que las vendedoras partan desde cero en cada conversacion.
@@ -197,9 +210,9 @@ Dolores frecuentes:
 - Necesita material confiable.
 - Puede comprar recurrentemente.
 
-### 6.3 Cliente B2B
+### 6.3 Cliente empresa
 
-Constructora, inmobiliaria, empresa, licitacion o contratista grande.
+Constructora, inmobiliaria, empresa, licitacion o contratista grande. Es un perfil de cliente, no un canal aparte: recorre el mismo flujo que cualquier otro y la vendedora lo categoriza despues de la derivacion.
 
 Dolores frecuentes:
 
@@ -328,7 +341,7 @@ El agente debe levantar:
 - Si ya tiene cotizacion de competencia.
 - Si es cliente particular, contratista o empresa.
 - Si requiere factura.
-- Si es B2B, si tiene OC o proyecto definido.
+- Si el cliente lo menciona, empresa y Orden de Compra se registran como dato opcional; nunca se piden como requisito.
 
 ### 9.4 Clasificacion preliminar
 
@@ -349,7 +362,7 @@ Segun clasificacion:
 - Lead A: derivacion prioritaria a ejecutiva.
 - Lead B: derivacion comercial normal.
 - Lead C: respuesta rapida y eventual derivacion.
-- Lead D: derivacion a Patricia / B2B.
+- Lead D: derivacion comercial normal a Ventas, igual que cualquier lead. La clasificacion viaja como informacion para la vendedora; no abre un canal propio.
 - Postventa: derivacion a Administracion / Postventa.
 - Reclamo: derivacion urgente a responsable humano.
 - Comprobante de pago: derivacion a Finanzas / ejecutiva.
@@ -489,12 +502,13 @@ Criterios:
 
 Accion:
 
-- Derivar a Patricia / B2B.
-- Levantar empresa, obra, contacto, OC y plazo.
-- No tratar como cliente particular.
-- Si hay condicion especial, marcar para Gerencia.
+- Derivar a Ventas, igual que cualquier lead comercial. No existe un area B2B separada.
+- Registrar empresa, obra, contacto y plazo **solo si el cliente los aporta**: son datos opcionales que no bloquean.
+- No pedir la Orden de Compra como requisito: ese documento existe despues de la cotizacion.
+- Tratar al cliente con el mismo flujo que cualquier otro; la categorizacion comercial la hace la vendedora.
+- Si hay condicion especial de pago, marcar para Gerencia.
 
-Mensaje: "Al ser una solicitud de empresa/constructora, la derivare al area B2B para revisar volumen, condiciones, documentacion y plazos de obra."
+Mensaje: el mismo del flujo normal. El agente no anuncia un canal de empresas ni promete un area distinta.
 
 ---
 
@@ -534,15 +548,17 @@ El agente debe reconocer al menos estas intenciones:
 
 ### 13.1 Cotizacion de material
 
-Campos comunes: nombre, telefono, producto, cantidad, retiro o despacho, fecha estimada, cliente particular o empresa. La comuna es obligatoria para despacho y para clientes B2B; es inaplicable para retiro particular en fabrica.
+Campos comunes: nombre, telefono, producto, cantidad, retiro o despacho, fecha estimada, cliente particular o empresa. La comuna es obligatoria para despacho; es inaplicable para retiro particular en fabrica, tambien cuando el cliente es una empresa.
 
 ### 13.2 Cotizacion con instalacion
 
 Campos: nombre, telefono, producto, comuna, direccion aproximada, metros aproximados, tipo de terreno, fotos si tiene, fecha deseada, si requiere retiro de escombros, si hay acceso para camion, si es casa, parcela, condominio u obra.
 
-### 13.3 Cotizacion B2B
+### 13.3 Cliente empresa (sin perfil obligatorio propio)
 
-Campos: empresa, RUT empresa, nombre contacto, cargo, telefono, correo, obra, comuna de obra, producto, cantidad, fecha requerida, si requiere OC, si ya tiene OC, condicion de pago solicitada, documentacion requerida.
+Una empresa cotiza con el perfil que corresponda a su modalidad (material, despacho, instalacion o retiro): **no tiene campos obligatorios propios**.
+
+Empresa, RUT empresa, nombre de contacto, cargo, correo, obra, condicion de pago, documentacion y Orden de Compra son **siempre condicionales**: se registran si el cliente los aporta y nunca entran en `commercial_missing_fields` ni bloquean la confirmacion o la creacion del lead.
 
 ### 13.4 Despacho
 
@@ -576,7 +592,7 @@ El agente no debe inventar precios.
 
 Puede responder precios solo si existe base de datos configurada, el producto esta identificado, la unidad esta clara, la moneda esta clara, los valores estan actualizados y la empresa autorizo mostrar precios.
 
-Si no existe precio configurado, debe pedir producto, cantidad y modalidad. Debe pedir comuna solo para despacho, instalacion o B2B; nunca para retiro particular en fabrica.
+Si no existe precio configurado, debe pedir producto, cantidad y modalidad. Debe pedir comuna solo para despacho o instalacion; nunca para retiro particular en fabrica.
 
 El agente debe evitar responder "Sale $X" sin contexto. Debe favorecer: "Depende de la cantidad, comuna y modalidad. No es lo mismo solo material que material con despacho o instalacion. Para orientarte bien, te hago unas preguntas rapidas."
 
@@ -624,15 +640,17 @@ Mensaje: "Perfecto. Lo dejo marcado porque el retiro de escombros requiere coord
 
 ---
 
-## 19. Reglas de respuesta sobre B2B
+## 19. Reglas de respuesta sobre clientes empresa
 
-El agente debe detectar palabras clave: constructora, inmobiliaria, empresa, OC, orden de compra, licitacion, proyecto, obra, supervisor, jefe de obra, compras, factura, pago a 30 dias, proveedor, volumen, cotizacion formal.
+El agente puede reconocer senales de empresa (constructora, inmobiliaria, OC, orden de compra, licitacion, obra, proveedor, volumen, cotizacion formal) para informar a la vendedora, pero **esa deteccion no cambia el flujo**.
 
-Cuando detecte B2B: responder solicitando nombre de la empresa, RUT, obra, comuna, producto, cantidad aproximada, plazo requerido y si cuentan con Orden de Compra o condicion de pago definida.
+Reglas:
 
-Mensaje: "Gracias. Esta solicitud corresponde al canal empresas/B2B. Para derivarte correctamente necesito algunos datos: nombre de la empresa, RUT, obra, comuna, producto, cantidad aproximada, plazo requerido y si cuentan con Orden de Compra o condicion de pago definida."
-
-Luego debe derivar a Patricia / area B2B.
+- Una empresa recorre el mismo flujo que cualquier cliente. El agente no abre un canal de empresas ni anuncia un area B2B.
+- El agente no pide una lista de datos de empresa por adelantado. Empresa, RUT, contacto, correo y Orden de Compra se registran si el cliente los aporta.
+- El agente **nunca** pide la Orden de Compra como requisito: ese documento existe despues de la cotizacion, y la cotizacion la prepara la vendedora tras la derivacion.
+- Que el cliente sea una empresa **no es motivo de derivacion por si solo**. Una solicitud explicita de Orden de Compra si puede derivar, y esa derivacion va al area de Ventas.
+- La categorizacion comercial del cliente la hace la vendedora al recibir el caso.
 
 Regla: si hay condicion especial de pago, debe marcarse como "requiere aprobacion Gerencia".
 
@@ -676,7 +694,11 @@ Respuesta: "Te entiendo. Para darte un precio correcto necesito al menos product
 
 ## 22. Escalamiento humano
 
-El agente debe derivar a humano en estos casos: cliente pide hablar con ejecutiva, cliente molesto, reclamo, garantia, cliente B2B, Orden de Compra, solicitud de descuento, condicion especial de pago, instalacion compleja, proyecto sobre $2.000.000, solicitud con urgencia alta, cliente envia comprobante, cliente solicita factura, cliente requiere programacion, cliente solicita cambio de fecha, cliente pregunta por despacho ya comprometido, cliente pide confirmacion de stock real, cliente envia fotos para evaluacion, cliente escribe mas de dos veces sin quedar resuelto.
+El agente debe derivar a humano en estos casos: cliente pide hablar con ejecutiva, cliente molesto, reclamo, garantia, Orden de Compra, solicitud de descuento, condicion especial de pago, instalacion compleja, proyecto sobre $2.000.000, solicitud con urgencia alta, cliente envia comprobante, cliente solicita factura, cliente requiere programacion, cliente solicita cambio de fecha, cliente pregunta por despacho ya comprometido, cliente pide confirmacion de stock real, cliente envia fotos para evaluacion, cliente escribe mas de dos veces sin quedar resuelto.
+
+Que el cliente sea una empresa no es, por si solo, motivo de derivacion: una empresa cotiza por el flujo normal.
+
+Toda derivacion comercial, incluidas las de empresa u Orden de Compra, va al area de Ventas (Ejecutiva comercial). No existe un area B2B con responsables propios.
 
 Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te derivare con una ejecutiva del equipo Hormiglass, quien revisara tu caso y continuara la atencion."
 
@@ -684,7 +706,7 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 
 ## 23. Priorizacion de derivaciones
 
-- Prioridad alta: Lead A, instalacion, proyecto sobre $2.000.000, cliente con urgencia, cliente B2B, reclamo, garantia, pago enviado, despacho o instalacion programada con problema.
+- Prioridad alta: Lead A, instalacion, proyecto sobre $2.000.000, cliente con urgencia, reclamo, garantia, pago enviado, despacho o instalacion programada con problema.
 - Prioridad media: Lead B, material sobre $500.000, cliente con medidas, cliente con intencion clara, cliente antiguo.
 - Prioridad baja: Consulta general, venta menor, cliente sin datos, exploracion inicial.
 
@@ -698,7 +720,7 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 
 ### 24.2 Solicitud de datos para cotizar
 
-"Para cotizarte bien necesito algunos datos: producto que buscas, cantidad o medidas aproximadas y si necesitas despacho, retiro o instalacion. Si corresponde despacho, instalacion o B2B, tambien necesito la comuna."
+"Para cotizarte bien necesito algunos datos: producto que buscas, cantidad o medidas aproximadas y si necesitas despacho, retiro o instalacion. Si corresponde despacho o instalacion, tambien necesito la comuna."
 
 ### 24.3 Instalacion
 
@@ -708,9 +730,9 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 
 "Para revisar despacho necesito comuna, direccion aproximada, producto, cantidad y fecha estimada de entrega."
 
-### 24.5 B2B
+### 24.5 Cliente empresa
 
-"Como es una solicitud de empresa/constructora, necesito algunos datos para derivarte al area B2B: nombre de empresa, RUT, obra, comuna, producto, cantidad, plazo requerido y si cuentan con Orden de Compra."
+No hay copy propio: una empresa recibe la misma respuesta que cualquier cliente segun su modalidad. El agente no anuncia un area B2B ni pide una lista de datos de empresa por adelantado.
 
 ### 24.6 Comprobante de pago
 
@@ -767,7 +789,9 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 - Medidas enviadas.
 - Comentario del cliente.
 
-### 25.3 Campos B2B
+### 25.3 Campos de empresa (opcionales)
+
+Se registran solo si el cliente los aporta. Ninguno es obligatorio ni bloquea la creacion del lead:
 
 - Empresa.
 - RUT empresa.
@@ -797,7 +821,6 @@ Mensaje de derivacion: "Gracias por la informacion. Para seguir correctamente te
 - Pendiente datos cliente.
 - Cotizacion solicitada.
 - Derivado a ventas.
-- Derivado B2B.
 - Derivado Finanzas.
 - Derivado Postventa.
 - Reclamo urgente.
@@ -828,9 +851,9 @@ Si el cliente indica comuna, guardar campo.
 
 Si menciona instalar, instalacion, maestro, obra, terreno o retiro de escombros, marcar posible instalacion.
 
-### A-005 — Detectar B2B
+### A-005 — Detectar cliente empresa
 
-Si menciona constructora, empresa, OC, licitacion, obra o factura, clasificar como Lead D.
+Si menciona constructora, empresa, OC, licitacion, obra o factura, registrar la senal como informacion para la vendedora. No cambia el flujo, no agrega campos obligatorios y no abre un canal aparte.
 
 ### A-006 — Detectar Lead A
 
@@ -902,7 +925,7 @@ Mensaje de cierre: "Gracias. Deje registrada tu solicitud y el siguiente paso es
 
 1. "Cuanto sale el metro de cierre": no entregar solo precio; preguntar comuna, metros, modalidad, uso y fecha.
 2. "En otro lado me sale mas barato": explicar costo total y comparar inclusiones sin bajar precio automaticamente.
-3. "Soy de una constructora, necesito cotizar 500 metros": clasificar B2B y pedir empresa, RUT, obra, comuna, producto, cantidad, plazo y OC.
+3. "Soy de una constructora, necesito cotizar 500 metros": seguir el flujo normal de cotizacion (producto, cantidad, modalidad). No pedir empresa, RUT, obra ni OC como requisito, y no anunciar un area B2B.
 4. "Te mande comprobante, cuando despachan?": indicar que Finanzas debe validar y derivar.
 5. "Quiero instalar pastelones en mi patio": pedir comuna, metros, fotos, terreno, acceso, fecha y retiro de escombros.
 6. "Necesito factura": pedir datos de facturacion y derivar a Finanzas/Administracion.
@@ -951,8 +974,8 @@ El agente se considera correctamente configurado si:
 4. Detecta intencion del cliente.
 5. Levanta datos minimos.
 6. Usa diagnostico D.A.T.O.S.
-7. Clasifica Leads A/B/C/D.
-8. Detecta B2B.
+7. Clasifica Leads A/B/C/D como informacion para la vendedora.
+8. Reconoce al cliente empresa sin abrirle un flujo aparte.
 9. Detecta instalacion.
 10. Pregunta por retiro de escombros cuando corresponde.
 11. Maneja objeciones sin bajar precio automaticamente.
@@ -983,7 +1006,7 @@ El resumen de oportunidad debe incluir:
 - Fotos adjuntas.
 - Requiere factura.
 - OC.
-- Siguiente paso recomendado: llamar, cotizar, pedir datos, derivar B2B, revisar pago o revisar reclamo.
+- Siguiente paso recomendado: llamar, cotizar, pedir datos, revisar pago o revisar reclamo.
 - Comentario breve del agente.
 
 ---
