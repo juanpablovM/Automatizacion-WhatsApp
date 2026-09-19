@@ -850,87 +850,6 @@
           "name": "Postgres CRM App Local"
         }
       }
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const CONTRACT_MODES = new Set(['legacy', 'shadow', 'canary', 'enforce']);\n\nconst asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};\nconst safe = (value, fallback = '') => String(value ?? fallback).trim();\nconst modeVersion = (mode) => ['canary', 'enforce'].includes(mode) ? 'v3' : 'legacy';\nconst normalizeMode = (value) => {\n  const mode = safe(value, 'enforce').toLowerCase();\n  return CONTRACT_MODES.has(mode) ? mode : 'legacy';\n};\n\nconst normalizeActiveRoute = (value) => {\n  const route = asObject(value);\n  const mode = normalizeMode(route.mode ?? route.route_mode);\n  const ruleId = safe(route.rule_id ?? route.route_rule_id);\n  if (!ruleId) return null;\n  return {\n    mode,\n    contract_version: safe(route.contract_version, modeVersion(mode)),\n    rule_id: ruleId,\n  };\n};\n\nconst resolveConversationContractRoute = (turn, configuration = {}) => {\n  const input = asObject(turn);\n  const requestedMode = normalizeMode(configuration.mode);\n  const requestedRuleId = safe(configuration.rule_id, `rollout:${requestedMode}`);\n  const activeRoute = normalizeActiveRoute(input.active_route);\n  const fixed = activeRoute || {\n    mode: requestedMode,\n    contract_version: modeVersion(requestedMode),\n    rule_id: requestedRuleId,\n  };\n  const isV3 = fixed.contract_version === 'v3';\n  return {\n    schema: 'conversation_contract_route/v1',\n    turn_id: safe(input.turn_id ?? input.inbound_event_id),\n    mode: fixed.mode,\n    contract_version: fixed.contract_version,\n    rule_id: fixed.rule_id,\n    route_replayed: Boolean(activeRoute),\n    route_drift_detected: Boolean(activeRoute)\n      && (activeRoute.mode !== requestedMode || activeRoute.rule_id !== requestedRuleId),\n    shadow_requested: fixed.mode === 'shadow',\n    visible_contract: fixed.mode === 'shadow' ? 'legacy' : fixed.contract_version,\n    recovery_contract: isV3 ? 'v3' : 'legacy',\n    legacy_reinterpretation_allowed: !isV3,\n  };\n};\n\nconst planShadowEvaluation = ({ route, legacy_delivery: legacyDelivery, payload }) => {\n  const fixedRoute = asObject(route);\n  const delivery = asObject(legacyDelivery);\n  const source = asObject(payload);\n  const dispatch = fixedRoute.mode === 'shadow' && delivery.delivered === true\n    && Boolean(safe(delivery.receipt_ref));\n  return {\n    schema: 'ai_prd_shadow_dispatch/v1',\n    dispatch,\n    reason: dispatch ? 'post_delivery' : 'not_eligible',\n    turn_id: safe(fixedRoute.turn_id),\n    route_rule_id: safe(fixedRoute.rule_id),\n    legacy_delivery_receipt_ref: safe(delivery.receipt_ref) || null,\n    wait_for_completion: false,\n    visible_latency_ms: 0,\n    allow_mutations: false,\n    allow_effects: false,\n    payload: {\n      ...source,\n      shadow_mode: true,\n      state_mutations: [],\n      effect_requests: [],\n      authorized_mutations: [],\n      authorized_effect_requests: [],\n    },\n  };\n};\n\nconst recordShadowEvaluation = (plan, outcome) => {\n  const dispatch = asObject(plan);\n  const result = asObject(outcome);\n  const ok = result.ok === true;\n  return {\n    schema: 'ai_prd_shadow_audit/v1',\n    turn_id: safe(dispatch.turn_id),\n    route_rule_id: safe(dispatch.route_rule_id),\n    legacy_delivery_receipt_ref: safe(dispatch.legacy_delivery_receipt_ref) || null,\n    status: ok ? 'completed' : 'failed',\n    error: ok ? null : safe(result.error, 'shadow_failed'),\n    duration_ms: Math.max(0, Number(result.duration_ms || 0)),\n    visible_delivery_affected: false,\n    mutations_applied: 0,\n    effects_executed: 0,\n  };\n};\n\nmodule.exports = {\n  CONTRACT_MODES,\n  resolveConversationContractRoute,\n  planShadowEvaluation,\n  recordShadowEvaluation,\n  get buildV3PolicyInput() { return require('./v3-policy-builder.js').buildV3PolicyInput; },\n};\n\n\n// This node runs after outbound delivery, so by the time it sees an item the\n// lane has been through `Merge Outbound Context` and `text_body` holds the reply\n// we sent, not the message the customer wrote. The shadow evaluator compiles its\n// v3 policy from this payload, so taking the turn context from here asks the\n// model to evidence observations against our own words: production compiled\n// three policies whose `turn.message.text` was the bot's question, and every\n// proposal failed on observation shape.\n//\n// `Workflow Input` is the dispatcher trigger, holding the orchestrator's output\n// before any outbound processing touched it. Take the turn from there and keep\n// only the delivery signals from the current item, which is the one lane that\n// knows whether the customer was actually served.\nreturn items.map((item) => {\n  const delivery = item.json || {};\n  let turn = delivery;\n  try {\n    turn = $('Workflow Input').first().json || delivery;\n  } catch (_error) {\n    // A replay or a recovery path may not expose the trigger item. Degrading to\n    // the current item keeps the lane alive; the gate below still refuses to\n    // dispatch anything that was not delivered.\n    turn = delivery;\n  }\n  const input = { ...turn, ...delivery, text_body: turn.text_body ?? delivery.text_body };\n  const plan = planShadowEvaluation({\n    route: input.contract_route || {\n      turn_id: input.inbound_event_id,\n      mode: input.contract_mode || input.route_mode,\n      rule_id: input.route_rule_id,\n    },\n    legacy_delivery: {\n      delivered: delivery.outbound_lane_complete === true\n        && (delivery.delivery_status === 'sent' || delivery.outbound_dispatch_status === 'already_sent'),\n      receipt_ref: delivery.delivery_receipt_ref || delivery.outbound_message_id || delivery.external_message_id,\n    },\n    payload: input,\n  });\n  return { json: { ...delivery, shadow_plan: plan, shadow_dispatch: plan.dispatch, shadow_payload: plan.payload } };\n});\n"
-      },
-      "id": "v3-shadow-01",
-      "name": "Prepare AI PRD Shadow",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1260,
-        40
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "v3-shadow-02-condition",
-              "leftValue": "={{ $json.shadow_dispatch === true }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "v3-shadow-02",
-      "name": "Should Dispatch AI PRD Shadow?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        1460,
-        40
-      ]
-    },
-    {
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "__PENDIENTE_AI_PRD_SHADOW__",
-          "mode": "id"
-        },
-        "options": {
-          "waitForSubWorkflow": false
-        }
-      },
-      "id": "v3-shadow-03",
-      "name": "Dispatch AI PRD Shadow",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        1660,
-        0
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const out = (items || []).map((i) => ({ json: { ...i.json, shadow_lane: \"complete\" } })); return out;"
-      },
-      "id": "1",
-      "name": "Shadow Lane Complete",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1860,
-        40
-      ]
     }
   ],
   "connections": {
@@ -1022,11 +941,6 @@
             "node": "Merge Dispatch Completion",
             "type": "main",
             "index": 1
-          },
-          {
-            "node": "Prepare AI PRD Shadow",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -1439,46 +1353,6 @@
         [
           {
             "node": "V3 Delivery Result?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Dispatch AI PRD Shadow": {
-      "main": [
-        [
-          {
-            "node": "Shadow Lane Complete",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Should Dispatch AI PRD Shadow?": {
-      "main": [
-        [
-          {
-            "node": "Dispatch AI PRD Shadow",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Shadow Lane Complete",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare AI PRD Shadow": {
-      "main": [
-        [
-          {
-            "node": "Should Dispatch AI PRD Shadow?",
             "type": "main",
             "index": 0
           }

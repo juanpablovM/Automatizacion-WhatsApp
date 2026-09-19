@@ -65,6 +65,8 @@ El preflight rechaza un conjunto de workflows legacy aunque sus nombres y enlace
 
 El runtime vigente quedó verificado con `enforce`, 48 nodos en el orquestador y 46 en el dispatcher, preservando los 19 IDs y su activación/publicación. Una aceptación real detectó un binding faltante del handoff normal; el fix ya está desplegado y pasaron **641 pruebas en 60 archivos**, la E2E aislada, paridad y readiness. El turno afectado fue abortado sin efectos ni salida y solo se archivó la sesión controlada configurada. Falta una nueva aceptación por WhatsApp real posterior al fix; esto no certifica el cierre del PRD. Ver [estado actual y evidencia](./docs/estado-actual.md#verificación-vigente-al-15-de-septiembre).
 
+Con v3 ya aplicada como predeterminada, el carril shadow del dispatcher quedó sin pregunta que responder y se retiró: en el repositorio el dispatcher pasa de 46 a 42 nodos, pendiente de sincronizar al runtime. El workflow evaluador se conserva inactivo para reutilizar su motor de veredicto. Ver [carril shadow retirado](./docs/estado-actual.md#carril-shadow-retirado).
+
 ## Alcance actual
 
 Hoy el repo cubre:

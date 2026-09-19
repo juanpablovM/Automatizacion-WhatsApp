@@ -1,3 +1,12 @@
+// Kept on purpose after the live shadow lane was removed. The rollout this node
+// served is over — v3 is the enforced default — and nothing dispatches this
+// evaluator any more. What survives is the validator-verdict logic below, and
+// above all the `not_evaluated` status: a provider error, a rate limit or a
+// throwing validator must never be recorded as a rejected proposal. A verdict
+// engine that cannot tell "the model failed the contract" from "we never got an
+// answer back" reports a false rejection rate, and that distinction is exactly
+// what a later conversational eval suite needs to score against this file.
+//
 // `Execute Shadow AI Advisor` is a sub-workflow call, so it replaces the item
 // with the advisor's own output. In the legacy branch that output is an
 // explicit allowlist which echoes neither `conversation_id`, `turn_policy` nor

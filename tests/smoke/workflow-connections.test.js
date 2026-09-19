@@ -35,8 +35,6 @@ const ALLOWED_TERMINALS = {
   'wa-inbound-downstream-dispatcher.json': [
     // Genuinely parallel lanes, each ending in its own completion node.
     'Dispatch Next Inbox Event', 'Upsert Early Opportunity', 'Follow-Up Lane Complete',
-    // Optional post-delivery rehearsal is fire-and-forget and never holds delivery.
-    'Shadow Lane Complete',
   ],
   'wa-inbound-entry.json': [
     // The health-check GET replies and stops; customer POSTs hand off

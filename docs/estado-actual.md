@@ -20,6 +20,29 @@ Evidencia de la corrección: [despliegue y runtime](../backups/v3-handoff-fix-20
 
 Evidencia inicial: [despliegue y verificaciones](../backups/v3-default-20260914-083919/live-deployment/result.txt), [E2E aislada](../backups/v3-default-20260914-083919/final-isolated-e2e-evidence/result.txt) y [suite completa](../backups/v3-default-20260914-083919/final-full-tests.log). Los snapshots de la regresión están en `backups/n8n-workflows-pre-takeover-20260909-160935/` y `backups/n8n-workflows-pre-lead-link-fix-20260909-163136/`.
 
+## Carril shadow retirado
+
+El rollout shadow terminó: v3 quedó desplegada, certificada y aplicada como contrato
+predeterminado, así que el carril que ejecutaba una llamada extra al asesor en cada turno
+en vivo ya no responde ninguna pregunta abierta. Además su nodo de despacho nunca resolvió
+un destino real — el enlace quedó en `__PENDIENTE_AI_PRD_SHADOW__` —, de modo que no
+aportaba cobertura sino cableado muerto.
+
+Se eliminaron del dispatcher los cuatro nodos del carril (`Prepare AI PRD Shadow`,
+`Should Dispatch AI PRD Shadow?`, `Dispatch AI PRD Shadow` y `Shadow Lane Complete`) junto
+con sus conexiones. `Outbound Lane Complete → Merge Dispatch Completion` no cambió: el
+carril terminaba en un nodo sin salida y nunca alimentó el merge.
+
+**Se conserva a propósito** `n8n/workflows/ai-prd-shadow-evaluator.json` (ya inactivo y
+ahora sin invocadores) junto con sus fixtures y pruebas. No es residuo: su motor de
+veredicto se reutilizará como núcleo de puntaje de una futura suite de evaluación
+conversacional. La propiedad que interesa es el estado `not_evaluated`, que impide contar
+un error del proveedor o un límite de tasa como propuesta rechazada.
+
+En el repositorio el dispatcher pasa de **46 a 42 nodos**. El runtime desplegado todavía
+ejecuta la versión de 46 verificada el 15 de septiembre; la diferencia se cierra en el
+próximo `sync-n8n-workflows.sh`.
+
 ---
 
 ## Corte histórico — 2026-08-29

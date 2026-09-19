@@ -5,7 +5,12 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
 node <<'NODE'
-const fs = require('fs');
+// El carril shadow en vivo se removio: el rollout v3 termino y v3 es el default
+// aplicado. Lo que sigue verificandose aca es la resolucion de ruta de las rutas
+// vivas (legacy/canary/enforce) y, sobre todo, que un rollback no mueva un turno
+// canary ya activo. Esa ultima propiedad no la cubre ningun test unitario.
+// planShadowEvaluation/recordShadowEvaluation sobreviven como nucleo de puntaje
+// para una futura suite de evaluacion conversacional; se siguen ejercitando aca.
 const {
   resolveConversationContractRoute,
   planShadowEvaluation,
@@ -62,10 +67,5 @@ if (failedShadow.visible_delivery_affected || failedShadow.status !== 'failed') 
   fail('Falla shadow afecto la entrega visible');
 }
 
-const dispatcher = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json', 'utf8'));
-const shadowNode = dispatcher.nodes.find((node) => node.name === 'Dispatch AI PRD Shadow');
-if (shadowNode?.parameters?.options?.waitForSubWorkflow !== false) {
-  fail('Dispatch AI PRD Shadow debe usar waitForSubWorkflow=false');
-}
-console.log('AI PRD rollout replay OK: 5 rutas + active-v3 rollback + shadow isolation/failure');
+console.log('AI PRD rollout replay OK: 5 rutas + active-v3 rollback + aislamiento/falla del evaluador');
 NODE
