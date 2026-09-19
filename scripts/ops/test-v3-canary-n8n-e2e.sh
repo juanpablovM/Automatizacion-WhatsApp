@@ -287,16 +287,31 @@ SELECT jsonb_build_object(
 echo "$preexisting" | jq -e 'to_entries | all(.value == 0)' >/dev/null \
   || fail "new-contact precondition was not empty: $preexisting"
 
+# n8n re-registers its webhooks asynchronously on every start, and the compose
+# healthcheck turns green before that finishes. The webhook_entity row outlives
+# a container recreate, so reading the table proves the path exists, never that
+# n8n is serving it: probe the GET healthcheck until it answers, the way the
+# deploy gate does. Call this again after every n8n restart, or the next POST
+# races the registration and comes back 404.
+wait_for_entry_webhooks() {
+  attempt=0
+  while [ "$attempt" -lt 45 ]; do
+    webhook_path=$(compose exec -T postgres psql -U test -d testdb -At -c \
+      "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\"='$entry_id' AND method='POST' AND node='EvolutionWebhook' LIMIT 1;")
+    health_path=$(compose exec -T postgres psql -U test -d testdb -At -c \
+      "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\"='$entry_id' AND method='GET' AND node='InboundHealthCheck' LIMIT 1;")
+    if [ -n "$webhook_path" ] && [ -n "$health_path" ] && curl --noproxy '*' -fsS \
+      "http://${TEST_N8N_HOST}:5678/webhook/$health_path" >/dev/null 2>&1; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  fail "Entry webhooks were not served after activation"
+}
+
 webhook_path=
-attempt=0
-while [ "$attempt" -lt 45 ]; do
-  webhook_path=$(compose exec -T postgres psql -U test -d testdb -At -c \
-    "SELECT \"webhookPath\" FROM webhook_entity WHERE \"workflowId\"='$entry_id' AND method='POST' AND node='EvolutionWebhook' LIMIT 1;")
-  [ -n "$webhook_path" ] && break
-  attempt=$((attempt + 1))
-  sleep 1
-done
-[ -n "$webhook_path" ] || fail "Entry POST webhook was not activated"
+wait_for_entry_webhooks
 
 build_payload() {
   jq -nc --arg message_id "$1" --arg text "$2" --arg timestamp "$(date +%s)" --arg phone_number "${3:-15550001111}" '{
@@ -863,6 +878,7 @@ export TEST_AI_PRD_CONTRACT_MODE=enforce
 export TEST_AI_PRD_CONTRACT_RULE_ID=rollout:enforce:v3-default
 compose up -d --wait --force-recreate n8n
 TEST_N8N_HOST=$(resolve_internal_host n8n)
+wait_for_entry_webhooks
 compose exec -T n8n sh -eu -c '
   test "$AI_PRD_CONTRACT_MODE" = enforce
   test "$AI_PRD_CONTRACT_RULE_ID" = rollout:enforce:v3-default
