@@ -86,6 +86,29 @@ function buildV3ContingencyDecision({ policy, reason, expectedSnapshotDigest }) 
   return { ...decision, decision_digest: digestObject(decision) };
 }
 
+// `Normalize AI Result` already separates a provider that never answered from a
+// model that answered badly: only a non-2xx response leaves `provider_error` or
+// `rate_limited`, while `invalid_json`, `intent_mismatch` and `low_confidence`
+// all mean the reply arrived and was poor, which is exactly what repair is for.
+// `missing_ai_request` stays off this list on purpose, because a request we
+// failed to build is our own misconfiguration and must not hide behind the
+// provider. `planV3Recovery` has had an `outage` branch from the start, but
+// nothing ever wrote `v3_provider_outcome`, so it read its default: every outage
+// was filed as `repair_exhausted`, indistinguishable from a proposal we could
+// not fix, and the turn first spent a repair call on a provider that had just
+// refused two. The merge suffixes the AI side, so the signal is read the way the
+// rejected proposal is.
+const PROVIDER_SILENT_REASONS = new Set(['provider_error', 'rate_limited']);
+const resolveV3ProviderOutcome = (mergedInput, input) => {
+  const source = mergedInput && typeof mergedInput === 'object' ? mergedInput : {};
+  const canonical = input && typeof input === 'object' ? input : {};
+  if (canonical.v3_provider_outcome) return canonical.v3_provider_outcome;
+  const reason = source.ai_fallback_reason
+    ?? source.ai_fallback_reason_2
+    ?? source.ai_fallback_reason_1;
+  return PROVIDER_SILENT_REASONS.has(String(reason ?? '')) ? 'outage' : 'accepted';
+};
+
 function planV3Recovery({
   policy, validation, repairAttempt = 0, providerOutcome = 'accepted', preTurnState,
   expectedSnapshotDigest, proposal = null,
@@ -181,6 +204,7 @@ if (typeof module !== 'undefined' && module.exports) {
     digestObject,
     cloneJsonValue,
     canonicalizeMergedTurnItem,
+    resolveV3ProviderOutcome,
     buildV3RepairRequest,
     buildV3ContingencyDecision,
     planV3Recovery,
@@ -194,11 +218,12 @@ const mergedInput = items[0]?.json ?? {};
 const rejectedProposal = mergedInput.ai_proposal ?? mergedInput.ai_proposal_2 ?? mergedInput.ai_proposal_1 ?? null;
 const input = canonicalizeMergedTurnItem(mergedInput);
 const policy = input.v3_policy || input.turn_policy;
+const providerOutcome = resolveV3ProviderOutcome(mergedInput, input);
 const v3Recovery = planV3Recovery({
   policy,
   validation: input.v3_validation ?? null,
   repairAttempt: Number(input.v3_repair_attempt || 0),
-  providerOutcome: input.v3_provider_outcome || 'accepted',
+  providerOutcome,
   preTurnState: input.qualification_context || {},
   expectedSnapshotDigest: input.expected_snapshot_digest || null,
   proposal: rejectedProposal,
@@ -206,6 +231,7 @@ const v3Recovery = planV3Recovery({
 return [{ json: {
   ...input,
   v3_recovery: v3Recovery,
+  v3_provider_outcome: providerOutcome,
   v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),
   ai_repair_request: v3Recovery.repair_request || null,
   turn_policy: v3Recovery.repair_request?.policy || policy,
