@@ -211,7 +211,7 @@ SELECT
   (SELECT COUNT(*) FROM conversations WHERE phone_number='15550001111'),
   (SELECT current_step FROM conversations WHERE id=$conversation_id),
   (SELECT COUNT(*) FROM messages WHERE conversation_id=$conversation_id),
-  (SELECT COUNT(*) FROM messages WHERE conversation_id=$conversation_id AND direction='outgoing' AND delivery_status='sent' AND text_body='¡Hola de nuevo! ¿Preferís continuar con la solicitud anterior o iniciar una nueva?'),
+  (SELECT COUNT(*) FROM messages WHERE conversation_id=$conversation_id AND direction='outgoing' AND delivery_status='sent' AND text_body='¡Hola de nuevo! ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?'),
   (SELECT COUNT(*) FROM follow_ups WHERE conversation_id=$conversation_id AND cycle_key='synthetic-old-cycle' AND estado='cancelled'),
   (SELECT COUNT(*) FROM follow_ups WHERE conversation_id=$conversation_id AND cycle_key='inbound:event:2' AND estado='pending'),
   (SELECT COUNT(*) FROM audit_logs WHERE entity_type='conversation' AND entity_id=$conversation_id AND event_name='follow_up_inbound_policy'),

@@ -47,6 +47,43 @@ const parseStructuredOutput = (value) => {
     return JSON.parse(text.slice(start, end + 1));
   }
 };
+const usesV3Contract = safe(row.ai_contract_version).toLowerCase() === 'v3'
+  || row.turn_policy?.version === 'ai_prd_turn_policy/v3';
+if (usesV3Contract) {
+  const statusCode = Number(row.ai_status_code || 0);
+  const responseOk = !row.ai_skipped && statusCode >= 200 && statusCode < 300;
+  let proposal = null;
+  let outputText = '';
+  let parseError = null;
+  if (responseOk) {
+    outputText = extractOutputText(row.ai_response);
+    try {
+      proposal = JSON.parse(outputText);
+    } catch (error) {
+      parseError = error.message;
+    }
+  }
+  const fallbackReason = row.ai_request_error
+    ? row.ai_request_error
+    : row.ai_skipped
+      ? row.ai_skip_reason || 'skipped'
+      : !responseOk
+        ? statusCode === 429 ? 'rate_limited' : 'provider_error'
+        : parseError
+          ? 'invalid_json'
+          : null;
+  return [{
+    json: {
+      ...row,
+      ai_contract_version: 'v3',
+      ai_parse_error: parseError,
+      ai_fallback_reason: fallbackReason,
+      ai_raw_output: outputText,
+      ai_proposal: proposal,
+      reply_text: proposal && typeof proposal.reply_text === 'string' ? proposal.reply_text : '',
+    },
+  }];
+}
 const uniqueMissing = (fields) => [...new Set(fields.filter(Boolean))];
 const requiredMissingFromFields = (fields) => ['service', 'city', 'requirement'].filter((field) => !safe(fields[field]));
 
@@ -221,21 +258,25 @@ const inferIntentFromMessage = (value) => {
 const PRODUCT_TERM_RE = /\b(adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|armado|losa|loseta|viga|muro|solera|cierre|cierro|tapa)\w*\b/i;
 const SERVICE_EVIDENCE_RE = /\b(instal\w+|despach\w+|retir\w*|suministr\w+|env\w*|transporte|domicilio)\b/;
 const SUMMINISTRO_MODALITY_RE = /\b(suministr|solo material|solo el material)\b/;
-const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material']);
+const PRODUCT_PHRASE_STOPWORDS = new Set(['para', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'en', 'con', 'del', 'al', 'y', 'que', 'mi', 'mis', 'tu', 'por', 'se', 'me', 'necesito', 'quiero', 'cotizar', 'comprar', 'tengo', 'solo', 'material', 'no', 'actualmente', 'actual', 'existente', 'sino']);
 const productPhraseFromClient = (text, matches) => {
   const normalized = normalizeText(text);
-  const match = normalized.match(PRODUCT_TERM_RE);
+  const requestedText = normalized
+    .replace(/\b(?:tiene|tengo|hay)\b.*?\b(?:actualmente|actual|existente)\b/g, ' ')
+    .replace(/\b(?:retirar|sacar|demoler|quitar)\b.*?(?=\b(?:quiero|necesito|instalar|cotizar|comprar)\b|$)/g, ' ')
+    .replace(/\b(?:no|no es|no son)\s+(?:una?\s+)?(?:adocesped|adocreto|adoquin|baldos|pastelon|solerill|bloque|placa|poste|maceter|cemento|pigmento|cuarzo|hormigon|losa|viga|muro|solera|cierre|cierro|tapa)\w*(?:\s+de hormigon)?/g, ' ');
+  const match = requestedText.match(PRODUCT_TERM_RE);
   if (!match) return null;
   const grounded = (Array.isArray(matches) ? matches : [])
     .map((item) => safe(item.name))
     .filter(Boolean)
     .find((name) => {
       const head = String(name).toLowerCase().split(/\s+/)[0];
-      return head && normalized.includes(head);
+      return head && requestedText.includes(head);
     });
   if (grounded) return safe(grounded);
   const tail = [];
-  for (const word of normalized.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
+  for (const word of requestedText.slice(match.index + match[0].length).split(/\s+/).filter(Boolean)) {
     if (/\d|[.,/]/.test(word) || word.endsWith('m2')) break;
     if (PRODUCT_PHRASE_STOPWORDS.has(word)) break;
     tail.push(word);
@@ -272,7 +313,7 @@ const allowedQuestionKeys = new Set(['none', 'need', 'product', 'commune', 'moda
 const allowedUpdateKeys = new Set(['name', 'product', 'commune', 'quantity', 'measurements', 'use_case', 'modality', 'urgency', 'desired_date', 'photos', 'terrain', 'truck_access', 'debris_removal', 'customer_type', 'company', 'company_rut', 'contact_name', 'contact_role', 'email', 'purchase_order', 'invoice_required', 'address', 'access_restrictions', 'reception_contact', 'sale_number', 'purchase_date', 'issue_description', 'payment_amount', 'payment_method', 'quote_number']);
 const sanitizeFieldUpdates = (value) => Object.fromEntries(
   Object.entries(compactObject(value))
-    .filter(([key, fieldValue]) => allowedUpdateKeys.has(key) && (fieldValue === null || ['string', 'boolean'].includes(typeof fieldValue)))
+    .filter(([key, fieldValue]) => allowedUpdateKeys.has(key) && (fieldValue === null || ['string', 'boolean'].includes(typeof fieldValue) || (['quantity', 'measurements'].includes(key) && typeof fieldValue === 'number' && Number.isFinite(fieldValue))))
     .map(([key, fieldValue]) => [key, typeof fieldValue === 'string' ? safe(fieldValue) : fieldValue])
 );
 const sanitizeDatos = (value) => {
@@ -309,13 +350,22 @@ const contextualIntent = contextualBooleanAnswer && ['confirmation_yes', 'confir
 const confirmationSatisfied = pendingQuestionKey === 'final_confirmation'
   && confirmationStatus === 'confirmed'
   && parsed.intent === 'confirmation_yes';
-const baseMissingFields = requiredMissingFromFields(acceptedFields);
+const existingQualificationContext = compactObject(row.ai_context?.qualification_context);
+// Retirar material en fábrica vuelve inaplicable la ciudad del cliente, y eso
+// vale igual para una empresa: no existe una vía comercial separada que
+// reinstale la pregunta.
+const pickupWithoutProjectLocation = parsed.modality === 'pickup'
+  || existingQualificationContext.modality === 'pickup';
+const baseMissingFields = requiredMissingFromFields(acceptedFields)
+  .filter((field) => field !== 'city' || !pickupWithoutProjectLocation);
 const missingFields = uniqueMissing([
   ...baseMissingFields,
   ...parsedMissingFields.filter((field) => field === 'confirmation' || baseMissingFields.includes(field)),
   ...(confirmationSatisfied ? [] : ['confirmation']),
 ]);
-const hasRequiredLeadFields = Boolean(acceptedFields.service && acceptedFields.city && acceptedFields.requirement);
+const hasRequiredLeadFields = Boolean(acceptedFields.service
+  && (acceptedFields.city || pickupWithoutProjectLocation)
+  && acceptedFields.requirement);
 const modelShouldCreateLead = Boolean(parsed.should_create_lead);
 const guardedShouldCreateLead = modelShouldCreateLead && hasRequiredLeadFields && confirmationSatisfied && confidence >= 0.75 && !parseError;
 
@@ -482,4 +532,3 @@ return [
     },
   },
 ];
-

@@ -21,7 +21,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// =============================================================================\n// OPS - Handoff ClickUp Closure — Normalize ClickUp Closure\n// -----------------------------------------------------------------------------\n// Turns an inbound ClickUp webhook into the two values the closure query needs:\n// the task id and the requested handoff state.\n//\n// This is the project's first inbound integration, so the node is deliberately\n// strict about what it accepts:\n//   - the HMAC signature must verify before any payload field is read\n//   - only task status changes are actionable; every other ClickUp event is\n//     acknowledged and ignored rather than treated as an error\n//   - an unmapped status is ignored too, so renaming a column in ClickUp can\n//     never silently advance a handoff\n//\n// Authentication follows ClickUp's documented webhook contract: every delivery\n// carries an X-Signature header holding the hex HMAC-SHA256 digest of the raw\n// request body, keyed by the webhook's own secret. ClickUp never sends a bearer\n// token or a shared secret in the clear, so there is no plaintext path to\n// accept — offering one would reject every genuine delivery while widening the\n// attack surface.\n//\n// Status mapping is configuration, not code. CLICKUP_STATUS_ACKNOWLEDGED and\n// CLICKUP_STATUS_RESOLVED hold comma-separated ClickUp status names; matching\n// is case-insensitive and whitespace-tolerant because ClickUp status names are\n// user-editable labels.\n//\n// Output (always exactly one item):\n//   { authorized, actionable, clickup_task_id, estado, reason }\n// =============================================================================\n\nconst DEFAULT_ACKNOWLEDGED_STATUSES = 'in progress,en progreso,en curso';\nconst DEFAULT_RESOLVED_STATUSES = 'complete,completed,closed,done,cerrado,resuelto';\n\nconst parseStatusList = (raw, fallback) => String(raw || fallback)\n  .split(',')\n  .map((entry) => entry.trim().toLowerCase())\n  .filter(Boolean);\n\nconst reject = (reason) => [{\n  json: {\n    authorized: false,\n    actionable: false,\n    clickup_task_id: null,\n    estado: null,\n    reason,\n  },\n}];\n\nconst ignore = (reason, clickupTaskId = null) => [{\n  json: {\n    authorized: true,\n    actionable: false,\n    clickup_task_id: clickupTaskId,\n    estado: null,\n    reason,\n  },\n}];\n\nconst input = items[0] ? items[0].json || {} : {};\nconst body = input.body || {};\nconst headers = input.headers || {};\n// The query string is deliberately unused: a signed body is the only accepted\n// proof of origin, and a token in the URL would leak through logs and referrers.\n\n// --- Authentication ---------------------------------------------------------\n// The secret is required. An unset secret must never mean \"allow everyone\":\n// this endpoint can advance operational state, so it fails closed.\nconst crypto = require('crypto');\n\nconst webhookSecret = String($env.CLICKUP_WEBHOOK_SECRET || '');\nif (!webhookSecret) {\n  return reject('clickup_webhook_secret_not_configured');\n}\n\nconst presentedSignature = String(\n  headers['x-signature'] || headers['X-Signature'] || '',\n).trim();\n\nif (!presentedSignature) {\n  return reject('missing_signature');\n}\n\n// ClickUp signs the exact bytes it sent. n8n has already parsed the JSON, so\n// prefer a raw body when the webhook node provides one and fall back to a\n// separator-free re-serialization, which is the reconstruction ClickUp\n// documents for clients that auto-parse. JSON.parse preserves key insertion\n// order, so the round trip reproduces the original bytes for ClickUp payloads.\nconst rawBody = typeof input.rawBody === 'string'\n  ? input.rawBody\n  : JSON.stringify(body);\n\nconst expectedSignature = crypto\n  .createHmac('sha256', webhookSecret)\n  .update(rawBody, 'utf8')\n  .digest('hex');\n\n// Compare in constant time. Buffers of unequal length make timingSafeEqual\n// throw, so the length check comes first and leaks only the length.\nconst presentedDigest = Buffer.from(presentedSignature, 'utf8');\nconst expectedDigest = Buffer.from(expectedSignature, 'utf8');\nconst signatureMatches = presentedDigest.length === expectedDigest.length\n  && crypto.timingSafeEqual(presentedDigest, expectedDigest);\n\nif (!signatureMatches) {\n  return reject('invalid_signature');\n}\n\n// --- Event shape ------------------------------------------------------------\nconst eventName = String(body.event || '').trim();\nif (eventName !== 'taskStatusUpdated') {\n  return ignore(`unsupported_event:${eventName || 'missing'}`);\n}\n\nconst clickupTaskId = String(body.task_id || '').trim();\nif (!clickupTaskId) {\n  return ignore('missing_task_id');\n}\n\n// ClickUp reports the transition inside history_items; the last entry carries\n// the status the task ended up in.\nconst historyItems = Array.isArray(body.history_items) ? body.history_items : [];\nconst statusChange = historyItems\n  .filter((entry) => entry && entry.field === 'status' && entry.after)\n  .pop();\n\nconst afterStatus = statusChange && statusChange.after\n  ? String(statusChange.after.status || '').trim().toLowerCase()\n  : '';\n\nif (!afterStatus) {\n  return ignore('missing_status_change', clickupTaskId);\n}\n\n// --- Status mapping ---------------------------------------------------------\nconst acknowledgedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_ACKNOWLEDGED,\n  DEFAULT_ACKNOWLEDGED_STATUSES,\n);\nconst resolvedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_RESOLVED,\n  DEFAULT_RESOLVED_STATUSES,\n);\n\n// Resolved wins when a status appears in both lists: closing is the stronger\n// claim, and an operator who lists a status twice most likely means \"done\".\nlet estado = null;\nif (resolvedStatuses.includes(afterStatus)) {\n  estado = 'resolved';\n} else if (acknowledgedStatuses.includes(afterStatus)) {\n  estado = 'acknowledged';\n}\n\nif (!estado) {\n  return ignore(`unmapped_status:${afterStatus}`, clickupTaskId);\n}\n\nreturn [{\n  json: {\n    authorized: true,\n    actionable: true,\n    clickup_task_id: clickupTaskId,\n    estado,\n    reason: `status:${afterStatus}`,\n  },\n}];\n"
+        "jsCode": "// =============================================================================\n// OPS - Handoff ClickUp Closure — Normalize ClickUp Closure\n// -----------------------------------------------------------------------------\n// Turns an inbound ClickUp webhook into the values two lanes need: the task id\n// and the requested handoff state for the closure query, and the ClickUp status\n// transition itself for commercial lead chat ownership.\n//\n// This is the project's first inbound integration, so the node is deliberately\n// strict about what it accepts:\n//   - the HMAC signature must verify before any payload field is read\n//   - only task status changes are actionable; every other ClickUp event is\n//     acknowledged and ignored rather than treated as an error\n//   - an unmapped status is ignored too, so renaming a column in ClickUp can\n//     never silently advance a handoff\n//\n// Authentication follows ClickUp's documented webhook contract: every delivery\n// carries an X-Signature header holding the hex HMAC-SHA256 digest of the raw\n// request body, keyed by the webhook's own secret. ClickUp never sends a bearer\n// token or a shared secret in the clear, so there is no plaintext path to\n// accept — offering one would reject every genuine delivery while widening the\n// attack surface.\n//\n// Status mapping is configuration, not code. CLICKUP_STATUS_ACKNOWLEDGED and\n// CLICKUP_STATUS_RESOLVED hold comma-separated ClickUp status names; matching\n// is case-insensitive and whitespace-tolerant because ClickUp status names are\n// user-editable labels.\n//\n// The lead chat ownership lane rides on the same delivery but does not share\n// the closure lane's verdict. A salesperson owns the chat while the task sits\n// in 'in progress' and stops owning it on any transition out of it — including\n// a transition to a status the handoff mapping does not know. So `lead_routable`\n// is decided from the event shape alone and stays true where `actionable` is\n// false; reading `actionable` for both lanes would silently drop that release.\n//\n// Output (always exactly one item):\n//   { authorized, actionable, clickup_task_id, estado, reason }\n// plus, on every authorized item:\n//   { clickup_history_id, clickup_history_at, clickup_previous_status,\n//     clickup_new_status, is_ownership_acquisition, lead_routable }\n// An unauthorized item keeps the original five fields and carries none of the\n// ownership ones: nothing downstream may act on a payload that failed HMAC.\n// =============================================================================\n\nconst DEFAULT_ACKNOWLEDGED_STATUSES = 'in progress,en progreso,en curso';\nconst DEFAULT_RESOLVED_STATUSES = 'complete,completed,closed,done,cerrado,resuelto';\n\nconst parseStatusList = (raw, fallback) => String(raw || fallback)\n  .split(',')\n  .map((entry) => entry.trim().toLowerCase())\n  .filter(Boolean);\n\n// ClickUp stamps history entries with epoch milliseconds carried in a string\n// (\"1568036964079\"). The ownership queries take a timestamptz, so the\n// conversion happens here rather than being left to the driver to guess. An\n// unusable value becomes null, which those queries already read as \"no ordering\n// evidence\" instead of failing the delivery.\nconst toIsoTimestamp = (value) => {\n  if (value === null || value === undefined) return null;\n  const raw = String(value).trim();\n  if (!raw) return null;\n  const epochMs = /^-?\\d+$/.test(raw) ? Number(raw) : Date.parse(raw);\n  if (!Number.isFinite(epochMs)) return null;\n  const parsed = new Date(epochMs);\n  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();\n};\n\n// Verbatim on purpose. `before.status` is the label an expired lease writes back\n// to ClickUp, and a trimmed or lowercased copy would restore a status the space\n// does not have.\nconst verbatimStatus = (side) => {\n  if (!side || side.status === null || side.status === undefined) return null;\n  return typeof side.status === 'string' ? side.status : String(side.status);\n};\n\n// Ownership fields travel on every authorized item so the routing IF nodes read\n// a real boolean instead of an absent key.\nconst EMPTY_LEAD_FIELDS = {\n  clickup_history_id: null,\n  clickup_history_at: null,\n  clickup_previous_status: null,\n  clickup_new_status: null,\n  is_ownership_acquisition: false,\n  lead_routable: false,\n};\n\nconst reject = (reason) => [{\n  json: {\n    authorized: false,\n    actionable: false,\n    clickup_task_id: null,\n    estado: null,\n    reason,\n  },\n}];\n\nconst ignore = (reason, clickupTaskId = null, leadFields = {}) => [{\n  json: {\n    authorized: true,\n    actionable: false,\n    clickup_task_id: clickupTaskId,\n    estado: null,\n    reason,\n    ...EMPTY_LEAD_FIELDS,\n    ...leadFields,\n  },\n}];\n\nconst input = items[0] ? items[0].json || {} : {};\nconst body = input.body || {};\nconst headers = input.headers || {};\n// The query string is deliberately unused: a signed body is the only accepted\n// proof of origin, and a token in the URL would leak through logs and referrers.\n\n// --- Authentication ---------------------------------------------------------\n// The secret is required. An unset secret must never mean \"allow everyone\":\n// this endpoint can advance operational state, so it fails closed.\nconst crypto = require('crypto');\n\nconst webhookSecret = String($env.CLICKUP_WEBHOOK_SECRET || '');\nif (!webhookSecret) {\n  return reject('clickup_webhook_secret_not_configured');\n}\n\nconst presentedSignature = String(\n  headers['x-signature'] || headers['X-Signature'] || '',\n).trim();\n\nif (!presentedSignature) {\n  return reject('missing_signature');\n}\n\n// ClickUp signs the exact bytes it sent. n8n has already parsed the JSON, so\n// prefer a raw body when the webhook node provides one and fall back to a\n// separator-free re-serialization, which is the reconstruction ClickUp\n// documents for clients that auto-parse. JSON.parse preserves key insertion\n// order, so the round trip reproduces the original bytes for ClickUp payloads.\nconst rawBody = typeof input.rawBody === 'string'\n  ? input.rawBody\n  : JSON.stringify(body);\n\nconst expectedSignature = crypto\n  .createHmac('sha256', webhookSecret)\n  .update(rawBody, 'utf8')\n  .digest('hex');\n\n// Compare in constant time. Buffers of unequal length make timingSafeEqual\n// throw, so the length check comes first and leaks only the length.\nconst presentedDigest = Buffer.from(presentedSignature, 'utf8');\nconst expectedDigest = Buffer.from(expectedSignature, 'utf8');\nconst signatureMatches = presentedDigest.length === expectedDigest.length\n  && crypto.timingSafeEqual(presentedDigest, expectedDigest);\n\nif (!signatureMatches) {\n  return reject('invalid_signature');\n}\n\n// --- Event shape ------------------------------------------------------------\nconst eventName = String(body.event || '').trim();\nif (eventName !== 'taskStatusUpdated') {\n  return ignore(`unsupported_event:${eventName || 'missing'}`);\n}\n\nconst clickupTaskId = String(body.task_id || '').trim();\nif (!clickupTaskId) {\n  return ignore('missing_task_id');\n}\n\n// ClickUp reports the transition inside history_items; the last entry carries\n// the status the task ended up in.\nconst historyItems = Array.isArray(body.history_items) ? body.history_items : [];\nconst statusChange = historyItems\n  .filter((entry) => entry && entry.field === 'status' && entry.after)\n  .pop();\n\nconst afterStatus = statusChange && statusChange.after\n  ? String(statusChange.after.status || '').trim().toLowerCase()\n  : '';\n\nif (!afterStatus) {\n  return ignore('missing_status_change', clickupTaskId);\n}\n\n// --- Status mapping ---------------------------------------------------------\nconst acknowledgedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_ACKNOWLEDGED,\n  DEFAULT_ACKNOWLEDGED_STATUSES,\n);\nconst resolvedStatuses = parseStatusList(\n  $env.CLICKUP_STATUS_RESOLVED,\n  DEFAULT_RESOLVED_STATUSES,\n);\n\n// --- Lead chat ownership ----------------------------------------------------\n// `is_ownership_acquisition` reads the acknowledged list directly instead of the\n// mapped `estado`: the lease exists while the task is in progress, which is what\n// that list names, and `estado` collapses to 'resolved' whenever an operator\n// lists a status in both places.\n//\n// `lead_routable` is deliberately independent of `estado`. Reaching this point\n// already proves the delivery is a signed taskStatusUpdated with a task id and a\n// usable destination status, which is everything the ownership queries need.\nconst leadFields = {\n  clickup_history_id: statusChange.id === null || statusChange.id === undefined\n    ? null\n    : String(statusChange.id),\n  clickup_history_at: toIsoTimestamp(statusChange.date),\n  clickup_previous_status: verbatimStatus(statusChange.before),\n  clickup_new_status: verbatimStatus(statusChange.after),\n  is_ownership_acquisition: acknowledgedStatuses.includes(afterStatus),\n  lead_routable: Boolean(clickupTaskId) && Boolean(afterStatus),\n};\n\n// Resolved wins when a status appears in both lists: closing is the stronger\n// claim, and an operator who lists a status twice most likely means \"done\".\nlet estado = null;\nif (resolvedStatuses.includes(afterStatus)) {\n  estado = 'resolved';\n} else if (acknowledgedStatuses.includes(afterStatus)) {\n  estado = 'acknowledged';\n}\n\n// An unmapped status stays non-actionable for the handoff lane — renaming a\n// ClickUp column must never advance a handoff — but it still routes to the\n// ownership lane, which only cares that the task left 'in progress'.\nif (!estado) {\n  return ignore(`unmapped_status:${afterStatus}`, clickupTaskId, leadFields);\n}\n\nreturn [{\n  json: {\n    authorized: true,\n    actionable: true,\n    clickup_task_id: clickupTaskId,\n    estado,\n    reason: `status:${afterStatus}`,\n    ...leadFields,\n  },\n}];\n"
       },
       "id": "normalize-clickup-closure",
       "name": "Normalize ClickUp Closure",
@@ -126,18 +126,173 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closure-unknown-handoff-task",
+              "leftValue": "={{ String($json.outcome || '') }}",
+              "rightValue": "unknown_task",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-unknown-handoff-task",
+      "name": "Is Unknown Handoff Task",
+      "notes": "Una tarea comercial no mapea a ningun handoff: la consulta de cierre devuelve 'unknown_task' sin escribir nada. Ese desenlace es la puerta hacia la propiedad del chat; cualquier otro es un handoff real y responde como siempre.",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        940,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closure-lead-routable",
+              "leftValue": "={{ Boolean($json.lead_routable) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-lead-routable",
+      "name": "Is Lead Routable",
+      "notes": "Rescata la transicion que el mapeo de handoff no reconoce. La propiedad del chat se libera al salir de 'in progress' hacia cualquier estado, asi que un 'unmapped_status' sigue siendo accionable para el lead aunque no lo sea para el handoff.",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closure-ownership-acquisition",
+              "leftValue": "={{ Boolean($('Normalize ClickUp Closure').first().json.is_ownership_acquisition) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-lead-ownership",
+      "name": "Route Lead Ownership",
+      "notes": "Lee la normalizacion por nombre, no $json: una de las dos entradas llega desde el nodo Postgres de cierre, cuyo item ya reemplazo los campos del webhook.",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 01_acquire_ownership_from_clickup.sql — Adquisicion de la propiedad del chat.\n-- -----------------------------------------------------------------------------\n-- Una tarea comercial que pasa a 'in progress' otorga al vendedor la propiedad\n-- provisoria del chat: desde ese momento la IA calla hasta que la propiedad se\n-- libere (transicion fuera de 'in progress') o venza el SLA. Esta consulta es\n-- la unica puerta de entrada de esa señal.\n--\n-- Idempotencia por identidad del evento: los webhooks de ClickUp reintentan y\n-- llegan desordenados. `last_clickup_history_id` deduplica la reentrega exacta\n-- ('already_applied') y `last_clickup_event_at` descarta el evento viejo que\n-- llega tarde ('stale_event'). Sin ese segundo guard, un 'in progress' de hace\n-- una hora reasigna la propiedad que un 'complete' mas nuevo ya libero, y el\n-- bot queda mudo sin que nadie este atendiendo.\n--\n-- Efectos: inserta o refresca una fila de lead_chat_ownerships y deja traza en\n-- audit_logs. El ON CONFLICT apunta al indice parcial\n-- uq_lead_chat_ownerships_active_lead, por lo que su predicado\n-- `WHERE released_at IS NULL AND deleted_at IS NULL` debe coincidir\n-- exactamente con el de la migracion 018.\n--\n-- Sobre una propiedad ya viva el upsert refresca solo la identidad de ClickUp:\n-- NO reescribe `acquired_at` (la antiguedad del lease es evidencia) y NO\n-- pisa un `previous_clickup_status` ya capturado, porque el estado a restaurar\n-- es el que habia ANTES de la primera toma, no el de la reentrega. Una fila ya\n-- liberada nunca resucita: el indice parcial la excluye y se inserta una nueva.\n-- Si el lead ya tiene un ultimo mensaje del cliente, la adquisicion lo toma como\n-- pendiente y abre el SLA desde el instante real del cambio de estado. Esperar\n-- al proximo mensaje para iniciar el reloj dejaria un `in progress` abandonado\n-- bloqueando al bot indefinidamente.\n--\n-- Devuelve siempre exactamente una fila, incluso cuando la tarea no mapea a\n-- ningun lead ('unknown_task'), que el llamador debe tratar como entrada\n-- invalida y no como error de servidor.\n--\n-- Params:\n--   $1 clickup_task_id (text), $2 previous_status (text, estado ANTERIOR a la\n--   transicion), $3 history_id (text), $4 history_event_at (timestamptz)\n-- =============================================================================\nWITH input AS (\n  SELECT\n    NULLIF($1::text, '') AS clickup_task_id,\n    NULLIF($2::text, '') AS previous_status,\n    NULLIF($3::text, '') AS history_id,\n    NULLIF($4::text, '')::timestamptz AS history_event_at\n),\nlead_row AS (\n  SELECT l.id\n  FROM leads l\n  CROSS JOIN input i\n  WHERE i.clickup_task_id IS NOT NULL\n    AND l.clickup_task_id = i.clickup_task_id\n    AND l.deleted_at IS NULL\n  ORDER BY l.id DESC\n  LIMIT 1\n),\nlatest_customer_message AS (\n  SELECT m.id, m.created_at\n  FROM messages m\n  JOIN conversations c ON c.id = m.conversation_id\n  JOIN lead_row lr ON TRUE\n  WHERE m.deleted_at IS NULL\n    AND m.direction = 'incoming'\n    AND m.sender_type = 'customer'\n    AND (m.lead_id = lr.id OR c.lead_id = lr.id)\n  ORDER BY m.created_at DESC, m.id DESC\n  LIMIT 1\n),\n-- Ultima proyeccion conocida del lead (viva o liberada) y bloqueo de la fila.\n-- El FOR UPDATE no es decorativo: dos entregas del mismo webhook pueden correr\n-- a la vez, ambas leer \"sin historial\" y ambas clasificarse como 'acquired'.\n-- La segunda espera aqui, vuelve a leer la identidad ya escrita y se clasifica\n-- como 'already_applied'.\nprojection AS MATERIALIZED (\n  SELECT\n    o.id, o.lead_id, o.released_at, o.acquired_at, o.previous_clickup_status,\n    o.last_clickup_history_id, o.last_clickup_event_at\n  FROM lead_chat_ownerships o\n  JOIN lead_row lr ON lr.id = o.lead_id\n  WHERE o.deleted_at IS NULL\n  ORDER BY o.id DESC\n  LIMIT 1\n  FOR UPDATE OF o\n),\nclassified AS (\n  SELECT\n    lr.id AS lead_id,\n    p.id AS ownership_id,\n    p.acquired_at,\n    p.previous_clickup_status,\n    CASE\n      WHEN i.history_id IS NOT NULL\n       AND p.last_clickup_history_id = i.history_id THEN 'already_applied'\n      WHEN i.history_event_at IS NOT NULL\n       AND p.last_clickup_event_at IS NOT NULL\n       AND i.history_event_at < p.last_clickup_event_at THEN 'stale_event'\n      ELSE 'acquired'\n    END AS outcome\n  FROM lead_row lr\n  CROSS JOIN input i\n  LEFT JOIN projection p ON p.lead_id = lr.id\n),\nacquisition AS (\n  INSERT INTO lead_chat_ownerships (\n    lead_id, clickup_task_id, previous_clickup_status,\n    acquired_at, last_clickup_history_id, last_clickup_event_at,\n    pending_message_id, pending_message_at, response_due_at\n  )\n  SELECT\n    c.lead_id,\n    i.clickup_task_id,\n    i.previous_status,\n    COALESCE(i.history_event_at, NOW()),\n    i.history_id,\n    COALESCE(i.history_event_at, NOW()),\n    lcm.id,\n    lcm.created_at,\n    CASE\n      WHEN lcm.id IS NOT NULL\n        THEN COALESCE(i.history_event_at, NOW()) + INTERVAL '2 hours'\n      ELSE NULL\n    END\n  FROM classified c\n  CROSS JOIN input i\n  LEFT JOIN latest_customer_message lcm ON TRUE\n  WHERE c.outcome = 'acquired'\n  ON CONFLICT (lead_id) WHERE released_at IS NULL AND deleted_at IS NULL\n  DO UPDATE SET\n    clickup_task_id = EXCLUDED.clickup_task_id,\n    previous_clickup_status = COALESCE(\n      lead_chat_ownerships.previous_clickup_status,\n      EXCLUDED.previous_clickup_status\n    ),\n    last_clickup_history_id = EXCLUDED.last_clickup_history_id,\n    last_clickup_event_at = EXCLUDED.last_clickup_event_at,\n    updated_at = NOW()\n  RETURNING id, lead_id, acquired_at, previous_clickup_status\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'lead_chat_ownership_acquisition',\n    'lead_chat_ownership',\n    COALESCE(a.id, c.ownership_id),\n    'system',\n    'crm-clickup-lead-chat-ownership',\n    c.outcome,\n    jsonb_build_object('ownership_id', c.ownership_id),\n    jsonb_build_object(\n      'ownership_id', COALESCE(a.id, c.ownership_id),\n      'previous_clickup_status', COALESCE(a.previous_clickup_status, c.previous_clickup_status)\n    ),\n    jsonb_build_object(\n      'lead_id', c.lead_id,\n      'clickup_task_id', (SELECT clickup_task_id FROM input),\n      'history_id', (SELECT history_id FROM input),\n      'history_event_at', (SELECT history_event_at FROM input)\n    )\n  FROM classified c\n  LEFT JOIN acquisition a ON a.lead_id = c.lead_id\n  WHERE c.outcome <> 'already_applied'\n  RETURNING 1\n)\nSELECT\n  COALESCE(a.id, c.ownership_id) AS ownership_id,\n  c.lead_id,\n  COALESCE(a.previous_clickup_status, c.previous_clickup_status) AS previous_clickup_status,\n  COALESCE(a.acquired_at, c.acquired_at) AS acquired_at,\n  c.outcome\nFROM classified c\nLEFT JOIN acquisition a ON a.lead_id = c.lead_id\n\nUNION ALL\n\nSELECT\n  NULL::bigint AS ownership_id,\n  NULL::bigint AS lead_id,\n  NULL::text AS previous_clickup_status,\n  NULL::timestamptz AS acquired_at,\n  'unknown_task' AS outcome\nWHERE NOT EXISTS (SELECT 1 FROM classified);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$('Normalize ClickUp Closure').first().json.clickup_task_id, $('Normalize ClickUp Closure').first().json.clickup_previous_status, $('Normalize ClickUp Closure').first().json.clickup_history_id, $('Normalize ClickUp Closure').first().json.clickup_history_at] }}"
+        }
+      },
+      "id": "acquire-lead-chat-ownership",
+      "name": "Acquire Lead Chat Ownership",
+      "notes": "El estado anterior viaja verbatim: es el que se restaura si el lease vence.",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1380,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 02_release_ownership_from_clickup.sql — Liberacion por transicion de ClickUp.\n-- -----------------------------------------------------------------------------\n-- Contracara de 01_acquire_ownership_from_clickup.sql: la tarea sale de\n-- 'in progress' (a 'complete' o a cualquier otro estado) y el vendedor deja de\n-- ser dueño del chat. La IA vuelve a poder responder en cuanto esta fila queda\n-- con released_at.\n--\n-- restoration_state queda en 'not_required': aqui el operador movio la tarea a\n-- proposito, asi que no hay estado previo que restaurar. La restauracion solo\n-- aplica al vencimiento del SLA, donde el sistema movio la tarea sin que nadie\n-- lo pidiera (06_claim_expired_ownerships.sql).\n--\n-- Mismos guards de identidad que la adquisicion: `already_applied` para la\n-- reentrega exacta del mismo history_id y `stale_event` para el evento cuyo\n-- history_event_at es anterior al ya proyectado. Un evento viejo no puede\n-- liberar una propiedad que una adquisicion mas nueva acaba de tomar.\n--\n-- Idempotencia: solo el desenlace 'released' escribe. 'already_applied',\n-- 'stale_event' y 'no_active_ownership' no tocan la fila ni auditan un rechazo\n-- falso. El pendiente y el plazo se conservan como evidencia de por que el\n-- lease existia; el predicado de propiedad ya los ignora porque released_at\n-- deja de ser NULL.\n--\n-- Devuelve siempre exactamente una fila. 'unknown_task' es entrada invalida,\n-- no error de servidor.\n--\n-- Params:\n--   $1 clickup_task_id (text), $2 new_status (text, estado destino de la\n--   transicion), $3 history_id (text), $4 history_event_at (timestamptz)\n-- =============================================================================\nWITH input AS (\n  SELECT\n    NULLIF($1::text, '') AS clickup_task_id,\n    NULLIF($2::text, '') AS new_status,\n    NULLIF($3::text, '') AS history_id,\n    NULLIF($4::text, '')::timestamptz AS history_event_at\n),\nlead_row AS (\n  SELECT l.id\n  FROM leads l\n  CROSS JOIN input i\n  WHERE i.clickup_task_id IS NOT NULL\n    AND l.clickup_task_id = i.clickup_task_id\n    AND l.deleted_at IS NULL\n  ORDER BY l.id DESC\n  LIMIT 1\n),\n-- Igual que en la adquisicion: se lee y se bloquea la ultima proyeccion del\n-- lead en el mismo paso, para que dos entregas simultaneas del webhook se\n-- serialicen en vez de liberar dos veces.\nprojection AS MATERIALIZED (\n  SELECT\n    o.id, o.lead_id, o.released_at, o.response_due_at, o.restoration_state,\n    o.last_clickup_history_id, o.last_clickup_event_at\n  FROM lead_chat_ownerships o\n  JOIN lead_row lr ON lr.id = o.lead_id\n  WHERE o.deleted_at IS NULL\n  ORDER BY o.id DESC\n  LIMIT 1\n  FOR UPDATE OF o\n),\nclassified AS (\n  SELECT\n    lr.id AS lead_id,\n    p.id AS ownership_id,\n    p.released_at,\n    p.restoration_state,\n    CASE\n      WHEN i.history_id IS NOT NULL\n       AND p.last_clickup_history_id = i.history_id THEN 'already_applied'\n      WHEN i.history_event_at IS NOT NULL\n       AND p.last_clickup_event_at IS NOT NULL\n       AND i.history_event_at < p.last_clickup_event_at THEN 'stale_event'\n      WHEN p.id IS NULL OR p.released_at IS NOT NULL THEN 'no_active_ownership'\n      ELSE 'released'\n    END AS outcome\n  FROM lead_row lr\n  CROSS JOIN input i\n  LEFT JOIN projection p ON p.lead_id = lr.id\n),\nrelease AS (\n  UPDATE lead_chat_ownerships o\n  SET\n    released_at = NOW(),\n    release_reason = 'clickup_released',\n    restoration_state = 'not_required',\n    last_clickup_history_id = i.history_id,\n    last_clickup_event_at = COALESCE(i.history_event_at, NOW()),\n    updated_at = NOW()\n  FROM classified c\n  CROSS JOIN input i\n  WHERE o.id = c.ownership_id\n    AND c.outcome = 'released'\n  RETURNING o.id, o.lead_id, o.released_at, o.restoration_state\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'lead_chat_ownership_release',\n    'lead_chat_ownership',\n    c.ownership_id,\n    'system',\n    'crm-clickup-lead-chat-ownership',\n    c.outcome,\n    jsonb_build_object('released_at', c.released_at),\n    jsonb_build_object('released_at', r.released_at),\n    jsonb_build_object(\n      'lead_id', c.lead_id,\n      'clickup_task_id', (SELECT clickup_task_id FROM input),\n      'new_status', (SELECT new_status FROM input),\n      'history_id', (SELECT history_id FROM input),\n      'history_event_at', (SELECT history_event_at FROM input)\n    )\n  FROM classified c\n  LEFT JOIN release r ON r.id = c.ownership_id\n  WHERE c.outcome <> 'already_applied'\n  RETURNING 1\n)\nSELECT\n  c.ownership_id,\n  c.lead_id,\n  COALESCE(r.released_at, c.released_at) AS released_at,\n  COALESCE(r.restoration_state, c.restoration_state) AS restoration_state,\n  c.outcome\nFROM classified c\nLEFT JOIN release r ON r.id = c.ownership_id\n\nUNION ALL\n\nSELECT\n  NULL::bigint AS ownership_id,\n  NULL::bigint AS lead_id,\n  NULL::timestamptz AS released_at,\n  NULL::text AS restoration_state,\n  'unknown_task' AS outcome\nWHERE NOT EXISTS (SELECT 1 FROM classified);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$('Normalize ClickUp Closure').first().json.clickup_task_id, $('Normalize ClickUp Closure').first().json.clickup_new_status, $('Normalize ClickUp Closure').first().json.clickup_history_id, $('Normalize ClickUp Closure').first().json.clickup_history_at] }}"
+        }
+      },
+      "id": "release-lead-chat-ownership",
+      "name": "Release Lead Chat Ownership",
+      "notes": "El estado destino queda auditado como motivo de la liberacion; el operador movio la tarea a proposito, asi que no hay nada que restaurar.",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1380,
+        380
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'applied', handoff_id: $json.handoff_id || null, handoff_estado: $json.handoff_estado || null, outcome: $json.outcome, conversation_closed: Boolean($json.conversation_closed) } }}",
+        "responseBody": "={{ { status: 'applied', lane: $json.ownership_id === undefined ? 'handoff' : 'lead_chat_ownership', outcome: $json.outcome, handoff_id: $json.handoff_id || null, handoff_estado: $json.handoff_estado || null, conversation_closed: Boolean($json.conversation_closed), ownership_id: $json.ownership_id || null, lead_id: $json.lead_id || null } }}",
         "options": {
           "responseCode": 200
         }
       },
       "id": "respond-applied",
       "name": "Respond Applied",
+      "notes": "Un mismo webhook alimenta dos carriles. 'lane' dice cual respondio, para que un desenlace de lead no se lea como un handoff con todo en null.",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        940,
+        1600,
         140
       ]
     },
@@ -154,8 +309,8 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        720,
-        320
+        940,
+        420
       ]
     },
     {
@@ -228,7 +383,7 @@
         ],
         [
           {
-            "node": "Respond Ignored",
+            "node": "Is Lead Routable",
             "type": "main",
             "index": 0
           }
@@ -236,6 +391,82 @@
       ]
     },
     "Close Handoff From ClickUp": {
+      "main": [
+        [
+          {
+            "node": "Is Unknown Handoff Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Unknown Handoff Task": {
+      "main": [
+        [
+          {
+            "node": "Route Lead Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Lead Routable": {
+      "main": [
+        [
+          {
+            "node": "Route Lead Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Ignored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Lead Ownership": {
+      "main": [
+        [
+          {
+            "node": "Acquire Lead Chat Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release Lead Chat Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Lead Chat Ownership": {
+      "main": [
+        [
+          {
+            "node": "Respond Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Lead Chat Ownership": {
       "main": [
         [
           {
@@ -247,7 +478,7 @@
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   },
@@ -256,5 +487,5 @@
     "instanceId": "versioned-source-of-truth"
   },
   "tags": [],
-  "versionId": "handoff-clickup-closure-v1"
+  "versionId": "handoff-clickup-closure-v2"
 }

@@ -254,7 +254,10 @@ describe('Fixture contract — Conversation Flow (memoria #686)', () => {
     expect(result.json.response_kind).toBe('escalation_routing');
   });
 
-  test('B2B detection -> b2b_redirect', () => {
+  // A company is an ordinary lead: the advisor derives the quote and the seller
+  // categorises the customer afterwards. Nothing diverts the conversation into
+  // a separate track that asks for a purchase order up front.
+  test('a company message follows the ordinary flow', () => {
     const input = {
       ...baseInput,
       has_active_conversation: true,
@@ -267,8 +270,9 @@ describe('Fixture contract — Conversation Flow (memoria #686)', () => {
       text_body: 'Somos una constructora, necesitamos OC',
     };
     const result = evaluateConversationStep(input);
-    expect(result.json.response_kind).toBe('b2b_redirect');
-    expect(result.json.deterministic_reply).toContain('constructora');
+    expect(result.json.response_kind).not.toBe('b2b_redirect');
+    expect(result.json.deterministic_reply).not.toMatch(/Orden de Compra/i);
+    expect(result.json.deterministic_reply).not.toMatch(/area B2B/i);
   });
 
   test('metadata includes reengagement structured logging', () => {

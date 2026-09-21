@@ -57,9 +57,11 @@ AI_HEALTHY_MIN_CONFIDENCE=0.45
 AI_FIELD_ACCEPT_MIN_CONFIDENCE=0.55
 AI_REPLY_TEXT_MIN_CONFIDENCE=0.50
 AI_OBJECTION_MIN_CONFIDENCE=0.50
-AI_B2B_MIN_CONFIDENCE=0.55
 AI_PRD_VALIDATION_ENABLED=true
 ```
+
+`AI_B2B_MIN_CONFIDENCE` quedo obsoleta: al eliminarse la via B2B separada, ningun nodo la
+lee. Si sigue definida en `.env` o en `docker-compose.yml` no produce ningun efecto.
 
 El workflow soporta dos formas de API directa:
 

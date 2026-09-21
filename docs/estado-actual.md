@@ -1,4 +1,53 @@
-# Estado actual — corte 2026-08-29
+# Estado actual — corte 2026-09-15
+
+**v3 está desplegada y habilitada como contrato predeterminado del sistema**: el runtime verificado usa `AI_PRD_CONTRACT_MODE=enforce` para los turnos nuevos. `legacy` queda como rollback explícito; no es el valor predeterminado.
+
+## Verificación vigente al 15 de septiembre
+
+- Runtime: orquestador con **48 nodos** y dispatcher con **46**; se preservaron los **19 IDs de workflow**, su activación y publicación. Preflight, paridad y verificación remota pasaron; n8n quedó listo.
+- Pruebas: **641/641 en 60 archivos** y E2E n8n/PostgreSQL aislada completa. Esta verificó reparación y contingencia, recibos de entrega, reutilización de un handoff sin duplicados, replay, creación y asignación del lead, ClickUp y notificación al vendedor, silencio por propiedad humana y `enforce` para un número nuevo sin allowlist.
+- Seguridad: proveedores simulados, red interna sin salida externa y URLs calculadas redirigidas a mocks antes de importar. Tras la prueba controlada y su reconciliación, el estado verificado conserva **1.961 mensajes, 110 leads y 199 ejecuciones del ledger**.
+
+La desactivación anterior fue una **regresión de despliegue** del 9 de septiembre, a las 16:11 de Chile: el takeover importó desde la raíz un orquestador legacy de 11 nodos sobre el v3 de 44 nodos que estaba en otro worktree. No se encontró una decisión de deshabilitar v3 por fallas. Ahora el preflight rechaza fuentes que eliminen su pipeline o su persistencia y contexto de entrega durables.
+
+Una aceptación controlada por WhatsApp real reveló después un defecto en el handoff normal: SQL 11 no entregaba `decision_id` en el formato plano que SQL 17 esperaba, y una persistencia sin filas podía terminar silenciosamente. Ambos puntos fueron corregidos y desplegados; el runtime volvió a pasar paridad, readiness, `enforce`, la E2E aislada y **641/641 pruebas**.
+
+El turno afectado, ejecución **199**, quedó reconciliado de forma explícita: `aborted`, operación 299 `failed`, sin efecto, handoff ni salida. El reset oficial archivó solamente la sesión controlada configurada; preservó historial, leads y mensajes.
+
+**Límite de la evidencia:** todavía falta una nueva aceptación por WhatsApp real **posterior a esta corrección**. El estado actual demuestra el fix desplegado y sus verificaciones aisladas, no el cierre completo del PRD ni el éxito real post-fix.
+
+Evidencia de la corrección: [despliegue y runtime](../backups/v3-handoff-fix-20260915-083849/live-deployment/result.txt), [E2E aislada](../backups/v3-handoff-fix-20260915-083849/final-isolated-e2e-evidence/result.txt), [suite completa](../backups/v3-handoff-fix-20260915-083849/v3-handoff-fix-full-tests.log) y [estado reconciliado](../backups/v3-handoff-fix-20260915-083849/final-state.json).
+
+Evidencia inicial: [despliegue y verificaciones](../backups/v3-default-20260914-083919/live-deployment/result.txt), [E2E aislada](../backups/v3-default-20260914-083919/final-isolated-e2e-evidence/result.txt) y [suite completa](../backups/v3-default-20260914-083919/final-full-tests.log). Los snapshots de la regresión están en `backups/n8n-workflows-pre-takeover-20260909-160935/` y `backups/n8n-workflows-pre-lead-link-fix-20260909-163136/`.
+
+## Carril shadow retirado
+
+El rollout shadow terminó: v3 quedó desplegada, certificada y aplicada como contrato
+predeterminado, así que el carril que ejecutaba una llamada extra al asesor en cada turno
+en vivo ya no responde ninguna pregunta abierta. Además su nodo de despacho nunca resolvió
+un destino real — el enlace quedó en `__PENDIENTE_AI_PRD_SHADOW__` —, de modo que no
+aportaba cobertura sino cableado muerto.
+
+Se eliminaron del dispatcher los cuatro nodos del carril (`Prepare AI PRD Shadow`,
+`Should Dispatch AI PRD Shadow?`, `Dispatch AI PRD Shadow` y `Shadow Lane Complete`) junto
+con sus conexiones. `Outbound Lane Complete → Merge Dispatch Completion` no cambió: el
+carril terminaba en un nodo sin salida y nunca alimentó el merge.
+
+**Se conserva a propósito** `n8n/workflows/ai-prd-shadow-evaluator.json` (ya inactivo y
+ahora sin invocadores) junto con sus fixtures y pruebas. No es residuo: su motor de
+veredicto se reutilizará como núcleo de puntaje de una futura suite de evaluación
+conversacional. La propiedad que interesa es el estado `not_evaluated`, que impide contar
+un error del proveedor o un límite de tasa como propuesta rechazada.
+
+En el repositorio el dispatcher pasa de **46 a 42 nodos**. El runtime desplegado todavía
+ejecuta la versión de 46 verificada el 15 de septiembre; la diferencia se cierra en el
+próximo `sync-n8n-workflows.sh`.
+
+---
+
+## Corte histórico — 2026-08-29
+
+> El contenido siguiente se conserva como registro de ese corte. Sus ramas, métricas, despliegues y decisiones de rollout describen agosto; **no representan el estado actual de v3** ni deben interpretarse como una desactivación vigente.
 
 Este es el corte canónico del proyecto. Reemplaza a `docs/estado-actual-2026-08-08.md`,
 que conservaba una fecha en el nombre por compatibilidad con enlaces existentes. Ese
@@ -155,6 +204,13 @@ ese directorio declara la verdad vigente del sistema, y la capacidad que describ
   detección vive en la lista de keywords de `evaluate-conversation-step.js`.
 - **B2B se deriva a ClickUp.** La configuración, y no un nombre en el código, decide qué
   áreas son entregables.
+- **Un pedido fuera del catálogo no deriva: vuelve a preguntar.** Si el cliente pide un
+  material que Hormiglass no vende, el asesor dice que no está en el catálogo y pregunta
+  cuál de los productos vigentes le interesa. No cotiza, no inventa una alternativa y no
+  abre un handoff por ese motivo. Decidido el 2026-09-15 tras verlo en la aceptación:
+  `hormigón armado` se clasifica como producto por la regla del PRD, pero el anclaje al
+  catálogo manda y ninguno de los 28 ítems vigentes lo cubre. La aceptación del 2026-08-29
+  todavía creaba un lead con ese pedido; ese comportamiento quedó atrás a propósito.
 
 ## Evidencia de este corte
 

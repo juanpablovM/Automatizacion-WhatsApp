@@ -52,8 +52,10 @@ WITH target AS (
     jsonb_build_object('cycle_key', n.cycle_key, 'previous_follow_up_id', n.id)
   FROM next_values n
   WHERE n.next_step IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM follow_up_preferences p
-                    WHERE p.conversation_id = n.conversation_id AND p.opted_out = TRUE)
+    AND NOT follow_up_contact_opted_out(n.conversation_id)
+    AND follow_up_is_eligible(
+      n.conversation_id, n.motivo, n.phone_number, n.source_number_id
+    )
   ON CONFLICT (conversation_id, cycle_key, step_dia) WHERE deleted_at IS NULL DO NOTHING
   RETURNING id
 ), audit_entry AS (

@@ -48,4 +48,43 @@ describe('Prepare Lead Assignment — real n8n Code node wrapper', () => {
       },
     ])).toThrow(/^BLOCKED\|/);
   });
+
+  test('creates a v3 material pickup lead without city and does not invent a factory commune', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const [output] = runCodeNode(source, [{ json: {
+      conversation_id: 100, phone_number: '56900000004', service: 'retiro', city: null,
+      requirement: 'Pastelones 100 unidades', commercial_missing_fields: [],
+      qualification_context: { product: 'Pastelones', quantity: '100 unidades', service_scope: 'material', fulfillment: 'pickup' },
+    } }]);
+    expect(output.json.is_qualified).toBe(true);
+    expect(output.json.city).toBeNull();
+    expect(output.json.qualification_context.commune).toBeUndefined();
+  });
+
+  test.each([
+    ['delivery', { service_scope: 'material', fulfillment: 'delivery' }],
+    ['installation', { service_scope: 'installation' }],
+  ])('%s still blocks lead creation without city', (_profile, qualificationContext) => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    expect(() => runCodeNode(source, [{ json: {
+      conversation_id: 100, phone_number: '56900000004', service: 'material', city: null,
+      requirement: 'Pastelones 100 unidades', commercial_missing_fields: [], qualification_context: qualificationContext,
+    } }])).toThrow(/faltan ciudad/);
+  });
+
+  // There is no separate company track: a company picking up material follows
+  // the same pickup rule as anyone else, so its city stays inapplicable.
+  test.each([
+    ['company customer', { service_scope: 'material', fulfillment: 'pickup', customer_type: 'b2b' }],
+    ['lead class D', { service_scope: 'material', fulfillment: 'pickup', lead_class: 'D' }],
+  ])('%s picking up material creates the lead without city', (_profile, qualificationContext) => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const [output] = runCodeNode(source, [{ json: {
+      conversation_id: 100, phone_number: '56900000004', service: 'material', city: null,
+      requirement: 'Pastelones 100 unidades', commercial_missing_fields: [],
+      commercial_policy_profile: 'retiro', qualification_context: qualificationContext,
+    } }]);
+    expect(output.json.is_qualified).toBe(true);
+    expect(output.json.city).toBeNull();
+  });
 });

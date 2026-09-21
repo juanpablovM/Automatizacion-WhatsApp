@@ -121,6 +121,15 @@ services:
       AI_LEAD_ASSISTANT_ENABLED: ${AI_LEAD_ASSISTANT_ENABLED:-true}
       AI_PROVIDER: ${AI_PROVIDER:-google}
       AI_API_KEY_REQUIRED: ${AI_API_KEY_REQUIRED:-true}
+      # v3 is the project default for new turns. Values: legacy, shadow,
+      # canary, enforce. Legacy is an explicit rollback, never an unset default.
+      # Only canary and enforce route a turn to the v3 lane.
+      AI_PRD_CONTRACT_MODE: ${AI_PRD_CONTRACT_MODE:-enforce}
+      AI_PRD_CONTRACT_RULE_ID: ${AI_PRD_CONTRACT_RULE_ID:-rollout:enforce:v3-default}
+      # Comma-separated phone numbers served by the v3 lane while everyone else
+      # stays on AI_PRD_CONTRACT_MODE. Only ever raises a turn to v3, never
+      # pulls one back. Empty means nobody.
+      AI_PRD_CONTRACT_CANARY_PHONES: ${AI_PRD_CONTRACT_CANARY_PHONES:-}
       AI_DIRECT_API_BASE_URL: ${AI_DIRECT_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       AI_DIRECT_API_PATH: ${AI_DIRECT_API_PATH:-/chat/completions}
       AI_DIRECT_API_KEY: ${AI_DIRECT_API_KEY:-}

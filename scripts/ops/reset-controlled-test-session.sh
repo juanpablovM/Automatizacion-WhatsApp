@@ -14,11 +14,13 @@ usage() {
   cat <<'EOF'
 Usage: scripts/ops/reset-controlled-test-session.sh PHONE_NUMBER --apply
 
-Archives active conversations for one controlled test number without deleting
-their messages, leads, or audit trail. It refuses to run while that number has
-received or processing inbound events. The next inbound starts a fresh
-conversation through the normal terminal-conversation path. The PHONE_NUMBER
-must exactly match CONTROLLED_TEST_PHONE_NUMBER from the repository .env file.
+Closes every open conversation for one controlled test number and cancels its
+scheduled follow-ups, without deleting messages, leads, handoffs, follow-up
+history, or the audit trail. It refuses to run while that number has received
+or processing inbound events, or a follow-up already in flight. The next
+inbound starts a fresh conversation through the normal terminal-conversation
+path. The PHONE_NUMBER must exactly match CONTROLLED_TEST_PHONE_NUMBER from the
+repository .env file.
 EOF
 }
 

@@ -25,6 +25,9 @@ Sincroniza workflows versionados usando el CLI oficial de n8n.
 Opciones:
   --preflight   Valida JSON, nombres y manifest local sin tocar Docker/n8n.
   --deploy      Despliega pausado, ejecuta acceptance controlada y activa al final.
+                TELEFONO_CONTROLADO debe coincidir exactamente con
+                CONTROLLED_TEST_PHONE_NUMBER del .env: la acceptance envia un
+                mensaje real y crea lead, asignacion y tarea de ClickUp.
   --verify-remote  Exporta y verifica el runtime, o verifica un export sin mutarlo.
   --snapshot DIR   Exporta un snapshot completo para rollback.
   --rollback DIR   Restaura y verifica un snapshot; deja Entry/Recovery pausados.
@@ -69,6 +72,7 @@ manifest_link_exists() {
 
 validate_local() {
   require_command jq
+  require_command node
 
   if [ ! -d "$WORKFLOW_DIR" ]; then
     echo "ERROR: no existe $WORKFLOW_DIR" >&2
@@ -169,6 +173,10 @@ validate_local() {
       exit 1
     fi
   done
+
+  # Project policy is v3 by default. Validate source capabilities independently
+  # of live credentials, global environment overrides, or runtime access.
+  node "$PROJECT_ROOT/scripts/dev/validate-v3-workflow-contract.mjs" "$WORKFLOW_DIR"
 
   rm -f "$tmp_names"
   trap - EXIT
@@ -658,15 +666,46 @@ ensure_default_instance_mapping() {
   echo "Mapeo de instancia validado para la linea activa"
 }
 
-sync_workflows() {
-  controlled_phone="$1"
-  validate_local
-  require_command docker
+assert_controlled_phone() {
+  # The acceptance run fabricates the inbound, but the reply leaves through the
+  # real Evolution instance and the turn creates a lead, an assignment and a
+  # ClickUp task. One mistyped digit aims all of that at a stranger, so refuse
+  # any number the repository has not authorised, before touching anything.
+  candidate_phone="$1"
+
+  case "$candidate_phone" in
+    *[!0-9]*|'')
+      echo "ERROR: el telefono debe ser solo digitos" >&2
+      exit 1
+      ;;
+  esac
 
   if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "ERROR: no existe .env en $PROJECT_ROOT" >&2
     exit 1
   fi
+
+  authorized_phone=$(sed -n 's/^CONTROLLED_TEST_PHONE_NUMBER=//p' "$PROJECT_ROOT/.env" | tail -n 1 | tr -d '"'"'"' \r')
+
+  case "$authorized_phone" in
+    *[!0-9]*|'')
+      echo "ERROR: CONTROLLED_TEST_PHONE_NUMBER debe contener el telefono de prueba autorizado en .env" >&2
+      exit 1
+      ;;
+  esac
+
+  [ "$candidate_phone" = "$authorized_phone" ] || {
+    echo "ERROR: el telefono no esta autorizado para la aceptacion controlada" >&2
+    echo "       la aceptacion envia un mensaje real y crea lead, asignacion y tarea de ClickUp" >&2
+    exit 1
+  }
+}
+
+sync_workflows() {
+  controlled_phone="$1"
+  assert_controlled_phone "$controlled_phone"
+  validate_local
+  require_command docker
 
   tmp_dir=$(mktemp -d)
   trap 'rm -rf "$tmp_dir"' EXIT

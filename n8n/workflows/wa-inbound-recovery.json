@@ -102,8 +102,8 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
-        1500,
-        460
+        1720,
+        420
       ]
     },
     {
@@ -160,6 +160,62 @@
       "position": [
         1500,
         240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-recovered-own-message",
+              "leftValue": "={{ $json.is_from_me === true || $json.sender_type_candidate === 'own_message' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "72000000-0000-0000-0000-000000000001",
+      "name": "Recovered Own Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1480,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "WA - Inbound Entry"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "72000000-0000-0000-0000-000000000002",
+      "name": "Execute Recovered Own Message",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1720,
+        580
       ]
     }
   ],
@@ -230,7 +286,7 @@
         ],
         [
           {
-            "node": "Execute Inbound Processor",
+            "node": "Recovered Own Message?",
             "type": "main",
             "index": 0
           }
@@ -247,6 +303,27 @@
           }
         ]
       ]
+    },
+    "Recovered Own Message?": {
+      "main": [
+        [
+          {
+            "node": "Execute Recovered Own Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute Inbound Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Recovered Own Message": {
+      "main": []
     }
   },
   "settings": {

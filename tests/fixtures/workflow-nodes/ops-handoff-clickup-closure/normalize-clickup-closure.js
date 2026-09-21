@@ -1,8 +1,9 @@
 // =============================================================================
 // OPS - Handoff ClickUp Closure — Normalize ClickUp Closure
 // -----------------------------------------------------------------------------
-// Turns an inbound ClickUp webhook into the two values the closure query needs:
-// the task id and the requested handoff state.
+// Turns an inbound ClickUp webhook into the values two lanes need: the task id
+// and the requested handoff state for the closure query, and the ClickUp status
+// transition itself for commercial lead chat ownership.
 //
 // This is the project's first inbound integration, so the node is deliberately
 // strict about what it accepts:
@@ -24,8 +25,20 @@
 // is case-insensitive and whitespace-tolerant because ClickUp status names are
 // user-editable labels.
 //
+// The lead chat ownership lane rides on the same delivery but does not share
+// the closure lane's verdict. A salesperson owns the chat while the task sits
+// in 'in progress' and stops owning it on any transition out of it — including
+// a transition to a status the handoff mapping does not know. So `lead_routable`
+// is decided from the event shape alone and stays true where `actionable` is
+// false; reading `actionable` for both lanes would silently drop that release.
+//
 // Output (always exactly one item):
 //   { authorized, actionable, clickup_task_id, estado, reason }
+// plus, on every authorized item:
+//   { clickup_history_id, clickup_history_at, clickup_previous_status,
+//     clickup_new_status, is_ownership_acquisition, lead_routable }
+// An unauthorized item keeps the original five fields and carries none of the
+// ownership ones: nothing downstream may act on a payload that failed HMAC.
 // =============================================================================
 
 const DEFAULT_ACKNOWLEDGED_STATUSES = 'in progress,en progreso,en curso';
@@ -35,6 +48,40 @@ const parseStatusList = (raw, fallback) => String(raw || fallback)
   .split(',')
   .map((entry) => entry.trim().toLowerCase())
   .filter(Boolean);
+
+// ClickUp stamps history entries with epoch milliseconds carried in a string
+// ("1568036964079"). The ownership queries take a timestamptz, so the
+// conversion happens here rather than being left to the driver to guess. An
+// unusable value becomes null, which those queries already read as "no ordering
+// evidence" instead of failing the delivery.
+const toIsoTimestamp = (value) => {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const epochMs = /^-?\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+  if (!Number.isFinite(epochMs)) return null;
+  const parsed = new Date(epochMs);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
+// Verbatim on purpose. `before.status` is the label an expired lease writes back
+// to ClickUp, and a trimmed or lowercased copy would restore a status the space
+// does not have.
+const verbatimStatus = (side) => {
+  if (!side || side.status === null || side.status === undefined) return null;
+  return typeof side.status === 'string' ? side.status : String(side.status);
+};
+
+// Ownership fields travel on every authorized item so the routing IF nodes read
+// a real boolean instead of an absent key.
+const EMPTY_LEAD_FIELDS = {
+  clickup_history_id: null,
+  clickup_history_at: null,
+  clickup_previous_status: null,
+  clickup_new_status: null,
+  is_ownership_acquisition: false,
+  lead_routable: false,
+};
 
 const reject = (reason) => [{
   json: {
@@ -46,13 +93,15 @@ const reject = (reason) => [{
   },
 }];
 
-const ignore = (reason, clickupTaskId = null) => [{
+const ignore = (reason, clickupTaskId = null, leadFields = {}) => [{
   json: {
     authorized: true,
     actionable: false,
     clickup_task_id: clickupTaskId,
     estado: null,
     reason,
+    ...EMPTY_LEAD_FIELDS,
+    ...leadFields,
   },
 }];
 
@@ -141,6 +190,26 @@ const resolvedStatuses = parseStatusList(
   DEFAULT_RESOLVED_STATUSES,
 );
 
+// --- Lead chat ownership ----------------------------------------------------
+// `is_ownership_acquisition` reads the acknowledged list directly instead of the
+// mapped `estado`: the lease exists while the task is in progress, which is what
+// that list names, and `estado` collapses to 'resolved' whenever an operator
+// lists a status in both places.
+//
+// `lead_routable` is deliberately independent of `estado`. Reaching this point
+// already proves the delivery is a signed taskStatusUpdated with a task id and a
+// usable destination status, which is everything the ownership queries need.
+const leadFields = {
+  clickup_history_id: statusChange.id === null || statusChange.id === undefined
+    ? null
+    : String(statusChange.id),
+  clickup_history_at: toIsoTimestamp(statusChange.date),
+  clickup_previous_status: verbatimStatus(statusChange.before),
+  clickup_new_status: verbatimStatus(statusChange.after),
+  is_ownership_acquisition: acknowledgedStatuses.includes(afterStatus),
+  lead_routable: Boolean(clickupTaskId) && Boolean(afterStatus),
+};
+
 // Resolved wins when a status appears in both lists: closing is the stronger
 // claim, and an operator who lists a status twice most likely means "done".
 let estado = null;
@@ -150,8 +219,11 @@ if (resolvedStatuses.includes(afterStatus)) {
   estado = 'acknowledged';
 }
 
+// An unmapped status stays non-actionable for the handoff lane — renaming a
+// ClickUp column must never advance a handoff — but it still routes to the
+// ownership lane, which only cares that the task left 'in progress'.
 if (!estado) {
-  return ignore(`unmapped_status:${afterStatus}`, clickupTaskId);
+  return ignore(`unmapped_status:${afterStatus}`, clickupTaskId, leadFields);
 }
 
 return [{
@@ -161,5 +233,6 @@ return [{
     clickup_task_id: clickupTaskId,
     estado,
     reason: `status:${afterStatus}`,
+    ...leadFields,
   },
 }];

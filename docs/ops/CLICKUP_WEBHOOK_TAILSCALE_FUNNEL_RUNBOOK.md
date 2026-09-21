@@ -1,6 +1,6 @@
 # Publicación segura del webhook de ClickUp con Tailscale Funnel
 
-Este runbook publica únicamente el webhook `OPS - Handoff ClickUp Closure` mediante HTTPS en el puerto `8443`. Mantiene intacto el servicio privado de Tailscale Serve en `443`, autentica cada evento con HMAC-SHA256 y conserva una ruta de reversión completa.
+Este runbook publica únicamente el webhook `OPS - Handoff ClickUp Closure` mediante HTTPS en el puerto `8443`. El mismo endpoint enruta cierres de handoff y cambios de ownership de leads; mantiene intacto el servicio privado de Tailscale Serve en `443`, autentica cada evento con HMAC-SHA256 y conserva una ruta de reversión completa.
 
 > **Efectos externos:** habilitar Funnel hace pública una ruta del host; registrar el webhook crea una integración real en ClickUp; cambiar el estado de una tarea de aceptación puede actualizar `handoffs` y cerrar una conversación. Cada bloque marcado como **GATE** requiere revisar su resultado antes de continuar.
 
@@ -14,10 +14,15 @@ Este runbook publica únicamente el webhook `OPS - Handoff ClickUp Closure` medi
 | Ruta pública única | `/clickup-handoff-closure` |
 | Destino local | `http://127.0.0.1:5678/webhook/clickup-handoff-closure` |
 | Evento ClickUp | `taskStatusUpdated` |
-| Alcance ClickUp | Solo `CLICKUP_HANDOFF_LIST_ID` |
+| Alcance ClickUp | Space compartido por `CLICKUP_LEADS_LIST_ID` y `CLICKUP_HANDOFF_LIST_ID` |
 | Autenticación | Header `X-Signature`, HMAC-SHA256 hexadecimal |
 
 No se debe publicar el editor de n8n, PostgreSQL, Evolution API ni la raíz de `127.0.0.1:5678`.
+
+El alcance a nivel Space es intencional: un webhook de lista no puede observar
+a la vez la lista comercial y la de handoffs. El workflow acepta únicamente
+`taskStatusUpdated` firmado y PostgreSQL descarta como `unknown_task` cualquier
+tarea que no corresponda a un lead o handoff conocido.
 
 ## 1. Preparar la sesión
 
@@ -50,7 +55,7 @@ for command in curl docker jq python3 tailscale; do
   }
 done
 
-for variable in CLICKUP_API_TOKEN CLICKUP_TEAM_ID CLICKUP_HANDOFF_LIST_ID; do
+for variable in CLICKUP_API_TOKEN CLICKUP_TEAM_ID CLICKUP_LEADS_LIST_ID CLICKUP_HANDOFF_LIST_ID; do
   eval "value=\${$variable:-}"
   test -n "$value" && test "$value" != '__PENDIENTE__' || {
     printf 'Falta configurar: %s\n' "$variable" >&2
@@ -60,7 +65,7 @@ done
 
 jq -e '
   .name == "OPS - Handoff ClickUp Closure"
-  and .active == false
+  and .active == true
   and any(.nodes[];
     .type == "n8n-nodes-base.webhook"
     and .parameters.httpMethod == "POST"
@@ -78,8 +83,8 @@ Continuar solo si:
 
 - n8n y PostgreSQL están sanos;
 - Tailscale está conectado y MagicDNS está habilitado;
-- el JSON declara `active: false` y la ruta esperada;
-- `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID` y `CLICKUP_HANDOFF_LIST_ID` están configurados;
+- el JSON versionado declara `active: true` y la ruta esperada; el paso 6 crea explícitamente una copia de importación pausada;
+- `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID`, `CLICKUP_LEADS_LIST_ID` y `CLICKUP_HANDOFF_LIST_ID` están configurados;
 - no se mostró ningún secreto en la terminal.
 
 ## 2. Verificar que Serve en 443 permanezca privado
@@ -105,16 +110,30 @@ El estado de Serve debe mostrar HTTPS privado en `443` y ninguna entrada Serve e
 
 ## 3. Validar estados y preparar `.env`
 
-Consultar la lista real sin guardar ni imprimir el token:
+Consultar ambas listas reales sin guardar ni imprimir el token, y probar que
+pertenecen al mismo Space:
 
 ```bash
 curl --fail --silent --show-error \
   --header "Authorization: $CLICKUP_API_TOKEN" \
-  "https://api.clickup.com/api/v2/list/$CLICKUP_HANDOFF_LIST_ID" \
-  --output "$RUN_DIR/clickup-list.json"
+  "https://api.clickup.com/api/v2/list/$CLICKUP_LEADS_LIST_ID" \
+  --output "$RUN_DIR/clickup-leads-list.json"
 
-jq -r '.statuses[] | [.status, .type] | @tsv' \
-  "$RUN_DIR/clickup-list.json"
+curl --fail --silent --show-error \
+  --header "Authorization: $CLICKUP_API_TOKEN" \
+  "https://api.clickup.com/api/v2/list/$CLICKUP_HANDOFF_LIST_ID" \
+  --output "$RUN_DIR/clickup-handoffs-list.json"
+
+export CLICKUP_SPACE_ID="$(jq -er '.space.id | tostring' \
+  "$RUN_DIR/clickup-leads-list.json")"
+
+test "$(jq -er '.space.id | tostring' "$RUN_DIR/clickup-handoffs-list.json")" \
+  = "$CLICKUP_SPACE_ID"
+
+for list in clickup-leads-list clickup-handoffs-list; do
+  printf '%s\n' "Estados de $list:"
+  jq -r '.statuses[] | [.status, .type] | @tsv' "$RUN_DIR/$list.json"
+done
 ```
 
 En la configuración verificada para este proyecto, los valores son:
@@ -134,7 +153,9 @@ WEBHOOK_URL=https://<TAILSCALE_HOSTNAME>:8443/
 
 ### GATE 3 — estados
 
-Los dos estados configurados deben existir exactamente en la respuesta de la lista. No continuar si fueron renombrados.
+Los dos estados configurados deben existir exactamente en ambas listas y
+`CLICKUP_SPACE_ID` debe ser el mismo para las dos. No continuar si los estados
+fueron renombrados o las listas ya no comparten Space.
 
 ## 4. Crear y verificar un backup
 
@@ -226,6 +247,30 @@ Una petición sin firma debe llegar a n8n cuando el workflow esté activo y resp
 
 Continuar solo si Funnel contiene exactamente `PUBLIC_PATH` en `8443` y el JSON de Serve `443` es idéntico al estado previo.
 
+### GATE 5.1 — DNS público, no solamente MagicDNS
+
+Una petición realizada desde un equipo conectado al tailnet puede usar MagicDNS
+y llegar al servicio privado aunque el endpoint sea inaccesible desde Internet.
+Antes de registrar el webhook, consultar un resolver público:
+
+```bash
+curl --fail --silent --show-error --max-time 20 \
+  --get --data-urlencode "name=$TAILSCALE_HOSTNAME" --data-urlencode 'type=A' \
+  https://dns.google/resolve --output "$RUN_DIR/public-dns.json"
+
+jq -e '.Status == 0 and any(.Answer[]?; .type == 1)' \
+  "$RUN_DIR/public-dns.json" >/dev/null
+```
+
+Si devuelve `Status: 3` (NXDOMAIN), detener el registro. Tailscale documenta que
+la publicación DNS puede tardar hasta diez minutos. Reaplicar únicamente la
+ruta de Funnel en `8443`, conservar `443` privado y repetir la comparación del
+paso 5. No cambiar puertos ni publicar servicios adicionales para eludir el error.
+En la intervención del 13/09/2026, ClickUp rechazó el endpoint con HTTP `400`,
+`OAUTH_194: Specified URL not allowed`, mientras ambos resolvers públicos
+(Google y Cloudflare) devolvían NXDOMAIN. Una respuesta local `200` o `401` no
+es suficiente para declarar recuperada la entrega pública.
+
 ## 6. Importar el workflow inactivo
 
 Verificar primero que no exista una copia runtime con el mismo nombre:
@@ -285,11 +330,11 @@ Durante esta ventana no se deben cambiar estados de tareas reales en la lista. E
 ```bash
 jq -n \
   --arg endpoint "$CLICKUP_ENDPOINT" \
-  --arg list_id "$CLICKUP_HANDOFF_LIST_ID" \
+  --arg space_id "$CLICKUP_SPACE_ID" \
   '{
     endpoint: $endpoint,
     events: ["taskStatusUpdated"],
-    list_id: ($list_id | tonumber)
+    space_id: ($space_id | tonumber)
   }' > "$RUN_DIR/create-webhook-request.json"
 
 HTTP_CODE="$(curl --silent --show-error \
@@ -355,9 +400,9 @@ unset CLICKUP_WEBHOOK_SECRET CLICKUP_WEBHOOK_ID
 
 No ejecutar `cat`, `jq .`, `set -x` ni comandos equivalentes sobre `.env` o la respuesta de creación.
 
-### GATE 7 — registro restringido
+### GATE 7 — registro restringido al Space
 
-Comprobar sin mostrar el secreto que ClickUp registró exactamente el endpoint, evento y lista esperados:
+Comprobar sin mostrar el secreto que ClickUp registró exactamente el endpoint, evento y Space esperados:
 
 ```bash
 set -a
@@ -372,12 +417,15 @@ curl --fail --silent --show-error \
 jq -e \
   --arg id "$CLICKUP_WEBHOOK_ID" \
   --arg endpoint "$CLICKUP_ENDPOINT" \
-  --arg list_id "$CLICKUP_HANDOFF_LIST_ID" '
+  --arg space_id "$CLICKUP_SPACE_ID" '
   any(.webhooks[];
     .id == $id
     and .endpoint == $endpoint
     and .events == ["taskStatusUpdated"]
-    and (.list_id | tostring) == $list_id)
+    and (.space_id | tostring) == $space_id
+    and .list_id == null
+    and .folder_id == null
+    and .task_id == null)
 ' "$RUN_DIR/webhooks.json" >/dev/null
 ```
 
@@ -456,7 +504,7 @@ jq -e '.status == "unauthorized"' \
 
 ### 9.2 Evento real controlado
 
-> **AUTORIZACIÓN EXPLÍCITA OBLIGATORIA:** mover una tarea real genera tráfico ClickUp → Funnel → n8n y puede cambiar `handoffs.estado` o cerrar la conversación asociada. Usar exclusivamente una tarea de prueba que ya esté vinculada a un handoff controlado.
+> **AUTORIZACIÓN EXPLÍCITA OBLIGATORIA:** mover una tarea real genera tráfico ClickUp → Funnel → n8n y puede cambiar `handoffs.estado`, el ownership comercial o cerrar una conversación asociada. Usar exclusivamente tareas controladas.
 
 1. Registrar el ID de la tarea controlada y el estado previo del handoff.
 2. Cambiar la tarea a `in progress`.
@@ -464,6 +512,8 @@ jq -e '.status == "unauthorized"' \
 4. Cambiar la misma tarea a `complete`.
 5. Confirmar `acknowledged → resolved` y el cierre de la conversación solo si estaba en `escalation_required`.
 6. Repetir el último evento o alternar estados fuera de orden y confirmar idempotencia: nunca debe ocurrir `resolved → acknowledged`.
+7. En una tarea de lead controlada, cambiar el estado a `in progress` y confirmar una fila activa en `lead_chat_ownerships` con el estado anterior exacto.
+8. Cambiar el lead a `complete` y confirmar `released_at` inmediato, sin restauración automática.
 
 Consultar evidencia sin exponer teléfono ni contenido del cliente:
 
@@ -516,6 +566,34 @@ Revisar en n8n las ejecuciones de `OPS - Handoff ClickUp Closure` y alertar ante
 - resultados `unknown_task` o `invalid_transition`;
 - aumento anormal de solicitudes o ejecuciones.
 
+Comprobar también la salud del webhook en ClickUp; un workflow activo en n8n
+no garantiza que ClickUp siga entregando eventos:
+
+```bash
+curl --fail --silent --show-error --max-time 30 \
+  --header "Authorization: $CLICKUP_API_TOKEN" \
+  "https://api.clickup.com/api/v2/team/$CLICKUP_TEAM_ID/webhook" \
+  --output "$RUN_DIR/webhooks-health.json"
+
+jq --arg id "$CLICKUP_WEBHOOK_ID" \
+  '[.webhooks[] | select(.id == $id) | {health, events}]' \
+  "$RUN_DIR/webhooks-health.json"
+```
+
+Si `health.status` es `suspended`, recuperar primero el acceso público y luego
+recrear el webhook, guardar el nuevo ID y secreto sin imprimirlos y recrear
+solamente n8n. Intentar conservar el webhook suspendido mientras se registra
+el reemplazo. Si ClickUp rechaza la configuración duplicada con HTTP `400`,
+`OAUTH_171: Webhook configuration already exists`, verificar primero el ingreso
+público y conservar un backup protegido de `.env` y de la configuración anterior;
+después eliminar únicamente el webhook suspendido y crear inmediatamente el
+reemplazo con el mismo alcance y endpoint. No eliminar un webhook activo para
+esta recuperación. Verificar la entrega real antes de declarar el incidente
+resuelto. No considerar suficiente un `PUT` que devuelva
+`active`: en la incidencia del 11/09 volvió a `suspended` inmediatamente.
+El JSON versionado debe permanecer `active: true` para que los próximos
+despliegues no vuelvan a desactivar este workflow.
+
 No registrar headers completos, `.env`, el body de creación del webhook ni la respuesta que contiene `webhook.secret`.
 
 ## 11. Rollback
@@ -540,6 +618,11 @@ HTTP_CODE="$(curl --silent --show-error \
 
 test "$HTTP_CODE" = '200'
 ```
+
+Si el rollback debe conservar el cierre histórico de handoffs, volver a crear
+el webhook anterior con `list_id: CLICKUP_HANDOFF_LIST_ID`, guardar el nuevo
+secreto y recrear n8n antes de reactivar el workflow. No reutilizar el secreto
+del webhook eliminado.
 
 ### 11.2 Desactivar el workflow y Funnel
 
@@ -604,3 +687,4 @@ rm -rf "$RUN_DIR"
 - [Crear un webhook en ClickUp](https://developer.clickup.com/reference/createwebhook)
 - [Firma de webhooks de ClickUp](https://developer.clickup.com/docs/webhooksignature)
 - [Eliminar un webhook de ClickUp](https://developer.clickup.com/reference/deletewebhook)
+- [Salud de webhooks de ClickUp](https://developer.clickup.com/docs/webhookhealth)

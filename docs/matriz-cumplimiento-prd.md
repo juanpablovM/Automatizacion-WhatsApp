@@ -126,7 +126,7 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 | Campo | Contenido |
 |---|---|
 | Requisito PRD | `#9.3`, `#13`, `#33.5` |
-| Implementación | Máquina de pasos: `baseQuestions` (city / service / requirement) en `Evaluate Conversation Step`; preguntas factibles por campo (`measurements`, `quantity`, `address`, etc.) en `Apply AI Assistance`; gate real en `crm-lead-creation-and-assignment.json` nodo `Prepare Lead Qualification` — exige 3 campos completos (`completedFieldsCount<3` lanza error «faltan servicio, ciudad o requerimiento») |
+| Implementación | Máquina de pasos: `baseQuestions` (city / service / requirement) en `Evaluate Conversation Step`; preguntas factibles por campo (`measurements`, `quantity`, `address`, etc.) en `Apply AI Assistance`; gate real en `crm-lead-creation-and-assignment.json` nodo `Prepare Lead Qualification` — exige servicio y requerimiento, además de ciudad para despacho e instalación; ciudad es inaplicable para retiro particular de material en fábrica, también cuando el cliente es una empresa. |
 | IMP | SI |
 | Prueba | `test-conversation-regression-local.sh`: CP-05 (datos incompletos) + fixture `lead_creation_gate` = [servicio, ciudad, requerimiento, confirmación]; `test-e2e-lead-creation.sh` |
 | Evidencia runtime | `leads.service/city/requirement`; `leads.lead_status_id` = `qualified_complete`; `conversations.qualification_context` poblado; auditoría de rechazo por el gate |
@@ -154,16 +154,16 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 | Evidencia runtime | `conversations.qualification_context.lead_class` / `advisor_decisions.lead_class` |
 | Trazabilidad | **Parcial** |
 
-### CR-008 — Detecta B2B
+### CR-008 — Cliente empresa como lead común
 
 | Campo | Contenido |
 |---|---|
-| Requisito PRD | `#19`, `#11.4`, `#33.8` |
-| Implementación | Deterministas `b2bKeywords` (constructora, inmobiliaria, OC, licitación, factura, …) en `Evaluate Conversation Step` con `b2b_redirect` al confirmar; señal AI `customer_type='b2b'` / `lead_class='D'`, pregunta empresa / contacto / cantidad / OC (`advisorQuestion`) |
-| IMP | SI para detección + recolección; **la derivación a área B2B / Patricia no existe**: el lead va al mismo lane de `crm-seller-notification-dispatch` sin diferenciar canal B2B |
-| Prueba | Sin caso dedicado en el fixture (brecha B04) |
-| Evidencia runtime | `qualification_context.customer_type='b2b'` / `lead_class='D'`; `response_kind='b2b_redirect'`; `leads.assigned_seller_id` = vendedor por rotación común |
-| Trazabilidad | **Parcial** |
+| Requisito PRD | `#19`, `#11.4`, `#33.8` (reescritos: el asesor deriva la cotización, la vendedora categoriza) |
+| Implementación | **La vía B2B separada fue eliminada.** Ya no existen `b2bKeywords` ni la rama `b2b_redirect` en `Evaluate Conversation Step`, ni el perfil comercial `b2b` en `Apply AI Assistance`, ni el bloque de metas requeridas por `customer_type='b2b'` / `lead_class='D'` en `v3-policy-builder.js` y `v3-contract-runtime.js`. Empresa, RUT, contacto, correo y OC siguen en `POLICY_FIELDS` como metas `optional` con `blocks_effects: []` |
+| IMP | Sí. Una empresa recorre el mismo flujo que cualquier cliente y ningún campo de empresa bloquea `create_lead`. La OC nunca se pide como requisito: ese documento existe después de la cotización |
+| Prueba | `tests/unit/v3-commercial-policy.test.js` (sin metas requeridas por empresa; goals opcionales; pickup de empresa crea lead sin OC), `tests/unit/commercial-capture-recovery.test.js` (perfil comercial común, sin `company`/`contact`/`oc` en `commercial_missing_fields`), `tests/unit/ensure-escalation-handoff-wrapper.test.js` (ruteo a Ventas + asignado ClickUp real), `tests/contract/conversation-flow.test.js` (mensaje de empresa sigue el flujo normal) |
+| Evidencia runtime | `qualification_context.customer_type='b2b'` / `lead_class='D'` se conservan como información para la vendedora; `handoffs.area='sales'` con `responsable='Ejecutiva comercial'` |
+| Trazabilidad | **Sí** |
 
 ### CR-009 — Detecta instalación
 
@@ -317,10 +317,12 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 
 ### CS-003 — «Soy de una constructora, necesito cotizar 500 m» (`#31.3`)
 
-- **Implementación**: `b2bKeywords` (constructora / OC / licitación) → `b2b_redirect` +
-  `advisorQuestion` (empresa, RUT, obra, comuna, producto, cantidad, plazo, OC).
-- **Prueba**: **sin caso en el fixture** (brecha B04).
-- **Trazabilidad**: **Parcial**.
+- **Implementación**: flujo normal de cotización (producto, cantidad, modalidad). No hay
+  desvío `b2b_redirect` ni lista de datos de empresa pedida por adelantado; empresa, RUT,
+  obra y OC se registran solo si el cliente los aporta.
+- **Prueba**: `tests/contract/conversation-flow.test.js` («a company message follows the
+  ordinary flow») y `tests/unit/contact-context-recovery.test.js`.
+- **Trazabilidad**: **Sí**.
 
 ### CS-004 — «Te mandé el comprobante, ¿cuál despachan?» (`#31.4`)
 
@@ -367,9 +369,9 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 | B01 | `#13.4` reclamo (CS-007) | Sin flujo de reclamo: no recolecta datos mínimos (venta / fecha / producto / fotos) ni deriva urgente determinística | Solo `escalation_area='claims'` (AI); sin nodo/query dedicado | Reclamos no quedan estructurados |
 | B02 | `#13.8` comprobante (CS-004) | No hay flujo real de recepción de comprobante → Finanzas; los campos `payment_*` existen en contexto pero no se derivan | Keys `payment_amount/payment_method` en `allowedQualificationKeys`; sin nodo de derivación a Finanzas | Comprobantes 100% dependientes de la escalada de IA |
 | B03 | `#9.4`, `#11`, `#23` priorización | `lead_class` (A/B/C/D) se persiste pero NO altera routing, prioridad ni rotación | Dispatcher filtra solo `should_create_lead`; rotación round-robin ignora la clase | §23 sin aplicación |
-| B04 | `#19`/B2B (CS-003) | Derivación a «Patricia / área B2B» no existe; el vendedor notificado es el de la rotación común | `seller-notification-dispatch` es lane único | B2B se trata como lead común |
+| B04 | `#19`/empresa (CS-003) | **Cerrada por decisión de producto**: no hay área B2B ni derivación a «Patricia». El asesor deriva la cotización y la vendedora categoriza, así que una empresa es un lead común y sus derivaciones van a Ventas, que sí tiene asignados reales | `HANDOFF_ROUTING.b2b`/`purchase_order` → `area='sales'`; `tests/unit/ensure-escalation-handoff-wrapper.test.js` | Resuelta |
 | B05 | `#22` triggers de escalamiento | Los triggers de escalado (garantía, factura, despacho comprometido, etc.) no están determinizables; dependen de la semántica de IA | `Evaluate Step` solo codifica `wantsHuman`/frustración | Escaladas sin respaldo por reglas |
-| B06 | `#13.2/` B2B, `#13.5` retiro | Campos dedicados (B2B, despacho, retiro) se recogen en `allowedQualificationKeys` pero sin validación de completitud por caso de uso | `allowedKeys` amplia; gate de lead solo exige 3 campos base | Datos B2B/despacho incompletos |
+| B06 | `#13.2`, `#13.5` retiro | Campos dedicados (despacho, retiro) se recogen en `allowedQualificationKeys` pero sin validación de completitud por caso de uso. Los campos de empresa quedan deliberadamente fuera: son opcionales por decisión de producto | `allowedKeys` amplia; gate de lead solo exige 3 campos base | Datos de despacho incompletos |
 | B07 | `#21.1-21.5` objeciones | Los textos de objeción no son plantillas fijas; se dejan al LLM (solo `objection_detected` + playbooks) | `PRD_VALIDATORS` no contiene plantillas de `#21` | Trazabilidad de copy frágil |
 | B08 | `#28.1`/CR-014 | Subida real de media/fotos al task de ClickUp NO implementada (solo metadata) | `message_attachments`; `attachments_json`; sin `Task Attachment` | CR-014 parcial |
 | B09 | `#32`, `#28.6` | Datos crudos y `monitor_snapshots` vacía; sin cómputo de métricas ni dashboard | `009` y `monitor-active-conversations.sql` | No se mide |
@@ -378,7 +380,7 @@ Convención de archivos citados (rutas relativas a la raíz del repo):
 | B12 | `#16` comprobante (texto) | El texto de `#16` puede aparecer solo vía fallback del guard; no hay manejo operativo del comprobante como evento | No hay nodo específico | Cumplimiento deficiente |
 | B13 | `#31` casos de evaluación (CS) | Los 8 escenarios de `#31` no tienen casos de prueba literales (solo CP genéricos) | fixture `conversation_regression_cases.sample.json` | Trazabilidad CS incompleta |
 | B14 | `#34` resumen | El resumen de ejecutivo depende del LLM; si `ai_skipped`, no hay resumen determinístico | `Apply AI Assistance`, `executive_summary` | Fallback sin resumen |
-| B15 | `#11.4` condiciones especiales | No hay flag persistido `requiere_aprobacion_management` en `leads`/ClickUp (solo `escalation_area='management'` en escalafón de AI) | — | Condición B2B especial sin bandera |
+| B15 | `#11.4` condiciones especiales | No hay flag persistido `requiere_aprobacion_management` en `leads`/ClickUp (solo `escalation_area='management'` en escalafón de AI) | — | Condición de pago especial sin bandera |
 
 **Total de brechas registradas: 15 (B01-B15).** No se resuelven aquí; serán priorizadas en las Unidades 1-9.
 
@@ -421,10 +423,10 @@ Verificación previa: `docker compose --env-file .env ps`, `sh scripts/dev/evolu
 - Casos `Cubierto`: CS-001 (guardrail), CS-008.
 - Pendientes: CR-020 (métrica de calidad) y CS-007 (flujo de reclamo).
 - Áreas de mayor riesgo operativo: comprobantes y reclamos (B01, B02, B12), priorización
-  (B03), B2B (B04) y métricas/dashboard (B09) — corresponden a fases 2-4 del PRD aún
-  incompletas.
+  (B03) y métricas/dashboard (B09) — corresponden a fases 2-4 del PRD aún incompletas.
+  B04 dejó de ser una brecha: la vía B2B se eliminó por decisión de producto.
 
-**Automatizaciones (PRD `#27`)**: A-001 oportunidad temprana (U2, `01_upsert_early_opportunity.sql`, test-opportunity-cycle-local.sh); A-002/A-003/A-004 campos de producto/comuna/instalación (U1, gate comercial); A-005/A-006 clasificación B2B/Lead A (textos en fixtures, handoff/prioridad); A-007 derivación urgente (U3); A-008 comprobante → Finanzas (U3 routing `HANDOFF_ROUTING.payment_proof`); A-009 fotos (U5: `media_attachments`, adjunto ClickUp diferido por decisión de usuario); **A-010 seguimiento 0/1/3/7/14 (U6):** tabla `follow_ups`, scheduler `OPS - Follow-Up Scheduler` con claim `FOR UPDATE SKIP LOCKED`, cancelación por respuesta/derivación/pérdida, `opt_out` definitivo, ventana horaria 09-20 y textos por step/motivo en fixture — validado con `test-followup-cadence-local.sh` (17+32 asserts deterministas).
+**Automatizaciones (PRD `#27`)**: A-001 oportunidad temprana (U2, `01_upsert_early_opportunity.sql`, test-opportunity-cycle-local.sh); A-002/A-003/A-004 campos de producto/comuna/instalación (U1, gate comercial); A-005/A-006 señal de cliente empresa (informativa, sin vía propia) y clasificación Lead A (textos en fixtures, handoff/prioridad); A-007 derivación urgente (U3); A-008 comprobante → Finanzas (U3 routing `HANDOFF_ROUTING.payment_proof`); A-009 fotos (U5: `media_attachments`, adjunto ClickUp diferido por decisión de usuario); **A-010 seguimiento 0/1/3/7/14 (U6):** tabla `follow_ups`, scheduler `OPS - Follow-Up Scheduler` con claim `FOR UPDATE SKIP LOCKED`, cancelación por respuesta/derivación/pérdida, `opt_out` definitivo, ventana horaria 09-20 y textos por step/motivo en fixture — validado con `test-followup-cadence-local.sh` (17+32 asserts deterministas).
 
 **Evidencia certificable de la Unidad 0**: ninguna exigencia del PRD queda sin un **ID
 estable**. Las 28 entidades (20 `CR` + 8 `CS`) cubren literalmente las secciones de
@@ -444,15 +446,15 @@ de las Unidades 1-9.
    romper el texto literal de los fallbacks. Evaluar extraerlas a un recurso versionado.
 3. **Dependencia fuerte del LLM** para: clasificación A/B/C/D, `objection_detected`,
    `escalation_area`, `confirmation_status`, `executive_summary` y extracción D.A.T.O.S. Las
-   heurísticas deterministas solo cubren `wantsHuman`, keywords B2B y guardrails de texto.
+   heurísticas deterministas solo cubren `wantsHuman` y guardrails de texto.
 4. **Guardia `confidence >= 0.75`**: `aiCanCreateLead` exige confianza + 3 campos +
    `confirmation_yes`; si el modelo degrada su confianza se pierden leads que sí eran
    calificados (observable vía `ai_creation_blocked_by_orchestrator`).
 5. **Evolution sin idempotencia de endpoint** (comentado en `wa-outbound-messages`): un retry
    puede duplicar el mensaje; mitigado con `maxAttempts=1` + reconciliación operativa.
 6. **ClickUp**: la forma de `reconciliation_required`/`unknown` requiere marcación manual; la
-   derivación B2B/Patricia y la bandera `requiere_aprobacion_management` no existen en la
-   estructura del lead (B04, B15).
+   bandera `requiere_aprobacion_management` no existe en la estructura del lead (B15). La
+   derivación B2B/Patricia ya no se espera: fue eliminada por decisión de producto (B04).
 7. **Rotación**: round-robin no pondera el `lead_type`/prioridad (§23) — brecha B03.
 8. **Fixtures**: los 8 casos de `#31` no están en la suite como casos literales; su cobertura
    depende de casos genéricos, difícil de traducir a delivery (B13).
