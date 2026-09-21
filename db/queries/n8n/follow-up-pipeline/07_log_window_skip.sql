@@ -1,4 +1,4 @@
--- Record at most one out-of-window observation per hour. $1 start, $2 end, $3 now
+-- Record at most one out-of-window observation per hour. p1 start, p2 end, p3 now
 WITH input AS (
   SELECT COALESCE(NULLIF($1::text, ''), '09:00')::time start_at,
     COALESCE(NULLIF($2::text, ''), '20:00')::time end_at,

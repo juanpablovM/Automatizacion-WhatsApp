@@ -1,6 +1,6 @@
 -- Complete a claimed ClickUp notification.
--- $1 operation_id, $2 claim_token, $3 outcome, $4 status_code,
--- $5 external_id, $6 external_url, $7 error, $8 response_json, $9 retry_safe.
+-- p1 operation_id, p2 claim_token, p3 outcome, p4 status_code,
+-- p5 external_id, p6 external_url, p7 error, p8 response_json, p9 retry_safe.
 WITH authorized AS MATERIALIZED (
   SELECT eo.*, h.max_attempts, h.created_at AS handoff_created_at
   FROM external_operations eo

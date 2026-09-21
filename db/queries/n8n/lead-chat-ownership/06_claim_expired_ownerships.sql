@@ -28,12 +28,12 @@
 -- para siempre, sin ninguna via de reintento, y la restauracion se perdia en
 -- silencio. Marcarla 'processing' con restoration_claimed_at la vuelve
 -- rescatable por la rama (b) de `candidates`, que es la unica razon por la que
--- $2 stale_processing_seconds existe.
+-- p2 stale_processing_seconds existe.
 --
 -- Se reclama la UNION de dos conjuntos, no uno solo:
 --   (a) leases recien vencidos todavia no liberados — la toma normal;
 --   (b) filas ya liberadas cuya restauracion sigue en 'pending' o 'processing'
---       y cuyo restoration_claimed_at es mas viejo que $2 segundos — el
+--       y cuyo restoration_claimed_at es mas viejo que p2 segundos — el
 --       rescate, con token nuevo.
 -- Un solo predicado con OR expresa esa union con un unico LIMIT y una unica
 -- pasada de locking; dos subconsultas UNION-idas tomarian hasta 2x batch_size.
@@ -55,8 +55,8 @@
 -- herede el resultado de la anterior.
 --
 -- Params:
---   $1 batch_size (integer, por defecto 20),
---   $2 stale_processing_seconds (integer, por defecto 900)
+--   p1 batch_size (integer, por defecto 20),
+--   p2 stale_processing_seconds (integer, por defecto 900)
 -- =============================================================================
 WITH input AS (
   SELECT
@@ -77,7 +77,7 @@ candidates AS MATERIALIZED (
         AND o.response_due_at <= NOW()
       )
       -- (b) Restauracion abandonada: la fila ya se libero pero su restauracion
-      -- sigue abierta y el claim que la abrio es mas viejo que $2 segundos. El
+      -- sigue abierta y el claim que la abrio es mas viejo que p2 segundos. El
       -- worker murio despues de reclamar; sin este rescate la restauracion se
       -- pierde en silencio. 'pending' entra ademas de 'processing' para que las
       -- filas que quedaron colgadas con el comportamiento anterior tambien

@@ -1,6 +1,6 @@
 -- Complete one claimed send and atomically create the next cadence step.
--- $1 follow_up_id, $2 claim_token, $3 outcome(sent|failed|unknown),
--- $4 error, $5 outbound_delivery_status, $6 outbound_message_id
+-- p1 follow_up_id, p2 claim_token, p3 outcome(sent|failed|unknown),
+-- p4 error, p5 outbound_delivery_status, p6 outbound_message_id
 WITH target AS (
   SELECT f.* FROM follow_ups f
   WHERE f.id = $1::bigint AND f.deleted_at IS NULL

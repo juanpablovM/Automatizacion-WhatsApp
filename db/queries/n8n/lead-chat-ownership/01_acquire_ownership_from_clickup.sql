@@ -34,8 +34,8 @@
 -- invalida y no como error de servidor.
 --
 -- Params:
---   $1 clickup_task_id (text), $2 previous_status (text, estado ANTERIOR a la
---   transicion), $3 history_id (text), $4 history_event_at (timestamptz)
+--   p1 clickup_task_id (text), p2 previous_status (text, estado ANTERIOR a la
+--   transicion), p3 history_id (text), p4 history_event_at (timestamptz)
 -- =============================================================================
 WITH input AS (
   SELECT
