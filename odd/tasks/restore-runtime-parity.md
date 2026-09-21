@@ -84,8 +84,8 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
   - Checks:
     - Documentation claims match the RRP-1 receipt and current Git state.
     - Focused documentation diff review.
-  - Work-unit commit: pending.
-  - RDD outcome: pending work-unit commit assessment.
+  - Work-unit commit: `0b726e3` (`docs(status): publish certified runtime state`).
+  - RDD outcome: medium risk, `under_budget` (199 accumulated changed lines from boundary `1426f83`).
 
 ## Progress
 
@@ -94,7 +94,8 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
 - Runtime synchronization completed successfully with explicit authorization.
 - RRP-1 acceptance, replay, activation, webhook readiness, and final remote verification passed.
 - RRP-1 was recorded in `286adb9`; native RDD assessment returned medium risk and `under_budget`.
-- RRP-2 updated the canonical status cut and passed focused documentation checks; its commit and RDD assessment remain pending.
+- RRP-2 updated the canonical status cut in `0b726e3` and passed focused documentation checks.
+- Native RDD assessment remains medium risk and `under_budget`; no review transition is due yet.
 
 ## Verification evidence
 
@@ -104,4 +105,4 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
 
 ## Next step
 
-Commit the RRP-2 documentation work unit, run its native RDD assessment, then reconcile the branch with `main` before delivery.
+Reconcile the branch with `main` before delivery, then obtain explicit GitHub authorization before push or pull-request creation.
