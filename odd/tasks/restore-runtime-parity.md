@@ -69,10 +69,10 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
     - Controlled acceptance created lead `220` in `assigned` state and the replay passed its idempotency check.
     - The ClickUp synchronization audit was observed, declared workflows were reactivated, and Entry POST/health webhooks passed readiness.
     - Non-blocking warnings: Node emitted `DEP0040` for `punycode`; readiness retries observed one connection reset and one transient `404` before the gate passed.
-  - Work-unit commit: pending receipt commit.
-  - RDD outcome: pending receipt commit assessment.
+  - Work-unit commit: `286adb9` (`docs(ops): record restored runtime parity`).
+  - RDD outcome: medium risk, `under_budget`.
 
-- [ ] **RRP-2 — Publish an evidence-backed status cut**
+- [x] **RRP-2 — Publish an evidence-backed status cut**
   - Route: delegated writer.
   - Trigger evidence: substantial work includes the feature document plus canonical status documentation; preparation was already delegated.
   - Update `docs/estado-actual.md` only after RRP-1 produces current evidence.
@@ -85,7 +85,7 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
     - Documentation claims match the RRP-1 receipt and current Git state.
     - Focused documentation diff review.
   - Work-unit commit: pending.
-  - RDD outcome: pending.
+  - RDD outcome: pending work-unit commit assessment.
 
 ## Progress
 
@@ -93,13 +93,15 @@ Runtime parity must be trustworthy before the two local fixes can be deployed or
 - Local preflight, topology regression, and smoke checks pass.
 - Runtime synchronization completed successfully with explicit authorization.
 - RRP-1 acceptance, replay, activation, webhook readiness, and final remote verification passed.
+- RRP-1 was recorded in `286adb9`; native RDD assessment returned medium risk and `under_budget`.
+- RRP-2 updated the canonical status cut and passed focused documentation checks; its commit and RDD assessment remain pending.
 
 ## Verification evidence
 
 - `n8n/workflow-links.json` declares `OPS - Error Handler`.
 - `scripts/dev/sync-n8n-workflows.sh` resolves and injects the runtime error-handler ID, verifies exact links, performs controlled acceptance, and rolls back on failure.
-- Current branch: `feat/afinar-hormi-atencion`, clean before this task document, two commits ahead and one merge commit behind `main`.
+- Current branch: `feat/afinar-hormi-atencion`; it started this change clean with two delivery commits ahead and remains one merge commit behind `main`.
 
 ## Next step
 
-Update the canonical status document from the RRP-1 runtime receipt.
+Commit the RRP-2 documentation work unit, run its native RDD assessment, then reconcile the branch with `main` before delivery.
