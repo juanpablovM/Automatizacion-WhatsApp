@@ -76,6 +76,61 @@ node <<'NODE'
     output_text: typeof payload === 'string' ? payload : JSON.stringify(payload),
   });
 
+  const validateOpenAiV3 = async () => {
+    const input = {
+      message_current: 'Necesito adoquines',
+      contract_version: 'v3',
+      turn_policy: { version: 'ai_prd_turn_policy/v3', policy_digest: 'a'.repeat(64) },
+    };
+    const openAiEnv = {
+      ...env,
+      AI_PROVIDER: 'openai',
+      AI_DIRECT_API_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      AI_DIRECT_API_PATH: '/chat/completions',
+      AI_DIRECT_API_MODEL: 'gemini-3.1-flash-lite',
+      AI_DIRECT_API_KEY: 'gemini-test-key',
+      OPENAI_API_KEY: 'openai-test-key',
+    };
+    const request = await runCode('Build AI Request', input, {}, openAiEnv);
+    expectEqual(request.ai_base_url, 'https://api.openai.com/v1', 'OpenAI base URL');
+    expectEqual(request.ai_request_path, '/responses', 'OpenAI Responses path');
+    expectEqual(request.ai_model, 'gpt-6-luna', 'OpenAI model');
+    expectEqual(request.ai_request.text.format.strict, true, 'OpenAI strict schema');
+    expectEqual(request.ai_request.store, false, 'OpenAI does not store response');
+    assert(!Object.hasOwn(request.ai_request, 'temperature'), 'GPT-6 request must omit temperature');
+    let calledCount = 0;
+    const called = await runCode('Call AI Provider', request, {
+      httpRequest: async (options) => {
+        calledCount += 1;
+        expectEqual(options.url, 'https://api.openai.com/v1/responses', 'OpenAI call URL');
+        expectEqual(options.headers.Authorization, 'Bearer openai-test-key', 'OpenAI credential selection');
+        return {
+          statusCode: 200,
+          body: { output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ version: 'ai_conversation_proposal/v3', reply_text: 'Hola' }) }] }] },
+          headers: {},
+        };
+      },
+    }, openAiEnv);
+    expectEqual(calledCount, 1, 'OpenAI call count');
+    const normalized = await runCode('Normalize AI Result', called, {}, openAiEnv);
+    expectEqual(normalized.ai_proposal.reply_text, 'Hola', 'OpenAI output normalization');
+    const missingKey = await runCode('Build AI Request', input, {}, { ...openAiEnv, OPENAI_API_KEY: '' });
+    expectEqual(missingKey.ai_request_error, 'missing_api_config', 'Missing OpenAI key must fail locally');
+
+    const gemini = await runCode('Build AI Request', input, {}, {
+      ...openAiEnv, AI_PROVIDER: 'google', OPENAI_API_KEY: '',
+    });
+    expectEqual(gemini.ai_base_url, 'https://generativelanguage.googleapis.com/v1beta/openai', 'Gemini URL unchanged');
+    expectEqual(gemini.ai_request_path, '/chat/completions', 'Gemini path unchanged');
+    expectEqual(gemini.ai_request.temperature, 0.05, 'Gemini temperature unchanged');
+    await runCode('Call AI Provider', gemini, {
+      httpRequest: async (options) => {
+        expectEqual(options.headers.Authorization, 'Bearer gemini-test-key', 'Gemini credential unchanged');
+        return { statusCode: 200, body: { choices: [{ message: { content: '{}' } }] }, headers: {} };
+      },
+    }, openAiEnv);
+  };
+
   const validateRequestContract = async () => {
     const request = await runCode('Build AI Request', readSample('ai_lead_qualification.sample.json'), {}, env);
     const schema = request.response_schema;
@@ -325,6 +380,7 @@ node <<'NODE'
     scenario.expect(normalized);
   };
 
+  await validateOpenAiV3();
   await validateRequestContract();
   await validateConfigFallback();
   await validateRateLimitHandling();

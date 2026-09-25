@@ -137,6 +137,8 @@ services:
       AI_DIRECT_API_BASE_URL: ${AI_DIRECT_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       AI_DIRECT_API_PATH: ${AI_DIRECT_API_PATH:-/chat/completions}
       AI_DIRECT_API_KEY: ${AI_DIRECT_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
       AI_DIRECT_API_MODEL: ${AI_DIRECT_API_MODEL:-gemini-3.1-flash-lite}
       AI_DIRECT_API_TIMEOUT_MS: ${AI_DIRECT_API_TIMEOUT_MS:-120000}
       AI_DIRECT_API_TEMPERATURE: ${AI_DIRECT_API_TEMPERATURE:-0.1}

@@ -101,6 +101,11 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
+    "node": "Call AI Provider",
+    "fixture": "ai-lead-qualification-assistant/call-ai-provider.js"
+  },
+  {
+    "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
     "node": "Normalize AI Result",
     "fixture": "ai-lead-qualification-assistant/normalize-ai-result.js"
   },

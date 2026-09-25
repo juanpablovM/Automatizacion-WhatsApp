@@ -8,6 +8,7 @@ const replacements = [
   ['https://app.clickup.com', 'http://mock-clickup:8083'],
   ['https://generativelanguage.googleapis.com/v1beta/openai', 'http://mock-ai:8081'],
   ['https://generativelanguage.googleapis.com', 'http://mock-ai:8081'],
+  ['https://api.openai.com/v1', 'http://mock-ai:8081'],
 ];
 const allowedOrigins = new Set(['http://mock-clickup:8083', 'http://mock-ai:8081', 'http://mock-evolution:8080']);
 const visit = (value) => {

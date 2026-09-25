@@ -87,12 +87,13 @@ const isPlaceholder = (value) => {
 };
 const aiEnabled = String($env.AI_LEAD_ASSISTANT_ENABLED || 'true').toLowerCase() === 'true';
 const provider = safe($env.AI_PROVIDER, 'google').toLowerCase();
-const model = safe($env.AI_DIRECT_API_MODEL);
-const requestPath = safe($env.AI_DIRECT_API_PATH, '/chat/completions');
+const usesOpenAi = provider === 'openai';
+const model = usesOpenAi ? safe($env.OPENAI_MODEL, 'gpt-6-luna') : safe($env.AI_DIRECT_API_MODEL);
+const requestPath = usesOpenAi ? '/responses' : safe($env.AI_DIRECT_API_PATH, '/chat/completions');
 const usesChatCompletions = requestPath.includes('/chat/completions');
 const apiMode = usesChatCompletions ? 'chat_completions' : 'responses';
-const baseUrl = safe($env.AI_DIRECT_API_BASE_URL, 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/+$/, '');
-const directApiKey = safe($env.AI_DIRECT_API_KEY);
+const baseUrl = (usesOpenAi ? 'https://api.openai.com/v1' : safe($env.AI_DIRECT_API_BASE_URL, 'https://generativelanguage.googleapis.com/v1beta/openai')).replace(/\/+$/, '');
+const directApiKey = usesOpenAi ? safe($env.OPENAI_API_KEY) : safe($env.AI_DIRECT_API_KEY);
 const timeoutMs = Number($env.AI_DIRECT_API_TIMEOUT_MS || 120000);
 const turnPolicy = parseJsonObject(pickMerged(row.turn_policy, row.turn_policy_1));
 const requestedContractVersion = safe(pickMerged(row.contract_version, row.contract_version_1)).toLowerCase();
@@ -485,7 +486,7 @@ if (usesV3Contract) {
             strict: true,
           },
         },
-        temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
+        ...(!usesOpenAi ? { temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05) } : {}),
         store: false,
       };
   return [{
@@ -1201,7 +1202,7 @@ const aiRequest = usesChatCompletions
           strict: true,
         },
       },
-      temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
+      ...(!usesOpenAi ? { temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05) } : {}),
       store: false,
     };
 

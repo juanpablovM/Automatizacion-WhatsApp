@@ -22,14 +22,16 @@ La autonomia operativa sigue en `n8n`:
 
 ## Variables
 
-`AI_PROVIDER` es una etiqueta operativa para auditoria y compatibilidad.
-El comportamiento real del proveedor lo determinan:
+`AI_PROVIDER=google` conserva la ruta Gemini. Para `AI_PROVIDER=openai`, el
+workflow usa `OPENAI_API_KEY`, `OPENAI_MODEL` (por defecto `gpt-6-luna`),
+`https://api.openai.com/v1/responses` y omite `temperature` para GPT-6.
+El resto de proveedores conserva la configuracion `AI_DIRECT_API_*`:
 
 - `AI_DIRECT_API_BASE_URL`
 - `AI_DIRECT_API_PATH`
 - `AI_DIRECT_API_MODEL`
 
-La configuracion versionada vigente usa un endpoint OpenAI-compatible de Google.
+La configuracion versionada vigente sigue usando un endpoint OpenAI-compatible de Google.
 Si cambias de proveedor, alinea `.env`, `.env.example` y `docker-compose.yml`.
 El modelo canónico actual es `gemini-3.1-flash-lite`.
 `gemini-3.5-flash` queda reservado como alternativa de escalamiento o canary si la calidad conversacional no basta.
@@ -44,6 +46,8 @@ AI_API_KEY_REQUIRED=true
 AI_DIRECT_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AI_DIRECT_API_PATH=/chat/completions
 AI_DIRECT_API_KEY=__PENDIENTE__
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-6-luna
 AI_DIRECT_API_MODEL=gemini-3.1-flash-lite
 AI_DIRECT_API_TIMEOUT_MS=120000
 AI_DIRECT_API_TEMPERATURE=0.1
@@ -67,6 +71,14 @@ El workflow soporta dos formas de API directa:
 
 - `/chat/completions`, valor versionado en `.env.example`
 - `/responses`, disponible si el proveedor elegido lo requiere
+
+La seleccion `openai` fuerza `/responses` y su URL oficial sin reutilizar la
+URL, ruta ni credencial Gemini. El schema v3 sigue siendo estricto y la
+solicitud incluye `store: false`. Si falta `OPENAI_API_KEY`, se registra
+`missing_api_config` y se usa el fallback determinista; la clave Gemini no
+actua como respaldo implicito. No hay cambio de proveedor en el n8n activo
+por agregar la clave al `.env`; la activacion exige configurar
+`AI_PROVIDER=openai` y recrear n8n tras una validacion autorizada.
 
 Para activar con proveedor real:
 

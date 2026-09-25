@@ -291,6 +291,12 @@ describe('v3 canary E2E binding contract', () => {
     expect(result[0].json.clickup_task_url).toBe('http://mock-clickup:8083/api/v2/list/synthetic-leads/task');
     expect(JSON.stringify(isolated.nodes)).not.toContain('https://api.clickup.com');
     expect(JSON.stringify(workflow.nodes)).toContain('https://api.clickup.com');
+    const aiWorkflow = JSON.parse(source(path.join(repositoryRoot, 'n8n/workflows/ai-lead-qualification-assistant.json')));
+    const isolatedAi = prepareIsolatedV3Workflow(aiWorkflow);
+    const aiBuilder = isolatedAi.nodes.find((node) => node.name === 'Build AI Request');
+    expect(aiBuilder.parameters.jsCode).toContain('http://mock-ai:8081');
+    expect(JSON.stringify(isolatedAi.nodes)).not.toContain('https://api.openai.com');
+    expect(JSON.stringify(aiWorkflow.nodes)).toContain('https://api.openai.com');
     const sellerWorkflow = prepareIsolatedV3Workflow(JSON.parse(source(path.join(repositoryRoot, 'n8n/workflows/crm-seller-notification-dispatch.json'))));
     const sellerBuilder = sellerWorkflow.nodes.find((node) => node.name === 'Build Seller Notification');
     const sellerResult = new Function('items', '$env', sellerBuilder.parameters.jsCode)([{ json: {
