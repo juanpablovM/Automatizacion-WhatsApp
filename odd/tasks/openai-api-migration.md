@@ -35,14 +35,14 @@ The user selected OpenAI and placed a key in the ignored local `.env`, but the c
 
 ## Tasks
 
-- [ ] **OAM-1 — Prepare an offline-safe OpenAI provider path**
+- [x] **OAM-1 — Prepare an offline-safe OpenAI provider path**
   - Route: delegated direct writer; mapping, preparation, and multi-file writer triggers apply.
   - Add failing regression coverage for provider-specific key selection, GPT-6 Responses request compatibility, output normalization, and existing Gemini behavior.
   - Implement the smallest changes in canonical AI node fixtures, synchronize generated workflow, forward the variable through Docker Compose, and update environment example and setup documentation without editing the user's secret.
   - Acceptance: OpenAI selects `OPENAI_API_KEY`, Responses `/v1/responses`, `gpt-6-luna`, strict v3 schema, `store: false`, and no unsupported `temperature`; Gemini still uses `AI_DIRECT_API_KEY` and its prior request behavior. Isolated canary imports redirect OpenAI to mock without allowing unknown origins.
   - Checks: focused RED/GREEN tests; canonical node parity; configured local AI and conversation regression runner; applicable npm checks; secret-safety and diff review.
   - Live API and n8n runtime checks: pending separate explicit authorization.
-  - Work-unit commit: pending.
+  - Work-unit commit: `f8f234c` (`feat(ai): prepare OpenAI Responses provider path`), 317 authored changed lines excluding generated workflow.
   - RDD outcome: disabled/unmanaged.
 
 ## Progress
@@ -53,4 +53,5 @@ The user selected OpenAI and placed a key in the ignored local `.env`, but the c
 - Local AI contract, Compose, node parity, full `npm test` (619 passed, 138 skipped), and `git diff --check` passed.
 - Configured combined runner remains failed: `test-conversation-regression-local.sh` exits 1 on the pre-existing `service=Baldosas` versus expected null assertion in unrelated conversation behavior; the new OpenAI path did not alter that node.
 - Live OpenAI and n8n runtime validation remain pending explicit remote-operation authorization.
-- Next: stage only migration files, commit the work unit, and record the commit identity and final check status.
+- No live validation, n8n cutover, push, or PR was attempted. The provider remains Google until an explicitly authorized cutover.
+- Next: obtain explicit authorization for destination, live test operation, and credential/session before any paid OpenAI probe or n8n deployment; then validate the exact dynamic schema and conversational outcomes.
