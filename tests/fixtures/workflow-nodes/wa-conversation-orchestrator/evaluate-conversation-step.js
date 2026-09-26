@@ -40,6 +40,12 @@ const MEASURE_UNITS = [
 const MEASURE_EVIDENCE_RE = new RegExp('\\b\\d+(?:\\s*\\d{3})*\\s*(?:' + MEASURE_UNITS.join('|') + ')\\b');
 const hasMeasureEvidence = (normalized) => MEASURE_EVIDENCE_RE.test(normalized);
 
+// Opt-out and lost-intent phrasing lives in shared/customer-opt-out-vocabulary.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const customerIntent = typeof detectOptOut === 'function'
+  ? { detectOptOut, detectLostIntent }
+  : require('../shared/customer-opt-out-vocabulary.js');
+
 // Single silence kind for this node. `Should Send Response` in
 // wa-inbound-downstream-dispatcher.json dispatches only when response_text is
 // non-empty, so this is a sibling of human_control_suppressed: it reaches the
@@ -535,30 +541,9 @@ function evaluateConversationStep(row) {
     /\b(ayuda|no entiendo nada|que hay que hacer)\b/i,
     /\b(quejarme|reclamo|queja|problema contigo)\b/i,
   ];
-  // Opt-out / lost intent detection (memoria #686)
-  const OPT_OUT_PATTERNS = [
-    /no me escribas mas/i,
-    /escribas mas/i,
-    /baja.*(de la lista|pas|mensajes|programa)/i,
-    /\bstop\b/i,
-    /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-    /dej(?:a|en) de escribirme/i,
-    /no me envies mas mensajes/i,
-    /darme de baja/i,
-    /quitarme de la lista/i,
-    /no me molestes/i,
-  ];
-
-  const LOST_PATTERNS = [
-    /ya no (me interesa|necesito|quiero)/i,
-    /lo pense y no (voy a|quiero)/i,
-    /estoy con (otra|la competencia)/i,
-    /no voy a (comprar|avanzar)/i,
-    /cerremos el tema/i,
-  ];
-
-  const detectOptOut = (text) => OPT_OUT_PATTERNS.some(p => p.test(String(text || '').trim()));
-  const detectLostIntent = (text) => LOST_PATTERNS.some(p => p.test(String(text || '').trim()));
+  // Opt-out / lost intent detection (memoria #686): shared vocabulary, see customerIntent.
+  const isOptOut = customerIntent.detectOptOut(normalizedText);
+  const isLostIntent = customerIntent.detectLostIntent(normalizedText);
 
   const detectFrustration = (text) => {
     if (!text) return false;
@@ -691,14 +676,14 @@ function evaluateConversationStep(row) {
   }
 
   // 1. OPT-OUT / abandono: siempre gana, incluso si el mensaje también pide retomar.
-  else if (detectOptOut(normalizedText) || detectLostIntent(normalizedText)) {
+  else if (isOptOut || isLostIntent) {
     shouldEscalate = true;
     shouldCreateLead = false;
-    escalationReason = detectOptOut(normalizedText) ? 'opt_out' : 'abandoned';
+    escalationReason = isOptOut ? 'opt_out' : 'abandoned';
     currentStepField = 'escalation';
     pendingQuestionKey = null;
     responseKind = 'escalation_routing';
-    responseText = detectOptOut(normalizedText)
+    responseText = isOptOut
       ? 'Entendido. No te escribiremos más.'
       : 'Entendido. Cerramos tu solicitud. Si necesitas algo más, aquí estaremos.';
     conversationStatusCode = 'closed';

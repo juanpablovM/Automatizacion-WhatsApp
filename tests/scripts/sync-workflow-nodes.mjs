@@ -87,7 +87,10 @@ const NODES = [
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Evaluate Conversation Step",
     "fixture": "wa-conversation-orchestrator/evaluate-conversation-step.js",
-    "transform": "n8n-explicit-return"
+    "transform": "n8n-explicit-return",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",

@@ -99,6 +99,35 @@ describe('one opt-out vocabulary', () => {
       expect(node.parameters.jsCode.startsWith(shared)).toBe(true);
     }
   });
+
+  test('the orchestrator node ships the shared vocabulary instead of a private copy', () => {
+    const shared = fs.readFileSync(
+      'tests/fixtures/workflow-nodes/shared/customer-opt-out-vocabulary.js',
+      'utf8',
+    );
+    const workflow = JSON.parse(fs.readFileSync('n8n/workflows/wa-conversation-orchestrator.json', 'utf8'));
+    const node = workflow.nodes.find((candidate) => candidate.name === 'Evaluate Conversation Step');
+    expect(node.parameters.jsCode.startsWith(shared)).toBe(true);
+    expect(node.parameters.jsCode.match(/const OPT_OUT_PATTERNS\b/g)).toHaveLength(1);
+  });
+});
+
+describe('orchestrator turn after a plural opt-out', () => {
+  test('the deployed Evaluate Conversation Step closes the request as an opt-out', async () => {
+    const { runEvaluate } = await import('../fixtures/conversation/engine.mjs');
+    const result = await runEvaluate({
+      conversation_id: 100,
+      has_active_conversation: true,
+      conversation_status_code: 'waiting_user',
+      current_step: 'confirm',
+      message_type: 'text',
+      text_body: 'mejor no, no me escriban más',
+    });
+
+    expect(result.escalation_reason).toBe('opt_out');
+    expect(result.conversation_status_code).toBe('closed');
+    expect(result.deterministic_reply).toBe('Entendido. No te escribiremos más.');
+  });
 });
 
 describe('follow-up policy after a plural opt-out', () => {
