@@ -305,6 +305,7 @@ const NODES = [
     "node": "Compile V3 Turn Policy",
     "fixture": "wa-conversation-orchestrator/compile-v3-turn.js",
     "runtimes": [
+      "shared/v3-line-items.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -318,7 +319,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Build V3 Lead Effect",
-    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js"
+    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js",
+    "runtimes": [
+      "shared/v3-line-items.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
@@ -330,6 +334,7 @@ const NODES = [
     "node": "Validate And Authorize V3",
     "fixture": "wa-conversation-orchestrator/validate-and-authorize-v3.js",
     "runtimes": [
+      "shared/v3-line-items.js",
       "shared/v3-contract-runtime.js"
     ]
   },
@@ -456,6 +461,7 @@ const NODES = [
     "node": "Prepare Shadow Evaluation",
     "fixture": "ai-prd-shadow-evaluator/prepare-shadow-evaluation.js",
     "runtimes": [
+      "shared/v3-line-items.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
