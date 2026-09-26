@@ -781,10 +781,23 @@ describeIntegration('v3 conversation turn execution saga', () => {
       'SELECT qualification_context FROM conversations WHERE id = $1',
       [conversation.id],
     );
+    // 025_item_aware_v3_state_mutations.sql is a deliberate superset of 022:
+    // a batch that touches an item field (`quantity` here) now also
+    // maintains the item-aware `line_items[]` model and its flat projection
+    // mirror (design.md D1-D3). `quantity` itself, and every other
+    // quote-level fact, stays exactly where it was.
     expect(state.rows[0].qualification_context).toEqual({
       name: 'Pedro',
       city: 'Santiago',
       quantity: '25 unidades',
+      product: null,
+      measurements: null,
+      line_items: [{
+        item_id: 'li_0', product: null, quantity: '25 unidades', measurements: null,
+        catalog_ref: null, requested_label: null,
+      }],
+      line_items_projection: { product: null, quantity: '25 unidades', measurements: null },
+      line_items_schema: 'line_items/v1',
     });
   });
 
