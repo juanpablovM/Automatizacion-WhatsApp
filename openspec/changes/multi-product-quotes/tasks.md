@@ -43,33 +43,35 @@ Every task below is RED (failing test) → GREEN (implementation) → REFACTOR w
 
 Proves: *Idempotent Item Replay and Legacy Compatibility* — "Replay and legacy reads stay correct"; regression baseline for all other requirements (v3 digests/leads byte-identical).
 
-- [ ] 1.1 RED `tests/fixtures/workflow-nodes/shared/v3-line-items.test.js`: `readLineItems` maps flat `qualification_context` to `[li_0]`
-- [ ] 1.2 GREEN implement `readLineItems` in `tests/fixtures/workflow-nodes/shared/v3-line-items.js`
-- [ ] 1.3 RED: `deriveItemId` = `li_` + `sha256("line_item/v1\0conv\0turn\0handle")[0:12]`; `li_0` for flat rows
-- [ ] 1.4 GREEN implement `deriveItemId`
-- [ ] 1.5 RED: `reduceV3StateMutations` upserts by `item_id` (no duplicate on replay), rejects flat mutations on `line_items*` keys, errors above 10 items
-- [ ] 1.6 GREEN implement `reduceV3StateMutations`
-- [ ] 1.7 RED: `projectFlat` mirrors first item in array order, deletes flat fields when no items remain
-- [ ] 1.8 GREEN implement `projectFlat`
-- [ ] 1.9 RED: `composeRequirement` single-item output is byte-identical to current legacy requirement string
-- [ ] 1.10 GREEN implement `composeRequirement` (single-item path; multi-item branch scaffolded per D9, wired in Slice 3)
-- [ ] 1.11 RED: D3 reconcile — flat projection differs from `line_items_projection` ⇒ legacy writer ran after rollback ⇒ flat values overwrite the primary item
-- [ ] 1.12 GREEN implement D3 reconcile inside `readLineItems`
-- [ ] 1.13 Create shared table-driven case fixture consumed by both the Vitest suite and the SQL parity suite
-- [ ] 1.14 Create `infra/postgres/migrations/025_item_aware_v3_state_mutations.sql` (`IMMUTABLE`, same signature; steps: D3 reconcile → flat `jsonb_set` / reject `line_items*` → primary-item materialize `li_0` → upsert by `item_id` → `remove_item` no-op-safe → >10 items error → recompute projection)
-- [ ] 1.15 Create `infra/postgres/rollback/025_item_aware_v3_state_mutations.down.sql` restoring the 022 body (outside `migrations/`, per D8)
-- [ ] 1.16 RED integration: SQL reducer equals JS reducer on the shared cases
-- [ ] 1.17 GREEN fix SQL until parity passes
-- [ ] 1.18 RED integration: replaying a committed turn is idempotent (no duplicate item, stable `expected_snapshot_digest`)
-- [ ] 1.19 GREEN fix
-- [ ] 1.20 RED integration: applying the down migration restores 022 behavior
-- [ ] 1.21 GREEN verify/fix
-- [ ] 1.22 Update `tests/scripts/sync-workflow-nodes.mjs`: add `v3-line-items.js` to the runtimes of Compile V3 Turn Policy, Validate And Authorize V3, Build V3 Lead Effect, Prepare Shadow Evaluation
-- [ ] 1.23 Update `shared/v3-policy-builder.js` to read through `readLineItems` (no version gating yet — output unchanged)
-- [ ] 1.24 RED regression: existing single-item v3 policy digests and leads are byte-identical to `main`
-- [ ] 1.25 GREEN confirm/adjust builder wiring until green
+- [x] 1.1 RED `tests/fixtures/workflow-nodes/shared/v3-line-items.test.js`: `readLineItems` maps flat `qualification_context` to `[li_0]`
+- [x] 1.2 GREEN implement `readLineItems` in `tests/fixtures/workflow-nodes/shared/v3-line-items.js`
+- [x] 1.3 RED: `deriveItemId` = `li_` + `sha256("line_item/v1\0conv\0turn\0handle")[0:12]`; `li_0` for flat rows
+- [x] 1.4 GREEN implement `deriveItemId`
+- [x] 1.5 RED: `reduceV3StateMutations` upserts by `item_id` (no duplicate on replay), rejects flat mutations on `line_items*` keys, errors above 10 items
+- [x] 1.6 GREEN implement `reduceV3StateMutations`
+- [x] 1.7 RED: `projectFlat` mirrors first item in array order, deletes flat fields when no items remain
+- [x] 1.8 GREEN implement `projectFlat`
+- [x] 1.9 RED: `composeRequirement` single-item output is byte-identical to current legacy requirement string
+- [x] 1.10 GREEN implement `composeRequirement` (single-item path; multi-item branch scaffolded per D9, wired in Slice 3)
+- [x] 1.11 RED: D3 reconcile — flat projection differs from `line_items_projection` ⇒ legacy writer ran after rollback ⇒ flat values overwrite the primary item
+- [x] 1.12 GREEN implement D3 reconcile inside `readLineItems`
+- [x] 1.13 Create shared table-driven case fixture consumed by both the Vitest suite and the SQL parity suite
+- [x] 1.14 Create `infra/postgres/migrations/025_item_aware_v3_state_mutations.sql` (`IMMUTABLE`, same signature; steps: D3 reconcile → flat `jsonb_set` / reject `line_items*` → primary-item materialize `li_0` → upsert by `item_id` → `remove_item` no-op-safe → >10 items error → recompute projection)
+- [x] 1.15 Create `infra/postgres/rollback/025_item_aware_v3_state_mutations.down.sql` restoring the 022 body (outside `migrations/`, per D8)
+- [x] 1.16 RED integration: SQL reducer equals JS reducer on the shared cases
+- [x] 1.17 GREEN fix SQL until parity passes
+- [x] 1.18 RED integration: replaying a committed turn is idempotent (no duplicate item, stable `expected_snapshot_digest`)
+- [x] 1.19 GREEN fix
+- [x] 1.20 RED integration: applying the down migration restores 022 behavior
+- [x] 1.21 GREEN verify/fix
+- [x] 1.22 Update `tests/scripts/sync-workflow-nodes.mjs`: add `v3-line-items.js` to the runtimes of Compile V3 Turn Policy, Validate And Authorize V3, Build V3 Lead Effect, Prepare Shadow Evaluation
+- [x] 1.23 Update `shared/v3-policy-builder.js` to read through `readLineItems` (no version gating yet — output unchanged)
+- [x] 1.24 RED regression: existing single-item v3 policy digests and leads are byte-identical to `main`
+- [x] 1.25 GREEN confirm/adjust builder wiring until green
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`; `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres && docker compose -f docker-compose.test.yml down -v`.
+
+**Apply note (2026-09-26):** all 25 tasks complete, full verification green (see apply-progress.md). Actual authored diff vs the tracker branch is **1110 changed lines** (`git diff --numstat feat/multi-product-quotes...HEAD`, generated workflow JSON excluded), above the preflight forecast (~690) and the 800-line review budget. This was discovered only after the slice was implemented as one cohesive, fully-tested unit; splitting it further post hoc would separate the SQL migration from the JS reducer it must stay in lockstep with. Flagged for an owner decision before opening PR1 (accept as `size:exception`, or split into two child PRs against `feat/multi-product-quotes-foundation`).
 
 ## Slice 2a — Contract, dark (branch `feat/multi-product-quotes-contract`, base `feat/multi-product-quotes-foundation`)
 
