@@ -35,9 +35,40 @@ const persistedPendingGoal = (value) => {
   return key === 'confirm' ? 'final_confirmation' : key;
 };
 
+// D1-D3 (design.md): the item-aware model is read through, not gated. A
+// single-item flat row and an item-aware row with one matching item always
+// derive the same primary-item fields, so this never changes today's v3
+// output (tests/unit/v3-policy-builder-line-items-regression.test.js). Only
+// v3.1 (Slice 2a) emits item facts, goals and authority beyond this primary
+// item.
+//
+// Production Code nodes get shared/v3-line-items.js concatenated ahead of
+// this file (tests/scripts/sync-workflow-nodes.mjs), so `readLineItems` is
+// already an outer free variable there and `require` resolves no relative
+// paths in that sandbox (docker-compose.yml: NODE_FUNCTION_ALLOW_BUILTIN).
+// Node test harnesses `require` this file standalone, so the fallback below
+// loads the sibling file directly in that environment only.
+const externalLineItemsRuntime = (() => {
+  if (typeof module === 'undefined' || typeof require !== 'function') return null;
+  try {
+    return require('./v3-line-items.js');
+  } catch (_error) {
+    return null;
+  }
+})();
+const resolvedReadLineItems = externalLineItemsRuntime
+  ? externalLineItemsRuntime.readLineItems
+  : (typeof readLineItems === 'function' ? readLineItems : null);
+const primaryLineItem = (context) => {
+  const items = resolvedReadLineItems ? resolvedReadLineItems(context) : [];
+  return items[0] || {};
+};
+const ITEM_FACT_FIELDS = new Set(['product', 'quantity', 'measurements']);
+
 const buildV3PolicyInput = (row, options = {}) => {
   const input = asObject(row);
   const context = asObject(input.qualification_context);
+  const primaryItem = primaryLineItem(context);
   const explicitGrounding = asObject(input.v3_grounding);
   const commercialContext = asObject(input.commercial_context);
   const inputReferenceContext = asObject(input.reference_context);
@@ -118,7 +149,7 @@ const buildV3PolicyInput = (row, options = {}) => {
     // the workflow item are legacy heuristics for the current turn and have no
     // evidence lineage; treating them as facts produced values such as
     // "Perfecto" and "Domicilio" in the service field.
-    const value = context[field] ?? compatibilityValue;
+    const value = (ITEM_FACT_FIELDS.has(field) ? primaryItem[field] : context[field]) ?? compatibilityValue;
     const hasValue = value !== undefined && value !== null && safe(value) !== '';
     const factId = hasValue ? `fact:${field}` : null;
     if (hasValue) {
