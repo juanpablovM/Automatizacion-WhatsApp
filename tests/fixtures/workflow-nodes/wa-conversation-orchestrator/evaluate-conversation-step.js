@@ -569,7 +569,18 @@ function evaluateConversationStep(row) {
   const isConfirmation = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
   const isRejection = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
-  const wantsNew = (text) => /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/.test(text);
+  const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
+  const wantsNew = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  // A directive is not an answer. "Iniciar una nueva" restarts the request; it
+  // does not name a city, and reading it as one leaves the customer living in a
+  // city called "Iniciar Una Nueva". Only whatever survives removing the
+  // directive can still carry data — "nueva cotización de pastelones en Viña"
+  // still names a product and a city.
+  const carriesOnlyNewRequestDirective = (text) => String(text || '')
+    .replace(NEW_REQUEST_DIRECTIVE, ' ')
+    .replace(/\b(?:por favor|porfa|quiero|querria|necesito|hacer|empezar|iniciar|comenzar|una|un|la|el|de|del|con)\b/g, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim().length === 0;
   const wantsHuman = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
   const operationalPatterns = [
     /\b(reclamo|queja|postventa|post venta)\b/,
@@ -761,7 +772,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = isGreetingOnly
@@ -786,7 +797,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = currentStepField === 'confirm' ? confirmationText() : nextQuestionForMissingField(currentStepField, current, 0, actionIntent);
@@ -839,7 +850,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     const freshMissing = nextMissingField();
     currentStepField = freshMissing;
     responseKind = isGreetingOnly ? 'recontact_greeting' : 'new_request_started';
