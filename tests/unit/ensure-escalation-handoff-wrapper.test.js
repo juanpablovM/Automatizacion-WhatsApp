@@ -4,13 +4,16 @@ import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
 
-const fixturePath = 'tests/fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js';
+// The deployed node is the fixture composed with its shared runtimes, so the
+// wrapper runs from the synced workflow rather than from the bare fixture.
+const deployedSource = () => JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json', 'utf8'))
+  .nodes.find((node) => node.name === 'Ensure Escalation Handoff').parameters.jsCode;
 
 const runCodeNode = (source, items, env = {}) => new Function('items', '$env', source)(items, env);
 
 describe('Ensure Escalation Handoff — real n8n Code node wrapper', () => {
   test('the embedded wrapper (not the exported functions) returns a handoff scope for a real escalation', () => {
-    const source = fs.readFileSync(fixturePath, 'utf8');
+    const source = deployedSource();
     const output = runCodeNode(source, [
       {
         json: {
@@ -31,7 +34,7 @@ describe('Ensure Escalation Handoff — real n8n Code node wrapper', () => {
   });
 
   test('the embedded wrapper skips the handoff write when nothing escalates', () => {
-    const source = fs.readFileSync(fixturePath, 'utf8');
+    const source = deployedSource();
     const output = runCodeNode(source, [
       {
         json: {
@@ -59,7 +62,7 @@ describe('Ensure Escalation Handoff — real n8n Code node wrapper', () => {
     ['purchase order intent', { intent: 'purchase_order' }],
     ['persisted b2b area', { escalation_area: 'b2b' }],
   ])('%s routes the handoff to sales, never to the unstaffed b2b area', (_case, overrides) => {
-    const source = fs.readFileSync(fixturePath, 'utf8');
+    const source = deployedSource();
     const [output] = runCodeNode(source, [{ json: {
       conversation_id: 100,
       phone_number: '56900000002',
@@ -93,7 +96,7 @@ describe('Ensure Escalation Handoff — real n8n Code node wrapper', () => {
   // The sales area is the one this routing now depends on, so it has to be
   // deliverable end to end with an ordinary assignee mapping.
   test('a company handoff reaches a real ClickUp assignee', () => {
-    const escalationSource = fs.readFileSync(fixturePath, 'utf8');
+    const escalationSource = deployedSource();
     const [escalation] = runCodeNode(escalationSource, [{ json: {
       conversation_id: 100,
       phone_number: '56900000002',

@@ -1,28 +1,9 @@
-const OPT_OUT_PATTERNS = [
-  /no me escribas mas/i,
-  /escribas mas/i,
-  /baja.*(de la lista|pas|mensajes|programa)/i,
-  /\bstop\b/i,
-  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-  /dej(?:a|en) de escribirme/i,
-  /no me envies mas mensajes/i,
-  /darme de baja/i,
-  /quitarme de la lista/i,
-  /no me molestes/i,
-];
-
-const LOST_PATTERNS = [
-  /ya no (me interesa|necesito|quiero)/i,
-  /lo pense y no (voy a|quiero)/i,
-  /estoy con (otra|la competencia)/i,
-  /no voy a (comprar|avanzar)/i,
-  /cerremos el tema/i,
-];
-
-const normalizeText = (text) => String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
-const matches = (patterns, text) => patterns.some((pattern) => pattern.test(normalizeText(text)));
-const detectOptOut = (text) => matches(OPT_OUT_PATTERNS, text);
-const detectLostIntent = (text) => matches(LOST_PATTERNS, text);
+// Opt-out and lost-intent phrasing lives in shared/customer-opt-out-vocabulary.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const customerIntent = typeof detectOptOut === 'function'
+  ? { OPT_OUT_PATTERNS, LOST_PATTERNS, normalizeIntentText, detectOptOut, detectLostIntent }
+  : require('../shared/customer-opt-out-vocabulary.js');
+const normalizeText = customerIntent.normalizeIntentText;
 
 const asPositiveInteger = (value) => {
   const parsed = Number(value);
@@ -70,8 +51,8 @@ const resolveCancellationAction = (row, explicitEpochMs = 0) => {
   const handoffWrite = Boolean(row.handoff_write || row.handoff_scope?.idempotency_key);
   const escalated = Boolean(row.should_escalate || row.escalation_required || handoffWrite);
   const closed = ['closed', 'inactive_timeout', 'handed_to_sales'].includes(String(row.conversation_status_code || ''));
-  const optOut = detectOptOut(customerText);
-  const lost = detectLostIntent(customerText);
+  const optOut = customerIntent.detectOptOut(customerText);
+  const lost = customerIntent.detectLostIntent(customerText);
   const normalizedText = normalizeText(customerText);
   const pendingChoice = row.pending_question_key === 'previous_context_choice'
     || String(row.current_step || '').split('|')[0] === 'previous_context';
@@ -160,10 +141,10 @@ const resolveCancellationAction = (row, explicitEpochMs = 0) => {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    OPT_OUT_PATTERNS,
-    LOST_PATTERNS,
-    detectOptOut,
-    detectLostIntent,
+    OPT_OUT_PATTERNS: customerIntent.OPT_OUT_PATTERNS,
+    LOST_PATTERNS: customerIntent.LOST_PATTERNS,
+    detectOptOut: customerIntent.detectOptOut,
+    detectLostIntent: customerIntent.detectLostIntent,
     resolveCancellationAction,
     resolveInboundCreatedEpochMs,
     resolveInboundIdentity,

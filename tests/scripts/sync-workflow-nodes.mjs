@@ -146,7 +146,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
     "node": "Ensure Escalation Handoff",
-    "fixture": "wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js"
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
@@ -266,7 +269,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
     "node": "Ensure Follow-Up Cancellation",
-    "fixture": "wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js"
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/ops-followup-scheduler.json",
