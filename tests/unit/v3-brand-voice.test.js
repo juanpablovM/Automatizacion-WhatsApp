@@ -1,5 +1,8 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
+
+const require = createRequire(import.meta.url);
 
 // The v3 prompt is the only one sent on the v3 lane. When it carried contract
 // rules alone, replies lost the Hormi Atención identity, and its voseo wording
@@ -46,6 +49,39 @@ describe('v3 brand voice', () => {
   test('treats a bare yes or no as the full answer to a yes/no question', () => {
     expect(v3Prompt).toMatch(/Esa regla aplica solo a preguntas con alternativas[^']*truck_access o debris_removal[^']*es la respuesta completa/);
     expect(v3Prompt).toMatch(/Nunca vuelvas a hacer la misma pregunta de sí o no/);
+  });
+
+  // "Una pandereta ... con alambre púa" marked pandereta ambiguous but recorded
+  // Alambre de Púas as the product in the same turn; the contract rejected the
+  // contradiction twice and the turn fell to contingency (3/10 valid on replay).
+  test('records no product while another product in the message is ambiguous', () => {
+    expect(v3Prompt).toMatch(/Con catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno, aunque el mensaje también nombre otro producto/);
+  });
+
+  // turn_policy.goals is compiled before the message, so "adoquines con
+  // instalación" looked complete and the model asked for final confirmation
+  // (13/20 invalid on replay). The prompt now states the conditional rules; this
+  // binds them to the policy builder so the two cannot drift apart.
+  test('states the same conditional required goals as the policy builder', () => {
+    const { buildV3PolicyInput } = require('../fixtures/workflow-nodes/shared/v3-policy-builder.js');
+    const required = (context) => new Set(buildV3PolicyInput({
+      inbound_event_id: 1, conversation_id: 1, external_message_id: 'm1', text_body: 'x',
+      qualification_context: context,
+    }).goals.filter((goal) => goal.importance === 'required_for_effect').map((goal) => goal.goal_id));
+    const clause = (label) => {
+      const match = v3Prompt.match(new RegExp(`${label}: ([a-z_, ]+?)\\.`));
+      expect(match, `prompt clause "${label}"`).toBeTruthy();
+      return new Set(match[1].split(/, | y /).map((field) => field.trim()));
+    };
+    const always = clause('Siempre');
+    const withAlways = (fields) => new Set([...always, ...fields]);
+
+    expect(required({})).toEqual(always);
+    expect(required({ service_scope: 'material' })).toEqual(withAlways(clause('Si service_scope es material o both')));
+    expect(required({ service_scope: 'installation' })).toEqual(withAlways(clause('Si service_scope es installation o both')));
+    expect(required({ service_scope: 'material', fulfillment: 'delivery' })).toEqual(withAlways([
+      ...clause('Si service_scope es material o both'), ...clause('Si fulfillment es delivery'),
+    ]));
   });
 
   test('carries no voseo imperatives in its own instructions', () => {
