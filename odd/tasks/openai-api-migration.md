@@ -55,3 +55,29 @@ The user selected OpenAI and placed a key in the ignored local `.env`, but the c
 - Live OpenAI and n8n runtime validation remain pending explicit remote-operation authorization.
 - No live validation, n8n cutover, push, or PR was attempted. The provider remains Google until an explicitly authorized cutover.
 - Next: obtain explicit authorization for destination, live test operation, and credential/session before any paid OpenAI probe or n8n deployment; then validate the exact dynamic schema and conversational outcomes.
+
+## OAM-2 — Live probe and runtime cutover (in progress)
+
+- Authorized: synthetic probe against `api.openai.com/v1/responses`, then local n8n cutover only if the probe passes.
+- n8n container recreated with `AI_PROVIDER=google` unchanged so Compose injects `OPENAI_API_KEY` and `OPENAI_MODEL`; key presence verified by length only.
+- Synthetic probe from inside the n8n container: HTTP 200, `gpt-6-luna`, `status=completed`, strict `json_schema` output parsed correctly, `store: false`, 75 input / 61 output tokens.
+- Runtime `AI - Lead Qualification Assistant` does not yet contain the OpenAI path; cutover requires a workflow deploy.
+- Blockers before cutover:
+  - `scripts/dev/sync-n8n-workflows.sh --deploy` sends a real WhatsApp message to `CONTROLLED_TEST_PHONE_NUMBER` and creates a lead, assignment, and ClickUp task.
+  - The deploy imports every workflow file in `n8n/workflows/`, including uncommitted, unrelated orchestrator edits in the checkout.
+  - `AI_PROVIDER=openai` must be set in `.env`; agent access to `.env` is denied, so the user edits it.
+
+### Cutover result (2026-09-25)
+
+- User set `AI_PROVIDER=openai` in `.env` and authorized the controlled deploy with real side effects.
+- Unrelated orchestrator edits were stashed before the deploy and restored afterwards; only committed workflows were deployed.
+- First deploy attempt failed acceptance: the controlled phone had an 80-hour-old open conversation, so the orchestrator stopped at `previous_context` and never called the AI assistant. Not an OpenAI failure.
+- `scripts/ops/reset-controlled-test-session.sh` closed the stale session; the second deploy passed (exit 0): lead created, idempotent replay verified, Entry, Recovery, and schedulers active, Entry webhooks verified.
+- Runtime AI executions `241217` and `241224` ran with provider `openai`, model `gpt-6-luna`, and `ai_fallback_reason: null`.
+- Rollback path: set `AI_PROVIDER=google` in `.env` and recreate n8n; Gemini `AI_DIRECT_*` configuration is preserved.
+
+### Follow-up: deploy rollback trap is clobbered
+
+- In `scripts/dev/sync-n8n-workflows.sh`, `sync_workflows` installs the rollback `EXIT` trap, but `verify_remote_export` later replaces it with `trap 'rm -f "$ids_json"' EXIT` and clears it with `trap - EXIT`.
+- Effect observed on the failed attempt: no automatic rollback ran; Entry, Recovery, and schedulers stayed paused with the candidate imported, and the runtime snapshot remained in `/tmp`.
+- Fix pending separate authorization.
