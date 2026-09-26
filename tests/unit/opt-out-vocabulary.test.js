@@ -163,14 +163,47 @@ describe('follow-up policy after a plural opt-out', () => {
     expect(result.follow_up_should_schedule).toBe(false);
   });
 
-  test('an escalated plural opt-out is routed with the opt-out motive', () => {
+  // An opt-out closes the conversation and stops the cadence; nobody on the team
+  // has to act on it, so it must not open a handoff that stays pending forever.
+  test('an escalated plural opt-out closes without opening a handoff', () => {
     const result = runNode('Ensure Escalation Handoff', {
       conversation_id: 100,
       phone_number: '56900000001',
       should_escalate: true,
+      escalation_reason: 'opt_out',
       text_body: 'no me contacten más',
     });
 
-    expect(result.handoff_scope.motivo).toBe('opt_out');
+    expect(result.handoff_write).toBe(false);
+    expect(result.handoff_skipped).toBe(true);
+    expect(result.handoff_resolved_motive).toBe('opt_out');
+    expect(result.handoff_gate.closure_allowed).toBe(true);
+  });
+
+  test('an opt-out wins over an AI escalation area and still opens no handoff', () => {
+    const result = runNode('Ensure Escalation Handoff', {
+      conversation_id: 100,
+      phone_number: '56900000001',
+      should_escalate: true,
+      intent: 'complaint',
+      escalation_area: 'claims',
+      text_body: 'no me escriban más',
+    });
+
+    expect(result.handoff_write).toBe(false);
+    expect(result.handoff_gate.closure_allowed).toBe(true);
+  });
+
+  test('a customer asking for a person still opens a handoff', () => {
+    const result = runNode('Ensure Escalation Handoff', {
+      conversation_id: 100,
+      phone_number: '56900000001',
+      should_escalate: true,
+      escalation_reason: 'human_requested',
+      text_body: 'quiero hablar con una persona',
+    });
+
+    expect(result.handoff_write).toBe(true);
+    expect(result.handoff_scope.area).toBe('sales');
   });
 });

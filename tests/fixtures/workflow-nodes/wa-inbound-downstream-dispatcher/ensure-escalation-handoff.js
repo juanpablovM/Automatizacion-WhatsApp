@@ -252,6 +252,24 @@ const routeEscalation = (row) => {
   const allCandidates = Array.from(candidateMotives);
   const resolvedMotive = resolvePrecedence(allCandidates);
 
+  // An opt-out closes the conversation and stops the cadence on its own. Nobody
+  // on the team has to act on it, and a handoff for it only sat pending forever
+  // and blocked resetting the number. It still outranks every other motive, so
+  // it is reported as resolved but not escalated, which also keeps the closure
+  // gate from waiting on a handoff that will never exist.
+  if (resolvedMotive === 'opt_out') {
+    return {
+      escalated: false,
+      write: false,
+      motivo: resolvedMotive,
+      routing: null,
+      idempotency_key: null,
+      trigger: rawReason || null,
+      precedence_level: PRECEDENCE_ORDER.indexOf(resolvedMotive) + 1,
+      all_candidate_motives: allCandidates,
+    };
+  }
+
   const routing = HANDOFF_ROUTING[resolvedMotive] || AREA_FALLBACK[area] || DEFAULT_ROUTING;
   const trigger = rawReason || (intent ? `intent:${intent}` : routing.area);
 
