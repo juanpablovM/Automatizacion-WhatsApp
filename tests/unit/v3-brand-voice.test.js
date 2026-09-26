@@ -40,6 +40,14 @@ describe('v3 brand voice', () => {
     expect(v3Prompt).toMatch(/Registra todo dato que el cliente exprese explícitamente[^']*aunque su goal sea opcional[^']*truck_access/);
   });
 
+  // A bare "sí" to "¿puede entrar un camión?" was recorded only 4/10 times on
+  // the real model: the generic-acceptance rule for pickup/delivery was read as
+  // "a bare yes answers nothing". With this rule it is recorded 10/10.
+  test('treats a bare yes or no as the full answer to a yes/no question', () => {
+    expect(v3Prompt).toMatch(/Esa regla aplica solo a preguntas con alternativas[^']*truck_access o debris_removal[^']*es la respuesta completa/);
+    expect(v3Prompt).toMatch(/Nunca vuelvas a hacer la misma pregunta de sí o no/);
+  });
+
   test('carries no voseo imperatives in its own instructions', () => {
     const instructions = v3Prompt.replace(/\("necesitás", "querés", "podés"\)/, '');
     expect(instructions).not.toMatch(VOSEO_IMPERATIVES);

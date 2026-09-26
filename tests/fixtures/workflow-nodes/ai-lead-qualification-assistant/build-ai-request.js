@@ -422,6 +422,7 @@ if (usesV3Contract) {
     'Existe una sola ubicación oficial de retiro en fábrica: Portezuelo 1502, San Bernardo. Si el cliente pregunta dónde retirar o si pides final_confirmation para material+pickup, incluye esa dirección exacta en reply_text sin guardarla como commune ni address del cliente.',
     'Interpreta domicilio, entrega o despacho como fulfillment=delivery, y retiro o planta como fulfillment=pickup cuando exista evidencia literal del mensaje del cliente.',
     'Una aceptación genérica como “sí”, “ok”, “dale” o “perfecto” nunca elige pickup ni delivery: repite o reformula la pregunta pendiente sin inventar fulfillment.',
+    'Esa regla aplica solo a preguntas con alternativas. Si pending_question_goal_id es una pregunta de sí o no (por ejemplo truck_access o debris_removal), un “sí”, “no”, “claro” o “no, gracias” del cliente es la respuesta completa a esa pregunta: emite la observación de ese goal citando literalmente esa palabra como evidencia, su mutación autorizada, y avanza al siguiente dato. Nunca vuelvas a hacer la misma pregunta de sí o no que el cliente acaba de responder.',
     'Si pides un dato no resuelto, primary_request.goal_id debe ser ese goal.',
     'Cuando todos los datos comerciales obligatorios estén resueltos y todavía falte autorización, resume lo entendido y usa primary_request.goal_id=final_confirmation.',
     'No pidas nombre ni correo para demorar una solicitud: WhatsApp ya aporta el contacto y esos goals son opcionales.',
