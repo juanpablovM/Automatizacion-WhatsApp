@@ -11,10 +11,10 @@
 -- que si alcanzo ClickUp se reconcilia sin repetir la escritura a ciegas.
 --
 -- Params:
---   $1 batch_size (default 20)
---   $2 stale_processing_seconds (default 300)
---   $3 retry_delay_seconds (default 60)
---   $4 max_attempts (default 5)
+--   p1 batch_size (default 20)
+--   p2 stale_processing_seconds (default 300)
+--   p3 retry_delay_seconds (default 60)
+--   p4 max_attempts (default 5)
 -- =============================================================================
 WITH input AS (
   SELECT

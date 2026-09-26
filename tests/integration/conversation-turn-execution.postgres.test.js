@@ -252,7 +252,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     };
     const prepared = contingency
       ? await client.query(prepareContingencySql, [
-          event.inboundEventId, event.token, policy, outputPayload,
+          event.inboundEventId, event.token, policy, outputPayload, null,
         ])
       : await client.query(persistAuthoritySql, [
           event.inboundEventId,
@@ -1388,6 +1388,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       event.token,
       policy,
       terminalRecovery.decision,
+      null,
     ]);
     expect(prepared.rows[0]).toMatchObject({
       state: 'prepared',
@@ -1462,13 +1463,202 @@ describeIntegration('v3 conversation turn execution saga', () => {
       routeRuleId: 'generated-contingency',
     });
     const prepared = await client.query(prepareContingencySql, [
-      event.inboundEventId, event.token, policy, decision,
+      event.inboundEventId, event.token, policy, decision, null,
     ]);
     expect(prepared.rows[0].decision_matches).toBe(true);
     expect(prepared.rows[0].state).toBe('prepared');
     const committed = await client.query(contingencySql, [decisionId, event.token]);
     expect(committed.rows[0].handoff_receipt.operation_key).toBe(operationKey);
     expect(committed.rows[0].text_body).toBe(decision.reply.text);
+  });
+
+  // n8n prunes executions after about two days, so the application database is
+  // the only durable place that can say why a turn fell back to contingency.
+  const seedContingencyTurn = async ({ providerOutcome = 'accepted', validation = null } = {}) => {
+    const conversation = await seedConversation({ city: 'Santiago', service: 'installation' });
+    const event = await seedEvent(conversation.id, `diagnostic-contingency-${sequence}`);
+    await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'diagnostic-contingency',
+    });
+    const policy = {
+      version: 'ai_prd_turn_policy/v3', policy_digest: `policy-diagnostic-${sequence}`,
+      turn: { id: `turn-diagnostic-${sequence}` },
+    };
+    const recovery = planV3Recovery({
+      policy,
+      validation,
+      repairAttempt: providerOutcome === 'outage' ? 0 : 1,
+      providerOutcome,
+      preTurnState: conversation.qualification_context,
+      expectedSnapshotDigest: `snapshot-diagnostic-${sequence}`,
+    });
+    expect(recovery.action).toBe('contingency');
+    return { conversation, event, policy, decision: recovery.decision };
+  };
+  const persistedDiagnostic = async (inboundEventId) => (await client.query(`
+    SELECT execution.id AS execution_id, execution.last_error, decision.validation_errors,
+      (SELECT COUNT(*)::int FROM advisor_decisions other
+        WHERE other.conversation_id = execution.conversation_id
+          AND other.decision_type = 'v3_system_contingency') AS contingency_decisions
+    FROM conversation_turn_executions execution
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    WHERE execution.inbound_event_id = $1
+  `, [inboundEventId])).rows[0];
+  const committedAudits = async (executionId) => (await client.query(`
+    SELECT metadata FROM audit_logs
+    WHERE entity_type = 'conversation_turn_execution' AND entity_id = $1
+      AND event_name = 'v3_contingency_committed'
+  `, [executionId])).rows;
+
+  test('persists the validation codes of an exhausted repair for later diagnosis', async () => {
+    const turn = await seedContingencyTurn({
+      validation: {
+        version: 'conversation_validation_result/v3',
+        valid: false,
+        errors: [{ code: 'policy_digest_mismatch', path: 'policy_digest' }],
+      },
+    });
+    const diagnostic = {
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+      ai_fallback_reason: 'invalid_json',
+      ai_status_code: 200,
+      repair_attempt: 1,
+    };
+    const prepared = await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision, diagnostic,
+    ]);
+    expect(prepared.rows[0]).toMatchObject({ state: 'prepared', replayed: false, decision_matches: true });
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual([
+      'v3_recovery_contingency', 'policy_digest_mismatch', 'reply_claim_ungrounded',
+    ]);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+      ai_fallback_reason: 'invalid_json',
+      ai_status_code: 200,
+      repair_attempt: 1,
+    });
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const audits = await committedAudits(persisted.execution_id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata).toMatchObject({
+      decision_id: turn.decision.decision_id,
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+    });
+  });
+
+  test('persists the provider signal of an outage with no validation codes', async () => {
+    const turn = await seedContingencyTurn({ providerOutcome: 'outage' });
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      { validation_error_codes: [], ai_fallback_reason: 'provider_error', ai_status_code: 503, repair_attempt: 0 },
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual(['v3_recovery_contingency']);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'provider_outage',
+      validation_error_codes: [],
+      ai_fallback_reason: 'provider_error',
+      ai_status_code: 503,
+      repair_attempt: 0,
+    });
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const audits = await committedAudits(persisted.execution_id);
+    expect(audits[0].metadata).toMatchObject({
+      recovery_reason: 'provider_outage',
+      validation_error_codes: [],
+    });
+  });
+
+  test('replaying a diagnosed contingency neither duplicates nor rewrites its record', async () => {
+    const turn = await seedContingencyTurn();
+    const args = [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      { validation_error_codes: ['policy_digest_mismatch'], ai_fallback_reason: null, ai_status_code: null, repair_attempt: 1 },
+    ];
+    await client.query(prepareContingencySql, args);
+    const before = await persistedDiagnostic(turn.event.inboundEventId);
+
+    const replayedPrepare = await client.query(prepareContingencySql, [
+      ...args.slice(0, 4),
+      { validation_error_codes: ['something_else'], ai_fallback_reason: 'provider_error', ai_status_code: 500, repair_attempt: 0 },
+    ]);
+    expect(replayedPrepare.rows[0]).toMatchObject({ replayed: true, decision_matches: true });
+    const afterPrepare = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(afterPrepare).toEqual(before);
+    expect(afterPrepare.contingency_decisions).toBe(1);
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const replayedCommit = await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    expect(replayedCommit.rows[0].replayed).toBe(true);
+    const audits = await committedAudits(before.execution_id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata.validation_error_codes).toEqual(['policy_digest_mismatch']);
+    expect((await persistedDiagnostic(turn.event.inboundEventId)).validation_errors)
+      .toEqual(before.validation_errors);
+  });
+
+  test('refuses to persist customer text or a raw proposal as a diagnostic', async () => {
+    const turn = await seedContingencyTurn();
+    const customerText = 'Hola, soy Ana, mi dirección es Av. Siempre Viva 742';
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      {
+        validation_error_codes: [
+          customerText, { nested: customerText }, 'x'.repeat(65), 'reply_claim_ungrounded',
+          ...Array.from({ length: 30 }, (_, index) => `code_${index}`),
+        ],
+        ai_fallback_reason: customerText,
+        ai_status_code: customerText,
+        repair_attempt: customerText,
+        ai_proposal: { reply: { text: customerText } },
+        message_text: customerText,
+      },
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    const serialized = JSON.stringify([persisted.last_error, persisted.validation_errors]);
+    expect(serialized).not.toContain('Ana');
+    expect(serialized).not.toContain('Siempre Viva');
+    expect(Object.keys(persisted.last_error).sort()).toEqual([
+      'ai_fallback_reason', 'ai_status_code', 'code', 'recovery_reason',
+      'repair_attempt', 'validation_error_codes',
+    ]);
+    expect(persisted.last_error.validation_error_codes).toHaveLength(20);
+    expect(persisted.last_error.validation_error_codes[0]).toBe('reply_claim_ungrounded');
+    expect(persisted.validation_errors).toHaveLength(21);
+    expect(persisted.last_error).toMatchObject({
+      ai_fallback_reason: null, ai_status_code: null, repair_attempt: null,
+    });
+  });
+
+  test('a contingency prepared without a diagnostic keeps the legacy shape with nulls', async () => {
+    const turn = await seedContingencyTurn();
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision, null,
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual(['v3_recovery_contingency']);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: [],
+      ai_fallback_reason: null,
+      ai_status_code: null,
+      repair_attempt: null,
+    });
   });
 
   test('stores one delivery receipt through the legal terminal transition', async () => {

@@ -40,6 +40,12 @@ const MEASURE_UNITS = [
 const MEASURE_EVIDENCE_RE = new RegExp('\\b\\d+(?:\\s*\\d{3})*\\s*(?:' + MEASURE_UNITS.join('|') + ')\\b');
 const hasMeasureEvidence = (normalized) => MEASURE_EVIDENCE_RE.test(normalized);
 
+// Opt-out and lost-intent phrasing lives in shared/customer-opt-out-vocabulary.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const customerIntent = typeof detectOptOut === 'function'
+  ? { detectOptOut, detectLostIntent }
+  : require('../shared/customer-opt-out-vocabulary.js');
+
 // Single silence kind for this node. `Should Send Response` in
 // wa-inbound-downstream-dispatcher.json dispatches only when response_text is
 // non-empty, so this is a sibling of human_control_suppressed: it reaches the
@@ -535,30 +541,9 @@ function evaluateConversationStep(row) {
     /\b(ayuda|no entiendo nada|que hay que hacer)\b/i,
     /\b(quejarme|reclamo|queja|problema contigo)\b/i,
   ];
-  // Opt-out / lost intent detection (memoria #686)
-  const OPT_OUT_PATTERNS = [
-    /no me escribas mas/i,
-    /escribas mas/i,
-    /baja.*(de la lista|pas|mensajes|programa)/i,
-    /\bstop\b/i,
-    /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-    /dej(?:a|en) de escribirme/i,
-    /no me envies mas mensajes/i,
-    /darme de baja/i,
-    /quitarme de la lista/i,
-    /no me molestes/i,
-  ];
-
-  const LOST_PATTERNS = [
-    /ya no (me interesa|necesito|quiero)/i,
-    /lo pense y no (voy a|quiero)/i,
-    /estoy con (otra|la competencia)/i,
-    /no voy a (comprar|avanzar)/i,
-    /cerremos el tema/i,
-  ];
-
-  const detectOptOut = (text) => OPT_OUT_PATTERNS.some(p => p.test(String(text || '').trim()));
-  const detectLostIntent = (text) => LOST_PATTERNS.some(p => p.test(String(text || '').trim()));
+  // Opt-out / lost intent detection (memoria #686): shared vocabulary, see customerIntent.
+  const isOptOut = customerIntent.detectOptOut(normalizedText);
+  const isLostIntent = customerIntent.detectLostIntent(normalizedText);
 
   const detectFrustration = (text) => {
     if (!text) return false;
@@ -569,7 +554,18 @@ function evaluateConversationStep(row) {
   const isConfirmation = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
   const isRejection = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
-  const wantsNew = (text) => /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/.test(text);
+  const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
+  const wantsNew = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  // A directive is not an answer. "Iniciar una nueva" restarts the request; it
+  // does not name a city, and reading it as one leaves the customer living in a
+  // city called "Iniciar Una Nueva". Only whatever survives removing the
+  // directive can still carry data — "nueva cotización de pastelones en Viña"
+  // still names a product and a city.
+  const carriesOnlyNewRequestDirective = (text) => String(text || '')
+    .replace(NEW_REQUEST_DIRECTIVE, ' ')
+    .replace(/\b(?:por favor|porfa|quiero|querria|necesito|hacer|empezar|iniciar|comenzar|una|un|la|el|de|del|con)\b/g, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim().length === 0;
   const wantsHuman = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
   const operationalPatterns = [
     /\b(reclamo|queja|postventa|post venta)\b/,
@@ -680,14 +676,14 @@ function evaluateConversationStep(row) {
   }
 
   // 1. OPT-OUT / abandono: siempre gana, incluso si el mensaje también pide retomar.
-  else if (detectOptOut(normalizedText) || detectLostIntent(normalizedText)) {
+  else if (isOptOut || isLostIntent) {
     shouldEscalate = true;
     shouldCreateLead = false;
-    escalationReason = detectOptOut(normalizedText) ? 'opt_out' : 'abandoned';
+    escalationReason = isOptOut ? 'opt_out' : 'abandoned';
     currentStepField = 'escalation';
     pendingQuestionKey = null;
     responseKind = 'escalation_routing';
-    responseText = detectOptOut(normalizedText)
+    responseText = isOptOut
       ? 'Entendido. No te escribiremos más.'
       : 'Entendido. Cerramos tu solicitud. Si necesitas algo más, aquí estaremos.';
     conversationStatusCode = 'closed';
@@ -761,7 +757,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = isGreetingOnly
@@ -786,7 +782,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = currentStepField === 'confirm' ? confirmationText() : nextQuestionForMissingField(currentStepField, current, 0, actionIntent);
@@ -839,7 +835,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     const freshMissing = nextMissingField();
     currentStepField = freshMissing;
     responseKind = isGreetingOnly ? 'recontact_greeting' : 'new_request_started';

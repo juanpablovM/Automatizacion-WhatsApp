@@ -26,8 +26,8 @@
 -- no error de servidor.
 --
 -- Params:
---   $1 clickup_task_id (text), $2 new_status (text, estado destino de la
---   transicion), $3 history_id (text), $4 history_event_at (timestamptz)
+--   p1 clickup_task_id (text), p2 new_status (text, estado destino de la
+--   transicion), p3 history_id (text), p4 history_event_at (timestamptz)
 -- =============================================================================
 WITH input AS (
   SELECT

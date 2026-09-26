@@ -110,7 +110,11 @@ nombre y `scripts/dev/sync-n8n-workflows.sh` aplica este gate:
 6. activacion definitiva, reverificacion remota y readiness del webhook.
 
 Ante un fallo, el snapshot completo se restaura y verifica con el trafico pausado.
-La reanudacion requiere redeploy verificado y acceptance E2E exitoso.
+Solo si la restauracion queda verificada se reactivan exactamente los workflows
+que el snapshot tenia activos (la version que estaba en produccion antes del
+deploy) y se verifican los webhooks de Entry. Si la restauracion no se puede
+verificar, el trafico queda pausado y el error queda a la vista: la
+reanudacion requiere entonces intervencion manual o un redeploy verificado.
 
 ## Decisiones tecnicas implementadas en esta fase
 

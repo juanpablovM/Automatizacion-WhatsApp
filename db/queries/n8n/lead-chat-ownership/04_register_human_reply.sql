@@ -13,9 +13,9 @@
 -- el ownership ocurren en la misma transaccion.
 --
 -- Params:
---   $1 lead_id, $2 message_id, $3 replied_at,
---   $4 inbound_event_id (nullable), $5 processing_token (nullable),
---   $6 clickup_acquisition_status (default 'in progress')
+--   p1 lead_id, p2 message_id, p3 replied_at,
+--   p4 inbound_event_id (nullable), p5 processing_token (nullable),
+--   p6 clickup_acquisition_status (default 'in progress')
 -- =============================================================================
 WITH input AS (
   SELECT

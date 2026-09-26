@@ -19,9 +19,9 @@
 -- 04_register_human_reply.sql en la misma ruta, despues de aplicar el SLA.
 --
 -- Params:
---   $1 inbound_event_id, $2 processing_token, $3 source_number_id,
---   $4 phone_number, $5 external_message_id, $6 external_timestamp,
---   $7 message_type, $8 text_body, $9 raw_payload_json, $10 instance_name
+--   p1 inbound_event_id, p2 processing_token, p3 source_number_id,
+--   p4 phone_number, p5 external_message_id, p6 external_timestamp,
+--   p7 message_type, p8 text_body, p9 raw_payload_json, p10 instance_name
 -- =============================================================================
 WITH input AS (
   SELECT

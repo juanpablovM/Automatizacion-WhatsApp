@@ -7,10 +7,10 @@
 -- el maximo configurado.
 --
 -- Params:
---   $1 operation_id, $2 operation_claim_token,
---   $3 outcome (succeeded | skipped_ownership_changed | retry | unknown | failed),
---   $4 error_text, $5 observed_clickup_status, $6 response_json,
---   $7 max_attempts (default 5)
+--   p1 operation_id, p2 operation_claim_token,
+--   p3 outcome (succeeded | skipped_ownership_changed | retry | unknown | failed),
+--   p4 error_text, p5 observed_clickup_status, p6 response_json,
+--   p7 max_attempts (default 5)
 -- =============================================================================
 WITH input AS (
   SELECT

@@ -10,7 +10,7 @@
 -- degrada en un upsert posterior.
 --
 -- Params:
--- Params posicionales n8n Postgres v2: $1..$15 (ver queryReplacement del workflow).
+-- Params posicionales n8n Postgres v2: p1..p15 (ver queryReplacement del workflow).
 -- =============================================================================
 WITH input_payload AS (
   SELECT

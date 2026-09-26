@@ -1,47 +1,71 @@
-# Estado actual — corte 2026-09-15
+# Estado actual — corte 2026-09-21
 
-**v3 está desplegada y habilitada como contrato predeterminado del sistema**: el runtime verificado usa `AI_PRD_CONTRACT_MODE=enforce` para los turnos nuevos. `legacy` queda como rollback explícito; no es el valor predeterminado.
+El repositorio y el runtime n8n vuelven a tener paridad certificada. El despliegue
+protegido importó los 17 workflows declarados, completó la aceptación controlada y dejó
+activos los puntos de entrada, recuperación y planificación operativa.
 
-## Verificación vigente al 15 de septiembre
+## Estado por capa
 
-- Runtime: orquestador con **48 nodos** y dispatcher con **46**; se preservaron los **19 IDs de workflow**, su activación y publicación. Preflight, paridad y verificación remota pasaron; n8n quedó listo.
-- Pruebas: **641/641 en 60 archivos** y E2E n8n/PostgreSQL aislada completa. Esta verificó reparación y contingencia, recibos de entrega, reutilización de un handoff sin duplicados, replay, creación y asignación del lead, ClickUp y notificación al vendedor, silencio por propiedad humana y `enforce` para un número nuevo sin allowlist.
-- Seguridad: proveedores simulados, red interna sin salida externa y URLs calculadas redirigidas a mocks antes de importar. Tras la prueba controlada y su reconciliación, el estado verificado conserva **1.961 mensajes, 110 leads y 199 ejecuciones del ledger**.
+### Repositorio
 
-La desactivación anterior fue una **regresión de despliegue** del 9 de septiembre, a las 16:11 de Chile: el takeover importó desde la raíz un orquestador legacy de 11 nodos sobre el v3 de 44 nodos que estaba en otro worktree. No se encontró una decisión de deshabilitar v3 por fallas. Ahora el preflight rechaza fuentes que eliminen su pipeline o su persistencia y contexto de entrega durables.
+- Rama: `feat/afinar-hormi-atencion`.
+- Commits locales todavía no publicados: `01a5c0d` (bloqueo del bot contraparte en el
+  webhook), `1426f83` (distinción entre caída del proveedor y propuesta irreparable) y
+  `286adb9` (recibo de restauración de paridad).
+- La rama contiene esos commits y este corte de estado todavía no publicados, y está un
+  merge commit por detrás de `main`. La reconciliación con `main` y el push siguen
+  pendientes.
 
-Una aceptación controlada por WhatsApp real reveló después un defecto en el handoff normal: SQL 11 no entregaba `decision_id` en el formato plano que SQL 17 esperaba, y una persistencia sin filas podía terminar silenciosamente. Ambos puntos fueron corregidos y desplegados; el runtime volvió a pasar paridad, readiness, `enforce`, la E2E aislada y **641/641 pruebas**.
+### Runtime n8n
 
-El turno afectado, ejecución **199**, quedó reconciliado de forma explícita: `aborted`, operación 299 `failed`, sin efecto, handoff ni salida. El reset oficial archivó solamente la sesión controlada configurada; preservó historial, leads y mensajes.
+- El despliegue protegido terminó con código `0` e importó **17 workflows** por las
+  etapas de bootstrap, resolución, aceptación aislada y post-aceptación.
+- La verificación remota pasó antes de la aceptación, después de la aceptación y después
+  de la activación. El error handler es único, los enlaces declarados resuelven y los
+  workflows apuntan al ID de runtime correcto.
+- La aceptación controlada creó el lead **220** en estado `assigned`; su replay pasó la
+  prueba de idempotencia y se observó la auditoría de sincronización con ClickUp.
+- Quedaron reactivados `WA - Inbound Entry`, `WA - Inbound Recovery` y los schedulers
+  declarados. La disponibilidad de webhooks pasó después de reintentos transitorios por
+  un reinicio de conexión y respuestas `404`.
+- Las advertencias `DEP0040` de Node por `punycode` no bloquearon el despliegue.
 
-**Límite de la evidencia:** todavía falta una nueva aceptación por WhatsApp real **posterior a esta corrección**. El estado actual demuestra el fix desplegado y sus verificaciones aisladas, no el cierre completo del PRD ni el éxito real post-fix.
+### Entrega
 
-Evidencia de la corrección: [despliegue y runtime](../backups/v3-handoff-fix-20260915-083849/live-deployment/result.txt), [E2E aislada](../backups/v3-handoff-fix-20260915-083849/final-isolated-e2e-evidence/result.txt), [suite completa](../backups/v3-handoff-fix-20260915-083849/v3-handoff-fix-full-tests.log) y [estado reconciliado](../backups/v3-handoff-fix-20260915-083849/final-state.json).
+- **No publicada:** no hay evidencia de push, pull request ni merge para este corte.
+- Próximo paso: reconciliar la rama con `main`, repetir los checks afectados y preparar
+  la entrega de los commits locales.
 
-Evidencia inicial: [despliegue y verificaciones](../backups/v3-default-20260914-083919/live-deployment/result.txt), [E2E aislada](../backups/v3-default-20260914-083919/final-isolated-e2e-evidence/result.txt) y [suite completa](../backups/v3-default-20260914-083919/final-full-tests.log). Los snapshots de la regresión están en `backups/n8n-workflows-pre-takeover-20260909-160935/` y `backups/n8n-workflows-pre-lead-link-fix-20260909-163136/`.
+## Verificación observada
 
-## Carril shadow retirado
+| Verificación | Resultado |
+|---|---|
+| Preflight del sincronizador | PASS |
+| Integridad de sincronización | PASS: 1 caso válido y 9 inválidos rechazados |
+| Smoke | PASS: 76/76 |
+| Verificación remota | PASS en los tres puntos del despliegue |
+| Aceptación controlada y replay | PASS |
+| Suite local completa previa | 607 pass / 138 skipped |
+| Paridad local | 0 advertencias |
+| Referencias SQL | 0 errores / 0 advertencias |
+| Validación de Compose | PASS |
 
-El rollout shadow terminó: v3 quedó desplegada, certificada y aplicada como contrato
-predeterminado, así que el carril que ejecutaba una llamada extra al asesor en cada turno
-en vivo ya no responde ninguna pregunta abierta. Además su nodo de despacho nunca resolvió
-un destino real — el enlace quedó en `__PENDIENTE_AI_PRD_SHADOW__` —, de modo que no
-aportaba cobertura sino cableado muerto.
+No hubo checks fallidos en la evidencia registrada. Los 138 tests omitidos pertenecen a
+la ejecución previa de la suite completa; no se reinterpretan como aprobados. No se creó
+un RED artificial para este corte documental.
 
-Se eliminaron del dispatcher los cuatro nodos del carril (`Prepare AI PRD Shadow`,
-`Should Dispatch AI PRD Shadow?`, `Dispatch AI PRD Shadow` y `Shadow Lane Complete`) junto
-con sus conexiones. `Outbound Lane Complete → Merge Dispatch Completion` no cambió: el
-carril terminaba en un nodo sin salida y nunca alimentó el merge.
+## Pendientes que requieren revalidación
 
-**Se conserva a propósito** `n8n/workflows/ai-prd-shadow-evaluator.json` (ya inactivo y
-ahora sin invocadores) junto con sus fixtures y pruebas. No es residuo: su motor de
-veredicto se reutilizará como núcleo de puntaje de una futura suite de evaluación
-conversacional. La propiedad que interesa es el estado `not_evaluated`, que impide contar
-un error del proveedor o un límite de tasa como propuesta rechazada.
+El backlog histórico de asignación B2B, cierre por webhook de ClickUp, U7/U8 e higiene de
+workflows se conserva como contexto, pero **debe revalidarse contra el runtime y el
+producto actuales antes de ejecutarse**. Este corte no autoriza ni acredita esas tareas.
 
-En el repositorio el dispatcher pasa de **46 a 42 nodos**. El runtime desplegado todavía
-ejecuta la versión de 46 verificada el 15 de septiembre; la diferencia se cierra en el
-próximo `sync-n8n-workflows.sh`.
+## Evidencia histórica del corte anterior
+
+Los recibos del 15 de septiembre siguen disponibles en
+`backups/v3-handoff-fix-20260915-083849/` y
+`backups/v3-default-20260914-083919/`. Describen ese corte y no sustituyen la evidencia
+operativa observada el 21 de septiembre.
 
 ---
 

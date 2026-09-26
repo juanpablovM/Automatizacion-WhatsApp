@@ -9,7 +9,7 @@
 -- 'invalid_transition' (el gate de no-cierre depende de este contrato).
 --
 -- Params:
---   $1 handoff_id, $2 estado ('acknowledged' | 'resolved')
+--   p1 handoff_id, p2 estado ('acknowledged' | 'resolved')
 -- =============================================================================
 WITH target AS (
   SELECT h.id, h.estado

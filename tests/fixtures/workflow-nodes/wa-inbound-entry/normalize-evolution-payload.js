@@ -158,10 +158,39 @@ if (normalizedEvent !== 'MESSAGES_UPSERT' || !remoteJid || isGroup) {
   ];
 }
 
+// A counterpart that runs its own bot answers every reply on its own cadence,
+// and two bots sharing a thread feed each other until the inbox is theirs. The
+// terminal-reply cooldown bounds what we say back, but the events keep arriving
+// and keep taking a turn slot from real customers, so a number named here is
+// dropped before the durable inbox: no turn, no conversation, nothing to reset
+// later. The row is still written as ignored, because a drop nobody can see is
+// indistinguishable from an outage. Empty means nobody is blocked.
+const digitsOnly = (value) => String(value ?? '').replace(/\D/g, '');
+const blockedPhones = new Set(
+  String($env.INBOUND_BLOCKED_PHONES || '')
+    .split(',')
+    .map(digitsOnly)
+    .filter(Boolean),
+);
+const phoneNumber = remoteJid.includes('@') ? remoteJid.split('@')[0] : remoteJid;
+
+if (blockedPhones.has(digitsOnly(phoneNumber))) {
+  return [
+    {
+      json: {
+        should_process: false,
+        event_type: 'blocked_number',
+        normalized_event: normalizedEvent,
+        phone_number: phoneNumber || null,
+        raw_payload_json: JSON.stringify(body),
+      },
+    },
+  ];
+}
+
 const message = data.message ?? {};
 const textBody = pickText(message);
 const attachment = buildAttachment(message);
-const phoneNumber = remoteJid.includes('@') ? remoteJid.split('@')[0] : remoteJid;
 const externalTimestamp = data.messageTimestamp || body.date_time || null;
 
 return [

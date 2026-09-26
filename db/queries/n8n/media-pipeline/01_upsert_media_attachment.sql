@@ -1,10 +1,10 @@
 -- Register inbound media metadata without downloading untrusted external URLs.
--- $1 should_write, $2 media_key, $3 external_url (metadata only), $4 message_id,
--- $5 inbound_event_id, $6 conversation_id, $7 source_number_id,
--- $8 instance_name, $9 phone_number, $10 attachment_type, $11 mime_type,
--- $12 filename, $13 file_size, $14 download_state, $15 rejected_reason,
--- $16 dedupe_key, $17 raw_payload JSON, $18 max_bytes, $19 expected_sha256,
--- $20 dispatcher_payload JSON.
+-- p1 should_write, p2 media_key, p3 external_url (metadata only), p4 message_id,
+-- p5 inbound_event_id, p6 conversation_id, p7 source_number_id,
+-- p8 instance_name, p9 phone_number, p10 attachment_type, p11 mime_type,
+-- p12 filename, p13 file_size, p14 download_state, p15 rejected_reason,
+-- p16 dedupe_key, p17 raw_payload JSON, p18 max_bytes, p19 expected_sha256,
+-- p20 dispatcher_payload JSON.
 WITH input AS MATERIALIZED (
   SELECT
     COALESCE(NULLIF($1::text, '')::boolean, FALSE) AS should_write,

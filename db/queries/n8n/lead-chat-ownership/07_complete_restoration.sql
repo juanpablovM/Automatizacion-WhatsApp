@@ -12,7 +12,7 @@
 -- consume al completar (queda NULL), de modo que reenviar el mismo resultado
 -- tambien devuelve 'claim_mismatch' en vez de contar dos veces.
 --
--- Desenlaces de $3 y su proyeccion en external_operations:
+-- Desenlaces de p3 y su proyeccion en external_operations:
 --   'succeeded'              -> operacion 'succeeded' (la tarea volvio a su
 --                               estado previo)
 --   'skipped_status_changed' -> operacion 'succeeded': alguien movio la tarea
@@ -20,16 +20,16 @@
 --                               decision humana; no intentarlo ES el resultado
 --                               correcto, no una falla que reintentar
 --   'failed'                 -> operacion 'failed', con last_error visible
--- Un $3 fuera de ese dominio lo rechaza el CHECK chk_lead_chat_ownerships_
+-- Un p3 fuera de ese dominio lo rechaza el CHECK chk_lead_chat_ownerships_
 -- restoration_state de la migracion 018: se prefiere fallar ruidosamente antes
 -- que degradarlo en silencio a 'failed' y perder el bug del llamador.
 --
 -- Devuelve siempre exactamente una fila.
 --
 -- Params:
---   $1 ownership_id (bigint), $2 restoration_claim_token (text),
---   $3 result ('succeeded' | 'failed' | 'skipped_status_changed'),
---   $4 error_text (text), $5 observed_clickup_status (text)
+--   p1 ownership_id (bigint), p2 restoration_claim_token (text),
+--   p3 result ('succeeded' | 'failed' | 'skipped_status_changed'),
+--   p4 error_text (text), p5 observed_clickup_status (text)
 -- =============================================================================
 WITH input AS (
   SELECT

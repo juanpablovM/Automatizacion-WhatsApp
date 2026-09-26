@@ -1,7 +1,8 @@
 // =============================================================================
 // follow-up-policy.js — Cadencia de seguimiento A-010 (PRD 25.4 / seccion 20).
-// SOURCE OF TRUTH de la cadencia 0/1/3/7/14, los textos por step/motivo, la
-// ventana de envio horaria y el fraseario de opt-out / perdida de interes.
+// SOURCE OF TRUTH de la cadencia 0/1/3/7/14, los textos por step/motivo y la
+// ventana de envio horaria. El fraseario de opt-out / perdida de interes vive
+// en ../shared/customer-opt-out-vocabulary.js y se reexporta aqui.
 // -----------------------------------------------------------------------------
 // El PRD no fija textos literales para A-010: esta es la libreria unica donde
 // se editan (es inferida por el scheduler y por los harness). Guardrails:
@@ -35,41 +36,14 @@ const MESSAGES = {
   },
 };
 
-// Frases de opt-out: ante cualquiera de estas expresiones la cadencia se
-// cancela para SIEMPRE (estado opted_out) y no se vuelve a enviar nada.
-const OPT_OUT_PATTERNS = [
-  /no me escribas mas/i,
-  /escribas mas/i,
-  /baja.*(de la lista|pas|mensajes|programa)/i,
-  /stop/i,
-  /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-  /dej[a|en] de escribirme/i,
-  /no me envies mas mensajes/i,
-  /darme de baja/i,
-  /quitar(me)? de la lista/i,
-  /no me molestes/i,
-];
-
-const detectOptOut = (text) => {
-  const source = String(text ?? '').trim().toLowerCase();
-  if (!source) return false;
-  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(source));
-};
-
-// Frases de perdida de interes: al detectarlas la cadencia se cancela con
-// motivo 'lost' (se guarda lost_reason con la frase normalizada).
-const LOST_PATTERNS = [
-  /ya no (me interesa|necesito|quiero)/i,
-  /lo pense y no (voy a|quiero)/i,
-  /estoy con (otra|la competencia)/i,
-  /no voy a (comprar|avanzar)/i,
-  /cerremos el tema/i,
-];
-
-const detectLostIntent = (text) => {
-  const source = String(text ?? '').trim();
-  return LOST_PATTERNS.some((pattern) => pattern.test(source));
-};
+// Opt-out cancels the cadence for good (opted_out); lost intent cancels it with
+// reason 'lost'. Both share one normalized vocabulary with the dispatcher.
+const {
+  OPT_OUT_PATTERNS,
+  LOST_PATTERNS,
+  detectOptOut,
+  detectLostIntent,
+} = require('../shared/customer-opt-out-vocabulary.js');
 
 const buildCadence = ({ withDayZero = false, startOn = null, now = null }) => {
   const base = now ? new Date(now) : startOn ? new Date(startOn) : new Date();

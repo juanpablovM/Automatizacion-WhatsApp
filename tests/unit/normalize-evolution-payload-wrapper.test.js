@@ -53,3 +53,54 @@ describe('Normalize Evolution Payload — own-message evidence', () => {
     expect(output.normalized_event).toBe('SECURITY_REJECTED');
   });
 });
+
+describe('Normalize Evolution Payload — blocked counterparts', () => {
+  const withBlocklist = (value) => ({
+    EVOLUTION_WEBHOOK_SECRET: 'secret',
+    INBOUND_BLOCKED_PHONES: value,
+  });
+
+  test('drops a message from a blocked number and says so', () => {
+    const output = run(
+      message({ remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist('56988599744'),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+    expect(output.normalized_event).toBe('MESSAGES_UPSERT');
+    expect(output.phone_number).toBe('56988599744');
+  });
+
+  test('matches a blocked number however the list spells it', () => {
+    const output = run(
+      message({ remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist(' +56 9 8859-9744 , 56911112222 '),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+  });
+
+  test('drops our own outgoing message to a blocked number too', () => {
+    const output = run(
+      message({ fromMe: true, remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist('56988599744'),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+  });
+
+  test('leaves every other number processable', () => {
+    const output = run(message(), withBlocklist('56988599744'));
+
+    expect(output.should_process).toBe(true);
+  });
+
+  test('blocks nobody when the list is unset, empty or only separators', () => {
+    expect(run(message()).should_process).toBe(true);
+    expect(run(message(), withBlocklist('')).should_process).toBe(true);
+    expect(run(message(), withBlocklist('  ,  ')).should_process).toBe(true);
+  });
+});

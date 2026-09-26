@@ -86,6 +86,29 @@ function buildV3ContingencyDecision({ policy, reason, expectedSnapshotDigest }) 
   return { ...decision, decision_digest: digestObject(decision) };
 }
 
+// `Normalize AI Result` already separates a provider that never answered from a
+// model that answered badly: only a non-2xx response leaves `provider_error` or
+// `rate_limited`, while `invalid_json`, `intent_mismatch` and `low_confidence`
+// all mean the reply arrived and was poor, which is exactly what repair is for.
+// `missing_ai_request` stays off this list on purpose, because a request we
+// failed to build is our own misconfiguration and must not hide behind the
+// provider. `planV3Recovery` has had an `outage` branch from the start, but
+// nothing ever wrote `v3_provider_outcome`, so it read its default: every outage
+// was filed as `repair_exhausted`, indistinguishable from a proposal we could
+// not fix, and the turn first spent a repair call on a provider that had just
+// refused two. The merge suffixes the AI side, so the signal is read the way the
+// rejected proposal is.
+const PROVIDER_SILENT_REASONS = new Set(['provider_error', 'rate_limited']);
+const resolveV3ProviderOutcome = (mergedInput, input) => {
+  const source = mergedInput && typeof mergedInput === 'object' ? mergedInput : {};
+  const canonical = input && typeof input === 'object' ? input : {};
+  if (canonical.v3_provider_outcome) return canonical.v3_provider_outcome;
+  const reason = source.ai_fallback_reason
+    ?? source.ai_fallback_reason_2
+    ?? source.ai_fallback_reason_1;
+  return PROVIDER_SILENT_REASONS.has(String(reason ?? '')) ? 'outage' : 'accepted';
+};
+
 function planV3Recovery({
   policy, validation, repairAttempt = 0, providerOutcome = 'accepted', preTurnState,
   expectedSnapshotDigest, proposal = null,
@@ -113,6 +136,47 @@ function planV3Recovery({
     };
   }
   return { action: 'resume', preserved_state: preservedState };
+}
+
+// n8n prunes executions after about two days, and the contingency decision only
+// keeps a coarse `recovery_reason`, so the cause of a fallback used to vanish
+// with the execution. This is the durable part of that cause: machine codes and
+// small scalars, never the rejected proposal, the prompt or the customer's
+// words. A value that does not look like a machine code is dropped, not
+// truncated, because a truncated free-form message is still free-form text.
+const DIAGNOSTIC_CODE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const DIAGNOSTIC_CODE_LIMIT = 20;
+const diagnosticCode = (value) =>
+  (typeof value === 'string' && DIAGNOSTIC_CODE.test(value) ? value : null);
+const diagnosticInteger = (value, min, max) =>
+  (Number.isInteger(value) && value >= min && value <= max ? value : null);
+
+function buildV3ContingencyDiagnostic({ validation, providerOutcome, repairAttempt, mergedInput }) {
+  const source = mergedInput && typeof mergedInput === 'object' ? mergedInput : {};
+  // On an outage the model never answered, so the only validation left is that
+  // of an absent proposal: it describes the gap, not the cause.
+  const errors = providerOutcome === 'outage' || !Array.isArray(validation?.errors)
+    ? []
+    : validation.errors;
+  const codes = [];
+  for (const error of errors) {
+    const code = diagnosticCode(error?.code);
+    if (code && !codes.includes(code)) codes.push(code);
+    if (codes.length === DIAGNOSTIC_CODE_LIMIT) break;
+  }
+  // The AI side of `Merge AI Assistance` is suffixed, and canonicalization drops
+  // it, so the provider signal is read from the merged item the way
+  // `resolveV3ProviderOutcome` reads it.
+  return {
+    validation_error_codes: codes,
+    ai_fallback_reason: diagnosticCode(
+      source.ai_fallback_reason ?? source.ai_fallback_reason_2 ?? source.ai_fallback_reason_1,
+    ),
+    ai_status_code: diagnosticInteger(
+      source.ai_status_code ?? source.ai_status_code_2 ?? source.ai_status_code_1, 100, 599,
+    ),
+    repair_attempt: diagnosticInteger(repairAttempt, 0, 100),
+  };
 }
 
 function releaseV3Contingency({ decision, handoffReceipt }) {
@@ -181,9 +245,11 @@ if (typeof module !== 'undefined' && module.exports) {
     digestObject,
     cloneJsonValue,
     canonicalizeMergedTurnItem,
+    resolveV3ProviderOutcome,
     buildV3RepairRequest,
     buildV3ContingencyDecision,
     planV3Recovery,
+    buildV3ContingencyDiagnostic,
     releaseV3Contingency,
     reconcileV3Operation,
   };
@@ -194,11 +260,12 @@ const mergedInput = items[0]?.json ?? {};
 const rejectedProposal = mergedInput.ai_proposal ?? mergedInput.ai_proposal_2 ?? mergedInput.ai_proposal_1 ?? null;
 const input = canonicalizeMergedTurnItem(mergedInput);
 const policy = input.v3_policy || input.turn_policy;
+const providerOutcome = resolveV3ProviderOutcome(mergedInput, input);
 const v3Recovery = planV3Recovery({
   policy,
   validation: input.v3_validation ?? null,
   repairAttempt: Number(input.v3_repair_attempt || 0),
-  providerOutcome: input.v3_provider_outcome || 'accepted',
+  providerOutcome,
   preTurnState: input.qualification_context || {},
   expectedSnapshotDigest: input.expected_snapshot_digest || null,
   proposal: rejectedProposal,
@@ -206,11 +273,20 @@ const v3Recovery = planV3Recovery({
 return [{ json: {
   ...input,
   v3_recovery: v3Recovery,
+  v3_provider_outcome: providerOutcome,
   v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),
   ai_repair_request: v3Recovery.repair_request || null,
   turn_policy: v3Recovery.repair_request?.policy || policy,
   v3_policy: v3Recovery.repair_request?.policy || policy,
   v3_recovery_decision: v3Recovery.decision || null,
+  v3_contingency_diagnostic: v3Recovery.action === 'contingency'
+    ? buildV3ContingencyDiagnostic({
+      validation: input.v3_validation ?? null,
+      providerOutcome,
+      repairAttempt: Number(input.v3_repair_attempt || 0),
+      mergedInput,
+    })
+    : null,
   decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,
   delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,
 } }];

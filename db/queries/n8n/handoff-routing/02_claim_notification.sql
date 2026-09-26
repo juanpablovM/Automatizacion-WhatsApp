@@ -1,5 +1,5 @@
 -- Claim pending handoffs through external_operations.
--- $1 batch size, $2 stale processing seconds.
+-- p1 batch size, p2 stale processing seconds.
 WITH stale AS (
   UPDATE external_operations eo
   SET status = 'unknown',

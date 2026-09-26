@@ -22,7 +22,7 @@
 -- que distinguir "sin datos" de "libre".
 --
 -- Params:
---   $1 lead_id (bigint)
+--   p1 lead_id (bigint)
 -- =============================================================================
 WITH input AS (
   SELECT NULLIF($1::text, '')::bigint AS lead_id

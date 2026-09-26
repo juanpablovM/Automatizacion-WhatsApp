@@ -1,4 +1,4 @@
--- $1 batch_size, $2 window_start, $3 window_end, $4 now, $5 stale_seconds
+-- p1 batch_size, p2 window_start, p3 window_end, p4 now, p5 stale_seconds
 SELECT * FROM claim_due_follow_ups(
   COALESCE(NULLIF($1::text, '')::integer, 50),
   COALESCE(NULLIF($2::text, ''), '09:00'),

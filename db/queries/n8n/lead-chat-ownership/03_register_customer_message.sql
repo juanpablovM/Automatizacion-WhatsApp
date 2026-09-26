@@ -3,7 +3,7 @@
 -- -----------------------------------------------------------------------------
 -- Cada mensaje entrante del cliente sobre un chat con propiedad viva abre (o
 -- reabre) el plazo del vendedor: el mensaje pasa a ser el pendiente y el plazo
--- queda en `message.created_at + $4 horas`. Un mensaje mas nuevo REEMPLAZA al
+-- queda en `message.created_at + p4 horas`. Un mensaje mas nuevo REEMPLAZA al
 -- anterior y arranca su propia ventana completa, porque el SLA se mide contra
 -- lo ultimo que el cliente pregunto, no contra lo primero.
 --
@@ -25,8 +25,8 @@
 -- Devuelve siempre exactamente una fila.
 --
 -- Params:
---   $1 lead_id (bigint), $2 message_id (bigint),
---   $3 message_created_at (timestamptz), $4 window_hours (numeric; el llamador
+--   p1 lead_id (bigint), p2 message_id (bigint),
+--   p3 message_created_at (timestamptz), p4 window_hours (numeric; el llamador
 --   pasa 2)
 -- =============================================================================
 WITH input AS (
