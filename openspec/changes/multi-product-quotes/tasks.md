@@ -75,7 +75,7 @@ Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`
 
 Proves: live scenario in *Item-Scoped Line Items, Goals, and Catalog Resolution*; *Item-Scoped Corrections*; *Evidenced Semantic Proposal* — "Correction target is unclear"; *Atomic Grounded Authorization* — "One member is invalid", "Ambiguous item retains its evidenced facts", "Eleventh item is rejected"; *Safe Versioned Rollout* — version dispatch half of "Shape change is versioned".
 
-- [ ] 2a.1 RED `shared/v3-contract-runtime.test.js`: `V3_CONTRACTS` adds `/v3.1` artifact versions; `v3` entries unchanged
+- [ ] 2a.1 RED `shared/v3-contract-runtime.test.js`: `V3_CONTRACTS` adds the v3.1 artifact versions (version strings ending in v3.1); `v3` entries unchanged
 - [ ] 2a.2 GREEN add v3.1 to `V3_CONTRACTS`
 - [ ] 2a.3 RED: version-dispatched validator/authorizer runs the unchanged v3 path when `policy.version` is `v3` (full existing v3 suite still green)
 - [ ] 2a.4 GREEN implement dispatch
@@ -87,13 +87,13 @@ Proves: live scenario in *Item-Scoped Line Items, Goals, and Catalog Resolution*
 - [ ] 2a.10 GREEN implement
 - [ ] 2a.11 RED: `item_target_required` — `item_ref:null` correction with ≥2 items asks which item; with exactly 1 item resolves to it
 - [ ] 2a.12 GREEN implement
-- [ ] 2a.13 RED: withholding — ambiguous/unsupported item's `product` mutation drops into `withheld_mutations` (not an error); its `quantity`/`measurements` still authorize
+- [ ] 2a.13 RED: withholding — ambiguous/unsupported item's `product` mutation drops into `withheld_mutations` (not an error); its `quantity` and `measurements` still authorize
 - [ ] 2a.14 GREEN implement
 - [ ] 2a.15 RED live-scenario: "pandereta de 3 metros de altura con alambre púa. Son aprox 500 ml en la comuna de Lo Prado" ⇒ wire item commits product "Alambre de Púas" with no invented quantity; pandereta item commits quantity "500 ml" + measurements "3 metros de altura", `product:null`, withheld; `commune` "Lo Prado" commits at quote level
 - [ ] 2a.16 GREEN implement full validator/authorizer path until the live-scenario test passes
 - [ ] 2a.17 RED: `catalog_resolution_clarification_required` per item — ambiguous item requires `primary_request={goal_id:'product', item_ref}`, never rejects mutations
 - [ ] 2a.18 GREEN implement
-- [ ] 2a.19 RED: `line_items` counts resolved with 1–10 items each having `product`+`quantity`; unresolved surfaces `product@<ref>`/`quantity@<ref>`
+- [ ] 2a.19 RED: `line_items` counts resolved with 1–10 items each having `product`+`quantity`; unresolved surfaces `product@<ref>` and `quantity@<ref>`
 - [ ] 2a.20 GREEN implement v3.1 `effectiveRequiredGoalIds`
 - [ ] 2a.21 RED: `shared/v3-policy-builder.js` emits item facts/goals/authority only when `policy.version` is v3.1
 - [ ] 2a.22 GREEN implement version gate
@@ -132,12 +132,12 @@ Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`
 Proves: *Itemized Lead, Task, and Notification Effects* — "One quote, one lead, itemized everywhere".
 
 - [ ] 3.1 RED `build-v3-lead-effect.test.js`: `reduce(context, decision.state_mutations)` produces the single-item requirement byte-identical to today
-- [ ] 3.2 GREEN wire `composeRequirement`/`reduceV3StateMutations` into `wa-conversation-orchestrator/build-v3-lead-effect.js`
+- [ ] 3.2 GREEN wire `composeRequirement` and `reduceV3StateMutations` into `wa-conversation-orchestrator/build-v3-lead-effect.js`
 - [ ] 3.3 RED: multi-item requirement renders `• {product} — {quantity}[, {measurements}]` lines joined by `\n`, plus `Uso: …` when present
 - [ ] 3.4 GREEN implement the multi-item branch consumption
 - [ ] 3.5 RED `build-clickup-payload.test.js`: extracted fixture's single-item output is byte-identical to the current inline node
 - [ ] 3.6 GREEN create `crm-clickup-sync-lead/build-clickup-payload.js` by extracting the inline node, preserving behavior
-- [ ] 3.7 RED: `build-clickup-payload.js` skips the flat `Cantidad`/`Medidas` labels when `line_items` has more than one item
+- [ ] 3.7 RED: `build-clickup-payload.js` skips the flat `Cantidad` and `Medidas` labels when `line_items` has more than one item
 - [ ] 3.8 GREEN implement the skip logic
 - [ ] 3.9 Register the `Build ClickUp Payload` fixture in `tests/scripts/sync-workflow-nodes.mjs`; regenerate workflow JSON
 - [ ] 3.10 RED: seller-notification template shows one line per item (via `leads.requirement` verbatim)
@@ -152,12 +152,12 @@ Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`
 - [ ] 4.2 Run `AI_REPLAY_LIVE=1 AI_REPLAY_RUNS=10 node tests/ops/v3-line-items-live-replay.mjs` against the real model, N≥10, including the live 2026-09-26 pandereta message, a confirmation turn, and correction turns; assert the itemized `final_confirmation` property (one `•` line per item) and no measurement misattribution
 - [ ] 4.3 Check whether `CLICKUP_CF_REQUIREMENT_ID` accepts newlines; if not, join requirement lines with ` | ` in `build-clickup-payload.js` and re-run 3.5–3.9
 - [ ] 4.4 Set `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; recreate n8n (`docker compose up -d n8n`)
-- [ ] 4.5 Run the canary E2E on `56997093038`: replay the incident message through confirmation; assert one lead + one ClickUp task listing Cierros de Hormigón and the wire item with their own measurements, no flat `Cantidad`/`Medidas` lines, and empty `last_error`/`validation_errors`
+- [ ] 4.5 Run the canary E2E on `56997093038`: replay the incident message through confirmation; assert one lead + one ClickUp task listing Cierros de Hormigón and the wire item with their own measurements, no flat `Cantidad` and `Medidas` lines, and empty `last_error` and `validation_errors`
 - [ ] 4.6 Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
 - [ ] 4.7 Monitor `conversation_turn_executions.last_error` and `advisor_decisions.validation_errors` for multi-product rejections; merge tracker → main once stable
 
 Rollback drain (ordered, per slice, latest first):
 - [ ] 4.8 Set `AI_PRD_V3_LINE_ITEMS=canary` (empty phone list) or `disabled`; recreate n8n — new turns compile v3
-- [ ] 4.9 Wait for in-flight `/v3.1` decisions to leave their non-terminal states
+- [ ] 4.9 Wait for in-flight v3.1 decisions to leave their non-terminal states
 - [ ] 4.10 Revert the workflows (`scripts/dev/sync-n8n-workflows.sh --rollback <pre-deploy snapshot>`), then apply `infra/postgres/rollback/025_item_aware_v3_state_mutations.down.sql`
 - [ ] 4.11 Confirm rows keep their flat projection and D3 reconciles on the next upgrade
