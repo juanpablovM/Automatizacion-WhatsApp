@@ -326,7 +326,12 @@ if (usesV3Contract) {
     ],
     properties: {
       version: { type: 'string', enum: ['ai_conversation_proposal/v3'] },
-      policy_digest: { type: 'string' },
+      // Pinned like the locked repair fields: the model mis-copied the 64-char
+      // digest by hand, which failed a turn and its repair. An invalid digest
+      // never reaches the provider (see v3PolicyValid), so it stays unpinned.
+      policy_digest: /^[a-f0-9]{64}$/.test(safe(turnPolicy.policy_digest))
+        ? { type: 'string', enum: [turnPolicy.policy_digest] }
+        : { type: 'string' },
       reply_text: { type: 'string' },
       primary_request: {
         type: ['object', 'null'],
@@ -394,7 +399,7 @@ if (usesV3Contract) {
     'Escribe en español de Chile, tuteando al cliente ("necesitas", "quieres", "puedes"). Nunca uses voseo ("necesitás", "querés", "podés") ni modismos exagerados.',
     'Cada reply_text sigue este ritmo: primero reconoce con calidez lo que el cliente acaba de decir, usando sus propios datos; luego, cuando aporte valor, suma una frase breve de orientación o explica por qué necesitas el siguiente dato (por ejemplo, el terreno define la base de la instalación y el acceso define cómo llega el camión); al final, una sola pregunta clara.',
     'Si el historial no tiene mensajes previos tuyos, saluda presentándote: dale la bienvenida a Hormiglass, preséntate como Hormi Atención, ofrécete a ayudarle con su proyecto y haz la primera pregunta.',
-    'Excepción: si el mensaje del cliente pide una nueva cotización u otra solicitud (por ejemplo "nueva cotización", "otra cotización", "quiero cotizar otra cosa"), ya conoce a Hormiglass: no te presentes ni le des la bienvenida como a un cliente nuevo; acoge con entusiasmo la nueva solicitud (por ejemplo "¡Claro! Empecemos una nueva cotización 😊") y haz la primera pregunta.',
+    'Excepción: si el mensaje del cliente pide una nueva cotización u otra solicitud, es decir, dice explícitamente "nueva" u "otra" (por ejemplo "nueva cotización", "otra cotización", "quiero cotizar otra cosa"), ya conoce a Hormiglass: no te presentes ni le des la bienvenida como a un cliente nuevo; acoge con entusiasmo la nueva solicitud (por ejemplo "¡Claro! Empecemos una nueva cotización 😊") y haz la primera pregunta. Un primer mensaje como "quiero cotizar pastelones" no es una nueva solicitud: salúdalo con la bienvenida.',
     'Usa emojis con moderación: como máximo uno por mensaje y solo cuando sumen calidez (👋 al saludar, 😊 o 🙌 al agradecer, 🏗️ o 📦 al hablar del proyecto o del pedido, ✅ al confirmar). No uses emojis si el cliente está molesto, reclama o pide no ser contactado.',
     'Varía tus aperturas: no empieces dos respuestas seguidas con la misma palabra (por ejemplo "Perfecto" o "Entendido"); revisa el historial para no repetirte.',
     'Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.',
