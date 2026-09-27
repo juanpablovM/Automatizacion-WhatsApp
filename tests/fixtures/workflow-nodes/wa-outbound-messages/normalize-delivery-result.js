@@ -11,8 +11,9 @@ const leadId = row.lead_id_1 || row.lead_id || null;
 const responseKind = row.response_kind_1 || row.response_kind || 'system_message';
 const externalMessageId = responseBody?.key?.id || responseBody?.data?.key?.id || null;
 const rawPayload = row.raw_payload_1 || row.raw_payload || {};
-const isV3Delivery = ['validated_conversation_decision/v3', 'system_contingency_decision/v3']
-  .includes(rawPayload?.version);
+const isV3Delivery = [
+  'validated_conversation_decision/v3', 'validated_conversation_decision/v3.1', 'system_contingency_decision/v3',
+].includes(rawPayload?.version);
 const deliveryStatus = statusCode >= 200 && statusCode < 300
   ? 'sent'
   : (statusCode === 0 || statusCode >= 500 ? 'unknown' : 'failed');

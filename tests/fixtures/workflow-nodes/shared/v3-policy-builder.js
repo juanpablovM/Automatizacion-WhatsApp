@@ -64,8 +64,13 @@ const primaryLineItem = (context) => {
   return items[0] || {};
 };
 const ITEM_FACT_FIELDS = new Set(['product', 'quantity', 'measurements']);
+const hasFieldValue = (value) => value !== undefined && value !== null && safe(value) !== '';
 
 const buildV3PolicyInput = (row, options = {}) => {
+  // Slice 2a (design.md D1-D5), dark: nothing in production requests
+  // `version: 'v3.1'` until Slice 2b's switch. The default stays the exact
+  // Slice 1 single-item read-through, byte-identical to today's output.
+  const version = options?.version === 'v3.1' ? 'v3.1' : 'v3';
   const input = asObject(row);
   const context = asObject(input.qualification_context);
   const primaryItem = primaryLineItem(context);
@@ -142,6 +147,9 @@ const buildV3PolicyInput = (row, options = {}) => {
   const sameAddressPending = safe(input.pending_question_key) === 'address' && previousPending === 'address';
   const nextAddressRetry = sameAddressPending ? previousRetry + 1 : 0;
   for (const field of POLICY_FIELDS) {
+    // v3.1 emits these three as per-item facts/authority below instead of a
+    // single flat quote-level entry.
+    if (version === 'v3.1' && ITEM_FACT_FIELDS.has(field)) continue;
     const compatibilityValue = field === 'service_scope'
       ? legacyServiceScope
       : field === 'fulfillment' ? legacyFulfillment : undefined;
@@ -189,7 +197,42 @@ const buildV3PolicyInput = (row, options = {}) => {
       ? { operation: 'replace', concept: field, field, current_fact_id: factId }
       : { operation: 'set', concept: field, field });
   }
+
+  if (version === 'v3.1') {
+    const lineItems = resolvedReadLineItems ? resolvedReadLineItems(context) : [];
+    for (const item of lineItems) {
+      for (const field of ITEM_FACT_FIELDS) {
+        const value = item?.[field];
+        if (!hasFieldValue(value)) continue;
+        facts.push({
+          fact_id: `fact:item:${item.item_id}:${field}`,
+          field,
+          value,
+          mutability: 'customer_correctable',
+          source: { message_id: safe(input.last_message_id), evidence_digest: safe(input.last_evidence_digest) },
+        });
+      }
+    }
+    const lineItemsResolved = lineItems.length >= 1 && lineItems.length <= 10
+      && lineItems.every((item) => hasFieldValue(item?.product) && hasFieldValue(item?.quantity));
+    requiredGoals.delete('product');
+    requiredGoals.delete('quantity');
+    requiredGoals.add('line_items');
+    goals.push({
+      goal_id: 'line_items',
+      status: lineItemsResolved ? 'resolved' : 'unresolved',
+      importance: 'required_for_effect',
+      blocks_effects: ['create_lead'],
+    });
+    for (const field of ITEM_FACT_FIELDS) {
+      allowedMutations.push({ operation: 'set', concept: field, field });
+      allowedMutations.push({ operation: 'replace', concept: field, field });
+    }
+    allowedMutations.push({ operation: 'remove_item', concept: 'line_items', field: null });
+  }
+
   return {
+    version,
     turn: {
       id: safe(input.inbound_event_id ?? input.turn_id),
       conversation_id: safe(

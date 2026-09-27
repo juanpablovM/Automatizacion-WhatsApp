@@ -20,7 +20,9 @@
 // that the call completed leaves the question the rollout exists to answer
 // unanswered. Run the same validator the live v3 lane runs, and record its
 // verdict next to the liveness signal rather than instead of it.
-const V3_POLICY_VERSION = 'ai_prd_turn_policy/v3';
+// Slice 2a (design.md D6), dark: a v3.1 policy runs through the exact same
+// validator dispatch as v3 — only the artifact version differs.
+const V3_POLICY_VERSIONS = new Set(['ai_prd_turn_policy/v3', 'ai_prd_turn_policy/v3.1']);
 
 const validateShadowProposal = (policy, proposal) => {
   if (!proposal || typeof proposal !== 'object') {
@@ -29,7 +31,7 @@ const validateShadowProposal = (policy, proposal) => {
     // satisfy the contract, so it must not be counted as a rejected proposal.
     return { proposal_present: false, proposal_valid: false, validation_status: 'not_evaluated', validation_error_codes: [] };
   }
-  if (policy?.version !== V3_POLICY_VERSION) {
+  if (!V3_POLICY_VERSIONS.has(policy?.version)) {
     return { proposal_present: true, proposal_valid: false, validation_status: 'not_evaluated', validation_error_codes: ['invalid_turn_policy'] };
   }
   let validation;

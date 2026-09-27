@@ -33,7 +33,11 @@ WITH execution_lock AS MATERIALIZED (
   WHERE execution.decision_id = $1::TEXT
     AND event.processing_token = $2::TEXT
     AND execution.expected_snapshot_digest = $3::TEXT
-    AND decision.output_payload->>'version' = 'validated_conversation_decision/v3'
+    -- Slice 2a (design.md D6), dark: v3.1 commits through the same boundary
+    -- as v3; row 09 always persists the decision's own version below.
+    AND decision.output_payload->>'version' IN (
+      'validated_conversation_decision/v3', 'validated_conversation_decision/v3.1'
+    )
     AND decision.output_payload->>'decision_id' = execution.decision_id
     AND decision.output_payload->>'expected_snapshot_digest' = execution.expected_snapshot_digest
     AND decision.output_payload#>>'{reply,delivery_key}' = execution.delivery_key
@@ -105,7 +109,9 @@ WITH execution_lock AS MATERIALIZED (
            -- `Mark Outbound Sending` posts this column verbatim, so the
            -- reply text belongs in it, not only in `text_body`.
            'text', target.output_payload#>>'{reply,text}',
-           'version', 'validated_conversation_decision/v3',
+           -- Slice 2a (design.md D6): persist the decision's own artifact
+           -- version (v3 or v3.1) instead of hardcoding v3.
+           'version', target.output_payload->>'version',
            'decision_id', target.decision_id,
            'reply_sha256', target.output_payload#>>'{reply,sha256}'
          ),
