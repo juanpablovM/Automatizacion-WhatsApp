@@ -1,0 +1,741 @@
+{
+  "source": "canary live E2E 2026-09-27 run 2, first turn: headless quantity-only item split",
+  "policy": {
+    "version": "ai_prd_turn_policy/v3.1",
+    "turn": {
+      "id": "1304",
+      "conversation_id": "328",
+      "conversation_revision": 0,
+      "pending_question_goal_id": null,
+      "message": {
+        "id": "SIM1790535186791671810",
+        "text": "Hola, necesito cotizar una pandereta de 3 metros de altura con alambre púa, 500 ml en Lo Prado",
+        "encoding": "utf-8",
+        "sha256": "ac95b536fe8bc4eb9812204f9e14eef496fd9b1f21611c41b1394ef6056868ac"
+      }
+    },
+    "history": {
+      "messages": [],
+      "truncated": false,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "reference_context": {
+      "prior_request": null
+    },
+    "facts": [],
+    "goals": [
+      {
+        "goal_id": "name",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "service",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "commune",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "use_case",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "service_scope",
+        "status": "unresolved",
+        "importance": "required_for_effect",
+        "blocks_effects": [
+          "create_lead"
+        ]
+      },
+      {
+        "goal_id": "fulfillment",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "urgency",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "desired_date",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "terrain",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "truck_access",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "debris_removal",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "customer_type",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "company",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "company_rut",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "contact_name",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "contact_role",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "email",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "purchase_order",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "invoice_required",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "address",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": [],
+        "guidance": {
+          "known_commune": null,
+          "question_focus": "street_and_approximate_number",
+          "commune_alone_is_not_address": true,
+          "previous_retry_count": 0,
+          "next_retry_count_without_progress": 0,
+          "clarify_at": 2,
+          "handoff_at": 3,
+          "next_action_without_progress": "ask",
+          "reset_retry_on_new_commercial_evidence": true
+        }
+      },
+      {
+        "goal_id": "access_restrictions",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "reception_contact",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "issue_description",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "payment_amount",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "payment_method",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "quote_number",
+        "status": "unresolved",
+        "importance": "optional",
+        "blocks_effects": []
+      },
+      {
+        "goal_id": "line_items",
+        "status": "unresolved",
+        "importance": "required_for_effect",
+        "blocks_effects": [
+          "create_lead"
+        ]
+      }
+    ],
+    "conversation_policy": {
+      "normal_voice": "ai_only",
+      "max_primary_requests": 1,
+      "may_answer_before_progressing": true,
+      "may_defer_commercial_goals": true,
+      "must_not_request_known_facts": true
+    },
+    "state_authority": {
+      "allowed_mutations": [
+        {
+          "operation": "set",
+          "concept": "name",
+          "field": "name"
+        },
+        {
+          "operation": "set",
+          "concept": "service",
+          "field": "service"
+        },
+        {
+          "operation": "set",
+          "concept": "commune",
+          "field": "commune"
+        },
+        {
+          "operation": "set",
+          "concept": "use_case",
+          "field": "use_case"
+        },
+        {
+          "operation": "set",
+          "concept": "service_scope",
+          "field": "service_scope"
+        },
+        {
+          "operation": "set",
+          "concept": "fulfillment",
+          "field": "fulfillment"
+        },
+        {
+          "operation": "set",
+          "concept": "urgency",
+          "field": "urgency"
+        },
+        {
+          "operation": "set",
+          "concept": "desired_date",
+          "field": "desired_date"
+        },
+        {
+          "operation": "set",
+          "concept": "terrain",
+          "field": "terrain"
+        },
+        {
+          "operation": "set",
+          "concept": "truck_access",
+          "field": "truck_access"
+        },
+        {
+          "operation": "set",
+          "concept": "debris_removal",
+          "field": "debris_removal"
+        },
+        {
+          "operation": "set",
+          "concept": "customer_type",
+          "field": "customer_type"
+        },
+        {
+          "operation": "set",
+          "concept": "company",
+          "field": "company"
+        },
+        {
+          "operation": "set",
+          "concept": "company_rut",
+          "field": "company_rut"
+        },
+        {
+          "operation": "set",
+          "concept": "contact_name",
+          "field": "contact_name"
+        },
+        {
+          "operation": "set",
+          "concept": "contact_role",
+          "field": "contact_role"
+        },
+        {
+          "operation": "set",
+          "concept": "email",
+          "field": "email"
+        },
+        {
+          "operation": "set",
+          "concept": "purchase_order",
+          "field": "purchase_order"
+        },
+        {
+          "operation": "set",
+          "concept": "invoice_required",
+          "field": "invoice_required"
+        },
+        {
+          "operation": "set",
+          "concept": "address",
+          "field": "address"
+        },
+        {
+          "operation": "set",
+          "concept": "access_restrictions",
+          "field": "access_restrictions"
+        },
+        {
+          "operation": "set",
+          "concept": "reception_contact",
+          "field": "reception_contact"
+        },
+        {
+          "operation": "set",
+          "concept": "issue_description",
+          "field": "issue_description"
+        },
+        {
+          "operation": "set",
+          "concept": "payment_amount",
+          "field": "payment_amount"
+        },
+        {
+          "operation": "set",
+          "concept": "payment_method",
+          "field": "payment_method"
+        },
+        {
+          "operation": "set",
+          "concept": "quote_number",
+          "field": "quote_number"
+        },
+        {
+          "operation": "set",
+          "concept": "product",
+          "field": "product"
+        },
+        {
+          "operation": "replace",
+          "concept": "product",
+          "field": "product"
+        },
+        {
+          "operation": "set",
+          "concept": "quantity",
+          "field": "quantity"
+        },
+        {
+          "operation": "replace",
+          "concept": "quantity",
+          "field": "quantity"
+        },
+        {
+          "operation": "set",
+          "concept": "measurements",
+          "field": "measurements"
+        },
+        {
+          "operation": "replace",
+          "concept": "measurements",
+          "field": "measurements"
+        },
+        {
+          "operation": "remove_item",
+          "concept": "line_items",
+          "field": null
+        }
+      ]
+    },
+    "grounding": {
+      "catalog": [
+        {
+          "ref": "product:adocreto",
+          "value": "Adocreto",
+          "concept": "product"
+        },
+        {
+          "ref": "product:adoquin",
+          "value": "Adoquín",
+          "concept": "product"
+        },
+        {
+          "ref": "product:alambre-concertina",
+          "value": "Alambre Concertina",
+          "concept": "product"
+        },
+        {
+          "ref": "product:alambre-puas",
+          "value": "Alambre de Púas",
+          "concept": "product"
+        },
+        {
+          "ref": "product:baldosa-minvu",
+          "value": "Baldosa Minvu",
+          "concept": "product"
+        },
+        {
+          "ref": "product:basas-para-pilar",
+          "value": "Basas Para Pilar",
+          "concept": "product"
+        },
+        {
+          "ref": "product:bloques-hormigon",
+          "value": "Bloques de Hormigón",
+          "concept": "product"
+        },
+        {
+          "ref": "product:bordes-piscina",
+          "value": "Bordes de Piscina",
+          "concept": "product"
+        },
+        {
+          "ref": "product:cemento",
+          "value": "Cemento",
+          "concept": "product"
+        },
+        {
+          "ref": "product:cierros-hormigon",
+          "value": "Cierros de Hormigón",
+          "concept": "product"
+        },
+        {
+          "ref": "product:durmientes-hormigon",
+          "value": "Durmientes de Hormigón",
+          "concept": "product"
+        },
+        {
+          "ref": "product:maceteros-hormigon",
+          "value": "Maceteros de Hormigón",
+          "concept": "product"
+        },
+        {
+          "ref": "product:pastelones",
+          "value": "Pastelones",
+          "concept": "product"
+        },
+        {
+          "ref": "product:pigmentos",
+          "value": "Pigmentos",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placa-imitacion-piedra-laja",
+          "value": "Placa Imitación Piedra Laja",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placas-50-cm",
+          "value": "Placas de 50 cm",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placas-50-cm-reforzadas",
+          "value": "Placas de 50 cm Reforzadas",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placas-60-cm",
+          "value": "Placas de 60 cm",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placas-hormigon",
+          "value": "Placas de Hormigón",
+          "concept": "product"
+        },
+        {
+          "ref": "product:placas-imitacion-madera",
+          "value": "Placas Imitación Madera",
+          "concept": "product"
+        },
+        {
+          "ref": "product:postes-curvos",
+          "value": "Postes Curvos",
+          "concept": "product"
+        },
+        {
+          "ref": "product:postes-rectos",
+          "value": "Postes Rectos",
+          "concept": "product"
+        },
+        {
+          "ref": "product:soleras-solerillas",
+          "value": "Soleras y Solerillas",
+          "concept": "product"
+        },
+        {
+          "ref": "product:tapas-camara",
+          "value": "Tapas de Cámara",
+          "concept": "product"
+        },
+        {
+          "ref": "service:instalacion",
+          "value": "Instalación",
+          "concept": "service"
+        },
+        {
+          "ref": "service:movimiento-tierra",
+          "value": "Movimiento de Tierra",
+          "concept": "service"
+        },
+        {
+          "ref": "service:transporte-carga",
+          "value": "Transporte de Carga",
+          "concept": "service"
+        },
+        {
+          "ref": "service:venta-productos",
+          "value": "Venta de Productos",
+          "concept": "service"
+        }
+      ],
+      "modality_synonyms": [
+        {
+          "ref": "service_scope:material",
+          "concept": "service_scope",
+          "value": "material"
+        },
+        {
+          "ref": "service_scope:installation",
+          "concept": "service_scope",
+          "value": "installation"
+        },
+        {
+          "ref": "service_scope:both",
+          "concept": "service_scope",
+          "value": "both"
+        },
+        {
+          "ref": "fulfillment:delivery",
+          "concept": "fulfillment",
+          "value": "delivery"
+        },
+        {
+          "ref": "fulfillment:pickup",
+          "concept": "fulfillment",
+          "value": "pickup"
+        }
+      ],
+      "snapshot_digest": "f0e886241927d5e34bd7327534fb1ad9e25201071d861b5e36890330e6e8cfb3"
+    },
+    "claim_authority": {
+      "rules": [
+        {
+          "rule_id": "no_stock_confirmation",
+          "kind": "forbidden_pattern",
+          "pattern": "\\bstock\\s+(confirmado|disponible)\\b",
+          "flags": "iu"
+        },
+        {
+          "rule_id": "no_unreceipted_derivation",
+          "kind": "forbidden_pattern",
+          "pattern": "\\b(ya|quedo)\\s+derivad[oa]\\b",
+          "flags": "iu"
+        },
+        {
+          "rule_id": "no_unreceipted_quote_progress",
+          "kind": "forbidden_pattern",
+          "pattern": "\\b(?:(?:estoy|estamos|seguimos)\\s+(?:procesando|gestionando)\\s+(?:tu|la)\\s+cotizaci[oó]n|(?:tu|la)\\s+cotizaci[oó]n\\s+(?:ya\\s+)?(?:est[aá]|qued[oó])\\s+en\\s+proceso)\\b",
+          "flags": "iu"
+        },
+        {
+          "rule_id": "no_unreceipted_delivery_progress",
+          "kind": "forbidden_pattern",
+          "pattern": "\\b(?:recibas|recibir[aá]s)\\s+tu\\s+material\\s+pronto\\b",
+          "flags": "iu"
+        }
+      ]
+    },
+    "effect_authority": {
+      "permissions": [
+        {
+          "type": "create_lead"
+        },
+        {
+          "type": "handoff"
+        }
+      ],
+      "requirements": [
+        {
+          "effect_type": "create_lead",
+          "required_goal_ids": [
+            "service_scope",
+            "line_items"
+          ],
+          "trigger": "explicit_confirmation_when_ready"
+        },
+        {
+          "effect_type": "handoff",
+          "required_goal_ids": []
+        }
+      ],
+      "operation_key_strategy": "system_derived/v1"
+    },
+    "commit_policy": {
+      "proposal_atomicity": "all_or_nothing",
+      "effects_before_reply": true,
+      "delivery_idempotency": "turn_reply/v1"
+    },
+    "failure_policy": {
+      "max_repairs": 1,
+      "preserve_pre_turn_state": true,
+      "static_copy": "contingency_only",
+      "handoff_after_exhaustion": true
+    },
+    "policy_digest": "adc3c5d0492aff7116d8e02d4483ecaa94ee66949fad5588af69efdc2514c431"
+  },
+  "proposals": [
+    {
+      "version": "ai_conversation_proposal/v3.1",
+      "policy_digest": "adc3c5d0492aff7116d8e02d4483ecaa94ee66949fad5588af69efdc2514c431",
+      "reply_text": "¡Hola! Bienvenido a Hormiglass, soy Hormi Atención y te ayudo con tu proyecto 😊 Para orientarte con la pandereta, ¿te refieres a nuestros Cierros de Hormigón?",
+      "primary_request": {
+        "goal_id": "product",
+        "item_ref": "new:1"
+      },
+      "catalog_resolutions": [
+        {
+          "status": "ambiguous",
+          "evidence_quote": "pandereta",
+          "evidence_occurrence": 1,
+          "grounding_ref": null,
+          "item_ref": "new:1"
+        },
+        {
+          "status": "matched",
+          "evidence_quote": "alambre púa",
+          "evidence_occurrence": 1,
+          "grounding_ref": "product:alambre-puas",
+          "item_ref": "new:2"
+        }
+      ],
+      "observations": [
+        {
+          "id": "obs-product-wire",
+          "concept": "product",
+          "raw_value": "alambre púa",
+          "normalized_value": "Alambre de Púas",
+          "evidence_quote": "alambre púa",
+          "evidence_occurrence": 1,
+          "grounding_ref": "product:alambre-puas",
+          "resolves_goal_ids": [
+            "product"
+          ],
+          "item_ref": "new:2"
+        },
+        {
+          "id": "obs-measurements",
+          "concept": "measurements",
+          "raw_value": "3 metros de altura",
+          "normalized_value": {
+            "kind": "height",
+            "value": 3,
+            "unit": "metros",
+            "name": null
+          },
+          "evidence_quote": "3 metros de altura",
+          "evidence_occurrence": 1,
+          "grounding_ref": null,
+          "resolves_goal_ids": [
+            "measurements"
+          ],
+          "item_ref": "new:1"
+        },
+        {
+          "id": "obs-quantity",
+          "concept": "quantity",
+          "raw_value": "500 ml",
+          "normalized_value": {
+            "kind": "quantity",
+            "value": 500,
+            "unit": "ml",
+            "name": null
+          },
+          "evidence_quote": "500 ml",
+          "evidence_occurrence": 1,
+          "grounding_ref": null,
+          "resolves_goal_ids": [
+            "quantity"
+          ],
+          "item_ref": null
+        },
+        {
+          "id": "obs-commune",
+          "concept": "commune",
+          "raw_value": "Lo Prado",
+          "normalized_value": "Lo Prado",
+          "evidence_quote": "Lo Prado",
+          "evidence_occurrence": 1,
+          "grounding_ref": null,
+          "resolves_goal_ids": [
+            "commune"
+          ],
+          "item_ref": null
+        }
+      ],
+      "state_mutations": [
+        {
+          "operation": "set",
+          "field": "product",
+          "item_ref": "new:2",
+          "observation_id": "obs-product-wire",
+          "replaces_fact_id": null
+        },
+        {
+          "operation": "set",
+          "field": "measurements",
+          "item_ref": "new:1",
+          "observation_id": "obs-measurements",
+          "replaces_fact_id": null
+        },
+        {
+          "operation": "set",
+          "field": "quantity",
+          "item_ref": null,
+          "observation_id": "obs-quantity",
+          "replaces_fact_id": null
+        },
+        {
+          "operation": "set",
+          "field": "commune",
+          "item_ref": null,
+          "observation_id": "obs-commune",
+          "replaces_fact_id": null
+        }
+      ],
+      "effect_requests": []
+    }
+  ]
+}

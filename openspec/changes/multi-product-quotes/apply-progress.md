@@ -13,6 +13,7 @@
 - 12/12 Slice 3 tasks complete (3.1–3.12). All marked `[x]` in `tasks.md`. See "Slice 3 — Output" section below.
 - 5/5 Slice 3c tasks complete (3c.1–3c.5). All marked `[x]` in `tasks.md`. 3c.6 (live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c — v3.1 contract alignment, from live evidence" section below.
 - 3/3 Slice 3c follow-up tasks complete (3c.7–3c.9). All marked `[x]` in `tasks.md`. 3c.10 (the second live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c follow-up — item attribution (live A/B round 2)" section below.
+- 1/1 bounded Slice 3c follow-up task complete (3c.11). The captured first-turn multi-item proposal cannot authorize an unscoped item field; rollout 4.x remains pending.
 
 ---
 
@@ -680,3 +681,24 @@ None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` was not touched and stay
   2. `feat(v3): add v3.1 prompt rules against cross-item quantity/measurement transfer and item-mismatched corrections` — production fix in `build-ai-request.js` (+13/−0), plus its test `build-ai-request-v31-prompt.test.js` (+25/−0) = **38 authored changed lines**, plus 1 regenerated workflow JSON file (2 generated lines, excluded from authored risk).
   3. `docs(sdd): record Slice 3c follow-up apply progress` — `tasks.md` checkbox marks (12/1) and this `apply-progress.md` section.
 - **Review budget: comfortably within forecast.** Total authored risk ≈ 24 + 130 + 142 (commit 1) + 13 + 25 (commit 2) = **334 authored changed lines** across the two functional commits, well under the 800-line cap — no `size:exception` needed. The 8 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's golden/generated-artifact carve-out.
+
+## Bounded Slice 3c follow-up — first-turn unscoped item field (3c.11)
+
+Captured canary evidence showed a first-turn proposal with `new:1` and `new:2` but a quantity observation and mutation with `item_ref:null`. The validator counted zero items **before** the turn and silently mapped that quantity to `li_0`, creating a third headless item. The v3.1-only guard now uses the proposal's touched item refs: when fewer than two items existed before the turn but two or more are proposed, an unscoped item-field observation or mutation raises repairable `item_field_unscoped` with the candidate refs. A single unscoped observation/mutation pair yields one error. The existing `item_target_required` behavior for two preexisting items, v3 validation, and the zero/one-item fallback are unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Safety net | RED | GREEN | Triangulation | Refactor |
+|---|---|---|---|---|---|
+| 3c.11 | Existing `v3-contract-runtime.test.js`: 19/19 passed | Captured regression `v3-v31-item-field-unscoped.test.js`: 3 failed, 8 passed before production edit | 11/11 regression cases passed; focused D11/contract set 45/45 passed | Captured observation and mutation null refs, corrected two-item proposal, quote-level commune, zero/one-item fallback, two preexisting items | Sorted `allowed_values` for deterministic repair instructions; reran focused suite 45/45 |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test | `npx vitest run tests/unit/v3-v31-item-field-unscoped.test.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js --globals` → 5 files, 45/45 tests passed |
+| Runtime harness | N/A: no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` updated embedded nodes and `npm run check:parity` verified them |
+| Full checks | `npm test` → 76 passed files, 17 skipped; 965 passed tests, 154 skipped. `npm run check:parity` → pass. `npm run check:sql-references` → 0 errors, 0 warnings. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert this validator guard, captured fixture/test, and regenerated embedded workflow-node code together; no switch or production deployment was changed. |
+
+Task 3c.11 is complete. Rollout tasks 4.x remain pending; this local check is not a live canary rerun.

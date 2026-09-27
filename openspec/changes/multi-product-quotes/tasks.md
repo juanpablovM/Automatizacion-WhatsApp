@@ -184,6 +184,10 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [x] 3c.9 Keep every guarantee green: D11 static coverage and differentials, the prompt-diff test, the v3 request byte-identical, and the live-evidence and consistency tests.
 - [x] 3c.10 (ran 2026-09-27, gate passed: first-turn validity 20/20, equal to v3; first-turn attribution 20/20; valid corrections 10/10, all scoped to the wire item; v3.1 total 40/40 with 0 contingencies against v3 35/40) Rerun the live A/B (N=10, production catalog). Gate for canary: first-turn validity at least v3; first-turn item attribution correct in at least 19 of 20 runs; every valid correction scoped to the named item.
 
+### Slice 3c bounded follow-up — unscoped item field in a first-turn multi-item proposal
+
+- [x] 3c.11 RED then GREEN: use the captured first-turn proposal to reject an item-field observation or mutation with `item_ref:null` when the proposal introduces two items, instead of creating a headless `li_0`; retain the 0/1-item fallback, quote-level fields, and `item_target_required` for two preexisting items. Sync embedded workflow nodes and run focused plus full local checks. This is contract-alignment work only; rollout tasks 4.x remain pending.
+
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 
 - [ ] 4.1 Apply migration 025 (safe superset while v3 decisions are in flight); deploy the four slices' workflows via `scripts/dev/sync-n8n-workflows.sh`; keep `AI_PRD_V3_LINE_ITEMS=disabled`

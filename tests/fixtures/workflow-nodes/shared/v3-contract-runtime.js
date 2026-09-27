@@ -764,6 +764,22 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   }
   for (const ref of validCatalogResolutionRefs) touchedItemRefs.add(ref);
 
+  // A first turn can introduce several items even when none existed before it.
+  // In that case a null item_ref must not materialize a third, flat item.
+  const unscopedItemObservationIds = new Set();
+  const newMultiItemProposal = existingItems.size < 2 && touchedItemRefs.size >= 2;
+  const itemScopeValues = [...touchedItemRefs].sort();
+  const itemScopeInstruction = `Set item_ref to the item whose product this value describes (one of: ${itemScopeValues.join(', ')}); a quantity or measurement written next to a product belongs to that product's item. Never leave a product, quantity or measurements observation or state_mutation without item_ref when the quote has several items.`;
+  if (newMultiItemProposal) {
+    for (const [index, observationEntry] of observations.entries()) {
+      if (!ITEM_FIELDS.has(observationEntry?.concept) || observationEntry.item_ref !== null
+          || !observationsById.has(observationEntry.id)) continue;
+      errors.push(validationError('item_field_unscoped', `observations[${index}].item_ref`,
+        [observationEntry.id], itemScopeValues, itemScopeInstruction));
+      unscopedItemObservationIds.add(observationEntry.id);
+    }
+  }
+
   // item_identity_required: a genuinely new item must be introduced through
   // a catalog_resolutions entry (matched, ambiguous or unsupported).
   for (const ref of touchedItemRefs) {
@@ -893,6 +909,13 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     let itemRef = mutation.item_ref ?? null;
     if (ITEM_FIELDS.has(mutation.field)) {
       if (itemRef === null) {
+        if (newMultiItemProposal) {
+          if (!unscopedItemObservationIds.has(observationEntry.id)) {
+            errors.push(validationError('item_field_unscoped', `${path}.item_ref`,
+              [observationEntry.id], itemScopeValues, itemScopeInstruction));
+          }
+          continue;
+        }
         if (existingItemCountPreTurn >= 2) {
           errors.push(validationError(
             'item_target_required', `${path}.item_ref`, [observationEntry.id], [],
