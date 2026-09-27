@@ -21,8 +21,13 @@ const cloneJsonValue = (value) => {
   if (['string', 'number', 'boolean'].includes(typeof value)) return value;
   throw new Error('non_json_recovery_state');
 };
+// Slice 2a (design.md D6), dark: a v3.1 turn shares this exact saga with v3
+// — only the artifact version differs. In-flight v3 repairs still need the
+// unwidened v3 path unchanged, so both are simply accepted here.
+const V3_POLICY_VERSIONS = new Set(['ai_prd_turn_policy/v3', 'ai_prd_turn_policy/v3.1']);
+const V3_VALIDATION_VERSIONS = new Set(['conversation_validation_result/v3', 'conversation_validation_result/v3.1']);
 const requirePolicy = (policy) => {
-  if (policy?.version !== 'ai_prd_turn_policy/v3' || !policy.policy_digest) {
+  if (!V3_POLICY_VERSIONS.has(policy?.version) || !policy.policy_digest) {
     throw new Error('invalid_v3_policy');
   }
   return policy;
@@ -31,7 +36,7 @@ const requirePolicy = (policy) => {
 function buildV3RepairRequest({ policy, validation, proposal = null, repairAttempt = 0 }) {
   requirePolicy(policy);
   if (repairAttempt !== 0) throw new Error('repair_limit_exhausted');
-  if (validation?.version !== 'conversation_validation_result/v3'
+  if (!V3_VALIDATION_VERSIONS.has(validation?.version)
       || validation.valid !== false || !Array.isArray(validation.errors)
       || validation.errors.length === 0) {
     throw new Error('repair_requires_machine_errors');
