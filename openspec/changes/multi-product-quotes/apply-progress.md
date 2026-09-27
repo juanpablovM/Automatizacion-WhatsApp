@@ -703,3 +703,13 @@ Captured canary evidence showed a first-turn proposal with `new:1` and `new:2` b
 
 Task 3c.11 is complete. Rollout tasks 4.x remain pending; this local check is not a live canary rerun.
 Work-unit commit: `2a991b9` (`fix(v3): reject unscoped item fields in multi-item first turns`). Its 990 total changed lines include 741 lines of captured live-proposal evidence and 8 generated workflow-JSON lines; the focused authored code/test/docs change is 241 lines. The captured fixture is kept intact for reproducibility rather than shortened to meet a size target.
+
+## Rollout: original multi-product incident verified on canary
+
+Tasks 4.3 and 4.5 are complete. A controlled live E2E on phone `56997093038` reached confirmation in eight inbound turns (conversation 330). The first turn retained exactly two items: pandereta with 500 ml and 3 m, and Alambre de Púas without a copied quantity. After clarification, the final state was Cierros de Hormigón (500 ml, 3 m) and Alambre de Púas (300 ml), with `service_scope=both` and delivery. The customer received an itemized final summary.
+
+Confirmation produced one lead (252, `seller_id=2`) and one successful ClickUp task (`wdpgrxvfm5`). ClickUp audit 14714 recorded multiline itemized text in both the description and `CLICKUP_CF_REQUIREMENT_ID`/Requerimiento custom field, so no ` | ` fallback is needed. Neither output had flat `Cantidad` or `Medidas` lines. All eight advisor decisions had `validation_errors=[]`; the corresponding turns had `last_error=NULL`.
+
+This is evidence for the original incident path, not for the prescribed rollout transitions in 4.1, 4.2, or 4.4; those and 4.6–4.7 remain open. The owner subsequently clarified that installation is available **only with delivery**: pickup plus installation must never be offered or accepted. This E2E exercised installation plus delivery, not the prohibited combination. A separate gap was observed for `service_scope=both` plus pickup; policy enforcement and negative-path verification are pending, with no code or runtime change in this documentation unit.
+
+Verification for this documentation unit: compared the task wording with the recorded conversation/lead/ClickUp audit outcomes; `git diff --check` passed. Runtime harness: N/A — this unit only records existing live evidence. Rollback boundary: revert this task-status/evidence documentation commit; no implementation or runtime state is changed.
