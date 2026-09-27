@@ -134,6 +134,14 @@ services:
       # stays on AI_PRD_CONTRACT_MODE. Only ever raises a turn to v3, never
       # pulls one back. Empty means nobody.
       AI_PRD_CONTRACT_CANARY_PHONES: ${AI_PRD_CONTRACT_CANARY_PHONES:-}
+      # Per-turn, phone-scoped switch for the item-aware v3.1 policy inside the
+      # v3 lane (design.md D7). disabled | canary | enabled; an unrecognized
+      # value fails safe to disabled. Stays disabled until Slice 3 (Output)
+      # and the live gates pass.
+      AI_PRD_V3_LINE_ITEMS: ${AI_PRD_V3_LINE_ITEMS:-disabled}
+      # Comma-separated phone numbers promoted to v3.1 while AI_PRD_V3_LINE_ITEMS
+      # is canary. Empty means nobody. Ignored when disabled or enabled.
+      AI_PRD_V3_LINE_ITEMS_CANARY_PHONES: ${AI_PRD_V3_LINE_ITEMS_CANARY_PHONES:-}
       AI_DIRECT_API_BASE_URL: ${AI_DIRECT_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       AI_DIRECT_API_PATH: ${AI_DIRECT_API_PATH:-/chat/completions}
       AI_DIRECT_API_KEY: ${AI_DIRECT_API_KEY:-}
