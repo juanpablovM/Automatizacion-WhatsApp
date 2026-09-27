@@ -156,8 +156,8 @@ Proves: *Itemized Lead, Task, and Notification Effects* — "One quote, one lead
 - [x] 3.7 RED: `build-clickup-payload.js` skips the flat `Cantidad` and `Medidas` labels when `line_items` has more than one item
 - [x] 3.8 GREEN implement the skip logic
 - [x] 3.9 Register the `Build ClickUp Payload` fixture in `tests/scripts/sync-workflow-nodes.mjs`; regenerate workflow JSON
-- [ ] 3.10 RED: seller-notification template shows one line per item (via `leads.requirement` verbatim)
-- [ ] 3.11 GREEN confirm/wire
+- [x] 3.10 RED: seller-notification template shows one line per item (via `leads.requirement` verbatim)
+- [x] 3.11 GREEN confirm/wire
 - [ ] 3.12 Create `tests/ops/v3-line-items-live-replay.mjs`: opt-in A/B harness (`AI_REPLAY_LIVE=1 AI_REPLAY_RUNS=10`) comparing baseline (main path) vs branch (v3.1) over scripted transcripts including the 2026-09-26 message, a confirmation turn, and correction turns; property assertions only — validation pass rate, contingency count, measurement-to-item attribution, correction scoping, one `•` line per item in `final_confirmation`
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`; Postgres integration compose sequence.
