@@ -475,6 +475,11 @@ const NODES = [
       "shared/v3-rollout-runtime.js",
       "shared/v3-contract-runtime.js"
     ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Build ClickUp Payload",
+    "fixture": "crm-clickup-sync-lead/build-clickup-payload.js"
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {

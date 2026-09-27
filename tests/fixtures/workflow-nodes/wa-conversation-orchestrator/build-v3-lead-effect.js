@@ -26,56 +26,55 @@ const FULFILLMENT_SERVICE = Object.freeze({
   pickup: 'retiro',
 });
 
-// PRD: "requerimiento suficientemente concreto". Compose it from the concrete
-// facts the turn authorized, in the order the PRD lists them, and never invent
-// one: below three fields the lead is refused on purpose.
-const REQUIREMENT_FIELDS = ['product', 'quantity', 'measurements', 'use_case'];
+// D9 (design.md): the item-aware reducer and requirement composer are the
+// single source of truth for both the flat single-item string (byte-identical
+// to the pre-item-aware merge below) and the multi-item bullet rendering.
+// Production Code nodes get shared/v3-line-items.js concatenated ahead of
+// this file (tests/scripts/sync-workflow-nodes.mjs), so `reduceV3StateMutations`,
+// `readLineItems` and `composeRequirement` are already outer free variables
+// there, and `require` resolves no relative paths in that sandbox
+// (docker-compose.yml: NODE_FUNCTION_ALLOW_BUILTIN). Node test harnesses
+// `require` this file standalone, so the fallback below loads the sibling
+// file directly in that environment only.
+const externalLineItemsRuntime = (() => {
+  if (typeof module === 'undefined' || typeof require !== 'function') return null;
+  try {
+    return require('../shared/v3-line-items.js');
+  } catch (_error) {
+    return null;
+  }
+})();
+const resolvedReduceV3StateMutations = externalLineItemsRuntime
+  ? externalLineItemsRuntime.reduceV3StateMutations
+  : (typeof reduceV3StateMutations === 'function' ? reduceV3StateMutations : null);
+const resolvedReadLineItems = externalLineItemsRuntime
+  ? externalLineItemsRuntime.readLineItems
+  : (typeof readLineItems === 'function' ? readLineItems : null);
+const resolvedComposeRequirement = externalLineItemsRuntime
+  ? externalLineItemsRuntime.composeRequirement
+  : (typeof composeRequirement === 'function' ? composeRequirement : null);
 
-const hasValue = (value) => value !== undefined
-  && value !== null
-  && (typeof value !== 'string' || value.trim() !== '');
-
-const formatRequirementValue = (value) => {
-  if (!hasValue(value)) return '';
-  if (typeof value !== 'object' || Array.isArray(value)) return String(value).trim();
-  const name = hasValue(value.name) ? String(value.name).trim() : '';
-  const amount = hasValue(value.value) ? String(value.value).trim() : '';
-  const unit = hasValue(value.unit) ? String(value.unit).trim() : '';
-  const measurement = [amount, unit].filter(Boolean).join(' ');
-  if (name || measurement) return [name, measurement].filter(Boolean).join(' ');
-  return JSON.stringify(value);
-};
-
-const projectedMutations = (row) => {
+const buildV3LeadEffect = (row) => {
+  const context = row.qualification_context ?? {};
   const mutations = Array.isArray(row.v3_decision?.state_mutations)
     ? row.v3_decision.state_mutations
     : [];
-  const byField = {};
-  for (const mutation of mutations) {
-    if (!mutation || typeof mutation.field !== 'string') continue;
-    const value = mutation.projected_value;
-    if (!hasValue(value)) continue;
-    byField[mutation.field] = value;
-  }
-  return byField;
-};
-
-const buildV3LeadEffect = (row) => {
-  const projected = projectedMutations(row);
-  const context = row.qualification_context ?? {};
-  const facts = { ...context, ...projected };
+  // reduce(context, decision.state_mutations): mirrors apply_v3_state_mutations
+  // (SQL), so the facts this effect reads are the same facts the commit step
+  // will persist. readLineItems then recovers the item list (dual-read: a
+  // historical flat row becomes a single implicit item) for the composer.
+  const reduced = resolvedReduceV3StateMutations(context, mutations);
+  const items = resolvedReadLineItems(reduced);
   // A requirement has to name what is being asked for. Quantity or measures
   // alone are not "suficientemente concreto", and must not overwrite a complete
   // requirement an earlier turn already committed.
-  const requirement = facts.product
-    ? REQUIREMENT_FIELDS.map((field) => formatRequirementValue(facts[field])).filter(Boolean).join(' ')
-    : '';
-  const legacyService = ['installation', 'both'].includes(facts.service_scope)
-    ? SERVICE_SCOPE_SERVICE[facts.service_scope]
-    : FULFILLMENT_SERVICE[facts.fulfillment]
-      ?? SERVICE_SCOPE_SERVICE[facts.service_scope]
-      ?? MODALITY_SERVICE[facts.modality]
-      ?? facts.service
+  const requirement = resolvedComposeRequirement(items, reduced);
+  const legacyService = ['installation', 'both'].includes(reduced.service_scope)
+    ? SERVICE_SCOPE_SERVICE[reduced.service_scope]
+    : FULFILLMENT_SERVICE[reduced.fulfillment]
+      ?? SERVICE_SCOPE_SERVICE[reduced.service_scope]
+      ?? MODALITY_SERVICE[reduced.modality]
+      ?? reduced.service
       ?? null;
   return ({
   ...row,
@@ -85,12 +84,12 @@ const buildV3LeadEffect = (row) => {
   external_contact_id: row.external_contact_id ?? null,
   whatsapp_name: row.whatsapp_name ?? null,
   service: legacyService,
-  city: facts.commune ?? facts.city ?? null,
+  city: reduced.commune ?? reduced.city ?? null,
   requirement: requirement || context.requirement || null,
   is_partial: false,
   conversation_id: row.conversation_id,
-  qualification_context: facts,
-  qualification_context_json: JSON.stringify(facts),
+  qualification_context: reduced,
+  qualification_context_json: JSON.stringify(reduced),
   commercial_missing_fields: [],
   });
 };

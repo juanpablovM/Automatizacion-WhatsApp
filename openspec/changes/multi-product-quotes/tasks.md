@@ -147,17 +147,17 @@ Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`
 
 Proves: *Itemized Lead, Task, and Notification Effects* — "One quote, one lead, itemized everywhere".
 
-- [ ] 3.1 RED `build-v3-lead-effect.test.js`: `reduce(context, decision.state_mutations)` produces the single-item requirement byte-identical to today
-- [ ] 3.2 GREEN wire `composeRequirement` and `reduceV3StateMutations` into `wa-conversation-orchestrator/build-v3-lead-effect.js`
-- [ ] 3.3 RED: multi-item requirement renders `• {product} — {quantity}[, {measurements}]` lines joined by `\n`, plus `Uso: …` when present
-- [ ] 3.4 GREEN implement the multi-item branch consumption
-- [ ] 3.5 RED `build-clickup-payload.test.js`: extracted fixture's single-item output is byte-identical to the current inline node
-- [ ] 3.6 GREEN create `crm-clickup-sync-lead/build-clickup-payload.js` by extracting the inline node, preserving behavior
-- [ ] 3.7 RED: `build-clickup-payload.js` skips the flat `Cantidad` and `Medidas` labels when `line_items` has more than one item
-- [ ] 3.8 GREEN implement the skip logic
-- [ ] 3.9 Register the `Build ClickUp Payload` fixture in `tests/scripts/sync-workflow-nodes.mjs`; regenerate workflow JSON
-- [ ] 3.10 RED: seller-notification template shows one line per item (via `leads.requirement` verbatim)
-- [ ] 3.11 GREEN confirm/wire
+- [x] 3.1 RED `build-v3-lead-effect.test.js`: `reduce(context, decision.state_mutations)` produces the single-item requirement byte-identical to today
+- [x] 3.2 GREEN wire `composeRequirement` and `reduceV3StateMutations` into `wa-conversation-orchestrator/build-v3-lead-effect.js`
+- [x] 3.3 RED: multi-item requirement renders `• {product} — {quantity}[, {measurements}]` lines joined by `\n`, plus `Uso: …` when present
+- [x] 3.4 GREEN implement the multi-item branch consumption
+- [x] 3.5 RED `build-clickup-payload.test.js`: extracted fixture's single-item output is byte-identical to the current inline node
+- [x] 3.6 GREEN create `crm-clickup-sync-lead/build-clickup-payload.js` by extracting the inline node, preserving behavior
+- [x] 3.7 RED: `build-clickup-payload.js` skips the flat `Cantidad` and `Medidas` labels when `line_items` has more than one item
+- [x] 3.8 GREEN implement the skip logic
+- [x] 3.9 Register the `Build ClickUp Payload` fixture in `tests/scripts/sync-workflow-nodes.mjs`; regenerate workflow JSON
+- [x] 3.10 RED: seller-notification template shows one line per item (via `leads.requirement` verbatim)
+- [x] 3.11 GREEN confirm/wire
 - [ ] 3.12 Create `tests/ops/v3-line-items-live-replay.mjs`: opt-in A/B harness (`AI_REPLAY_LIVE=1 AI_REPLAY_RUNS=10`) comparing baseline (main path) vs branch (v3.1) over scripted transcripts including the 2026-09-26 message, a confirmation turn, and correction turns; property assertions only — validation pass rate, contingency count, measurement-to-item attribution, correction scoping, one `•` line per item in `final_confirmation`
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`; Postgres integration compose sequence.

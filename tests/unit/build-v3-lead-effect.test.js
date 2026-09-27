@@ -30,9 +30,10 @@ const decision = (mutations) => ({
   state_mutations: mutations,
 });
 
-const mutation = (field, projected_value) => ({
+const mutation = (field, projected_value, item_id = null) => ({
   operation: 'set',
   field,
+  item_id,
   observation_id: `obs-${field}`,
   replaces_fact_id: null,
   projected_value,
@@ -195,5 +196,62 @@ describe('Build V3 Lead Effect — the v3 decision reaches the lead contract', (
     expect(lead.city).toBe('Santiago');
     expect(lead.service).toBeNull();
     expect(lead.requirement).toBeNull();
+  });
+});
+
+describe('Build V3 Lead Effect — item-aware reducer wiring (design.md D9)', () => {
+  test('reads a persisted line_items array through the shared dual-read reducer (no flat mirror set)', () => {
+    // Today's naive `{...context, ...projectedMutations}` merge cannot see
+    // into `qualification_context.line_items`: it only ever reads flat
+    // top-level fields. Once `reduce(context, decision.state_mutations)`
+    // (shared/v3-line-items.js) is wired in, the primary item's facts are
+    // recovered through the dual-read adapter even when nothing this turn
+    // restates them as flat fields or as mutations.
+    const lead = buildV3LeadEffect(authorizedTurn({
+      qualification_context: {
+        commune: 'Santiago',
+        // D2: the flat mirror stays in sync with the primary item on every
+        // committed write, so a real persisted row always carries both.
+        product: 'Baldosas',
+        quantity: '10 m2',
+        measurements: null,
+        line_items: [{
+          item_id: 'li_a', product: 'Baldosas', quantity: '10 m2', measurements: null,
+          catalog_ref: null, requested_label: null,
+        }],
+        line_items_projection: { product: 'Baldosas', quantity: '10 m2', measurements: null },
+        line_items_schema: 'line_items/v1',
+      },
+      v3_decision: decision([]),
+    }));
+
+    expect(lead.requirement).toBe('Baldosas 10 m2');
+    expect(lead.city).toBe('Santiago');
+    expect(lead.qualification_context.line_items).toHaveLength(1);
+  });
+
+  test('renders one bullet line per item, with measurements only for the item that has them, plus one quote-level Uso line', () => {
+    const lead = buildV3LeadEffect(authorizedTurn({
+      qualification_context: {},
+      v3_decision: decision([
+        mutation('product', 'Cierro de Hormigón', 'li_a'),
+        mutation('quantity', '5 m2', 'li_a'),
+        mutation('measurements', '3 metros de altura', 'li_a'),
+        mutation('product', 'Alambre de Púas', 'li_b'),
+        mutation('quantity', '200 ml', 'li_b'),
+        mutation('use_case', 'Cierre perimetral'),
+        mutation('commune', 'Lo Prado'),
+      ]),
+    }));
+
+    expect(lead.requirement).toBe(
+      '• Cierro de Hormigón — 5 m2, 3 metros de altura\n• Alambre de Púas — 200 ml\nUso: Cierre perimetral',
+    );
+    expect(lead.city).toBe('Lo Prado');
+    expect(lead.qualification_context.line_items).toHaveLength(2);
+    expect(lead.qualification_context.line_items.map((item) => item.product)).toEqual([
+      'Cierro de Hormigón',
+      'Alambre de Púas',
+    ]);
   });
 });
