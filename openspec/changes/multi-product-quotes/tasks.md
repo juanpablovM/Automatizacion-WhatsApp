@@ -182,7 +182,7 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [x] 3c.7 RED then GREEN: a deterministic v3.1 validator rule rejects a proposal where one evidence span (the same `evidence_quote` and `evidence_occurrence`) resolves the same item concept on two different items. The error is repairable, and its code joins the v3.1-only allowlist rationale in the static coverage test if needed.
 - [x] 3c.8 RED then GREEN: v3.1 prompt rules (v3.1-only, the prompt-diff allowlist updated): never copy or move a quantity or measurement from one item to another; one mentioned product is one item, never split into two; a correction applies to the item whose product or label the customer names in that message, and a correction that names no item asks which item.
 - [x] 3c.9 Keep every guarantee green: D11 static coverage and differentials, the prompt-diff test, the v3 request byte-identical, and the live-evidence and consistency tests.
-- [ ] 3c.10 Rerun the live A/B (N=10, production catalog). Gate for canary: first-turn validity at least v3; first-turn item attribution correct in at least 19 of 20 runs; every valid correction scoped to the named item.
+- [x] 3c.10 (ran 2026-09-27, gate passed: first-turn validity 20/20, equal to v3; first-turn attribution 20/20; valid corrections 10/10, all scoped to the wire item; v3.1 total 40/40 with 0 contingencies against v3 33/40) Rerun the live A/B (N=10, production catalog). Gate for canary: first-turn validity at least v3; first-turn item attribution correct in at least 19 of 20 runs; every valid correction scoped to the named item.
 
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 
