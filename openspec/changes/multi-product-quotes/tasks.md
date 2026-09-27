@@ -162,6 +162,17 @@ Proves: *Itemized Lead, Task, and Notification Effects* — "One quote, one lead
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`; Postgres integration compose sequence.
 
+## Slice 3c — v3.1 contract alignment, from live evidence (branch `feat/multi-product-quotes-alignment`, base `feat/multi-product-quotes-output`)
+
+Rollout step 3 (live A/B, N=10, production catalog) blocked the canary: v3.1 first-turn proposals were valid only 2/20 times against 20/20 for v3. Captured real proposals show the model is semantically right (wire and pandereta as separate items, 500 ml and 3 m on the pandereta, commune at quote level, a clarification question), and the v3.1 validator rejects them. Slices 2a and 2b were built against mocks and disagree. Evidence: `tests/fixtures/v3-line-items/captured-live-proposals.json` (15 real proposals with their turn policies and validation errors).
+
+- [x] 3c.1 RED: a live-evidence test feeds every captured proposal through the real v3.1 validator with its captured turn policy. Every semantically correct proposal must validate, or fail only on the documented clarification rule. The wire correction must stay scoped to the wire item. It must fail on the current code with `goal_reference_unknown` and `mutation_shape_invalid`.
+- [x] 3c.2 GREEN: make the v3.1 goals, allowed mutations and item mutation shape one contract shared by the policy builder, the validator and the response schema. Resolve `goal_reference_unknown` (per-item product, quantity and measurements goals, or goal references the validator maps to `line_items`) and `mutation_shape_invalid` for item mutations.
+- [x] 3c.3 RED then GREEN: resolve `catalog_resolution_product_observation_required` for an ambiguous item with no product observation, consistent with D5 (withholding, not rejecting), and make the ambiguous-item clarification select `primary_request` product rather than an unrelated goal.
+- [x] 3c.4 Add a contract-consistency test: the v3.1 response schema, the policy builder output and the validator accept the same goal ids and mutation shapes, so the three cannot drift again.
+- [x] 3c.5 Keep every D11 guarantee green: static error-code coverage, behavioral and authorizer differentials, the prompt-diff test, v3 byte-identity, and all existing suites.
+- [ ] 3c.6 Rerun the live A/B (N=10, production catalog). Gate for canary: v3.1 first-turn validity is at least v3 first-turn validity, and every valid correction is scoped to the named item.
+
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 
 - [ ] 4.1 Apply migration 025 (safe superset while v3 decisions are in flight); deploy the four slices' workflows via `scripts/dev/sync-n8n-workflows.sh`; keep `AI_PRD_V3_LINE_ITEMS=disabled`
