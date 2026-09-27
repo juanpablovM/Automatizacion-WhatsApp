@@ -1,8 +1,8 @@
 # Apply Progress: Multi-Product Quotes
 
-**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), AND Slice 2b — Advisor, dark (tasks 2b.1–2b.15). Slices 3/4 not started.
+**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), Slice 2b — Advisor, dark (tasks 2b.1–2b.15), AND Slice 3 — Output (tasks 3.1–3.12). Slice 4 (rollout) not started — no code changes, no switch flipped.
 **Mode**: Strict TDD.
-**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`).
+**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`); `feat/multi-product-quotes-output` (Slice 3, base `feat/multi-product-quotes-advisor`).
 
 ## Status
 
@@ -10,6 +10,7 @@
 - 27/27 Slice 2a tasks complete (2a.1–2a.27). All marked `[x]` in `tasks.md`.
 - 5/5 Slice 2a rework tasks complete (2a.28–2a.32, design.md D11). All marked `[x]` in `tasks.md`. See "Slice 2a rework (D11)" section below.
 - 15/15 Slice 2b tasks complete (2b.1–2b.15). All marked `[x]` in `tasks.md`. See "Slice 2b — Advisor, dark" section below.
+- 12/12 Slice 3 tasks complete (3.1–3.12). All marked `[x]` in `tasks.md`. See "Slice 3 — Output" section below.
 
 ---
 
@@ -416,3 +417,81 @@ None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` defaults to `disabled` i
   2. `e028464` `feat(v3): add the AI_PRD_V3_LINE_ITEMS rollout switch, dark` — 138 authored additions + 1 authored deletion (139/2 raw, minus 1/1 generated workflow JSON) = **139 authored changed lines**
 - **Review budget: within forecast.** Design.md forecast ~420 lines for Slice 2b; actual authored total is 448 + 139 = **587 lines** across 2 commits, each individually well under the 800-line cap. No `size:exception` needed.
 - **Review budget: EXCEEDED for 2a-ii.** 2a-i (506 lines) is comfortably under the 800-line budget. 2a-ii (2051 lines) is over, by design — task 2a.32 explicitly directs "do not try to force 2a-ii under 800 by separating tests from code; just report its size," and the orchestrator's own follow-up added more to the same indivisible unit (the structural coverage test proves the composition the behavioral test and the authorizer fix both depend on; splitting any of the three apart would let a broken composition merge with green CI on the split-off piece). **Decision needed before PR2a (rewritten) opens**: accept `size:exception` for 2a-ii, or split PR2a into PR2a-i (`26c114e`, 506 lines) → PR2a-ii (`2372b5e`, 2051 lines, base = PR2a-i's branch) and ask the maintainer to review 2a-ii as a single indivisible unit despite the size.
+
+---
+
+## Slice 3 — Output
+
+**Scope**: tasks 3.1–3.12 only. Branch `feat/multi-product-quotes-output`, base `feat/multi-product-quotes-advisor`.
+
+### Owner hard requirement — proof
+
+Before any production change, three golden/approval baselines were captured or reused, all still green after the slice:
+
+1. **`build-v3-lead-effect.test.js`** (pre-existing, 8 assertions with hardcoded exact strings) — run as the Safety Net immediately before editing `build-v3-lead-effect.js`; all 8 still pass unmodified after wiring `composeRequirement`/`reduceV3StateMutations` in. Hand-verified algebraically for every pre-existing test case (documented in the RED/GREEN evidence below) that the new item-aware path always reduces to the exact same flat computation for a single item.
+2. **`tests/fixtures/golden/build-clickup-payload-inline-v1.js`** — a byte-for-byte capture of the CURRENT inline `Build ClickUp Payload` node's `jsCode`, taken via `node -e "...JSON.parse(...).parameters.jsCode..."` straight from `n8n/workflows/crm-clickup-sync-lead.json` before any extraction (sha256 `827edbf0...`, 6525 bytes). `tests/unit/build-clickup-payload.test.js` runs this exact golden source AND the newly extracted fixture through the identical `new Function('items', '$env', source)` harness on the same representative single-item inputs and asserts the two outputs are `toEqual` — proving the extraction is behavior-preserving by direct comparison, not by re-typing expected values by hand.
+3. **Seller notification** — confirmed unchanged (D9: "the seller notification renders `leads.requirement` verbatim"); no production edit was needed or made.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3.1–3.2 wire the reducer into `build-v3-lead-effect.js` | `tests/unit/build-v3-lead-effect.test.js` | Unit | ✅ 9/9 pre-existing exact-string assertions green before the edit | ✅ 2 new tests written first, confirmed RED (dual-read case: `null` instead of `'Baldosas 10 m2'`; multi-item case: flat single string instead of bullets) against the unmodified fixture | ✅ 11/11 passed after wiring `reduceV3StateMutations`/`readLineItems`/`composeRequirement` in | ✅ dual-read-only case (no decision mutations) + multi-item case (2 items, quote-level `use_case`) | ✅ removed the now-redundant local `formatRequirementValue`/`REQUIREMENT_FIELDS`/`hasValue`, replaced by the shared runtime's byte-identical equivalents |
+| 3.1–3.2 raw-fixture harness update | `tests/unit/v3-effect-execution-wrapper.test.js` | Unit | — | N/A (pre-existing test broke because the fixture legitimately now depends on `shared/v3-line-items.js` being concatenated, exactly like `v3-policy-builder.js` already does) | ✅ updated `runFixture` to compose declared `runtimes` ahead of the fixture source, mirroring `sync-workflow-nodes.mjs`'s own composition; 4/4 passed | ➖ N/A | ➖ None needed |
+| 3.3–3.4 multi-item bullet rendering | same file | Unit | (covered above) | (covered above) | (covered above) | (covered above) | (covered above) |
+| 3.5–3.6 extract `Build ClickUp Payload` | `tests/unit/build-clickup-payload.test.js` | Unit | N/A (new fixture) | ✅ written first, confirmed RED: `ENOENT` (fixture file did not exist yet) | ✅ created the fixture as a byte-for-byte copy of the golden capture; 2/2 passed | ✅ 2 cases (plain single item; single item with `measurements` present) | ➖ None needed (extraction only) |
+| 3.7–3.8 skip flat `Cantidad`/`Medidas` for multi-item | same file | Unit | ✅ 2/2 extraction tests green before this edit | ✅ written first, confirmed RED (description contained `Cantidad:`/`Medidas:` when it should not) | ✅ 4/4 passed after adding the `line_items.length > 1` skip guard | ✅ 2 cases (multi-item skips; exactly-one-item still shows both) | ➖ None needed |
+| 3.9 register + regenerate | `tests/scripts/sync-workflow-nodes.mjs`, `n8n/workflows/crm-clickup-sync-lead.json` | N/A (structural) | ✅ `check:parity` green before the edit | ➖ Skipped: config array entry, no branching | ✅ `check:parity`/`check:sql-references` green after registering the fixture and running `node tests/scripts/sync-workflow-nodes.mjs` | ➖ N/A | ➖ N/A |
+| 3.10–3.11 seller notification confirmation | `tests/unit/crm-seller-notification-dispatch.test.js` | Unit (confirmatory) | N/A (no production change) | N/A — this is a confirmation that existing behavior already satisfies D9, per the same pattern as prior slices' "confirm/wire" tasks (1.22, 2b.15) | ✅ 2/2 passed against the unmodified inline node, read straight from the deployed workflow JSON | ✅ 2 cases (multi-item itemized requirement; plain single-item requirement) | ➖ N/A — no production code touched |
+| 3.12 opt-in A/B live-replay harness | `tests/unit/v3-line-items-live-replay.test.js` | Unit | N/A (new file) | ✅ every exported pure function written test-first against the not-yet-existing harness module (import error until the file existed) | ✅ 22/22 passed | ✅ multiple cases per property function (see Test Summary) | ✅ `runTurn`'s `reduce(...)`-on-`decision-or-unchanged` path kept minimal; property functions stayed pure with no hidden state |
+
+### Test Summary
+
+- **Total tests written this slice**: 2 (`build-v3-lead-effect.test.js` new describe block) + 2 (`build-clickup-payload.test.js` extraction) + 2 (`build-clickup-payload.test.js` skip-logic) + 2 (`crm-seller-notification-dispatch.test.js`) + 22 (`v3-line-items-live-replay.test.js`) = **30 new tests**, plus 1 pre-existing test file (`v3-effect-execution-wrapper.test.js`) updated to compose the fixture's now-real runtime dependency (not a behavior change — a harness fix).
+- **Total tests passing**: 900/900 non-skipped in the full unit suite (up from 870 at the start of this slice), 154/154 Postgres integration tests, 0 regressions.
+- **Layers used**: Unit (30 new + 1 updated harness). No new SQL/DB-bound behavior this slice (no `.sql` files touched), so the Postgres integration suite was run once at the end as a regression check per the Verification line, not because any task in 3.1–3.12 changes SQL.
+- **Approval tests**: the 9 pre-existing `build-v3-lead-effect.test.js` assertions (unmodified) plus the golden ClickUp capture (`tests/fixtures/golden/build-clickup-payload-inline-v1.js`), both proving byte-identical single-item behavior across the refactor/extraction.
+- **Pure functions created**: none new in production `shared/*.js` (this slice only *consumes* Slice 1/2a/2b's `reduceV3StateMutations`/`readLineItems`/`composeRequirement`); the live-replay harness (`tests/ops/v3-line-items-live-replay.mjs`) exports 11 pure/DI functions: `buildScriptedTranscripts`, `buildTurnPolicy`, `buildAiRequestForTurn`, `extractProposal`, `runTurn`, `runTranscript`, `aggregateRuns`, `checkItemizedFinalConfirmation`, `checkCorrectionScoping`, `checkMeasurementAttribution`, `replay` — every one of them either pure or with its only side-effecting dependency (`callModel`) injected.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/unit/build-v3-lead-effect.test.js tests/unit/v3-effect-execution-wrapper.test.js tests/unit/build-clickup-payload.test.js tests/unit/crm-seller-notification-dispatch.test.js tests/unit/v3-line-items-live-replay.test.js --globals` → **41/41 passed** (11 + 4 + 4 + 2 + 22 — includes the 2 confirmatory seller-notification tests and 4 raw-fixture wrapper tests) |
+| Runtime harness command/scenario and exact result | `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `docker compose -f docker-compose.test.yml down -v` → **17 files, 154/154 passed** (no `.sql` file changed this slice; run as a full regression check). The live-replay harness's OWN runtime boundary (`AI_REPLAY_LIVE=1 AI_REPLAY_RUNS=10 node tests/ops/v3-line-items-live-replay.mjs`, meant to run inside the n8n container) was explicitly NOT executed, per the orchestrator's instruction; verified instead by running the CLI locally with `AI_REPLAY_LIVE` unset (prints the opt-in message, exit 0, no network) and with `AI_REPLAY_LIVE=1` and no `OPENAI_API_KEY` (fails closed with exit 1, still no network, never touches `.env`). |
+| Rollback boundary | Revert any of the 4 commits on `feat/multi-product-quotes-output` independently: `a1e4729` (lead-effect wiring), `3a5d9b5` (ClickUp extraction), `e67e634` (seller-notification test only, no production code), `efdd6ca` (live-replay harness, dark/opt-in, zero runtime exposure — `AI_REPLAY_LIVE` does not exist anywhere in production config). Single-item requirement, ClickUp payload and seller text stay byte-identical to `main` throughout (see the golden/approval proofs above). |
+
+### Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **71 files passed, 17 skipped; 900 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` (including the 2 regenerated this slice: `Build V3 Lead Effect`, `Build ClickUp Payload`).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings (no `.sql` file touched this slice).
+- `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `down -v`: **17 files passed, 154/154 tests passed**, including migration 025 applying cleanly again (superset, unchanged since Slice 1).
+
+### Regression Safety Net
+
+- `build-v3-lead-effect.test.js`'s 9 pre-existing exact-string assertions run and confirmed green immediately before editing production code, then again immediately after — 0 regressions, and every one of them hand-verified algebraically (traced through `reduceV3StateMutations`/`readLineItems`/`composeRequirement` by hand for each input) to confirm the new item-aware path reduces to the exact same output for every single-item case, not just empirically observed to still pass.
+- `v3-effect-execution-wrapper.test.js`'s other 3 pre-existing tests (unrelated fixtures) stayed green throughout; only the 1 test exercising `build-v3-lead-effect.js` needed its harness updated (see Deviations).
+- Full 900-test unit suite and 154-test Postgres suite re-run clean at the end of the slice.
+
+### Deviations from Design
+
+1. **`tests/unit/v3-effect-execution-wrapper.test.js` needed a harness fix, not a design deviation**: this pre-existing test runs `build-v3-lead-effect.js` as a raw, unconcatenated fixture (`new Function('items', source)`, no runtimes). Once the fixture legitimately depends on `shared/v3-line-items.js` being concatenated ahead of it (exactly as `shared/v3-policy-builder.js` already documents and relies on for `readLineItems`), that harness needed the same runtime-composition fix `v3-policy-builder.js`'s own comment already describes. This is a test-harness correction, not a behavior change — production nodes get the runtime concatenated for real by `sync-workflow-nodes.mjs` (already declared for this node in the `NODES` array since Slice 1).
+2. **ClickUp payload extraction kept the raw n8n Code node body shape (no `module.exports`, no wrapper)**, matching `crm-lead-creation-and-assignment/prepare-lead-assignment.js`'s established pattern for a `runOnceForAllItems` node with no other need for a `require`-able export — tested via the same `new Function('items', '$env', source)` technique already used for that fixture and for `build-ai-request.js`.
+3. **The live-replay harness's live path (task 3.12) was never executed**, exactly as instructed. Its request-building/validation/authorization wiring is provably correct in shape (real `compileV3TurnPolicy`/`buildV3PolicyInput`, real `Build AI Request`/`Normalize AI Result` node code, real `validateV3AiProposal`/`authorizeV3ConversationDecision` dispatcher) but the model's actual reasoning quality against the live 2026-09-26 message is untested by this slice — that is explicitly Slice 4's job (tasks 4.2/4.5), and out of scope here.
+4. **Property-check unit tests use hand-fabricated `turnResult`-shaped fixtures for `checkItemizedFinalConfirmation`/`checkCorrectionScoping`/`checkMeasurementAttribution`**, rather than only exercising them through the full mocked-model pipeline. This is deliberate: forcing the full real validator/authorizer through non-trivial item-scoped scenarios (multiple catalog-grounded observations, evidence digests, etc.) would either re-test Slice 2a's own already-exhaustive validator suite or require a second hand-rolled "fake validator," neither of which is this file's job. The full pipeline IS exercised end-to-end (`runTurn`/`runTranscript`/`replay` tests) with a trivially-valid empty proposal, proving the wiring; the property functions are independently proven correct on their own inputs.
+
+### Issues Found
+
+None. All hard constraints held: every pre-existing single-item assertion in `build-v3-lead-effect.test.js` passed unmodified; the ClickUp golden capture and the extracted fixture produce `toEqual` output for the same inputs; the seller notification needed no code change; `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled`; the live-replay harness never executes live logic unless `AI_REPLAY_LIVE=1`, and even then fails closed without `OPENAI_API_KEY` rather than falling back to reading `.env`; `.env` itself and the live n8n runtime were never touched.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), PR3 = Slice 3 Output, base = `feat/multi-product-quotes-advisor`.
+- Current work unit: Slice 3 — Output, complete (12/12 tasks, 3.1–3.12).
+- Boundary: 4 commits on `feat/multi-product-quotes-output`, each individually well under the 800-line budget:
+  1. `a1e4729` `feat(v3): itemize the lead requirement through the shared reducer` — 118 insertions + 51 deletions total (1/1 generated workflow JSON) = **167 authored changed lines**
+  2. `3a5d9b5` `feat(v3): extract Build ClickUp Payload into a testable fixture` — 472 insertions + 10 deletions total (1/1 generated workflow JSON, 9/9 of which is `tasks.md`) = **480 authored changed lines** (163 of which is the golden capture and 171 the extracted fixture — almost entirely mechanical copy, not hand-authored logic; the actual new behavior, the skip-guard, is ~8 lines)
+  3. `e67e634` `test(v3): confirm the seller notification renders leads.requirement itemized` — 63 insertions + 2 deletions total, **65 authored changed lines**, zero production code
+  4. `efdd6ca` `test(v3): add the opt-in v3/v3.1 live-replay A/B harness` — 664 insertions + 1 deletion total, **665 authored changed lines**
+- **Review budget: EXCEEDED for the slice total.** Design.md forecast ~700 lines for Slice 3; actual authored total is 167 + 480 + 65 + 665 = **1377 authored changed lines**, against the 800-line PR budget — same pattern as Slices 1 and 2a: each commit is individually reviewable and under budget, but PR3 as a whole (if delivered as one PR against `feat/multi-product-quotes-advisor`) exceeds it. Unlike Slice 2a's validator, these 4 commits have NO shared internal state forcing them together — they are already 4 independent, cleanly separable functional units on 4 non-overlapping files (lead-effect wiring; ClickUp extraction; a test-only confirmation; a new opt-in ops script). **Decision needed before PR3 opens**: accept `size:exception` for PR3 as a whole, or split PR3 into 4 child PRs against `feat/multi-product-quotes-output` at the exact commit boundaries above (PR3a=167, PR3b=480, PR3c=65, PR3d=665 lines) — each already independently green and independently revertible.
