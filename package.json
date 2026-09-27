@@ -18,6 +18,7 @@
     "test:v3": "npm run test:e2e:v3-canary"
   },
   "devDependencies": {
+    "acorn": "^8.18.0",
     "fast-check": "4.9.0",
     "pg": "8.16.3",
     "vitest": "3.2.7"
