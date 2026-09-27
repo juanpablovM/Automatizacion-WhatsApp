@@ -754,3 +754,11 @@ The first D12 guard mixed `material` into a `fulfillment` error's `allowed_value
 | Rollback boundary | Revert the narrowed repair value and persisted-clarification exception, their tests/docs, and regenerated workflow JSON without reverting the original D12 guard. No runtime deploy or migration occurred. |
 
 Verification for this documentation unit: compared the task wording with the recorded conversation/lead/ClickUp audit outcomes; `git diff --check` passed. Runtime harness: N/A — this unit only records existing live evidence. Rollback boundary: revert this task-status/evidence documentation commit; no implementation or runtime state is changed.
+
+## Controlled canary: installation requires delivery (2026-09-27)
+
+Guarded workflow sync for `85542d3` and `ab6dbfa` exited 0 with acceptance and replay checks. The durable pre-deploy snapshot is `backups/n8n-pre-installation-delivery-20260927T225650Z` (19 workflow JSON files). Runtime remained in `canary` for the controlled phone; no reset, migration, global enablement, or push occurred.
+
+The single negative inbound `negative-install-pickup-20260927T2305Z` created conversation 332 / turn 406. The bot stated that installation cannot be combined with factory pickup and requires delivery. Its v3.1 decision authorized no pickup fulfillment or effect command; validation errors were empty, the turn was delivered with `last_error=null`, and the conversation created no lead or ClickUp task. Guarded acceptance used a separate conversation 331.
+
+Pre-deploy focused tests passed 44/44; parity, SQL references, preflight, runtime marker, and canonical webhook checks passed. This one negative canary scenario does not satisfy task 4.2's N≥10 live A/B gate.

@@ -200,6 +200,7 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [x] 4.3 Check whether `CLICKUP_CF_REQUIREMENT_ID` accepts newlines; if not, join requirement lines with ` | ` in `build-clickup-payload.js` and re-run 3.5–3.9
 - [ ] 4.4 Set `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; recreate n8n (`docker compose up -d n8n`)
 - [x] 4.5 Run the canary E2E on `56997093038`: replay the incident message through confirmation; assert one lead + one ClickUp task listing Cierros de Hormigón and the wire item with their own measurements, no flat `Cantidad` and `Medidas` lines, and empty `last_error` and `validation_errors`
+- [x] 4.5a Deploy the installation-delivery guard to the controlled canary and verify a factory-pickup plus installation request is declined without a lead or ClickUp effect (conversation 332; see `apply-progress.md`)
 
 - [ ] 4.6 Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
 - [ ] 4.7 Monitor `conversation_turn_executions.last_error` and `advisor_decisions.validation_errors` for multi-product rejections; merge tracker → main once stable
