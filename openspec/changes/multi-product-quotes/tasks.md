@@ -123,23 +123,25 @@ The first implementation wrote the v3.1 validator from scratch and dropped six v
 
 Proves: schema/prompt half of *Safe Versioned Rollout* — "Shape change is versioned"; enables the live-scenario end to end once wired with 2a/3.
 
-- [ ] 2b.1 RED `build-ai-request.test.js`: v3.1 schema pins `item_ref` enums and `policy_digest` (same pattern as v3)
-- [ ] 2b.2 GREEN implement v3.1 schema
-- [ ] 2b.3 RED: v3 prompt stays byte-identical, including rule `build-ai-request.js:436` verbatim
-- [ ] 2b.4 GREEN guard/refactor so v3 prompt is untouched
-- [ ] 2b.5 RED: v3.1 prompt replaces rule 436's "no product for either item" clause with item-scoped clarification; rules 398–409, 425, 435 and the `policy_digest` enum stay unchanged in both variants
-- [ ] 2b.6 GREEN implement v3.1 prompt variant
-- [ ] 2b.7 RED: v3.1 prompt adds a `final_confirmation` rule — one `•` line per item (quantity+measurements), then one line per quote-level fact
-- [ ] 2b.8 GREEN implement the summary rule
-- [ ] 2b.9 RED `compile-v3-turn.test.js`: `disabled` compiles v3 for every phone
-- [ ] 2b.10 GREEN implement disabled path
-- [ ] 2b.11 RED: `canary` compiles v3.1 only when the phone's digits appear in `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES` (mirrors `resolve-conversation-contract-route.js:13-23`), else v3
-- [ ] 2b.12 GREEN implement canary path
-- [ ] 2b.13 RED: `enabled` compiles v3.1 for every phone
-- [ ] 2b.14 GREEN implement enabled path
-- [ ] 2b.15 Update `docker-compose.yml` and `.env.example` to pass through `AI_PRD_V3_LINE_ITEMS` (default `disabled`) and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES`
+- [x] 2b.1 RED `build-ai-request.test.js`: v3.1 schema pins `item_ref` enums and `policy_digest` (same pattern as v3)
+- [x] 2b.2 GREEN implement v3.1 schema
+- [x] 2b.3 RED: v3 prompt stays byte-identical, including rule `build-ai-request.js:436` verbatim
+- [x] 2b.4 GREEN guard/refactor so v3 prompt is untouched
+- [x] 2b.5 RED: v3.1 prompt replaces rule 436's "no product for either item" clause with item-scoped clarification; rules 398–409, 425, 435 and the `policy_digest` enum stay unchanged in both variants
+- [x] 2b.6 GREEN implement v3.1 prompt variant
+- [x] 2b.7 RED: v3.1 prompt adds a `final_confirmation` rule — one `•` line per item (quantity+measurements), then one line per quote-level fact
+- [x] 2b.8 GREEN implement the summary rule
+- [x] 2b.9 RED `compile-v3-turn.test.js`: `disabled` compiles v3 for every phone
+- [x] 2b.10 GREEN implement disabled path
+- [x] 2b.11 RED: `canary` compiles v3.1 only when the phone's digits appear in `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES` (mirrors `resolve-conversation-contract-route.js:13-23`), else v3
+- [x] 2b.12 GREEN implement canary path
+- [x] 2b.13 RED: `enabled` compiles v3.1 for every phone
+- [x] 2b.14 GREEN implement enabled path
+- [x] 2b.15 Update `docker-compose.yml` and `.env.example` to pass through `AI_PRD_V3_LINE_ITEMS` (default `disabled`) and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES`
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`.
+
+**Apply note (2026-09-27):** all 15 tasks complete, full verification green (see apply-progress.md). Two functional commits on `feat/multi-product-quotes-advisor` (base `feat/multi-product-quotes-contract`): schema+prompt (441/9, `ee3bcef`) and the switch+compose passthrough (139/2, `e028464`), both comfortably under the 800-line review budget. The v3.1 prompt is derived programmatically from the v3 prompt array (never retyped); a differential test plus a manual drift-injection proof (documented in apply-progress.md) confirm it only ever removes the one D5-allowlisted clause.
 
 ## Slice 3 — Output (branch `feat/multi-product-quotes-output`, base `feat/multi-product-quotes-advisor`)
 

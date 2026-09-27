@@ -97,7 +97,14 @@ const directApiKey = usesOpenAi ? safe($env.OPENAI_API_KEY) : safe($env.AI_DIREC
 const timeoutMs = Number($env.AI_DIRECT_API_TIMEOUT_MS || 120000);
 const turnPolicy = parseJsonObject(pickMerged(row.turn_policy, row.turn_policy_1));
 const requestedContractVersion = safe(pickMerged(row.contract_version, row.contract_version_1)).toLowerCase();
-const usesV3Contract = requestedContractVersion === 'v3' || turnPolicy.version === 'ai_prd_turn_policy/v3';
+// Slice 2b (design.md D6), dark: the route's contract_version stays 'v3' for
+// both sub-versions (D6) — only turn_policy.version tells v3 apart from v3.1.
+// Nothing in production requests 'ai_prd_turn_policy/v3.1' until
+// compile-v3-turn.js's switch (this same slice) is set to canary or enabled.
+const usesV3Contract = requestedContractVersion === 'v3'
+  || turnPolicy.version === 'ai_prd_turn_policy/v3'
+  || turnPolicy.version === 'ai_prd_turn_policy/v3.1';
+const usesV31Contract = turnPolicy.version === 'ai_prd_turn_policy/v3.1';
 
 if (usesV3Contract) {
   const normalizedValueSchema = {
@@ -347,6 +354,178 @@ if (usesV3Contract) {
       effect_requests: effectRequestsSchema,
     },
   };
+  // ---------------------------------------------------------------------
+  // v3.1 (design.md D5/D6/D11 Interfaces, Slice 2b), dark: the same digest
+  // pin the v3 schema already uses, extended to item_ref. An item_ref is
+  // either one of this turn's existing item ids (from policy.facts, known
+  // ahead of the call, so it is enum-pinned exactly like policy_digest) or a
+  // new-item handle the model invents; those are bounded to the remaining
+  // slots under the 10-item cap (line_items_limit_exceeded), so the full
+  // candidate set is still closed and known ahead of the call.
+  // ---------------------------------------------------------------------
+  const ITEM_FACT_ID_RE_V31 = /^fact:item:([^:]+):(product|quantity|measurements)$/;
+  const MAX_LINE_ITEMS_V31 = 10;
+  const ITEM_MUTATION_FIELDS_V31 = new Set(['product', 'quantity', 'measurements']);
+  const policyFactsV31 = Array.isArray(turnPolicy.facts) ? turnPolicy.facts : [];
+  const existingLineItemIdsV31 = uniqueStrings(policyFactsV31
+    .map((fact) => ITEM_FACT_ID_RE_V31.exec(safe(fact?.fact_id)))
+    .filter(Boolean)
+    .map((match) => match[1]));
+  const newItemHandlesV31 = Array.from(
+    { length: Math.max(0, MAX_LINE_ITEMS_V31 - existingLineItemIdsV31.length) },
+    (_unused, index) => `new:${index + 1}`,
+  );
+  const itemRefCandidatesV31 = [...existingLineItemIdsV31, ...newItemHandlesV31];
+  const nullableItemRefSchemaV31 = { type: ['string', 'null'], enum: [...itemRefCandidatesV31, null] };
+  const requiredItemRefSchemaV31 = { type: 'string', enum: itemRefCandidatesV31 };
+  const observationSchemaV31 = ({ concept, normalizedValue, groundingRef }) => ({
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'id', 'concept', 'raw_value', 'normalized_value', 'evidence_quote',
+      'evidence_occurrence', 'grounding_ref', 'resolves_goal_ids', 'item_ref',
+    ],
+    properties: {
+      id: { type: 'string' },
+      concept,
+      raw_value: { type: 'string' },
+      normalized_value: normalizedValue,
+      evidence_quote: { type: 'string' },
+      evidence_occurrence: { type: 'integer', minimum: 1 },
+      grounding_ref: groundingRef,
+      resolves_goal_ids: { type: 'array', items: { type: 'string' } },
+      item_ref: nullableItemRefSchemaV31,
+    },
+  });
+  const observationVariantsV31 = [];
+  for (const concept of observationConcepts.filter((value) => groundedConcepts.has(value))) {
+    const entries = groundingEntries.filter((entry) => entry.concept === concept);
+    if (entries.length === 0) continue;
+    observationVariantsV31.push(observationSchemaV31({
+      concept: { type: 'string', enum: [concept] },
+      normalizedValue: { type: 'string', enum: uniqueJsonValues(entries.map((entry) => entry.value ?? entry.name)) },
+      groundingRef: { type: 'string', enum: uniqueStrings(entries.map((entry) => entry.ref)) },
+    }));
+  }
+  if (ungroundedAllowedConcepts.length > 0) {
+    observationVariantsV31.push(observationSchemaV31({
+      concept: { type: 'string', enum: ungroundedAllowedConcepts },
+      normalizedValue: normalizedValueSchema,
+      groundingRef: { type: 'null' },
+    }));
+  }
+  const observationsSchemaV31 = { type: 'array', items: { anyOf: observationVariantsV31 } };
+  const mutationSchemaV31 = ({ operation, field, itemRefSchema, replacesFactId }) => ({
+    type: 'object',
+    additionalProperties: false,
+    required: ['operation', 'field', 'item_ref', 'observation_id', 'replaces_fact_id'],
+    properties: {
+      operation: { type: 'string', enum: [operation] },
+      field: field === null ? { type: 'null' } : { type: 'string', enum: [field] },
+      item_ref: itemRefSchema,
+      observation_id: { type: 'string' },
+      replaces_fact_id: replacesFactId,
+    },
+  });
+  const mutationVariantsV31 = [];
+  for (const entry of allowedMutations) {
+    if (!entry) continue;
+    if (entry.operation === 'remove_item') {
+      mutationVariantsV31.push(mutationSchemaV31({
+        operation: 'remove_item', field: null, itemRefSchema: requiredItemRefSchemaV31,
+        replacesFactId: { type: 'null' },
+      }));
+      continue;
+    }
+    if (!['set', 'replace'].includes(entry.operation) || !observationConcepts.includes(entry.concept)
+      || typeof entry.field !== 'string' || entry.field.length === 0) continue;
+    if (ITEM_MUTATION_FIELDS_V31.has(entry.field)) {
+      if (entry.operation === 'set') {
+        mutationVariantsV31.push(mutationSchemaV31({
+          operation: 'set', field: entry.field, itemRefSchema: nullableItemRefSchemaV31,
+          replacesFactId: { type: 'null' },
+        }));
+      } else {
+        const existingFactIdsForField = uniqueStrings(existingLineItemIdsV31
+          .filter((itemId) => policyFactsV31.some((fact) => fact?.fact_id === `fact:item:${itemId}:${entry.field}`))
+          .map((itemId) => `fact:item:${itemId}:${entry.field}`));
+        mutationVariantsV31.push(mutationSchemaV31({
+          operation: 'replace', field: entry.field, itemRefSchema: nullableItemRefSchemaV31,
+          replacesFactId: existingFactIdsForField.length > 0
+            ? { type: 'string', enum: existingFactIdsForField }
+            : { type: 'string' },
+        }));
+      }
+    } else {
+      mutationVariantsV31.push(mutationSchemaV31({
+        operation: entry.operation, field: entry.field, itemRefSchema: { type: 'null' },
+        replacesFactId: entry.operation === 'replace'
+          ? { type: 'string', enum: [entry.current_fact_id] }
+          : { type: 'null' },
+      }));
+    }
+  }
+  const stateMutationsSchemaV31 = mutationVariantsV31.length > 0
+    ? { type: 'array', items: { anyOf: mutationVariantsV31 } }
+    : { type: 'array', maxItems: 0, items: mutationSchemaV31({
+        operation: 'set', field: '', itemRefSchema: { type: 'null' }, replacesFactId: { type: 'null' },
+      }) };
+  const catalogResolutionVariantV31 = ({ status, groundingRef }) => ({
+    type: 'object',
+    additionalProperties: false,
+    required: ['status', 'evidence_quote', 'evidence_occurrence', 'grounding_ref', 'item_ref'],
+    properties: {
+      status: { type: 'string', enum: [status] },
+      evidence_quote: { type: 'string' },
+      evidence_occurrence: { type: 'integer', minimum: 1 },
+      grounding_ref: groundingRef,
+      item_ref: requiredItemRefSchemaV31,
+    },
+  });
+  const catalogResolutionsSchemaV31 = {
+    type: 'array',
+    items: {
+      anyOf: [
+        catalogResolutionVariantV31({
+          status: 'matched',
+          groundingRef: productGroundingRefs.length > 0
+            ? { type: 'string', enum: productGroundingRefs }
+            : { type: 'string' },
+        }),
+        catalogResolutionVariantV31({ status: 'unsupported', groundingRef: { type: 'null' } }),
+        catalogResolutionVariantV31({ status: 'ambiguous', groundingRef: { type: 'null' } }),
+      ],
+    },
+  };
+  const v31ResponseSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'version', 'policy_digest', 'reply_text', 'primary_request',
+      'catalog_resolutions', 'observations', 'state_mutations', 'effect_requests',
+    ],
+    properties: {
+      version: { type: 'string', enum: ['ai_conversation_proposal/v3.1'] },
+      policy_digest: /^[a-f0-9]{64}$/.test(safe(turnPolicy.policy_digest))
+        ? { type: 'string', enum: [turnPolicy.policy_digest] }
+        : { type: 'string' },
+      reply_text: { type: 'string' },
+      primary_request: {
+        type: ['object', 'null'],
+        additionalProperties: false,
+        required: ['goal_id', 'item_ref'],
+        properties: {
+          goal_id: { type: 'string', enum: primaryRequestGoalIds },
+          item_ref: nullableItemRefSchemaV31,
+        },
+      },
+      catalog_resolutions: catalogResolutionsSchemaV31,
+      observations: observationsSchemaV31,
+      state_mutations: stateMutationsSchemaV31,
+      effect_requests: effectRequestsSchema,
+    },
+  };
+  const activeResponseSchema = usesV31Contract ? v31ResponseSchema : v3ResponseSchema;
   const v3BasePayload = {
     ...row,
     ai_contract_version: 'v3',
@@ -355,7 +534,7 @@ if (usesV3Contract) {
     ai_base_url: baseUrl,
     ai_api_mode: apiMode,
     turn_policy: turnPolicy,
-    response_schema: v3ResponseSchema,
+    response_schema: activeResponseSchema,
   };
   const v3ControlReason = Boolean(pickMerged(row.bot_suppressed, row.bot_suppressed_1, false))
     ? 'human_control_active'
@@ -368,7 +547,7 @@ if (usesV3Contract) {
     return [{ json: { ...v3BasePayload, ai_skipped: true, ai_skip_reason: v3ControlReason,
       ai_request: null, ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
   }
-  const v3PolicyValid = turnPolicy.version === 'ai_prd_turn_policy/v3'
+  const v3PolicyValid = (turnPolicy.version === 'ai_prd_turn_policy/v3' || turnPolicy.version === 'ai_prd_turn_policy/v3.1')
     && /^[a-f0-9]{64}$/.test(safe(turnPolicy.policy_digest));
   if (!v3PolicyValid) {
     return [{ json: { ...v3BasePayload, ai_skipped: false, ai_request: null, ai_request_error: 'invalid_turn_policy', ai_request_path: requestPath, ai_timeout_ms: timeoutMs } }];
@@ -470,6 +649,41 @@ if (usesV3Contract) {
       ? 'Esta es la única reparación permitida: parte de repair_request.rejected_proposal, corrige cada path usando allowed_values y conserva los campos no implicados. catalog_resolution ya validado es inmutable en el schema. Devuelve una propuesta completa corregida.'
       : null,
   ].filter(Boolean).join('\n');
+  // The array above (assigned in one statement to keep this exact literal
+  // text — `const v3SystemPrompt = [` ... `].filter(Boolean).join('\n');` —
+  // byte-identical to before Slice 2b, since tests/unit/v3-brand-voice.test.js
+  // extracts the v3 prompt straight from the deployed workflow's source text
+  // by searching for those exact markers) is the v3 prompt, unchanged.
+  //
+  // v3.1 (design.md Supersession note, D5, D11), dark: derived from that same
+  // array, split back out of the joined string, never retyped. Only the
+  // allowlisted clause is replaced (D5's per-item carve-out); the itemized
+  // final_confirmation rule and the item_ref/pandereta guidance are pure
+  // additions. Every other v3 line — brand voice, the yes/no rule, the
+  // ambiguity definition, the pinned digest instruction — reaches v3.1
+  // unchanged, automatically.
+  const V3_PROMPT_LINES = v3SystemPrompt.split('\n');
+  const V31_REPLACED_RULE = 'Con catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno, aunque el mensaje también nombre otro producto del catálogo (por ejemplo "pandereta con alambre de púas"): usa primary_request.goal_id=product para aclarar primero el producto dudoso, menciona en reply_text que también tomaste nota del otro producto, y regístralo en un turno posterior. Sí puedes registrar la cantidad, las medidas y la comuna que el cliente dio.';
+  const V31_ITEM_SCOPED_REPLACEMENT_RULE = 'Con catalog_resolution ambiguous o unsupported, el corte es por ítem, no por todo el turno: no emitas observación ni mutación de product para ESE ítem (usa primary_request.goal_id=product con el item_ref de ese ítem para aclararlo), pero sí registra normalmente el product de cualquier otro ítem del mismo mensaje que sí coincida inequívocamente con el catálogo (por ejemplo, en "pandereta con alambre de púas", registra el alambre de púas ahora y deja pendiente solo la pandereta). También puedes registrar la cantidad, las medidas y cualquier dato de nivel de cotización (por ejemplo la comuna) que el cliente haya dado, incluso para el ítem ambiguo.';
+  const V31_FINAL_CONFIRMATION_RULE = 'Cuando pidas final_confirmation con más de un ítem, resume con una línea "•" por ítem indicando su cantidad y, si existen, sus medidas, y luego una línea por cada dato de nivel de cotización (por ejemplo comuna, modalidad); no mezcles los datos de un ítem con los de otro.';
+  const V31_ITEM_REF_GUIDANCE_RULE = 'Toda observación o mutación de product, quantity o measurements debe declarar item_ref. Usa el item_ref existente que te entrega la policy para un ítem ya registrado; para un ítem nuevo de este turno, usa un identificador simple y consistente como new:1, new:2 (uno distinto por ítem) y reutilízalo en todas las observaciones y mutaciones de ese mismo ítem dentro de este mismo turno. Los datos que no son de ítem (por ejemplo commune) siempre llevan item_ref=null.';
+  const V31_CORRECTION_TARGET_RULE = 'Si el cliente corrige la cantidad, las medidas o el producto de un ítem y la cotización ya tiene dos o más ítems, y no queda claro a cuál se refiere, usa item_ref=null en esa mutación y pregunta explícitamente a cuál ítem se refiere, nombrando los productos o descripciones de cada ítem en reply_text; no adivines ni copies el dato al ítem equivocado.';
+  const V31_PANDERETA_EXAMPLE_RULE = 'Ejemplo de catalogación por ítem: si el cliente dice "pandereta" y luego, al aclarar, confirma un producto del grounding (por ejemplo Cierros de Hormigón), usa matched con ese grounding_ref exacto para ese ítem; no asumas otro producto similar del catálogo (por ejemplo Adoquín) sin evidencia explícita del cliente.';
+  const buildV31PromptLines = (v3Lines) => {
+    const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
+    if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
+    const derived = [...v3Lines];
+    derived.splice(replacedIndex, 1, V31_ITEM_SCOPED_REPLACEMENT_RULE);
+    derived.push(
+      V31_FINAL_CONFIRMATION_RULE,
+      V31_ITEM_REF_GUIDANCE_RULE,
+      V31_CORRECTION_TARGET_RULE,
+      V31_PANDERETA_EXAMPLE_RULE,
+    );
+    return derived;
+  };
+  const v31SystemPrompt = buildV31PromptLines(V3_PROMPT_LINES).filter(Boolean).join('\n');
+  const activeSystemPrompt = usesV31Contract ? v31SystemPrompt : v3SystemPrompt;
   const v3UserPrompt = JSON.stringify({
     turn_policy: turnPolicy,
     ...(hasRepairRequest ? { repair_request: repairRequest } : {}),
@@ -478,7 +692,7 @@ if (usesV3Contract) {
     ? {
         model,
         messages: [
-          { role: 'system', content: `${v3SystemPrompt}\nDevuelve solo JSON válido. No uses Markdown.` },
+          { role: 'system', content: `${activeSystemPrompt}\nDevuelve solo JSON válido. No uses Markdown.` },
           { role: 'user', content: v3UserPrompt },
         ],
         temperature: Number($env.AI_DIRECT_API_TEMPERATURE || 0.05),
@@ -491,21 +705,25 @@ if (usesV3Contract) {
         ...(provider === 'nvidia' ? {} : {
           response_format: {
             type: 'json_schema',
-            json_schema: { name: 'ai_conversation_proposal_v3', schema: v3ResponseSchema, strict: true },
+            json_schema: {
+              name: usesV31Contract ? 'ai_conversation_proposal_v3_1' : 'ai_conversation_proposal_v3',
+              schema: activeResponseSchema,
+              strict: true,
+            },
           },
         }),
       }
     : {
         model,
         input: [
-          { role: 'system', content: v3SystemPrompt },
+          { role: 'system', content: activeSystemPrompt },
           { role: 'user', content: v3UserPrompt },
         ],
         text: {
           format: {
             type: 'json_schema',
-            name: 'ai_conversation_proposal_v3',
-            schema: v3ResponseSchema,
+            name: usesV31Contract ? 'ai_conversation_proposal_v3_1' : 'ai_conversation_proposal_v3',
+            schema: activeResponseSchema,
             strict: true,
           },
         },
