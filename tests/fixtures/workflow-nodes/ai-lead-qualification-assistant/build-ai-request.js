@@ -497,6 +497,16 @@ if (usesV3Contract) {
       ],
     },
   };
+  // design.md's validator rules table pins `catalog_resolution_clarification_required`
+  // to a literal `primary_request={goal_id:'product', item_ref}` (and
+  // `item_target_required`'s repair instruction reuses `goal_id:<field>` for
+  // quantity/measurements too), but `primaryRequestGoalIds` above only ever
+  // contains real policy goal ids plus `final_confirmation` — it never
+  // contains an item concept name. Locked to `primaryRequestGoalIds` during a
+  // repair turn, so the repair's own `allowed_values` lock is never widened.
+  const primaryRequestGoalIdsV31 = hasRepairRequest
+    ? primaryRequestGoalIds
+    : uniqueStrings([...primaryRequestGoalIds, ...ITEM_MUTATION_FIELDS_V31]);
   const v31ResponseSchema = {
     type: 'object',
     additionalProperties: false,
@@ -515,7 +525,7 @@ if (usesV3Contract) {
         additionalProperties: false,
         required: ['goal_id', 'item_ref'],
         properties: {
-          goal_id: { type: 'string', enum: primaryRequestGoalIds },
+          goal_id: { type: 'string', enum: primaryRequestGoalIdsV31 },
           item_ref: nullableItemRefSchemaV31,
         },
       },

@@ -640,7 +640,13 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const observations = Array.isArray(proposalObject.observations) ? proposalObject.observations : [];
   if (!Array.isArray(proposalObject.observations)) errors.push(validationError('observations_invalid', 'observations'));
   const observationIds = new Set();
-  const knownGoalIds = new Set((policy?.goals || []).map((goal) => goal.goal_id));
+  // Design D11/Interfaces: v3.1's policy exposes a single quote-level
+  // `line_items` goal (no per-item product/quantity/measurements goal is
+  // emitted — see design.md's Deviations note). An item-scoped observation
+  // legitimately resolves the field it observed, so the three item concept
+  // names are known goal references too, exactly like `primary_request`'s
+  // `requestGoalValid` below already treats them.
+  const knownGoalIds = new Set([...(policy?.goals || []).map((goal) => goal.goal_id), ...ITEM_FIELDS]);
   for (const [index, observationEntry] of observations.entries()) {
     const path = `observations[${index}]`;
     let valid = exactKeys(observationEntry, OBSERVATION_KEYS_V31)
@@ -766,8 +772,14 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const ambiguousRefs = [...catalogResolutionByRef.values()]
     .filter((resolution) => resolution.status === 'ambiguous')
     .map((resolution) => resolution.item_ref);
+  // Design's literal is `goal_id:'product'`. The policy only ever exposes the
+  // single quote-level `line_items` goal for items (no per-item goal), so a
+  // `primary_request` naming that item's `line_items` goal, scoped to the
+  // exact ambiguous item_ref, asks the identical question with no less
+  // specificity — accepted as an equivalent literal, never a looser one.
   if (ambiguousRefs.length > 0
-      && !(primaryRequestValid && primaryRequest?.goal_id === 'product' && ambiguousRefs.includes(primaryRequest.item_ref))) {
+      && !(primaryRequestValid && ['product', 'line_items'].includes(primaryRequest?.goal_id)
+        && ambiguousRefs.includes(primaryRequest.item_ref))) {
     errors.push(validationError(
       'catalog_resolution_clarification_required', 'primary_request', ambiguousRefs, ['product'],
       'Ask one focused clarification that distinguishes the possible grounded products for the ambiguous item.',
