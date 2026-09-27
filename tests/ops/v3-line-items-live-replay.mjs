@@ -106,12 +106,18 @@ let policyInputCounter = 0;
 
 // compileV3TurnPolicy(buildV3PolicyInput(input, { version })) mirrors the
 // exact call compile-v3-turn.js makes in production (design.md D7).
-export function buildTurnPolicy(version, qualificationContext, grounding = DEFAULT_GROUNDING) {
+// `turn` carries what production reads from the inbound and the conversation:
+// the customer's text, the pending question and the recent messages. Without
+// them the model sees a blank turn and only ever greets.
+export function buildTurnPolicy(version, qualificationContext, grounding = DEFAULT_GROUNDING, turn = {}) {
   policyInputCounter += 1;
   return compileV3TurnPolicy(buildV3PolicyInput({
     inbound_event_id: `replay-event-${policyInputCounter}`,
     conversation_id: 'replay-conversation',
     external_message_id: `replay-message-${policyInputCounter}`,
+    text_body: turn.text ?? '',
+    pending_question_key: turn.pendingQuestionKey ?? null,
+    recent_messages: turn.recentMessages ?? [],
     qualification_context: qualificationContext,
     v3_grounding: grounding,
   }, { version }));
@@ -159,8 +165,10 @@ export async function defaultCallModel(aiRequest, env) {
 // mutations back into the quote (mirroring what `09_commit_v3_turn.sql`
 // commits) so the NEXT turn in the transcript (confirmation, correction)
 // sees the same state a real conversation would.
-export async function runTurn({ version, qualificationContext, grounding, text, env, callModel }) {
-  const turnPolicy = buildTurnPolicy(version, qualificationContext, grounding);
+export async function runTurn({
+  version, qualificationContext, grounding, text, pendingQuestionKey = null, recentMessages = [], env, callModel,
+}) {
+  const turnPolicy = buildTurnPolicy(version, qualificationContext, grounding, { text, pendingQuestionKey, recentMessages });
   const { ai_request: aiRequest } = buildAiRequestForTurn(turnPolicy, env);
   const providerOutcome = await callModel(aiRequest, env);
   const proposal = extractProposal(turnPolicy, providerOutcome, env);
@@ -187,11 +195,19 @@ export async function runTranscript(transcript, { grounding = DEFAULT_GROUNDING,
   const results = {};
   for (const version of ['v3', 'v3.1']) {
     let context = {};
+    let pendingQuestionKey = null;
+    const recentMessages = [];
     const turns = [];
     for (const turn of transcript.turns) {
       // eslint-disable-next-line no-await-in-loop -- turns are sequential by design
-      const result = await runTurn({ version, qualificationContext: context, grounding, text: turn.text, env, callModel });
+      const result = await runTurn({
+        version, qualificationContext: context, grounding, text: turn.text,
+        pendingQuestionKey, recentMessages: [...recentMessages], env, callModel,
+      });
       context = result.qualificationContext;
+      if (result.decision) pendingQuestionKey = result.proposal?.primary_request?.goal_id ?? null;
+      recentMessages.push({ role: 'user', content: turn.text });
+      if (result.proposal?.reply_text) recentMessages.push({ role: 'assistant', content: result.proposal.reply_text });
       turns.push({ ...turn, ...result });
     }
     results[version] = turns;
@@ -302,6 +318,25 @@ export async function replay({
   return { runs: allRuns, summary, finalConfirmations };
 }
 
+// Per-run detail a human can judge: what each lane stored after every turn,
+// and why an invalid turn failed. Codes and stored facts only.
+export function summarizeRun(run) {
+  const lane = (turns) => (turns ?? []).map((turn) => ({
+    kind: turn.kind,
+    valid: Boolean(turn.validation?.valid),
+    errors: (turn.validation?.errors ?? []).map((error) => error.code),
+    withheld: (turn.validation?.withheld_mutations ?? []).map((mutation) => mutation.field),
+    items: readLineItems(turn.qualificationContext ?? {}).map((item) => ({
+      product: item.product ?? null,
+      requested_label: item.requested_label ?? null,
+      quantity: item.quantity ?? null,
+      measurements: item.measurements ?? null,
+    })),
+    commune: turn.qualificationContext?.commune ?? null,
+  }));
+  return { name: run.name, v3: lane(run.results.v3), 'v3.1': lane(run.results['v3.1']) };
+}
+
 async function main() {
   if (process.env.AI_REPLAY_LIVE !== '1') {
     console.log('[v3-line-items-live-replay] AI_REPLAY_LIVE is not "1" — opt-in only, doing nothing live.');
@@ -312,8 +347,16 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const report = await replay({});
-  console.log(JSON.stringify({ summary: report.summary, finalConfirmations: report.finalConfirmations }, null, 2));
+  // The production catalog makes "pandereta" as ambiguous as it is live; the
+  // built-in two-product grounding is only a fallback.
+  const groundingFile = process.env.AI_REPLAY_GROUNDING_FILE;
+  const grounding = groundingFile ? JSON.parse(fs.readFileSync(groundingFile, 'utf8')) : DEFAULT_GROUNDING;
+  const report = await replay({ grounding });
+  console.log(JSON.stringify({
+    summary: report.summary,
+    finalConfirmations: report.finalConfirmations,
+    runs: report.runs.map((run) => summarizeRun(run)),
+  }, null, 2));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -147,7 +147,8 @@ describe('runTurn — real validate/authorize/reduce, mocked model', () => {
       version: 'v3.1',
       qualificationContext: {},
       grounding: DEFAULT_GROUNDING,
-      text: LIVE_2026_09_26_MESSAGE,
+      // A greeting carries no fact, so an empty proposal is genuinely valid.
+      text: 'Hola',
       env: OPENAI_ENV,
       callModel: mockCallModel(calls),
     });
@@ -181,7 +182,8 @@ describe('runTurn — real validate/authorize/reduce, mocked model', () => {
 describe('runTranscript — threads state across turns for both versions', () => {
   test('calls the mocked model once per turn per version and returns both version lanes', async () => {
     const calls = [];
-    const transcript = { name: 'two-turn', turns: [{ kind: 'initial', text: LIVE_2026_09_26_MESSAGE }, { kind: 'confirmation', text: 'Sí, confirmo' }] };
+    // Fact-free turns, so the mocked empty proposals are genuinely valid.
+    const transcript = { name: 'two-turn', turns: [{ kind: 'initial', text: 'Hola' }, { kind: 'confirmation', text: 'Gracias' }] };
     const run = await runTranscript(transcript, { grounding: DEFAULT_GROUNDING, env: OPENAI_ENV, callModel: mockCallModel(calls) });
 
     expect(calls).toHaveLength(4); // 2 turns x 2 versions
@@ -190,6 +192,26 @@ describe('runTranscript — threads state across turns for both versions', () =>
     expect(run.results['v3.1']).toHaveLength(2);
     expect(run.results.v3.every((turn) => turn.validation.valid)).toBe(true);
     expect(run.results['v3.1'].every((turn) => turn.validation.valid)).toBe(true);
+  });
+
+  // The first live run sent every turn with an empty message: the model only
+  // ever saw a blank turn and greeted, so both lanes "passed" without the
+  // customer's words ever reaching it. Each request must carry the turn's own
+  // text, and later turns the conversation so far, like production does.
+  test('sends each turn its customer text and the conversation history so far', async () => {
+    const calls = [];
+    const transcript = { name: 'two-turn', turns: [{ kind: 'initial', text: LIVE_2026_09_26_MESSAGE }, { kind: 'confirmation', text: 'Sí, confirmo' }] };
+    await runTranscript(transcript, { grounding: DEFAULT_GROUNDING, env: OPENAI_ENV, callModel: mockCallModel(calls) });
+
+    const turnPolicyOf = (request) => JSON.parse(request.input.find((message) => message.role === 'user').content).turn_policy;
+    for (const [index, expectedText] of [[0, LIVE_2026_09_26_MESSAGE], [1, 'Sí, confirmo'], [2, LIVE_2026_09_26_MESSAGE], [3, 'Sí, confirmo']]) {
+      expect(turnPolicyOf(calls[index]).turn.message.text).toBe(expectedText);
+    }
+    expect(turnPolicyOf(calls[0]).history.messages).toEqual([]);
+    expect(turnPolicyOf(calls[1]).history.messages).toEqual([
+      { role: 'user', content: LIVE_2026_09_26_MESSAGE },
+      { role: 'assistant', content: 'Entendido.' },
+    ]);
   });
 });
 
@@ -307,7 +329,7 @@ describe('replay — end-to-end with an injected mock, never a real network call
       runs: 1,
       env: OPENAI_ENV,
       callModel: mockCallModel(calls),
-      transcripts: [{ name: 'single-turn', turns: [{ kind: 'initial', text: LIVE_2026_09_26_MESSAGE }] }],
+      transcripts: [{ name: 'single-turn', turns: [{ kind: 'initial', text: 'Hola' }] }],
     });
 
     expect(report.summary.v3.validationAttempts).toBe(1);
@@ -335,5 +357,31 @@ describe('the harness file documents its opt-in gate and never reads .env', () =
     expect(source).not.toContain("require('dotenv')");
     expect(source).not.toMatch(/readFileSync\([^)]*\.env/);
     expect(source).not.toContain('process.env.OPENAI_API_KEY, null, 2'); // never printed
+  });
+});
+
+describe('summarizeRun — per-run detail a human can judge', () => {
+  test('reports each lane turn by turn: validity, error codes and the stored items', async () => {
+    const { summarizeRun } = await import('../ops/v3-line-items-live-replay.mjs');
+    const run = {
+      name: 'demo',
+      results: {
+        v3: [{ kind: 'initial', validation: { valid: false, errors: [{ code: 'quantity_observation_required' }] }, qualificationContext: {} }],
+        'v3.1': [{
+          kind: 'initial',
+          validation: { valid: true, errors: [], withheld_mutations: [{ field: 'product' }] },
+          qualificationContext: { commune: 'Lo Prado', line_items: [{ item_id: 'li_a', product: null, requested_label: 'pandereta', quantity: '500 ml', measurements: '3 metros de altura' }] },
+        }],
+      },
+    };
+
+    expect(summarizeRun(run)).toEqual({
+      name: 'demo',
+      v3: [{ kind: 'initial', valid: false, errors: ['quantity_observation_required'], withheld: [], items: [], commune: null }],
+      'v3.1': [{
+        kind: 'initial', valid: true, errors: [], withheld: ['product'], commune: 'Lo Prado',
+        items: [{ product: null, requested_label: 'pandereta', quantity: '500 ml', measurements: '3 metros de altura' }],
+      }],
+    });
   });
 });
