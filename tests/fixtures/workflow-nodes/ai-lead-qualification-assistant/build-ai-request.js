@@ -690,6 +690,12 @@ if (usesV3Contract) {
   // moved to the wrong item, or one product split across two items).
   const V31_NO_CROSS_ITEM_TRANSFER_RULE = 'Nunca copies ni traslades una cantidad o medida de un ítem a otro: cada cantidad y cada medida se registra solo en el ítem cuya evidencia la describe en este mismo mensaje, aunque otro ítem también la necesite. Un producto mencionado una sola vez en el mensaje es un solo ítem: no lo dividas en dos ítems distintos aunque registres su cantidad y sus medidas en observaciones separadas.';
   const V31_CORRECTION_NAMED_ITEM_RULE = 'Si el cliente corrige un dato y nombra el producto o la descripción de un ítem existente, esa corrección se aplica únicamente a ese ítem, aunque la cotización tenga otros ítems; no traslades el dato corregido a un ítem distinto del nombrado.';
+  // Live canary 2026-09-27 (final-confirmation turn, "Sí, está todo
+  // correcto"): the model emitted a catalog_resolutions entry citing "todo"
+  // for an item whose product was already a known fact. The validator rejects
+  // it (and keeps rejecting it); this v3.1-only rule keeps the model from
+  // re-resolving an already-known item when the customer names no product.
+  const V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE = 'catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje. Una confirmación, un "sí", un "todo correcto" o cualquier respuesta que no nombre un producto lleva catalog_resolutions=[]; nunca vuelvas a resolver ni reclasificar un ítem cuyo product ya está registrado, salvo que el cliente nombre en este mensaje un producto para ese ítem.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -699,6 +705,7 @@ if (usesV3Contract) {
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
       V31_NO_CROSS_ITEM_TRANSFER_RULE,
+      V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,
       V31_PANDERETA_EXAMPLE_RULE,

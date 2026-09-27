@@ -554,6 +554,23 @@ const deriveItemIdV31 = (conversationId, turnId, handle) => {
 const hasResolvedValue = (value) => value !== undefined && value !== null
   && (typeof value !== 'string' || value.trim() !== '');
 
+// Repair guidance only (never changes accept/reject): live canary 2026-09-27
+// showed the model emitting a catalog_resolutions entry for an item whose
+// product was already a known fact while the customer named no product
+// (a final confirmation). These helpers let the repair prompt say so.
+const foldForProductMatchV31 = (value) => String(value ?? '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+const quoteNamesCatalogProductV31 = (policy, quote) => {
+  const folded = foldForProductMatchV31(quote);
+  if (!folded.trim()) return false;
+  return groundingEntries(policy)
+    .filter((entry) => entry?.concept === 'product')
+    .map((entry) => foldForProductMatchV31(groundingValue(entry)))
+    .some((name) => name.trim() !== '' && folded.includes(name));
+};
+const CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31 = 'evidence_quote must be exact text from the current message. If the customer message names no product for this item, remove this entry: a message that names no product uses catalog_resolutions=[].';
+const spuriousCatalogResolutionInstructionV31 = (itemRefs) => `Remove the catalog_resolutions entry for ${itemRefs.join(', ')}: that item's product is already a known fact and the evidence_quote names no product from the catalog. A confirmation or answer that names no product uses catalog_resolutions=[].`;
+
 // Required goals reuse the quote-level conditional rules in
 // effectiveRequiredGoalIds, replacing product/quantity with line_items.
 const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) => {
@@ -605,7 +622,10 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       ? findOccurrence(messageText, resolution.evidence_quote, resolution.evidence_occurrence)
       : null;
     if (!occurrence) {
-      errors.push(validationError('catalog_resolution_evidence_not_found', `${path}.evidence_quote`));
+      errors.push(validationError(
+        'catalog_resolution_evidence_not_found', `${path}.evidence_quote`, [], [],
+        CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31,
+      ));
       continue;
     }
     if (resolution.status === 'matched') {
@@ -964,6 +984,21 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   };
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
   const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
+  // Items unresolved ONLY because this proposal's own unsupported/ambiguous
+  // resolution withholds a product the policy already holds, with evidence
+  // that names no catalog product: the repair hint says to drop it.
+  const spuriousResolutionProductIds = new Set(remainingItemRefs
+    .filter((ref) => {
+      const resolution = catalogResolutionByRef.get(ref);
+      return resolution && ['ambiguous', 'unsupported'].includes(resolution.status)
+        && hasResolvedValue(existingItems.get(ref)?.product)
+        && !quoteNamesCatalogProductV31(policy, resolution.evidence_quote);
+    })
+    .map((ref) => `product@${ref}`));
+  const spuriousResolutionInstructionFor = (unresolvedIds) => {
+    const itemRefs = unresolvedIds.filter((id) => spuriousResolutionProductIds.has(id)).map((id) => id.slice('product@'.length));
+    return itemRefs.length > 0 ? spuriousCatalogResolutionInstructionV31(itemRefs) : null;
+  };
   const lineItemsResolved = remainingItemRefs.length >= 1 && remainingItemRefs.length <= MAX_LINE_ITEMS
     && unresolvedProductRefs.length === 0 && unresolvedQuantityRefs.length === 0;
 
@@ -995,9 +1030,11 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     ));
   }
   if (primaryRequestValid && primaryRequest?.goal_id === FINAL_CONFIRMATION_GOAL && createLeadUnresolved.length > 0) {
+    const spuriousInstruction = spuriousResolutionInstructionFor(createLeadUnresolved);
     errors.push(validationError(
       'final_confirmation_not_ready', 'primary_request.goal_id', createLeadUnresolved, createLeadUnresolved,
-      'Ask for one unresolved required goal instead of asking for final confirmation.',
+      ['Ask for one unresolved required goal instead of asking for final confirmation.', spuriousInstruction]
+        .filter(Boolean).join(' '),
     ));
   }
 
@@ -1053,7 +1090,9 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       ? createLeadUnresolved
       : configuredGoalIds.filter((goalId) => !resolvedGoalIds.has(goalId));
     if (unresolved.length > 0) {
-      errors.push(validationError('effect_prerequisite_unresolved', path, unresolved));
+      errors.push(validationError(
+        'effect_prerequisite_unresolved', path, unresolved, [], spuriousResolutionInstructionFor(unresolved),
+      ));
       continue;
     }
     if (effect.type === 'create_lead' && !createLeadAuthorized) {

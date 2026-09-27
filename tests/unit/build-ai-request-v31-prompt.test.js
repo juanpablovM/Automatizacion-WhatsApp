@@ -116,4 +116,18 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v31Prompt).toContain('esa corrección se aplica únicamente a ese ítem');
     expect(v3Prompt).not.toContain('esa corrección se aplica únicamente a ese ítem');
   });
+
+  // Live canary 2026-09-27: on the final-confirmation turn ("Sí, está todo
+  // correcto") the model re-resolved an already-known item's product with a
+  // catalog_resolutions entry citing "todo". The validator correctly rejects
+  // it; this v3.1-only rule keeps the model from emitting it in the first place.
+  test('v3.1 adds a rule that catalog_resolutions only cover a product named in this message', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v31Prompt).toContain('catalog_resolutions=[]');
+    expect(v3Prompt).not.toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
 });
