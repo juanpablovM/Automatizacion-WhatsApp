@@ -171,7 +171,18 @@ Rollout step 3 (live A/B, N=10, production catalog) blocked the canary: v3.1 fir
 - [x] 3c.3 RED then GREEN: resolve `catalog_resolution_product_observation_required` for an ambiguous item with no product observation, consistent with D5 (withholding, not rejecting), and make the ambiguous-item clarification select `primary_request` product rather than an unrelated goal.
 - [x] 3c.4 Add a contract-consistency test: the v3.1 response schema, the policy builder output and the validator accept the same goal ids and mutation shapes, so the three cannot drift again.
 - [x] 3c.5 Keep every D11 guarantee green: static error-code coverage, behavioral and authorizer differentials, the prompt-diff test, v3 byte-identity, and all existing suites.
-- [ ] 3c.6 Rerun the live A/B (N=10, production catalog). Gate for canary: v3.1 first-turn validity is at least v3 first-turn validity, and every valid correction is scoped to the named item.
+- [x] 3c.6 (ran 2026-09-27: first-turn validity 20/20, equal to v3; the correction-scoping gate failed in 1 of 6 valid corrections, so it was not passed; follow-up in 3c.7–3c.10) Rerun the live A/B (N=10, production catalog). Gate for canary: v3.1 first-turn validity is at least v3 first-turn validity, and every valid correction is scoped to the named item.
+
+### Slice 3c follow-up — item attribution (live A/B round 2)
+
+Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 20/20 (equal to v3), total 36/40 against v3 30/40. Remaining defects, observed live:
+- First turn, 3 of 20: the pandereta quantity "500 ml" was copied or moved onto the wire item, or the pandereta was split into two items.
+- Wire correction, 1 of 6 valid: 300 ml landed on the pandereta instead of the wire. The canary gate (every valid correction scoped to the named item) failed.
+
+- [x] 3c.7 RED then GREEN: a deterministic v3.1 validator rule rejects a proposal where one evidence span (the same `evidence_quote` and `evidence_occurrence`) resolves the same item concept on two different items. The error is repairable, and its code joins the v3.1-only allowlist rationale in the static coverage test if needed.
+- [x] 3c.8 RED then GREEN: v3.1 prompt rules (v3.1-only, the prompt-diff allowlist updated): never copy or move a quantity or measurement from one item to another; one mentioned product is one item, never split into two; a correction applies to the item whose product or label the customer names in that message, and a correction that names no item asks which item.
+- [x] 3c.9 Keep every guarantee green: D11 static coverage and differentials, the prompt-diff test, the v3 request byte-identical, and the live-evidence and consistency tests.
+- [ ] 3c.10 Rerun the live A/B (N=10, production catalog). Gate for canary: first-turn validity at least v3; first-turn item attribution correct in at least 19 of 20 runs; every valid correction scoped to the named item.
 
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 

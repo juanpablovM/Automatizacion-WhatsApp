@@ -1,6 +1,6 @@
 # Apply Progress: Multi-Product Quotes
 
-**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), Slice 2b — Advisor, dark (tasks 2b.1–2b.15), Slice 3 — Output (tasks 3.1–3.12), AND Slice 3c — v3.1 contract alignment from live evidence (tasks 3c.1–3c.5; 3c.6 — the live A/B rerun — is explicitly out of scope, done by the orchestrator). Slice 4 (rollout) not started — no code changes, no switch flipped.
+**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), Slice 2b — Advisor, dark (tasks 2b.1–2b.15), Slice 3 — Output (tasks 3.1–3.12), Slice 3c — v3.1 contract alignment from live evidence (tasks 3c.1–3c.5; 3c.6 — the live A/B rerun — is explicitly out of scope, done by the orchestrator), AND the Slice 3c follow-up — item attribution, live A/B round 2 (tasks 3c.7–3c.9; 3c.10 — the second live A/B rerun — is explicitly out of scope). Slice 4 (rollout) not started — no code changes, no switch flipped.
 **Mode**: Strict TDD.
 **Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`); `feat/multi-product-quotes-output` (Slice 3, base `feat/multi-product-quotes-advisor`); `feat/multi-product-quotes-alignment` (Slice 3c, base `feat/multi-product-quotes-output`).
 
@@ -12,6 +12,7 @@
 - 15/15 Slice 2b tasks complete (2b.1–2b.15). All marked `[x]` in `tasks.md`. See "Slice 2b — Advisor, dark" section below.
 - 12/12 Slice 3 tasks complete (3.1–3.12). All marked `[x]` in `tasks.md`. See "Slice 3 — Output" section below.
 - 5/5 Slice 3c tasks complete (3c.1–3c.5). All marked `[x]` in `tasks.md`. 3c.6 (live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c — v3.1 contract alignment, from live evidence" section below.
+- 3/3 Slice 3c follow-up tasks complete (3c.7–3c.9). All marked `[x]` in `tasks.md`. 3c.10 (the second live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c follow-up — item attribution (live A/B round 2)" section below.
 
 ---
 
@@ -590,3 +591,175 @@ None beyond the two contract-shape bugs this slice fixes. `AI_PRD_V3_LINE_ITEMS`
   1. `fix(v3): align v3.1 goal ids and item primary_request literals across policy, validator and schema` — production fixes in `v3-contract-runtime.js` (+14/−2) and `build-ai-request.js` (+11/−1) = **26 authored changed lines**, plus the live-evidence test `v3-line-items-live-evidence.test.js` (117 new lines) that proves the fix against the real captured model output, plus the captured-evidence fixture `tests/fixtures/v3-line-items/captured-live-proposals.json` (real model output, not hand-authored — treated as evidence data, like a golden capture, not authored risk) and 3 regenerated workflow JSON files (10 generated lines, `node tests/scripts/sync-workflow-nodes.mjs`) = **143 authored changed lines** (excluding the evidence JSON and generated workflow JSON).
   2. `test(v3): add a v3.1 contract-consistency test for goal ids and mutation shapes` — `v3-v31-contract-consistency.test.js` (173 new lines), plus the `tasks.md` checkbox marks (5 lines) and this `apply-progress.md` section = **178 authored changed lines** (excluding `apply-progress.md`'s own documentation length).
 - **Review budget: within forecast.** Total authored risk ≈ 26 (production) + 117 + 173 (tests) + 5 (`tasks.md`) = **321 authored changed lines**, comfortably under the 800-line cap — no `size:exception` needed. The 11,857-line captured-evidence JSON and the 10 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's golden/generated-artifact carve-out, but remain part of the complete snapshot for review/receipt purposes.
+
+---
+
+## Slice 3c follow-up — item attribution (live A/B round 2)
+
+**Scope**: tasks 3c.7–3c.9 only. Same branch (`feat/multi-product-quotes-alignment`), same base (`feat/multi-product-quotes-output`). Task 3c.10 (the second live A/B rerun, N=10, production catalog) is explicitly out of scope for this batch — the orchestrator runs it.
+
+### Why this follow-up exists
+
+The live A/B after 3c.1–3c.5 (N=10, production catalog) closed the validity gap: v3.1 first-turn validity reached 20/20, equal to v3 (total 36/40 against v3's 30/40). Two attribution defects remained, observed live on real model output (not captured in a fixture — described by the orchestrator from the run's own results, since round 2 had no saved `captured-live-proposals.json`-style dump):
+
+1. **First turn, 3 of 20**: the pandereta's evidenced quantity ("500 ml") was copied onto the wire item (both items ended up with 500 ml, citing the same evidence span), moved onto the wire (wire got 500 ml, pandereta kept only its height), or the pandereta was split into two items (one holding the quantity, another holding the height).
+2. **Wire correction, 1 of 6 valid**: "Corrección: el alambre de púas son 300 ml, no 500 ml" put 300 ml on the pandereta instead of the wire — the canary gate ("every valid correction scoped to the named item") failed.
+
+### Decision: which shape is deterministically detectable
+
+Both defects share one root cause (spec's Item-Scoped Line Items requirement: "a quantity or measurement fact MUST attach only to the item its evidence names"), but they split into two shapes with very different detectability at the validator layer:
+
+- **Copied** (the same evidenced text resolves the same item concept on two items): deterministically detectable. The same `(field, evidence_quote, evidence_occurrence)` triple can never legitimately authorize two different `item_ref` values in one proposal — there is exactly one span, and it cannot mean two contradictory things at once. Task 3c.7 implements this as a new validator rule.
+- **Moved** (a single, non-duplicated span attached to the wrong item): **not** deterministically detectable. There is only one span and one item_ref; nothing in the proposal's shape distinguishes "the model chose correctly" from "the model chose incorrectly" — the validator has no ground truth for which item is "right". This is true for both the first-turn quantity-moved-to-wire case and the wire-correction-moved-to-fence case. Confirmed empirically: `tests/unit/v3-v31-item-evidence-span-conflict.test.js` reproduces both "moved" shapes on real captured turn policies and shows the validator (correctly) still accepts them with zero errors. This is why the task explicitly routes this shape to a v3.1-only prompt fix (3c.8), not the validator.
+
+**Split-item signal — considered, not implemented, and why.** The task asked me to consider whether a "two new items created with no product and no `requested_label`" or "the same `requested_label` evidence on two items" signal is deterministically detectable. Neither is implementable at the validator layer:
+- `requested_label` does not exist anywhere in the v3.1 proposal contract (`OBSERVATION_KEYS_V31`, `CATALOG_RESOLUTION_KEYS_V31`, `MUTATION_KEYS_V31` all omit it) or in the response schema (`build-ai-request.js`'s v3.1 schema variants). It is a storage-only field the reducer (`v3-line-items.js`) always sets to `null` today — nothing in production ever populates it. There is no evidence signal to check against at validation time.
+- "Two new items with no product and no `requested_label`" is not unambiguous: a customer can legitimately mention two genuinely separate, both-unclear products in one message (e.g., two different ambiguous catalog names), which would create exactly this shape without being a split at all. Flagging it would reject correct multi-item turns, violating the per-item carve-out (D5) the rest of this contract protects.
+- Generalizing 3c.7's own rule to `catalog_resolutions` (treating catalog resolution as an implicit `product` concept, and flagging two catalog_resolutions entries that share the same `evidence_quote`/`evidence_occurrence` but different `item_ref`) was considered as a closer analogue, but the actual observed split shape (quantity on one new item, height/measurements on another) does not necessarily produce two catalog_resolutions with identical evidence — each new item's catalog_resolution independently cites its own textual mention, and there is no guarantee both share the same span. Implementing it would add a narrow rule with an unverified detection rate against a real defect shape, so it is left to the prompt (3c.8's "one mentioned product is one item, never split into two") rather than added as a second speculative validator rule.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3c.7 (synthetic) | `tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js` (`item_evidence_span_conflict` describe block) | Unit | ✅ 17/17 pre-existing tests in this file green before the edit | ✅ Written first | ✅ Confirmed RED: 2/4 new cases failed against the pre-fix validator (see RED evidence below) | ✅ 4 cases: same-span-two-items (reject), same-text-different-occurrence (no false positive), same-text-different-concept (no false positive), duplicated `product` span across two new matched items (reject) | ➖ None needed |
+| 3c.7 (captured-evidence) | `tests/unit/v3-v31-item-evidence-span-conflict.test.js` | Unit | ✅ (see above; this file is new) | ✅ Written first, against real captured turn policies from `captured-live-proposals.json` | ✅ Confirmed RED then GREEN (see RED evidence below): 6/6 pass after the fix | ✅ 6 cases: 2 sanity (unmodified captured proposal still valid), 2 "copied" (rejected), 2 "moved" (documented gap, stays valid — proves the boundary the decision above explains) | ➖ None needed — pure test file |
+| 3c.8 | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | ✅ 7/7 pre-existing tests in this file green before the edit | ✅ Written first | ✅ Confirmed RED: 2/2 new cases failed against the pre-fix prompt (see RED evidence below) | ✅ 2 cases: no-copy/no-move/no-split rule text present in v3.1 only; correction-named-item rule text present in v3.1 only | ➖ None needed |
+| 3c.9 | full existing suites (no new file) | Unit | ✅ | N/A (confirmatory) | ✅ 944/944 unit (154 skipped without `TEST_PG_INTEGRATION=1`), `check:parity` 0 drift after regenerating, `check:sql-references` 0 errors, 0 regressions | N/A | N/A |
+
+### RED evidence
+
+**3c.7 (synthetic, `v3-contract-runtime.test.js`)**: `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js` against the pre-fix `v3-contract-runtime.js` (production edit stashed) — **2 of 4 new cases failed** (`rejects the same evidence span resolving quantity on two different items` and `also rejects a duplicated product evidence span across two new, matched items`, both `expected true to be false`); the 2 negative-control cases already passed (there was nothing to false-positive on before the rule existed). After the fix: 19/19 in the file.
+
+**3c.7 (captured-evidence, new file)**: same stash procedure, `npx vitest run tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js` — **4 of 25 failed** (the 2 "copied" cases in each file); the 2 sanity cases and the 2 documented-gap "moved" cases already passed. `git stash pop` restored the fix; the same command then passed **25/25**.
+
+**3c.8 (`build-ai-request-v31-prompt.test.js`)**: ran the file against the pre-fix `build-ai-request.js` (before adding the two new rule constants) — **2 of 9 failed** (`v3.1 adds a rule against copying or moving a quantity/measurement between items, and against splitting one product into two items` and `v3.1 adds a rule that a correction naming an item's product or label applies only to that item`, both `expected [] to contain '...'`). After adding `V31_NO_CROSS_ITEM_TRANSFER_RULE` and `V31_CORRECTION_NAMED_ITEM_RULE`: 9/9.
+
+### Test Summary
+
+- **Total tests written this follow-up**: 4 (synthetic `item_evidence_span_conflict` cases) + 6 (`v3-v31-item-evidence-span-conflict.test.js`) + 2 (prompt rule cases) = **12 new tests**.
+- **Total tests passing**: 12/12 new, 0 regressions across 932 pre-existing unit tests (`npm test`: 944/944 non-skipped after this follow-up).
+- **Layers used**: Unit (12). No SQL/DB behavior changed (no `.sql` file touched, no error-code enumeration exists in SQL); the "must-stay-green" Postgres suite was intentionally not re-run this batch since neither task touches SQL/DB behavior (per the orchestrator's explicit scoping) — it was last verified green at the end of Slice 3c (3c.1–3c.5) and nothing in this follow-up changes what it exercises.
+- **Approval tests**: none — every new assertion calls the real, unmocked `validateV3AiProposal` (via `v3-contract-runtime.js`) or the real `build-ai-request.js` code-node source through the same `new Function('items','$env',source)` harness prior slices use; none change an existing assertion's expected value.
+- **Pure functions changed**: `validateV3AiProposalV31` gains one new deterministic check (no new exported function — an inline guard inside the existing mutation-processing loop, keyed by `${field}\u0000${evidence_quote}\u0000${evidence_occurrence}`); `build-ai-request.js`'s `buildV31PromptLines` gains two new appended constants, no existing line touched.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-line-items-live-evidence.test.js tests/unit/v3-v31-contract-consistency.test.js tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-wrapper.test.js tests/unit/v3-brand-voice.test.js tests/unit/compile-v3-turn.test.js tests/unit/build-v3-lead-effect.test.js tests/unit/v3-effect-execution-wrapper.test.js tests/unit/build-clickup-payload.test.js tests/unit/crm-seller-notification-dispatch.test.js tests/unit/mock-ai-valid-proposal.test.js tests/unit/shadow-evaluator-persistence.test.js tests/unit/v3-line-items-live-replay.test.js --globals` → **310/310 passed** (22 files) |
+| Runtime harness command/scenario and exact result | N/A — no SQL/DB behavior changed this batch (per the orchestrator's explicit scoping: "Postgres integration only if SQL/DB behavior changes"); the Postgres suite (17 files / 154 tests) was last verified green at the end of Slice 3c (3c.1–3c.5) and this follow-up touches neither `.sql` files nor the reducer's SQL twin |
+| Rollback boundary | Revert the two functional commits on `feat/multi-product-quotes-alignment` (validator guard + its tests; prompt rules + their tests) independently — each is self-contained with its own tests and touches a disjoint file set. `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled` everywhere; nothing in production passes `version:'v3.1'`; this follow-up only tightens which proposals the (still-dark) v3.1 validator/prompt accept, with zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **74 files passed, 17 skipped; 944 tests passed, 154 skipped**.
+- `npm run check:parity`: initial run showed `[DRIFT]` on `Compile V3 Turn Policy`, `Validate And Authorize V3` (both concatenate `v3-contract-runtime.js`), `Prepare Shadow Evaluation`, `Record Shadow Evaluation` (same reason), and `Build AI Request` implicitly via its own fixture — regenerated via `node tests/scripts/sync-workflow-nodes.mjs` (5 nodes patched, backups written to the gitignored `n8n/workflows/backup/`); re-run: exit 0, 0 drift, all nodes `[OK]`.
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings (no `.sql` file touched this follow-up).
+
+### Deviations from Design
+
+1. **Split-item detection left to the prompt, not the validator** — see "Decision: which shape is deterministically detectable" above. This is an explicit, considered deviation from implementing every suggested signal in the task, not an oversight: both suggested signals (`requested_label`-based, and "two new items with no product") are either non-existent at the validation layer or too broad to implement without false-positiving on legitimate multi-item turns.
+2. **The "moved" shape (single span, wrong item) is a documented, unclosed gap at the validator layer** for both first-turn and correction scenarios — by design, since no shape signal exists to close it deterministically. `tests/unit/v3-v31-item-evidence-span-conflict.test.js` pins this boundary explicitly (asserting the mutated proposal still validates) so a future change that silently makes this detectable is visible as a passing-test surprise, not a silent regression.
+
+### Issues Found
+
+None beyond the two attribution defects this follow-up addresses (one closed at the validator, one addressed only at the prompt with the closure documented as out of this batch's reach). `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled`; nothing in production passes `version:'v3.1'`; the v3 validator and v3 prompt stay byte-identical (confirmed by `v3-runtime-compatibility.test.js`, `v3-v31-composition-differential.test.js`, and the prompt-diff test's "the v3 prompt is exactly what it was before the refactor" / "exactly one v3 line is removed" assertions, all passing unmodified in shape); `.env` and the live n8n runtime were never touched; no Docker exec against production containers or OpenAI network calls were made.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), same PR3c = Slice 3c Contract Alignment, base = `feat/multi-product-quotes-output`. This follow-up lands as additional commits on the same branch/PR, not a new slice.
+- Current work unit: Slice 3c follow-up — item attribution, complete for tasks 3c.7–3c.9. Task 3c.10 (the second live A/B rerun) is the orchestrator's next step, not part of this apply batch. Slice 4 remains not started.
+- Boundary: 3 commits on `feat/multi-product-quotes-alignment` (on top of the existing 2 Slice 3c commits):
+  1. `fix(v3): reject a proposal that resolves the same item concept from two items' shared evidence span` — production fix in `v3-contract-runtime.js` (+24/−0), plus its synthetic tests in `v3-contract-runtime.test.js` (+130/−0) and the new captured-evidence test file `v3-v31-item-evidence-span-conflict.test.js` (142 new lines), plus 2 regenerated workflow JSON files (`wa-conversation-orchestrator.json` +2/−2, `ai-prd-shadow-evaluator.json` +2/−2 = 4 generated lines) = **296 authored changed lines** (excluding the 4 generated workflow-JSON lines).
+  2. `feat(v3): add v3.1-only prompt rules against cross-item quantity/measurement transfer and item-scoped corrections` — production addition in `build-ai-request.js` (+13/−0), plus its tests in `build-ai-request-v31-prompt.test.js` (+25/−0), plus 1 regenerated workflow JSON file (`ai-lead-qualification-assistant.json` +1/−1 = 2 generated lines) = **38 authored changed lines** (excluding the 2 generated workflow-JSON lines).
+  3. `docs(sdd): record the Slice 3c follow-up apply progress` — `tasks.md` checkbox marks (3 lines) and this `apply-progress.md` section.
+- **Review budget: within forecast.** Total authored risk ≈ 296 + 38 = **334 authored changed lines**, comfortably under the 800-line cap — no `size:exception` needed. The 6 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's generated-artifact carve-out, but remain part of the complete snapshot for review/receipt purposes.
+
+---
+
+## Slice 3c follow-up — item attribution (live A/B round 2)
+
+**Scope**: tasks 3c.7–3c.9 only. Same branch (`feat/multi-product-quotes-alignment`), same base (`feat/multi-product-quotes-output`). Tasks 3c.10 (the orchestrator's live A/B rerun) and Slice 4 are explicitly out of scope for this batch.
+
+### Why this batch exists
+
+The live A/B rerun after 3c.1–3c.5 (N=10, production catalog) reached first-turn validity 20/20 (equal to v3; total 36/40 against v3's 30/40), but found two remaining item-attribution defects:
+- First turn, 3 of 20: the pandereta's quantity "500 ml" was copied onto the wire item (both items carried 500 ml, with the same evidence span), or moved onto the wire (wire 500 ml, pandereta only height), or the pandereta was split into two items.
+- Wire correction, 1 of 6 valid corrections put 300 ml on the pandereta instead of the wire. The canary gate ("every valid correction is scoped to the named item") failed.
+
+### Decisions recorded
+
+1. **The observed failures split into two shapes with different fixes.** "Copied" (the same evidenced text resolves the same item concept on two different items) is deterministically detectable: the same `(field, evidence_quote, evidence_occurrence)` triple can never legitimately authorize two different `item_ref` values in one proposal — no legitimate customer message repeats itself to mean two different items without a different occurrence number. "Moved" (one unambiguous, non-duplicated span attached to the wrong item) has no such signal: the validator has no ground truth for "the right item" when there is exactly one span and exactly one target. Task 3c.7 fixes the first shape in the validator; task 3c.8 addresses the second (and the "split into two items" pattern) in the v3.1-only prompt, per the orchestrator's own framing of the two tasks.
+2. **Split-item detection was considered and NOT implemented as a separate deterministic validator rule.** The task's own suggested signals were checked directly against the real contract surface and found unusable:
+   - *"two new items created with no product and no `requested_label`"*: this is not a reliable split signal — a customer can legitimately open a turn with two separate, still-unresolved new items (two genuinely different unclear products), which must not be rejected. There is no way to distinguish "two legitimately separate ambiguous items" from "one item wrongly split in two" from this shape alone.
+   - *"the same `requested_label` evidence on two items"*: `requested_label` is not part of the v3.1 proposal contract at all — it is a system-derived storage field on `line_items` (design.md D4/D10), absent from `OBSERVATION_KEYS_V31`, `CATALOG_RESOLUTION_KEYS_V31` and every other proposal-shape key set the validator checks. Grepping the reducer (`tests/fixtures/workflow-nodes/shared/v3-line-items.js`) confirms it is always set to `null` today (`newItem`, `readLineItems`'s flat-row branch) and never derived from anything — there is no `requested_label` value at validation time to compare across items.
+   - The one signal that *is* both unambiguous and already covered by the contract surface — two `catalog_resolutions` entries sharing the identical `evidence_quote`/`evidence_occurrence` but different `item_ref` — is exactly the same mechanism task 3c.7 already implements (the evidence-span-conflict key is keyed by field, and `product` is an `ITEM_FIELD`; a genuine "same catalog mention split across two items" case that also emits a duplicated `product` observation for both new items is already caught, see the fourth synthetic test below). A weaker, catalog-resolution-only version of the rule (matching span, no product observation on either side) was rejected: nothing requires the model to emit a `catalog_resolutions` entry with matching text for a genuine split (the observed live shape was one item getting quantity, the other getting measurements, with no guarantee their `catalog_resolutions` entries — if any — share the same span), so a rule keyed only on `catalog_resolutions` would not reliably catch the real shape and risks false positives on legitimately separate multi-product turns. This is why 3c.8 also adds an explicit prompt rule ("one mentioned product is one item, never split into two") — the general fix belongs in the model's own instructions, not a shape heuristic that cannot see the customer's intent.
+3. **The new validator code is v3.1-only and needs no static-coverage-allowlist entry.** `tests/unit/v3-v31-static-error-code-coverage.test.js` asserts V3 codes ⊆ V31 codes ∪ the closed D5 allowlist; it says nothing about codes that exist only in V3.1. `item_evidence_span_conflict` is never emitted by `validateV3AiProposalV3`, so the coverage test needed no change — confirmed green with no edits (see Full Suite Verification below).
+4. **The new validator error is repairable by construction, not by a special case.** Every error built via the shared `validationError(...)` helper carries `disposition: 'repairable'` unconditionally (same as every other v3/v3.1 code); `item_evidence_span_conflict` uses that same helper, so it automatically routes through the existing one-shot repair path rather than straight to contingency — no new dispatch logic was needed or added.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3c.7 (validator rule, synthetic cases) | `tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js` (new `item_evidence_span_conflict` describe block) | Unit | ✅ 17/17 pre-existing cases in this file green before the edit | ✅ Written first; confirmed RED via `git stash` (see RED evidence below) | ✅ 4/4 new cases pass after the fix | ✅ 4 cases: same span + same field + 2 items rejects; same text at a different occurrence does not; same span but different fields (quantity vs measurements) does not; the same rule also catches a duplicated `product` evidence span across two new matched items | ➖ None needed |
+| 3c.7 (validator rule, live-evidence cases) | `tests/unit/v3-v31-item-evidence-span-conflict.test.js` (new file) | Unit | ✅ 15/15 `v3-line-items-live-evidence.test.js` cases green before this file existed | ✅ Written first against REAL captured `turn_policy`/`proposal` pairs (`captured-live-proposals.json`, first-turn[3] and wire-correction[0]), never hand-authored policies; confirmed RED via `git stash` | ✅ 6/6 passed after the fix | ✅ 6 cases: 2 sanity (unmodified captured proposals still validate), 2 "copied" (rejected), 2 "moved" (documented gap — still validates, proving the boundary of what 3c.7 can and cannot catch) | ➖ None needed — pure test file |
+| 3c.8 (prompt rules) | `tests/unit/build-ai-request-v31-prompt.test.js` (2 new tests) | Unit | ✅ 7/7 pre-existing cases in this file green before the edit | ✅ Written first, confirmed RED (2/9 failed, exact text not yet present) | ✅ 9/9 passed after adding the two new prompt-line constants | ➖ Single scenario per rule (a prompt-line presence/absence check has one meaningful case: present in v3.1, absent from v3) | ➖ None needed |
+| 3c.9 (regression confirmation) | full existing suites, no new file | Unit | ✅ | N/A (confirmatory) | ✅ 944/944 non-skipped unit tests, 0 regressions, `check:parity`/`check:sql-references` clean (see Full Suite Verification) | N/A | N/A |
+
+### RED evidence (3c.7 — both new test files, against the pre-fix `v3-contract-runtime.js`)
+
+Command: `git stash push -- tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js && npx vitest run tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js --globals`
+
+Result: **4 of 25 failed**, exactly the 2 "copied" cases in each file (the synthetic duplicate-quantity/duplicate-product cases, and the captured-evidence duplicate-quantity cases for both first-turn and wire-correction) — every other case (the 2 negative-control synthetic cases, the 2 sanity cases, and the 2 documented-gap "moved" cases) already passed before the fix, which is expected since they assert the absence of the new code. `git stash pop` restored the fix; the same command then passed **25/25**.
+
+### RED evidence (3c.8 — `build-ai-request-v31-prompt.test.js`, against the pre-fix `build-ai-request.js`)
+
+The two new tests were written first and run against the file before adding the two new prompt-line constants: **2 of 9 failed** (`expect(v31Prompt).toContain(...)` on text that did not exist yet). After adding `V31_NO_CROSS_ITEM_TRANSFER_RULE` and `V31_CORRECTION_NAMED_ITEM_RULE` to `buildV31PromptLines`'s `derived.push(...)` call: **9/9 passed**, including the pre-existing "exactly one v3 line is removed" test, confirming the v3 prompt stayed byte-identical and every other v3 line still reaches v3.1 verbatim (pure append, no v3 line touched).
+
+### Test Summary
+
+- **Total tests written this batch**: 4 (`v3-contract-runtime.test.js`, new describe block) + 6 (`v3-v31-item-evidence-span-conflict.test.js`, new file) + 2 (`build-ai-request-v31-prompt.test.js`) = **12 new tests**.
+- **Total tests passing**: 12/12 new, 0 regressions across 932 pre-existing unit tests (`npm test`: 944/944 non-skipped after this batch).
+- **Layers used**: Unit (12). No `.sql` file touched this batch — the Postgres suite was not re-run (no SQL/DB behavior changed; per the phase's own instruction, Postgres integration is only required when SQL/DB behavior changes).
+- **Approval tests**: none — every new assertion calls the real, unmocked `validateV3AiProposal`/`validateV3AiProposalV31` and the real `build-ai-request.js` prompt-building code via the same `new Function('items', '$env', source)` harness prior slices already use.
+- **Pure functions/constants created**: no new exported functions — `item_evidence_span_conflict` is one new branch inside the existing `validateV3AiProposalV31` mutation loop (keyed by a `Map<string, string>` local to that function call, so it is scoped per validation and side-effect-free across calls); `V31_NO_CROSS_ITEM_TRANSFER_RULE` and `V31_CORRECTION_NAMED_ITEM_RULE` are two new string constants appended (pure data) to the existing `buildV31PromptLines` derivation.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-wrapper.test.js tests/unit/v3-brand-voice.test.js tests/unit/compile-v3-turn.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-line-items-live-evidence.test.js tests/unit/v3-v31-contract-consistency.test.js tests/unit/build-v3-lead-effect.test.js tests/unit/v3-effect-execution-wrapper.test.js tests/unit/build-clickup-payload.test.js tests/unit/crm-seller-notification-dispatch.test.js tests/unit/mock-ai-valid-proposal.test.js tests/unit/shadow-evaluator-persistence.test.js tests/unit/v3-line-items-live-replay.test.js --globals` → **363/363 passed** (23 files, includes every D11 guarantee suite plus every named "must stay green" suite) |
+| Runtime harness command/scenario and exact result | N/A — no SQL/DB behavior changed this batch (only the JS validator and the JS prompt builder), so the Postgres integration harness was not re-run, per the phase instruction limiting it to SQL/DB changes. The n8n Code-node runtime boundary is exercised indirectly by `npm run check:parity` (regenerates and diffs the 5 nodes embedding `v3-contract-runtime.js`/`build-ai-request.js`; clean after `node tests/scripts/sync-workflow-nodes.mjs`) |
+| Rollback boundary | Revert the two functional commits on `feat/multi-product-quotes-alignment` (validator guard + its tests; prompt rules + prompt tests) independently — each is self-contained with its own tests and neither depends on the other. `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled` everywhere; nothing in production passes `version:'v3.1'`, so this batch has zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **74 files passed, 17 skipped; 944 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after `node tests/scripts/sync-workflow-nodes.mjs` regenerated the 3 workflow files embedding the two edited fixtures (`wa-conversation-orchestrator.json`: Validate And Authorize V3; `ai-prd-shadow-evaluator.json`: Prepare Shadow Evaluation + Record Shadow Evaluation; `ai-lead-qualification-assistant.json`: Build AI Request).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings (no `.sql` file touched this batch).
+- Postgres integration: not re-run (no SQL/DB behavior changed; migration 025 and its down file are unaffected).
+
+### Regression Safety Net
+
+- Every D11 guarantee suite (`v3-v31-static-error-code-coverage.test.js`, `v3-v31-composition-differential.test.js`, `v3-v31-authorizer-composition-differential.test.js`, `v3-v31-address-and-pickup-regression.test.js`, `v3-runtime-compatibility.test.js`, `v3-address-hardbound.test.js`, `v3-commercial-policy.test.js`) re-run green with no edits, confirming the new mutation-loop branch changes no existing v3 or v3.1 behavior for any case those suites cover.
+- The prompt-diff guarantee (`build-ai-request-v31-prompt.test.js`'s "exactly one v3 line is removed... every other v3 line survives verbatim" test) re-run green, confirming the two new prompt lines are pure appends and the v3 prompt stayed byte-identical (also proven directly by the unchanged `GOLDEN_V3_PROMPT` approval test in the same file).
+- `v3-line-items-live-evidence.test.js` and `v3-v31-contract-consistency.test.js` (the two Slice-3c guarantee files named in the phase instruction) both re-run green with no edits.
+
+### Deviations from Design
+
+1. **Split-item detection was not implemented as a separate deterministic validator rule.** See "Decisions recorded" #2 above for the full reasoning (the task's own suggested signals are either too broad — legitimate multi-item ambiguous turns would false-positive — or not present in the validator's input surface at all, since `requested_label` is never populated by any code path today). The general fix for the split-item and moved-item shapes is the v3.1-only prompt rule added in 3c.8, per the task's own framing ("implement only if it is unambiguous; otherwise leave it to the prompt").
+2. **The new error code's `related_ids` carries only the conflicting (later) mutation's observation id**, matching the exact convention `mutation_target_duplicate` already uses for item-field mutations (`[observationEntry.id]`), not both observation ids. This keeps every error in the mutation loop shaped consistently for any downstream repair-instruction renderer that reads `related_ids`.
+
+### Issues Found
+
+None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled`; nothing in production passes `version:'v3.1'`; the v3 validator and v3 prompt are untouched (confirmed by `v3-runtime-compatibility.test.js`, `v3-address-hardbound.test.js`, `v3-commercial-policy.test.js` and the prompt file's own "byte-identical" approval test all passing unmodified); `.env` and the live n8n runtime were never touched; no Docker exec against production containers or OpenAI network calls were made; `untitled.md` was left untouched.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), same PR3c = Slice 3c Contract Alignment, base = `feat/multi-product-quotes-output`.
+- Current work unit: Slice 3c follow-up, complete for tasks 3c.7–3c.9. Task 3c.10 (the orchestrator's live A/B rerun) is the next step, not part of this apply batch. Slice 4 not started.
+- Boundary: 3 commits added on `feat/multi-product-quotes-alignment` (on top of the 2 already-landed Slice 3c commits):
+  1. `feat(v3): reject a duplicated evidence span across two line items` — production fix in `v3-contract-runtime.js` (+24/−0 = **24 authored changed lines**), plus its tests: `v3-contract-runtime.test.js` (+130/−0) and the new `v3-v31-item-evidence-span-conflict.test.js` (142 new lines) = **296 authored changed lines**, plus 2 regenerated workflow JSON files (6 generated lines, excluded from authored risk).
+  2. `feat(v3): add v3.1 prompt rules against cross-item quantity/measurement transfer and item-mismatched corrections` — production fix in `build-ai-request.js` (+13/−0), plus its test `build-ai-request-v31-prompt.test.js` (+25/−0) = **38 authored changed lines**, plus 1 regenerated workflow JSON file (2 generated lines, excluded from authored risk).
+  3. `docs(sdd): record Slice 3c follow-up apply progress` — `tasks.md` checkbox marks (12/1) and this `apply-progress.md` section.
+- **Review budget: comfortably within forecast.** Total authored risk ≈ 24 + 130 + 142 (commit 1) + 13 + 25 (commit 2) = **334 authored changed lines** across the two functional commits, well under the 800-line cap — no `size:exception` needed. The 8 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's golden/generated-artifact carve-out.
