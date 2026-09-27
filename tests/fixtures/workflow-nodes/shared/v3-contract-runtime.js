@@ -806,6 +806,19 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const mutations = Array.isArray(proposalObject.state_mutations) ? proposalObject.state_mutations : [];
   if (!Array.isArray(proposalObject.state_mutations)) errors.push(validationError('state_mutations_invalid', 'state_mutations'));
   const seenMutationTargets = new Set();
+  // 3c.7 (design.md D4/Requirement "Item-Scoped Line Items...": a quantity
+  // or measurement fact MUST attach only to the item its evidence names).
+  // Live A/B round 2 found the model sometimes reused the exact same
+  // evidenced text (same evidence_quote + evidence_occurrence in this
+  // message) to resolve the same item concept on two different items —
+  // copying or duplicating a fact instead of attaching it once. That one
+  // shape is deterministically detectable: the same (field, evidence_quote,
+  // evidence_occurrence) triple can never legitimately authorize two
+  // different item_ref values in one proposal. A single span reattached to
+  // the *wrong* item (no duplicate) has no such signal and is not caught
+  // here — see design.md's Deviations/D11 follow-up notes and the v3.1
+  // prompt rule added in task 3c.8.
+  const evidenceSpanItemsByField = new Map();
   const existingItemCountPreTurn = existingItems.size;
   for (const [index, mutation] of mutations.entries()) {
     const path = `state_mutations[${index}]`;
@@ -875,6 +888,17 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         continue;
       }
       seenMutationTargets.add(targetKey);
+
+      const evidenceSpanKey = `${mutation.field}\u0000${observationEntry.evidence_quote}\u0000${observationEntry.evidence_occurrence}`;
+      const evidenceSpanItemRef = evidenceSpanItemsByField.get(evidenceSpanKey);
+      if (evidenceSpanItemRef !== undefined && evidenceSpanItemRef !== itemRef) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', path, [observationEntry.id], [],
+          'This evidence already resolved this concept for a different item; attach it only to the item its evidence names, or drop this mutation and ask which item it refers to.',
+        ));
+        continue;
+      }
+      evidenceSpanItemsByField.set(evidenceSpanKey, itemRef);
 
       if (mutation.field === 'product') {
         const resolution = catalogResolutionByRef.get(itemRef);
