@@ -463,6 +463,14 @@ const pickupFactoryAddressRequiredError = (normalizedReplyText) => {
   );
 };
 
+const installationRequiresDeliveryError = (serviceScope, fulfillment) => {
+  if (!['installation', 'both'].includes(serviceScope) || fulfillment !== 'pickup') return null;
+  return validationError(
+    'installation_requires_delivery', 'fulfillment', ['service_scope', 'fulfillment'], ['delivery', 'material'],
+    'Installation is available only with delivery. Correct fulfillment to delivery, or quote material-only pickup without installation. Do not offer installation with factory pickup.',
+  );
+};
+
 const primaryRequestGoalInapplicableError = (requestedGoal, serviceScope, allowedNextGoalIds) => {
   if (!(requestedGoal === 'fulfillment' && serviceScope === 'installation')) return null;
   return validationError(
@@ -1067,6 +1075,8 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
+  const installationDeliveryError = installationRequiresDeliveryError(serviceScope, fulfillment);
+  if (installationDeliveryError) errors.push(installationDeliveryError);
   const normalizedReplyText = String(proposalObject.reply_text || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
@@ -1486,6 +1496,8 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
+  const installationDeliveryError = installationRequiresDeliveryError(serviceScope, fulfillment);
+  if (installationDeliveryError) errors.push(installationDeliveryError);
   const normalizedReplyText = String(proposalObject.reply_text || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')

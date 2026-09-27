@@ -188,6 +188,10 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 
 - [x] 3c.11 RED then GREEN: use the captured first-turn proposal to reject an item-field observation or mutation with `item_ref:null` when the proposal introduces two items, instead of creating a headless `li_0`; retain the 0/1-item fallback, quote-level fields, and `item_target_required` for two preexisting items. Sync embedded workflow nodes and run focused plus full local checks. This is contract-alignment work only; rollout tasks 4.x remain pending.
 
+### Slice 3c owner-rule follow-up — installation requires delivery
+
+- [x] 3c.12 RED then GREEN: reject projected `service_scope=installation|both` with `fulfillment=pickup` in the shared v3/v3.1 validator; verify persisted and same-turn combinations, correction to delivery or material-only, material-only pickup, installation-only without explicit fulfillment, authorizer protection, and v3.1-only prompt guidance. Sync workflow nodes and run local checks. No live deployment in this task.
+
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 
 - [ ] 4.1 Apply migration 025 (safe superset while v3 decisions are in flight); deploy the four slices' workflows via `scripts/dev/sync-n8n-workflows.sh`; keep `AI_PRD_V3_LINE_ITEMS=disabled`
@@ -199,7 +203,7 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [ ] 4.6 Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
 - [ ] 4.7 Monitor `conversation_turn_executions.last_error` and `advisor_decisions.validation_errors` for multi-product rejections; merge tracker → main once stable
 
-Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; the existing canary state is not proof that their prescribed transitions occurred. Installation requiring delivery is a newly stated owner rule, not yet implemented or verified against pickup.
+Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; the existing canary state is not proof that their prescribed transitions occurred. Installation requiring delivery is now covered by a local validator guard and tests, but its negative path is not yet verified on the live canary.
 
 Rollback drain (ordered, per slice, latest first):
 - [ ] 4.8 Set `AI_PRD_V3_LINE_ITEMS=canary` (empty phone list) or `disabled`; recreate n8n — new turns compile v3

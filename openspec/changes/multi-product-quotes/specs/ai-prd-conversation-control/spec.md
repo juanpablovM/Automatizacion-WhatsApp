@@ -40,6 +40,25 @@ Each quote MUST produce exactly one lead and one ClickUp task listing every line
 
 ## MODIFIED Requirements
 
+### Requirement: Installation Requires Delivery
+
+Installation **MUST** be provided only with delivery. A quote **MUST NOT** combine `fulfillment=pickup` with `service_scope=installation` or `service_scope=both`, whether those values were committed in prior turns or proposed in the current turn. Validation **MUST** reject the combination before authorizing mutations or effects and provide a repairable instruction. Material-only pickup **MUST** remain valid, and installation-only **MUST NOT** gain a new explicit fulfillment prerequisite.
+
+#### Scenario: Installation with pickup is rejected
+- GIVEN a quote has installation or both service scope and factory pickup, from persisted facts or same-turn evidence
+- WHEN the advisor proposal is validated
+- THEN no mutation or effect is authorized, and a repairable error directs the advisor to delivery or material-only pickup
+
+#### Scenario: A correction resolves the conflict
+- GIVEN a quote has installation or both service scope and factory pickup
+- WHEN the customer corrects fulfillment to delivery or scope to material-only
+- THEN the corrected quote is not rejected for the former installation-pickup conflict
+
+#### Scenario: Valid fulfillment paths remain available
+- GIVEN a quote requests material-only pickup, installation-only without an explicit fulfillment choice, or installation with delivery
+- WHEN the advisor proposal is validated
+- THEN this rule does not block the quote or add a fulfillment prerequisite for installation-only
+
 ### Requirement: Evidenced Semantic Proposal
 
 A proposal **MUST** include exact reply text, zero or one primary request, and observations citing quote plus occurrence. The system **MUST** derive offsets and evidence digests; confidence **MUST NOT** authorize behavior. Multiple facts **MAY** progress together. A customer-correctable fact **MAY** be replaced only with evidence naming the prior fact. When a quote has multiple line items, a fact or correction observation **MUST** cite the `item_id` it targets, or cite quote-level scope when it names no item; a correction **MUST NOT** be authorized against an item unless its evidence unambiguously identifies that item.

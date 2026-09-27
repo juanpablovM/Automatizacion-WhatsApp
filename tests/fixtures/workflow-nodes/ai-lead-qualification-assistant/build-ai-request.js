@@ -696,6 +696,7 @@ if (usesV3Contract) {
   // it (and keeps rejecting it); this v3.1-only rule keeps the model from
   // re-resolving an already-known item when the customer names no product.
   const V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE = 'catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje. Una confirmación, un "sí", un "todo correcto" o cualquier respuesta que no nombre un producto lleva catalog_resolutions=[]; nunca vuelvas a resolver ni reclasificar un ítem cuyo product ya está registrado, salvo que el cliente nombre en este mensaje un producto para ese ítem.';
+  const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment debe ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Para installation sin fulfillment explícito, no pidas esa elección: el despacho va implícito.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -706,6 +707,7 @@ if (usesV3Contract) {
       V31_ITEM_REF_GUIDANCE_RULE,
       V31_NO_CROSS_ITEM_TRANSFER_RULE,
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
+      V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,
       V31_PANDERETA_EXAMPLE_RULE,

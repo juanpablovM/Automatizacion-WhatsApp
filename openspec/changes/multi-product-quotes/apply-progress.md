@@ -712,4 +712,26 @@ Confirmation produced one lead (252, `seller_id=2`) and one successful ClickUp t
 
 This is evidence for the original incident path, not for the prescribed rollout transitions in 4.1, 4.2, or 4.4; those and 4.6–4.7 remain open. The owner subsequently clarified that installation is available **only with delivery**: pickup plus installation must never be offered or accepted. This E2E exercised installation plus delivery, not the prohibited combination. A separate gap was observed for `service_scope=both` plus pickup; policy enforcement and negative-path verification are pending, with no code or runtime change in this documentation unit.
 
+## Owner-rule follow-up — installation requires delivery (3c.12)
+
+Both v3 and v3.1 now reject a quote projected as `service_scope=installation|both` with `fulfillment=pickup`. A shared repairable validator error checks current-turn candidate observations before persisted facts, so correcting either field clears an existing conflict. The guard authorizes no mutation or effect on the invalid proposal. Material-only pickup and installation-only without explicit fulfillment remain valid. Only the v3.1 prompt gains the explanatory rule; the v3 prompt's pinned bytes are unchanged. This is a local code change, not a deployment or live negative-path verification.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.12 validator | `tests/unit/v3-installation-delivery-policy.test.js` | Unit | Relevant preexisting suite 42/42 passed | 4/10 new tests failed on missing `installation_requires_delivery` | 10/10 passed after shared guard | Added both+pickup same-turn and pickup against persisted installation; 14/14 passed | Shared pure error helper; 14/14 remained green |
+| 3c.12 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 10/10 passed before new test | 1/11 failed on missing v3.1 rule | 11/11 passed after v3.1-only rule | v3 byte-identity and v3.1 differential already covered by existing cases | No further refactor needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-installation-delivery-policy.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js --globals` → 7 files, 72/72 passed |
+| Runtime harness | N/A — no SQL or external runtime changed; generated n8n Code-node JSON was synced locally and `npm run check:parity` passed |
+| Full checks | `npm test` → 77 files passed, 17 skipped; 980 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration not run (no SQL change). |
+| Rollback boundary | Revert the shared validator guard, v3.1 prompt clause, their tests/spec/task evidence, and three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |
+
+Rollout tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; this local verification does not satisfy them. The prohibited path still needs a controlled live canary test after deployment.
+
 Verification for this documentation unit: compared the task wording with the recorded conversation/lead/ClickUp audit outcomes; `git diff --check` passed. Runtime harness: N/A — this unit only records existing live evidence. Rollback boundary: revert this task-status/evidence documentation commit; no implementation or runtime state is changed.

@@ -48,6 +48,11 @@ describe('Build AI Request — v3 prompt stays byte-identical after the v3.1 ref
 });
 
 describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped', () => {
+  test('installation is only offered with delivery in v3.1, without changing the pinned v3 prompt', () => {
+    const rule = 'La instalación solo se ofrece con despacho';
+    expect(systemPromptFor('ai_prd_turn_policy/v3.1')).toContain(rule);
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain(rule);
+  });
   test('exactly one v3 line is removed (the D5 allowlisted clause), every other v3 line survives verbatim', () => {
     const v3Lines = systemPromptFor('ai_prd_turn_policy/v3').split('\n');
     const v31Lines = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n');
