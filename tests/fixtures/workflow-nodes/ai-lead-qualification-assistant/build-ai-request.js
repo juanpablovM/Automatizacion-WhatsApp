@@ -679,6 +679,17 @@ if (usesV3Contract) {
   const V31_ITEM_REF_GUIDANCE_RULE = 'Toda observación o mutación de product, quantity o measurements debe declarar item_ref. Usa el item_ref existente que te entrega la policy para un ítem ya registrado; para un ítem nuevo de este turno, usa un identificador simple y consistente como new:1, new:2 (uno distinto por ítem) y reutilízalo en todas las observaciones y mutaciones de ese mismo ítem dentro de este mismo turno. Los datos que no son de ítem (por ejemplo commune) siempre llevan item_ref=null.';
   const V31_CORRECTION_TARGET_RULE = 'Si el cliente corrige la cantidad, las medidas o el producto de un ítem y la cotización ya tiene dos o más ítems, y no queda claro a cuál se refiere, usa item_ref=null en esa mutación y pregunta explícitamente a cuál ítem se refiere, nombrando los productos o descripciones de cada ítem en reply_text; no adivines ni copies el dato al ítem equivocado.';
   const V31_PANDERETA_EXAMPLE_RULE = 'Ejemplo de catalogación por ítem: si el cliente dice "pandereta" y luego, al aclarar, confirma un producto del grounding (por ejemplo Cierros de Hormigón), usa matched con ese grounding_ref exacto para ese ítem; no asumas otro producto similar del catálogo (por ejemplo Adoquín) sin evidencia explícita del cliente.';
+  // Slice 3c follow-up (live A/B round 2, design.md's spec: "the system MUST
+  // NOT copy one item's quantity or measurements to another item without
+  // explicit evidence for that item"): 3 of 20 live first-turn proposals and
+  // 1 of 6 valid corrections attached a quantity/measurement to the wrong
+  // item, or split one mentioned product into two items. Task 3c.7's
+  // validator rule only catches the duplicated-evidence shape of the first
+  // defect; these two rules are v3.1-only additions targeting the shapes the
+  // validator cannot detect deterministically (a single, unambiguous span
+  // moved to the wrong item, or one product split across two items).
+  const V31_NO_CROSS_ITEM_TRANSFER_RULE = 'Nunca copies ni traslades una cantidad o medida de un ítem a otro: cada cantidad y cada medida se registra solo en el ítem cuya evidencia la describe en este mismo mensaje, aunque otro ítem también la necesite. Un producto mencionado una sola vez en el mensaje es un solo ítem: no lo dividas en dos ítems distintos aunque registres su cantidad y sus medidas en observaciones separadas.';
+  const V31_CORRECTION_NAMED_ITEM_RULE = 'Si el cliente corrige un dato y nombra el producto o la descripción de un ítem existente, esa corrección se aplica únicamente a ese ítem, aunque la cotización tenga otros ítems; no traslades el dato corregido a un ítem distinto del nombrado.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -687,7 +698,9 @@ if (usesV3Contract) {
     derived.push(
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
+      V31_NO_CROSS_ITEM_TRANSFER_RULE,
       V31_CORRECTION_TARGET_RULE,
+      V31_CORRECTION_NAMED_ITEM_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;

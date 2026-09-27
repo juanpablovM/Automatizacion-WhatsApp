@@ -91,4 +91,29 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v31Prompt).toContain('Cierros de Hormigón');
     expect(v31Prompt).toContain('pregunta explícitamente a cuál ítem se refiere');
   });
+
+  // Slice 3c follow-up (live A/B round 2): 3 of 20 first-turn proposals and
+  // 1 of 6 valid corrections misattributed a quantity/measurement across
+  // items. Task 3c.7's validator rule only catches the *duplicated*-evidence
+  // shape; these v3.1-only prompt additions (design's spec: "the system MUST
+  // NOT copy one item's quantity or measurements to another item without
+  // explicit evidence for that item") target the *moved*/split shapes the
+  // validator cannot detect deterministically.
+  test('v3.1 adds a rule against copying or moving a quantity/measurement between items, and against splitting one product into two items', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt).toContain('no lo dividas en dos ítems distintos');
+    expect(v3Prompt).not.toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v3Prompt).not.toContain('no lo dividas en dos ítems distintos');
+  });
+
+  test('v3.1 adds a rule that a correction naming an item\'s product or label applies only to that item', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('esa corrección se aplica únicamente a ese ítem');
+    expect(v3Prompt).not.toContain('esa corrección se aplica únicamente a ese ítem');
+  });
 });
