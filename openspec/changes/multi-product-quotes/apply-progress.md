@@ -1,12 +1,20 @@
 # Apply Progress: Multi-Product Quotes
 
-**Scope**: Slice 1 — Foundation only (tasks 1.x). Slices 2a/2b/3/4 not started.
+**Scope**: Slice 1 — Foundation (tasks 1.x) AND Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32). Slices 2b/3/4 not started.
 **Mode**: Strict TDD.
-**Branch**: `feat/multi-product-quotes-foundation` (base tracker `feat/multi-product-quotes`).
+**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`).
 
 ## Status
 
-25/25 Slice 1 tasks complete (1.1–1.25). All marked `[x]` in `tasks.md`.
+- 25/25 Slice 1 tasks complete (1.1–1.25). All marked `[x]` in `tasks.md`.
+- 27/27 Slice 2a tasks complete (2a.1–2a.27). All marked `[x]` in `tasks.md`.
+- 5/5 Slice 2a rework tasks complete (2a.28–2a.32, design.md D11). All marked `[x]` in `tasks.md`. See "Slice 2a rework (D11)" section below.
+
+---
+
+## Slice 1 — Foundation
+
+_(unchanged from the original Slice 1 apply — preserved below for continuity)_
 
 ## TDD Cycle Evidence
 
@@ -75,3 +83,227 @@ None. All hard constraints held: the advisor still emits exactly one implicit it
   2. `feat(db): make apply_v3_state_mutations item-aware (migration 025)`
   3. `feat(v3): read v3 policy facts through the item-aware model`
 - **Review budget: EXCEEDED.** `git diff --numstat feat/multi-product-quotes...HEAD` (generated workflow JSON excluded): **1110 authored changed lines** (1112 additions + 6 deletions total, minus 8 lines of generated workflow-JSON diff), against a forecast of ~690 and a hard cap of 800 agreed in preflight. This was only visible after implementing the slice as one cohesive, fully cross-tested unit (JS reducer + SQL twin + parity/replay/down-migration integration tests + wiring + regression tests all had to land together to keep RED→GREEN honest and the SQL/JS parity guarantee meaningful). **Decision needed before PR1 opens**: accept `size:exception` for this slice, or split it into two child PRs against `feat/multi-product-quotes-foundation` (e.g. PR1a = JS reducer + cases + SQL migration/rollback + parity suite; PR1b = `v3-policy-builder.js` wiring + workflow regeneration + regression test — this split is mechanically clean since commit boundaries already separate these concerns).
+
+---
+
+## Slice 2a — Contract, dark
+
+**Scope**: tasks 2a.1–2a.27 only. Branch `feat/multi-product-quotes-contract`, base `feat/multi-product-quotes-foundation`.
+
+### Status
+
+27/27 Slice 2a tasks complete (2a.1–2a.27). All marked `[x]` in `tasks.md`.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 2a.1–2a.4 `V3_CONTRACTS` + version dispatch | `shared/v3-contract-runtime.test.js` | Unit | ✅ full existing 599-unit / v3-runtime-compatibility (38 tests) green before edit | ✅ Written | ✅ Passed | ✅ 4 cases (v3.1 keys, compiler dispatch, v3 unchanged, v3.1 stamped) | ✅ Clean |
+| 2a.5–2a.6 `mutation_target_duplicate` | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario (duplicate target is binary) | ➖ None needed |
+| 2a.7–2a.8 `line_items_limit_exceeded` | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario (11th item) | ➖ None needed |
+| 2a.9–2a.10 `item_identity_required` | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario | ➖ None needed |
+| 2a.11–2a.12 `item_target_required` | same | Unit | — | ✅ Written | ✅ Passed | ✅ 2 cases (≥2 items rejects, exactly 1 resolves) | ➖ None needed |
+| 2a.13–2a.14 withholding | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario incl. quantity+measurements still authorizing | ➖ None needed |
+| 2a.15–2a.16 live scenario | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario (spec-mandated exact transcript) | ➖ None needed |
+| 2a.17–2a.18 `catalog_resolution_clarification_required` non-blocking | same | Unit | — | ✅ Written | ✅ Passed | ➖ Single scenario | ➖ None needed |
+| 2a.19–2a.20 `line_items` goal / `effectiveRequiredGoalIds` v3.1 | same | Unit | — | ✅ Written | ✅ Passed | ✅ 2 cases (all resolved, one unresolved surfacing `product@<ref>`/`quantity@<ref>`) | ➖ None needed |
+| 2a.21–2a.22 `v3-policy-builder.js` item gate | `tests/unit/v3-policy-builder-v31-items.test.js` | Unit | ✅ 4/4 `v3-policy-builder-line-items-regression.test.js` green before edit | ✅ Written | ✅ Passed | ✅ 4 cases (v3 default unaffected, per-item facts, goal+authority, resolved/unresolved) | ➖ None needed |
+| 2a.23–2a.24 version-set widening | `tests/unit/v3-artifact-version-widening.test.js` | Unit | ✅ 6/6 `v3-outbound-delivery-wrapper` + `normalize-ai-result-wrapper` green before edit | ✅ Written | ✅ Passed | ✅ 6 cases across the 4 files | ➖ None needed |
+| 2a.25–2a.26 SQL version widening | `tests/integration/v3-contract-runtime-v31-sql.postgres.test.js` | Integration (Postgres) | ✅ 152/152 full Postgres suite green before edit | ✅ Written (see deviation note below) | ✅ Passed | ✅ 2 cases (08/09/16 full turn, 15 contingency) | ➖ None needed |
+| 2a.27 full v3 regression | `v3-runtime-compatibility.test.js` + full Postgres suite | Unit + Integration | ✅ | N/A (confirmatory) | ✅ 38/38 unit + 154/154 Postgres, 0 regressions | N/A | N/A |
+
+**Deviation on 2a.25/2a.26 RED**: the SQL widening (`IN (...)` version-set checks, dynamic `version` in row 09's outbox insert) was authored just ahead of its integration test rather than strictly test-first, because a meaningful RED assertion needs the full `07→08/09/15/16` turn-authority harness (conversation, inbound event, route) that only exists once the SQL accepts the payload shape enough to route past `07`; a true "fails because 08/09/15/16 reject v3.1" RED would have required a second throwaway harness discarded immediately. The **JS-layer version dispatch** (which drives the exact same behavioral contract at the application layer, 2a.23/2a.24) was written strictly RED-first. The SQL integration test is a genuine approval/confirmation test proving the widened boundary end-to-end (turn creation → authority persistence → commit → outbox → replay-read), not a rubber stamp: it fails if any of the four `IN (...)` clauses or the dynamic version substitution is reverted (verified by temporarily reverting each SQL edit and re-running — all four reversions reproduced a failure).
+
+### Test Summary
+
+- **Total tests written this slice**: 15 (`v3-contract-runtime.test.js`) + 4 (`v3-policy-builder-v31-items.test.js`) + 6 (`v3-artifact-version-widening.test.js`) + 2 (`v3-contract-runtime-v31-sql.postgres.test.js`) = **27 new tests**.
+- **Total tests passing**: 27/27 new, 0 regressions across 804 pre-existing unit tests and 152 pre-existing integration tests (`npm test`: 829/829 non-skipped; Postgres: 154/154).
+- **Layers used**: Unit (25), Integration/Postgres (2).
+- **Approval tests**: none required a behavior change to an existing assertion (the v3.1 path is entirely additive and dark; the full existing v3 suite — `v3-runtime-compatibility.test.js`, 38 tests — passed unmodified).
+- **Pure functions created**: `validateV3AiProposalV31`, `authorizeV3ConversationDecisionV31`, `effectiveRequiredGoalIdsV31`, `existingLineItemsFromPolicy`, `deriveItemIdV31` (all side-effect-free).
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-policy-builder-v31-items.test.js tests/unit/v3-artifact-version-widening.test.js --globals` → **63/63 passed** (15 + 38 + 4 + 6) |
+| Runtime harness command/scenario and exact result | `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && TEST_PG_INTEGRATION=1 npx vitest run tests/integration --globals --testTimeout=30000 && docker compose -f docker-compose.test.yml down -v` → **17 files, 154/154 passed** (includes the new `v3-contract-runtime-v31-sql.postgres.test.js`: 2/2) |
+| Rollback boundary | Revert commit `e477023` (tests) then `31ae299` (production) on `feat/multi-product-quotes-contract`. `AI_PRD_V3_LINE_ITEMS` does not exist yet (introduced in Slice 2b) and `compileV3TurnPolicy`/`buildV3PolicyInput` default to the unchanged v3 path with no `version` option — nothing in this slice is reachable by production code paths, so revert is pure code/SQL rollback with zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **61 files passed, 17 skipped; 829 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` (including the 4 regenerated: `Validate And Authorize V3`, `Normalize Delivery Result`, `Prepare Shadow Evaluation`, `Record Shadow Evaluation`).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings, 36 SQL files embedded/referenced byte-for-byte (08/09/15/16 re-verified byte-identical to their workflow-embedded copies after manual re-embedding).
+- `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (with `TEST_PG_INTEGRATION=1`) then `docker compose -f docker-compose.test.yml down -v`: **17 files passed, 154/154 tests passed** (0 failures, 0 skipped once the flag is set).
+
+### Regression Safety Net
+
+- Verified the production-only state (all 4 test files temporarily moved aside) is green BEFORE committing: `npm test` → 804/804 (exact Slice 1 baseline), `check:parity` → 0 drift, `check:sql-references` → 0 errors. This proves commit `31ae299` alone leaves the suite green.
+- Pre-existing full unit suite (804 tests) and full Postgres suite (152 tests) both green immediately after every production edit, at every checkpoint during implementation — 0 regressions at any point.
+
+### Deviations from Design
+
+1. **Simplified `state_authority.allowed_mutations` shape for item fields**: design.md's Interfaces section describes `{operation, field, item_ids[]}` (per-item authorization lists) plus a top-level `max_new_items` cap. The implementation instead emits one `{operation:'set'|'replace', concept, field}` entry per item field (matching v3's existing shape, no `item_ids`), and authorizes `replace` by cross-checking `mutation.replaces_fact_id` against the real `fact:item:<id>:<field>` fact (which can only exist for an item that already has that field set). This is materially as safe — a forged `replace` still needs a real prior fact for that exact item — and avoids inventing a second, redundant per-item authorization list that the fact-id check already subsumes. `max_new_items` is not separately enforced; `line_items_limit_exceeded` (>10 total) is the enforced cap, which is what every test and the live scenario actually exercise.
+2. **Not ported to v3.1 in this slice**: `pickup_factory_address_required`, `service_scope_both_evidence_invalid`, `fulfillment_evidence_invalid`, `primary_request_goal_inapplicable`, `address_retry_exhausted`/`address_retry_handoff_required`, and `quantity_observation_required` — these are quote-level v3 heuristics orthogonal to item-scoping. None are in the 2a.1–2a.27 task list or the live-scenario spec, and v3.1 is unreachable at runtime this slice, so there is zero behavioral risk today. Flagged as a Slice 2b/3 follow-up if the live A/B harness (Slice 3, task 3.12) surfaces a scenario needing one of them under v3.1.
+3. **Per-item goals (`{goal_id:<field>, item_id}`) not emitted** by `buildV3PolicyInput`'s v3.1 branch: the validator computes item resolution directly from `policy.facts` + this turn's observations (`existingLineItemsFromPolicy`), never by reading per-item goal entries, so emitting them would be unused scaffolding. Only the single quote-level `line_items` goal is emitted, which is what `effectiveRequiredGoalIdsV31` and every test actually consume.
+4. **SQL RED evidence is an approval test, not strict test-first** (see TDD Cycle Evidence table above) — the one place this slice did not follow strict RED-before-GREEN literally, with the mitigating verification (reversion-reproduces-failure) recorded there.
+
+### Issues Found
+
+None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` was not introduced; `compileV3TurnPolicy` defaults to `V3_CONTRACTS.policy` (v3) unless `input.version === 'v3.1'` is explicitly passed, which nothing in production code passes yet; `buildV3PolicyInput` defaults to the Slice 1 single-item behavior unless `options.version === 'v3.1'` is explicitly passed; the full pre-existing v3 validator/authorizer suite (`v3-runtime-compatibility.test.js`, 38 tests covering the exact scenarios in the spec's unmodified requirements) passed unmodified; SQL `IN (...)` widenings are strict supersets of the prior single-value equality checks.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), PR2a = Slice 2a Contract, base = `feat/multi-product-quotes-foundation`.
+- Current work unit: Slice 2a — Contract, dark, complete (27/27 tasks).
+- Boundary: starts from the foundation branch's tip; ends with 2 commits on `feat/multi-product-quotes-contract`:
+  1. `31ae299` `feat(v3): add item-aware v3.1 contract runtime, dark` (708 insertions, 30 deletions = **738 changed lines**)
+  2. `e477023` `test(v3): cover the item-aware v3.1 contract, builder gate, version widening and SQL boundary` (873 insertions, 0 deletions = **873 changed lines**)
+- **Review budget: EXCEEDED.** `git diff --numstat feat/multi-product-quotes-foundation..HEAD` (generated workflow JSON excluded): **1589 authored changed lines** (1570 additions + 19 deletions), against a forecast of ~620 and the 800-line review budget. Verified same-day, same-cause as Slice 1: the item-aware v3.1 validator/authorizer is one cohesive function (item-scoped catalog resolution, withholding, dedup/limit/identity/target checks and `line_items` resolution all share state within one pass), so it could not be split into independently-green sub-increments without either shipping a half-built validator or deferring test coverage past the behavior it proves. **Decision needed before PR2a opens**: accept `size:exception` for the tests commit (only 9% over budget, pure test additions with zero production-logic review risk), or split PR2a into two child PRs against `feat/multi-product-quotes-contract` at the exact commit boundary above: PR2a-impl (commit `31ae299`, 738 lines, comfortably under budget) → PR2a-tests (commit `e477023`, 873 lines, base = PR2a-impl's branch). If strict ≤800 is required even for the tests PR, it splits further at a describe-block boundary into contract+builder tests (`v3-contract-runtime.test.js` + `v3-policy-builder-v31-items.test.js`, 562 lines) and widening+SQL tests (`v3-artifact-version-widening.test.js` + `v3-contract-runtime-v31-sql.postgres.test.js`, 311 lines).
+
+**Superseded note**: commits `31ae299` and `e477023` above no longer exist on `feat/multi-product-quotes-contract`. The rework below (design.md D11) rewrote this branch's history on top of the same unpublished, non-published branch (owner-authorized rewrite) to fix the from-scratch validator and to re-cut the slice per task 2a.32. See "Slice 2a rework (D11)" immediately below for the current commit set and line counts.
+
+---
+
+## Slice 2a rework (D11) — v3.1 validator/authorizer compose v3
+
+**Scope**: tasks 2a.28–2a.32 only. Same branch (`feat/multi-product-quotes-contract`), same base (`feat/multi-product-quotes-foundation`). History rewritten per owner authorization (branch not published).
+
+### Why
+
+The first Slice 2a attempt (commits `31ae299`/`e477023`, now superseded) wrote `validateV3AiProposalV31`/`authorizeV3ConversationDecisionV31` from scratch. That silently dropped six-plus production guardrails that only exist in `validateV3AiProposalV3`: the address retry hard bound (`address_retry_exhausted`/`address_retry_handoff_required`), `pickup_factory_address_required`, `service_scope_both_evidence_invalid`, `fulfillment_evidence_invalid`, `primary_request_goal_inapplicable`, `quantity_observation_required`, and (found during this rework, not in the task's original enumeration but caught by the same differential harness) `address_requires_street_details`. Design D11: v3.1 must **compose** v3 — every quote-level v3 rule runs unchanged under v3.1, and v3.1 only adds item rules plus the two named D5 carve-outs.
+
+### Status
+
+5/5 tasks complete (2a.28–2a.32). All marked `[x]` in `tasks.md`. Orchestrator review found two remaining gaps against the owner's hard requirement ("v3.1 never loses an existing protection or function"); both are fixed on the same branch, amended into commit `2372b5e` (2a-ii) — see "Orchestrator follow-up" below.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 2a.28 differential guarantee test | `tests/unit/v3-v31-composition-differential.test.js` | Unit | ✅ full pre-rework suite green (844 unit / 154 Postgres) before this file existed | ✅ Written first | ✅ Confirmed RED against the pre-rework `v3-contract-runtime.js` (7/10 cases failed — see RED evidence below) | ✅ 8 cases (one per dropped rule) + 1 clean baseline + 2 allowlisted carve-out cases | ➖ None needed — pure test file |
+| 2a.29 composition refactor | `tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js` | Unit | ✅ `v3-address-hardbound.test.js` (4) + `v3-commercial-policy.test.js` (27) + `v3-runtime-compatibility.test.js` (38) + `v3-contract-runtime.test.js` (15) green before touching `validateV3AiProposalV3`'s body | ✅ (see 2a.28) | ✅ All 10 differential cases pass; full v3 safety net (84 tests) still passes after extracting the 7 shared helper functions and wiring them into `validateV3AiProposalV31` | ✅ Covered by the differential table's per-rule cases | ✅ Extracted `addressRequiresStreetDetailsError`, `serviceScopeBothEvidenceError`, `fulfillmentEvidenceError`, `quantityObservationRequiredError`, `pickupFactoryAddressRequiredError`, `primaryRequestGoalInapplicableError`, `addressRetryBoundErrors` — v3's body now calls these instead of inlining the rule, so v3 and v3.1 execute the identical function |
+| 2a.30 explicit v3.1 address/pickup regression | `tests/unit/v3-v31-address-and-pickup-regression.test.js` | Unit | ✅ 10/10 differential test green before adding this file | ✅ Written first (referenced the not-yet-composed v3.1 path) | ✅ 5/5 passed after 2a.29's composition (one fix needed: `item_ref` not `item_id` on `validation.authorized_mutations`, corrected before final GREEN) | ✅ 5 cases: retry-exhausted, progress-resets-bound, handoff-domain-reason, pickup-rejected, pickup-accepted | ➖ None needed |
+| 2a.31 full regression confirmation | `v3-runtime-compatibility.test.js` (unmodified) + full unit/Postgres suites | Unit + Integration | ✅ | N/A (confirmatory) | ✅ 844/844 unit (154 skipped without the Postgres flag), 154/154 Postgres, 0 regressions, `v3-runtime-compatibility.test.js` untouched | N/A | N/A |
+| 2a.32 re-cut into 2a-i/2a-ii | git history on `feat/multi-product-quotes-contract` | N/A (structural) | ✅ each intermediate state re-verified green (see Work Unit Evidence) | N/A | ✅ both commits independently pass their own tests + full suites (see below) | N/A | N/A |
+
+### RED evidence (2a.28)
+
+Command: `npx vitest run tests/unit/v3-v31-composition-differential.test.js --globals` against the pre-rework `v3-contract-runtime.js` (before any 2a.29 helper extraction).
+
+Result: **7 of 10 cases failed** (3 passed: the clean baseline and the two allowlisted carve-out cases, which are expected to differ). The 7 failing cases, each showing the exact v3 code(s) v3.1 was silently missing:
+
+- `address retry hard bound` — v3.1 produced `[]`, v3 produced `['address_retry_exhausted', 'address_retry_handoff_required']`
+- `pickup factory address required` — v3.1 produced `[]`, v3 produced `['pickup_factory_address_required']`
+- `address requires street details` — v3.1 produced `['primary_request_goal_resolved']`, v3 produced `['address_requires_street_details', 'mutation_shape_invalid']`
+- `service_scope_both_evidence_invalid` — v3.1 produced `[]`, v3 produced `['mutation_shape_invalid', 'service_scope_both_evidence_invalid']`
+- `fulfillment_evidence_invalid` — v3.1 produced `[]`, v3 produced `['fulfillment_evidence_invalid', 'mutation_shape_invalid']`
+- `quantity_observation_required` — v3.1 produced `['catalog_resolution_product_observation_required']` only, v3 additionally produced `quantity_observation_required`
+- `primary_request_goal_inapplicable` — v3.1 produced `[]`, v3 produced `['primary_request_goal_inapplicable']`
+
+After 2a.29's composition refactor, the same command: **10/10 passed**.
+
+### Test Summary
+
+- **Total tests written this rework**: 10 (`v3-v31-composition-differential.test.js`) + 5 (`v3-v31-address-and-pickup-regression.test.js`) = **15 new tests**.
+- **Total tests passing**: 15/15 new, 0 regressions across the full 844 unit tests (154 skipped without `TEST_PG_INTEGRATION=1`) and 154 Postgres integration tests.
+- **Layers used**: Unit (15).
+- **Approval tests**: none — this rework is a pure refactor (v3's body) plus additive composition (v3.1's body); no existing assertion's expected value changed.
+- **Pure functions created**: `addressRequiresStreetDetailsError`, `serviceScopeBothEvidenceError`, `fulfillmentEvidenceError`, `quantityObservationRequiredError`, `pickupFactoryAddressRequiredError`, `primaryRequestGoalInapplicableError`, `addressRetryBoundErrors` — all side-effect-free, shared verbatim by `validateV3AiProposalV3` and `validateV3AiProposalV31`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-policy-builder-v31-items.test.js tests/unit/v3-policy-builder-line-items-regression.test.js tests/unit/v3-artifact-version-widening.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js --globals` → **113/113 passed** (9 files) |
+| Runtime harness command/scenario and exact result | `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (with `TEST_PG_INTEGRATION=1`) then `docker compose -f docker-compose.test.yml down -v` → **17 files, 154/154 passed**, run twice (once at the 2a-i intermediate commit state, once at the final 2a-ii state) |
+| Rollback boundary | Revert commit `90498a8` (2a-ii) then `26c114e` (2a-i) on `feat/multi-product-quotes-contract`. `AI_PRD_V3_LINE_ITEMS` still does not exist (Slice 2b) and nothing in production passes `version: 'v3.1'`, so revert is pure code rollback with zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **63 files passed, 17 skipped; 844 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after `node tests/scripts/sync-workflow-nodes.mjs`.
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings, 36 SQL files embedded/referenced byte-for-byte.
+- `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `down -v`: **17 files passed, 154/154 tests passed**.
+
+### Deviations from Design
+
+None. `pickup_factory_address_required`, `service_scope_both_evidence_invalid`, `fulfillment_evidence_invalid`, `primary_request_goal_inapplicable`, `address_retry_exhausted`/`address_retry_handoff_required` and `quantity_observation_required` (the six guardrails named in design.md's D11 rejected-alternative text) are now composed. `address_requires_street_details` was not named in that text but was found missing by the same generic differential mechanism and composed identically — this is the "any new/overlooked v3 rule is inherited automatically" property D11 asks for, demonstrated on a rule the task list itself did not enumerate.
+
+Superseded by the orchestrator follow-up below: `authorizeV3ConversationDecisionV31` now carries the same handoff enrichment as v3.
+
+### Issues Found (2a.28–2a.32, before the orchestrator follow-up)
+
+None at the time. All hard constraints held: v3.1 stays dark (nothing in production passes `version: 'v3.1'`); `v3-runtime-compatibility.test.js` was not modified; every pre-existing Slice 1/2a test stayed green throughout. The orchestrator review below found the guarantee was not yet fully automatic and the authorizer parity gap noted above; both are now closed.
+
+---
+
+### Orchestrator follow-up — structural coverage + authorizer parity
+
+The orchestrator reviewed 2a.28–2a.32 and found two remaining gaps against the owner's hard requirement ("v3.1 never loses an existing protection or function"):
+
+1. The behavioral differential test (2a.28) is a table of enumerated cases — it cannot prove a **brand-new** v3 rule nobody remembers to add as a case is covered.
+2. `authorizeV3ConversationDecisionV31` did not carry v3's handoff `escalation_reason`/`pending_question_key` payload enrichment, which downstream handoff routing (`ensure-escalation-handoff.js` `REASON_TO_MOTIVE`/`motiveFromReason`) reads to decide routing.
+
+Both are fixed on the same branch, strict TDD (RED first), amended into commit `2372b5e` (2a-ii is one indivisible unit; 2a-i is unaffected).
+
+#### Gap 1 — structural error-code coverage test
+
+`tests/unit/v3-v31-static-error-code-coverage.test.js` parses `v3-contract-runtime.js` with `acorn` (added as a devDependency) into a real AST, statically walks the call graph from `validateV3AiProposalV3` — collecting every literal `validationError('<code>', ...)` call reachable directly or transitively through every helper function it calls, resolved within the same file — and does the same for `validateV3AiProposalV31`. It then asserts every v3 code is either reachable from v3.1 too, or is one of the two closed-allowlist D5 carve-outs (`catalog_resolution_conflict`, `catalog_resolution_action_forbidden`), each carrying a one-line reason. Because this walks the call graph textually rather than enumerating cases, a future v3 rule is covered automatically as long as v3.1 keeps composing (calling) the same rule-checking functions — no test-case addition needed.
+
+**RED evidence**: this test file did not exist before the rework's composition (2a.29) landed, so proving RED-before-GREEN for the *mechanism itself* needed a manual demonstration against the real file: `validationError('dummy_new_v3_rule', 'x')` was inserted as the first statement of `validateV3AiProposalV3`'s body, and `npx vitest run tests/unit/v3-v31-static-error-code-coverage.test.js -t "V3 codes are a subset"` failed:
+```
+AssertionError: expected [ 'dummy_new_v3_rule' ] to deeply equal []
+```
+The dummy line was removed immediately after and the file diffed clean against its committed content. The test suite also keeps this proof permanently as its own case ("a brand-new v3-only code (not allowlisted) fails the coverage assertion"), which injects the same dummy code into an in-memory copy of the source (never touching the file on disk) and asserts the coverage check flags it — so the property is re-verified on every run, not just once manually.
+
+#### Gap 2 — authorizer payload-enrichment parity
+
+Extracted `buildV3EffectCommand(policy, effect, authorizedMutationCount, operationKeyNamespace)` from `authorizeV3ConversationDecisionV3`'s inline `effectCommands` construction; both `authorizeV3ConversationDecisionV3` (namespace `'effect/v3'`) and `authorizeV3ConversationDecisionV31` (namespace `'effect/v3.1'`) now call this one function, so the `escalation_reason`/`pending_question_key` enrichment is composed, not copied.
+
+**RED evidence**: `tests/unit/v3-v31-authorizer-composition-differential.test.js`, written first, ran against the pre-fix authorizer:
+```
+AssertionError: expected { conversation_id: '22', …(2) } to deeply equal { conversation_id: '22', …(4) }
+- escalation_reason: "no_progress_commercial_question_loop"
+- pending_question_key: "address"
+```
+After extracting `buildV3EffectCommand` and wiring both authorizers to it: GREEN, and the v3.1 decision's `effect_commands[0].payload`/`payload_digest` are byte-identical to v3's for the address-retry handoff scenario (mirroring `v3-address-hardbound.test.js`'s "existing permitted handoff needs no quote address and carries the domain reason").
+
+The translation helpers used by both differential test files (`toV31Input`, `toV31Proposal`) were extracted into `tests/support/v3-v31-translate.js` to avoid duplicating that logic across the validator and authorizer differential harnesses (approval-tested: the existing 10-case validator differential suite was re-run and stayed green after the extraction, before any new code was added).
+
+#### Updated Test Summary (final, after both gap fixes)
+
+- **Total tests written this rework (2a.28–2a.32 + orchestrator follow-up)**: 10 (`v3-v31-composition-differential.test.js`) + 5 (`v3-v31-address-and-pickup-regression.test.js`) + 4 (`v3-v31-static-error-code-coverage.test.js`) + 1 (`v3-v31-authorizer-composition-differential.test.js`) = **20 new tests**.
+- **Total tests passing**: 20/20 new, 0 regressions across 849 unit tests (154 skipped without `TEST_PG_INTEGRATION=1`) and 154 Postgres integration tests.
+- **Layers used**: Unit (20).
+- **New devDependency**: `acorn` (zero-dependency ESTree parser; no install scripts of its own) — needed for a real AST rather than a hand-rolled brace/regex scanner, which would mis-handle regex-literal braces (e.g. `.{0,50}` quantifiers already present in this file).
+- **Pure functions added this follow-up**: `buildV3EffectCommand` (shared by both authorizers).
+
+#### Updated Work Unit Evidence (final)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-policy-builder-v31-items.test.js tests/unit/v3-policy-builder-line-items-regression.test.js tests/unit/v3-artifact-version-widening.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js --globals` → **118/118 passed** (11 files) |
+| Runtime harness command/scenario and exact result | `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (with `TEST_PG_INTEGRATION=1`) then `docker compose -f docker-compose.test.yml down -v` → **17 files, 154/154 passed** |
+| Rollback boundary | Revert commit `2372b5e` (2a-ii) then `26c114e` (2a-i) on `feat/multi-product-quotes-contract`. `AI_PRD_V3_LINE_ITEMS` still does not exist (Slice 2b) and nothing in production passes `version: 'v3.1'`, so revert is pure code rollback with zero live-traffic exposure. |
+
+#### Updated Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **65 files passed, 17 skipped; 849 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after `node tests/scripts/sync-workflow-nodes.mjs`.
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings, 36 SQL files embedded/referenced byte-for-byte.
+- `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `down -v`: **17 files passed, 154/154 tests passed**.
+
+### Issues Found (final)
+
+None. Both orchestrator-flagged gaps are closed and structurally guarded against recurrence (the static coverage test catches any future v3 rule regardless of whether anyone adds a differential test case for it). All hard constraints held throughout: v3.1 stays dark; `v3-runtime-compatibility.test.js` was not modified; every pre-existing Slice 1/2a test stayed green at every checkpoint.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), PR2a = Slice 2a Contract (rewritten), base = `feat/multi-product-quotes-foundation`.
+- Current work unit: Slice 2a rework (D11) + orchestrator follow-up, complete.
+- Boundary: `feat/multi-product-quotes-contract` now has exactly 2 commits ahead of `feat/multi-product-quotes-foundation` (history rewritten per owner authorization; commit `90498a8` was amended into `2372b5e` to fold in both gap fixes — 2a-i is untouched):
+  1. `26c114e` `feat(v3): widen the v3 route family to accept v3.1 artifacts (2a-i)` — 490 authored additions + 16 authored deletions (500/26 raw, minus 10/10 generated workflow JSON) = **506 authored changed lines**
+  2. `2372b5e` `feat(v3): compose the v3.1 validator and authorizer from v3 (2a-ii)` — 1937 authored additions + 114 authored deletions (1941/118 raw, minus 4/4 generated workflow JSON) = **2051 authored changed lines**
+- **Review budget: EXCEEDED for 2a-ii.** 2a-i (506 lines) is comfortably under the 800-line budget. 2a-ii (2051 lines) is over, by design — task 2a.32 explicitly directs "do not try to force 2a-ii under 800 by separating tests from code; just report its size," and the orchestrator's own follow-up added more to the same indivisible unit (the structural coverage test proves the composition the behavioral test and the authorizer fix both depend on; splitting any of the three apart would let a broken composition merge with green CI on the split-off piece). **Decision needed before PR2a (rewritten) opens**: accept `size:exception` for 2a-ii, or split PR2a into PR2a-i (`26c114e`, 506 lines) → PR2a-ii (`2372b5e`, 2051 lines, base = PR2a-i's branch) and ask the maintainer to review 2a-ii as a single indivisible unit despite the size.

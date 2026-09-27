@@ -77,35 +77,47 @@ Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`
 
 Proves: live scenario in *Item-Scoped Line Items, Goals, and Catalog Resolution*; *Item-Scoped Corrections*; *Evidenced Semantic Proposal* — "Correction target is unclear"; *Atomic Grounded Authorization* — "One member is invalid", "Ambiguous item retains its evidenced facts", "Eleventh item is rejected"; *Safe Versioned Rollout* — version dispatch half of "Shape change is versioned".
 
-- [ ] 2a.1 RED `shared/v3-contract-runtime.test.js`: `V3_CONTRACTS` adds the v3.1 artifact versions (version strings ending in v3.1); `v3` entries unchanged
-- [ ] 2a.2 GREEN add v3.1 to `V3_CONTRACTS`
-- [ ] 2a.3 RED: version-dispatched validator/authorizer runs the unchanged v3 path when `policy.version` is `v3` (full existing v3 suite still green)
-- [ ] 2a.4 GREEN implement dispatch
-- [ ] 2a.5 RED: `mutation_target_duplicate` — two mutations target the same `(item_ref, field)`
-- [ ] 2a.6 GREEN implement
-- [ ] 2a.7 RED: `line_items_limit_exceeded` — an 11th item rejects the whole proposal
-- [ ] 2a.8 GREEN implement
-- [ ] 2a.9 RED: `item_identity_required` — new item has neither a matched product nor an ambiguous/unsupported entry
-- [ ] 2a.10 GREEN implement
-- [ ] 2a.11 RED: `item_target_required` — `item_ref:null` correction with ≥2 items asks which item; with exactly 1 item resolves to it
-- [ ] 2a.12 GREEN implement
-- [ ] 2a.13 RED: withholding — ambiguous/unsupported item's `product` mutation drops into `withheld_mutations` (not an error); its `quantity` and `measurements` still authorize
-- [ ] 2a.14 GREEN implement
-- [ ] 2a.15 RED live-scenario: "pandereta de 3 metros de altura con alambre púa. Son aprox 500 ml en la comuna de Lo Prado" ⇒ wire item commits product "Alambre de Púas" with no invented quantity; pandereta item commits quantity "500 ml" + measurements "3 metros de altura", `product:null`, withheld; `commune` "Lo Prado" commits at quote level
-- [ ] 2a.16 GREEN implement full validator/authorizer path until the live-scenario test passes
-- [ ] 2a.17 RED: `catalog_resolution_clarification_required` per item — ambiguous item requires `primary_request={goal_id:'product', item_ref}`, never rejects mutations
-- [ ] 2a.18 GREEN implement
-- [ ] 2a.19 RED: `line_items` counts resolved with 1–10 items each having `product`+`quantity`; unresolved surfaces `product@<ref>` and `quantity@<ref>`
-- [ ] 2a.20 GREEN implement v3.1 `effectiveRequiredGoalIds`
-- [ ] 2a.21 RED: `shared/v3-policy-builder.js` emits item facts/goals/authority only when `policy.version` is v3.1
-- [ ] 2a.22 GREEN implement version gate
-- [ ] 2a.23 RED: `v3-saga-runtime.js`, `normalize-ai-result.js`, `normalize-delivery-result.js`, `record-shadow-evaluation.js` accept the v3.1 version string alongside v3
-- [ ] 2a.24 GREEN implement version-set widening
-- [ ] 2a.25 RED integration: `08/09/15/16_*.sql` accept v3 and v3.1; `09` persists the decision's own version
-- [ ] 2a.26 GREEN implement SQL changes
-- [ ] 2a.27 Run the full existing v3 regression suite to confirm it is unchanged
+- [x] 2a.1 RED `shared/v3-contract-runtime.test.js`: `V3_CONTRACTS` adds the v3.1 artifact versions (version strings ending in v3.1); `v3` entries unchanged
+- [x] 2a.2 GREEN add v3.1 to `V3_CONTRACTS`
+- [x] 2a.3 RED: version-dispatched validator/authorizer runs the unchanged v3 path when `policy.version` is `v3` (full existing v3 suite still green)
+- [x] 2a.4 GREEN implement dispatch
+- [x] 2a.5 RED: `mutation_target_duplicate` — two mutations target the same `(item_ref, field)`
+- [x] 2a.6 GREEN implement
+- [x] 2a.7 RED: `line_items_limit_exceeded` — an 11th item rejects the whole proposal
+- [x] 2a.8 GREEN implement
+- [x] 2a.9 RED: `item_identity_required` — new item has neither a matched product nor an ambiguous/unsupported entry
+- [x] 2a.10 GREEN implement
+- [x] 2a.11 RED: `item_target_required` — `item_ref:null` correction with ≥2 items asks which item; with exactly 1 item resolves to it
+- [x] 2a.12 GREEN implement
+- [x] 2a.13 RED: withholding — ambiguous/unsupported item's `product` mutation drops into `withheld_mutations` (not an error); its `quantity` and `measurements` still authorize
+- [x] 2a.14 GREEN implement
+- [x] 2a.15 RED live-scenario: "pandereta de 3 metros de altura con alambre púa. Son aprox 500 ml en la comuna de Lo Prado" ⇒ wire item commits product "Alambre de Púas" with no invented quantity; pandereta item commits quantity "500 ml" + measurements "3 metros de altura", `product:null`, withheld; `commune` "Lo Prado" commits at quote level
+- [x] 2a.16 GREEN implement full validator/authorizer path until the live-scenario test passes
+- [x] 2a.17 RED: `catalog_resolution_clarification_required` per item — ambiguous item requires `primary_request={goal_id:'product', item_ref}`, never rejects mutations
+- [x] 2a.18 GREEN implement
+- [x] 2a.19 RED: `line_items` counts resolved with 1–10 items each having `product`+`quantity`; unresolved surfaces `product@<ref>` and `quantity@<ref>`
+- [x] 2a.20 GREEN implement v3.1 `effectiveRequiredGoalIds`
+- [x] 2a.21 RED: `shared/v3-policy-builder.js` emits item facts/goals/authority only when `policy.version` is v3.1
+- [x] 2a.22 GREEN implement version gate
+- [x] 2a.23 RED: `v3-saga-runtime.js`, `normalize-ai-result.js`, `normalize-delivery-result.js`, `record-shadow-evaluation.js` accept the v3.1 version string alongside v3
+- [x] 2a.24 GREEN implement version-set widening
+- [x] 2a.25 RED integration: `08/09/15/16_*.sql` accept v3 and v3.1; `09` persists the decision's own version
+- [x] 2a.26 GREEN implement SQL changes
+- [x] 2a.27 Run the full existing v3 regression suite to confirm it is unchanged
 
 Verification: `npm test`; `npm run check:parity`; `npm run check:sql-references`; Postgres integration compose sequence (as Slice 1).
+
+**Apply note (2026-09-26):** all 27 tasks complete, full verification green (see apply-progress.md). Actual authored diff vs `feat/multi-product-quotes-foundation` is **1589 changed lines** (`git diff --numstat`, generated workflow JSON excluded), above the preflight forecast (~620) and the 800-line review budget, split across two commits (738 production + 873 tests — the tests commit is itself ~9% over 800). Same pattern as Slice 1: the item-aware validator/authorizer is one cohesive function that could not be meaningfully implemented or tested in smaller independently-green increments without either duplicating a half-built validator or deferring RED coverage past GREEN. Flagged for an owner decision before opening PR2a (accept as `size:exception` for the tests commit, or split PR2a into two child PRs against `feat/multi-product-quotes-contract`: PR2a-impl = production commit `31ae299` [738 lines]; PR2a-tests = test commit `e477023` [873 lines], further splittable into contract+builder tests [562] and widening+SQL tests [311] if strict ≤800 is required).
+
+### Slice 2a rework — v3.1 as a superset of v3 (design D11)
+
+The first implementation wrote the v3.1 validator from scratch and dropped six v3 guardrails (address retry bound, pickup factory address, service_scope and fulfillment evidence, primary_request applicability, quantity observation). The owner requires that v3.1 never removes an existing protection.
+
+- [x] 2a.28 RED: differential guarantee test. Run every v3 validator case from the existing suites against v3.1 on single-item input, and require identical error codes except a closed allowlist of the two D5 carve-outs (`catalog_resolution_conflict`, and the state-mutation branch of `catalog_resolution_action_forbidden`). It must fail on the current branch.
+- [x] 2a.29 GREEN: refactor `validateV3AiProposalV31` and `authorizeV3ConversationDecisionV31` to compose the v3 validator and authorizer. Remove the duplicated quote-level rules; keep only item rules and the two carve-outs.
+- [x] 2a.30 RED then GREEN: explicit v3.1 regression tests for the address retry hard bound (third repeated address request is rejected and hands off) and the pickup factory address rule, mirroring `tests/unit/v3-address-hardbound.test.js`.
+- [x] 2a.31 Keep every existing Slice 2a test green (live pandereta scenario, item targeting, 10-item cap, version widening, SQL boundary) and `v3-runtime-compatibility.test.js` unmodified.
+- [x] 2a.32 Re-cut the slice into functional work units, each with its own tests: 2a-i (version widening, SQL version sets and builder gate) and 2a-ii (v3.1 validator composing v3, with the differential test). Report changed lines per unit.
 
 ## Slice 2b — Advisor, dark (branch `feat/multi-product-quotes-advisor`, base `feat/multi-product-quotes-contract`)
 

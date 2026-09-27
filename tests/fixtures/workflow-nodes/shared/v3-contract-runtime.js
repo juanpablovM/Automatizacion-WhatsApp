@@ -3,6 +3,13 @@ const V3_CONTRACTS = Object.freeze({
   proposal: 'ai_conversation_proposal/v3',
   validation: 'conversation_validation_result/v3',
   decision: 'validated_conversation_decision/v3',
+  // Slice 2a (design.md D6): the item-aware shape ships under new artifact
+  // versions inside the unchanged v3 route family. Dark until Slice 2b wires
+  // the switch — nothing in production requests these today.
+  policy_v3_1: 'ai_prd_turn_policy/v3.1',
+  proposal_v3_1: 'ai_conversation_proposal/v3.1',
+  validation_v3_1: 'conversation_validation_result/v3.1',
+  decision_v3_1: 'validated_conversation_decision/v3.1',
 });
 
 const CONCEPT_TO_FIELD = Object.freeze({
@@ -192,7 +199,7 @@ const compileV3TurnPolicy = (input) => {
   const priorRequest = sanitizePolicyPriorRequest(referenceContextInput.prior_request);
 
   const policy = {
-    version: V3_CONTRACTS.policy,
+    version: input.version === 'v3.1' ? V3_CONTRACTS.policy_v3_1 : V3_CONTRACTS.policy,
     turn: {
       id: String(input.turn.id ?? ''),
       conversation_id: String(input.turn.conversation_id ?? ''),
@@ -398,7 +405,670 @@ const matchesPriorRequestValue = (policy, field, value, occurrence) => {
 const hasExplicitQuantityEvidence = (value) => /\b\d+(?:[.,]\d+)?\s*(?:m2|m²|mtl|m\.?l\.?|metros?\s+lineales?|unidades?|uds?)(?=\s|$|[.,;:])/iu
   .test(String(value ?? ''));
 
-const validateV3AiProposal = (policy, proposal) => {
+// ---------------------------------------------------------------------------
+// Shared quote-level rule bodies (design.md D11). Both validateV3AiProposalV3
+// and validateV3AiProposalV31 call these exact functions instead of each
+// re-deriving the rule. Editing a rule here changes both versions
+// identically — that composition is the property
+// v3-v31-composition-differential.test.js proves.
+// ---------------------------------------------------------------------------
+const addressRequiresStreetDetailsError = (policy, rawObservations, observationEntry, path) => {
+  const addressGoal = (policy.goals || []).find((goal) => goal.goal_id === 'address');
+  const knownCommune = projectedValueFor(policy, rawObservations, 'commune')
+    ?? addressGoal?.guidance?.known_commune;
+  const comparableAddress = (value) => String(normalizedComparable(value) ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+  const communeText = comparableAddress(knownCommune);
+  if (!communeText) return null;
+  if (comparableAddress(observationEntry.normalized_value) !== communeText
+      && comparableAddress(observationEntry.evidence_quote) !== communeText) return null;
+  return validationError(
+    'address_requires_street_details', `${path}.normalized_value`, [observationEntry.id], [],
+    'The commune is already known. Ask for street and approximate number instead of treating the commune alone as an address.',
+  );
+};
+
+const serviceScopeBothEvidenceError = (policy, canonicalGroundedValue, messageText, occurrence, observationEntry, path) => {
+  if (canonicalGroundedValue !== 'both') return null;
+  if (hasExplicitBothScope(messageText)) return null;
+  if (matchesPriorRequestValue(policy, 'service_scope', canonicalGroundedValue, occurrence)) return null;
+  return validationError(
+    'service_scope_both_evidence_invalid', `${path}.grounding_ref`, [observationEntry.id],
+    groundingRefsForConcept(policy, 'service_scope').filter((ref) => ref !== 'service_scope:both'),
+    'Use both only when the customer explicitly requests two alternatives; a single installation request is installation.',
+  );
+};
+
+const fulfillmentEvidenceError = (policy, canonicalGroundedValue, messageText, occurrence, observationEntry, path) => {
+  if (hasExplicitFulfillmentEvidence(messageText, canonicalGroundedValue)) return null;
+  if (matchesPriorRequestValue(policy, 'fulfillment', canonicalGroundedValue, occurrence)) return null;
+  return validationError(
+    'fulfillment_evidence_invalid', `${path}.grounding_ref`, [observationEntry.id],
+    groundingRefsForConcept(policy, 'fulfillment'),
+    'Use pickup or delivery only when the customer explicitly chooses a fulfillment mode; a generic acknowledgement resolves neither.',
+  );
+};
+
+const quantityObservationRequiredError = () => validationError(
+  'quantity_observation_required', 'observations', [], ['quantity'],
+  'The customer stated an explicit quantity with a unit; add an evidenced quantity observation and its authorized mutation.',
+);
+
+const pickupFactoryAddressRequiredError = (normalizedReplyText) => {
+  if (normalizedReplyText.includes('portezuelo 1502') && normalizedReplyText.includes('san bernardo')) return null;
+  return validationError(
+    'pickup_factory_address_required', 'reply_text', ['fulfillment'], ['Portezuelo 1502, San Bernardo'],
+    'State the single official factory pickup address exactly: Portezuelo 1502, San Bernardo. Do not store it as the customer commune or project address.',
+  );
+};
+
+const primaryRequestGoalInapplicableError = (requestedGoal, serviceScope, allowedNextGoalIds) => {
+  if (!(requestedGoal === 'fulfillment' && serviceScope === 'installation')) return null;
+  return validationError(
+    'primary_request_goal_inapplicable', 'primary_request.goal_id', ['fulfillment', 'installation'],
+    allowedNextGoalIds.filter((goalId) => goalId !== 'fulfillment'),
+    'Installation already implies delivery to the work site; do not ask pickup versus delivery.',
+  );
+};
+
+// Quote-level only: this rule never inspects product/quantity/measurements,
+// so a plain field-name Map is safe even though item facts (D4) share those
+// three field names across different items.
+const addressRetryBoundErrors = (policy, candidateMutations, primaryRequestValid, primaryRequest, permissions, candidateEffects) => {
+  const errors = [];
+  const addressGoal = (policy?.goals || []).find((goal) => goal.goal_id === 'address');
+  const priorValues = new Map((policy?.facts || []).map((fact) => [fact.field, fact.value]));
+  const materialProgress = candidateMutations.some((mutation) => (
+    !['customer_type', 'lead_class', 'objection_detected', 'diagnostic_datos', 'executive_summary'].includes(mutation.field)
+    && canonicalJson(mutation.projected_value) !== canonicalJson(priorValues.get(mutation.field) ?? null)
+  ));
+  const addressRetryExhausted = policy?.turn?.pending_question_goal_id === 'address'
+    && addressGoal?.status !== 'resolved'
+    && Number(addressGoal?.guidance?.next_retry_count_without_progress || 0)
+      >= Number(addressGoal?.guidance?.handoff_at || 3)
+    && !materialProgress;
+  if (!addressRetryExhausted) return errors;
+  if (primaryRequestValid && primaryRequest !== null) {
+    errors.push(validationError('address_retry_exhausted', 'primary_request.goal_id', ['address'], [],
+      'Do not ask another qualification question without new commercial evidence after the address retry limit.'));
+  }
+  if (permissions.has('handoff') && !candidateEffects.some((effect) => effect.type === 'handoff')) {
+    errors.push(validationError('address_retry_handoff_required', 'effect_requests', ['address'], ['handoff'],
+      'Request the permitted handoff instead of repeating the address question; do not claim completed assignment before its receipt.'));
+  }
+  return errors;
+};
+
+// ---------------------------------------------------------------------------
+// v3.1 (Slice 2a, design.md D1-D5): item-scoped line items on top of the
+// unchanged v3 contract above. Dark in this slice — nothing in production
+// requests `input.version: 'v3.1'` until Slice 2b's switch.
+// ---------------------------------------------------------------------------
+const ITEM_FIELDS = new Set(['product', 'quantity', 'measurements']);
+const ITEM_FACT_ID_RE = /^fact:item:([^:]+):(product|quantity|measurements)$/;
+const MAX_LINE_ITEMS = 10;
+const LINE_ITEM_VERSION = 'line_item/v1';
+const FLAT_ITEM_ID = 'li_0';
+const OBSERVATION_KEYS_V31 = new Set([...OBSERVATION_KEYS, 'item_ref']);
+const MUTATION_KEYS_V31 = new Set(['operation', 'field', 'item_ref', 'observation_id', 'replaces_fact_id']);
+const PRIMARY_REQUEST_KEYS_V31 = new Set(['goal_id', 'item_ref']);
+const CATALOG_RESOLUTION_KEYS_V31 = new Set([...CATALOG_RESOLUTION_KEYS, 'item_ref']);
+const CATALOG_RESOLUTION_STATUSES_V31 = new Set(['matched', 'unsupported', 'ambiguous']);
+const TOP_LEVEL_PROPOSAL_KEYS_V31 = new Set([
+  'version', 'policy_digest', 'reply_text', 'primary_request',
+  'catalog_resolutions', 'observations', 'state_mutations', 'effect_requests',
+]);
+// Per design D5, an ambiguous/unsupported item's clarification notice never
+// rejects the rest of the proposal (v3's equivalent has no carve-out, so it
+// stays a blocking code there).
+const NON_BLOCKING_V31_CODES = new Set(['catalog_resolution_clarification_required']);
+
+const itemIdFromFactId = (factId) => {
+  const match = ITEM_FACT_ID_RE.exec(String(factId || ''));
+  return match ? match[1] : null;
+};
+
+const existingLineItemsFromPolicy = (policy) => {
+  const items = new Map();
+  for (const fact of policy?.facts || []) {
+    const match = ITEM_FACT_ID_RE.exec(fact?.fact_id || '');
+    if (!match) continue;
+    const [, itemId, field] = match;
+    if (!items.has(itemId)) items.set(itemId, { item_id: itemId, product: null, quantity: null, measurements: null });
+    items.get(itemId)[field] = fact.value;
+  }
+  return items;
+};
+
+// D1: handles are fixed inside the immutable decision, so replay derives the
+// same id. Duplicated from shared/v3-line-items.js on purpose — these
+// shared/*.js runtimes are concatenated standalone into n8n Code nodes with
+// no cross-file `require` (see that file's own header comment).
+const deriveItemIdV31 = (conversationId, turnId, handle) => {
+  if (handle === undefined || handle === null || handle === '') return FLAT_ITEM_ID;
+  const seed = [LINE_ITEM_VERSION, String(conversationId ?? ''), String(turnId ?? ''), String(handle)].join('\u0000');
+  return `li_${sha256(seed).slice(0, 12)}`;
+};
+
+const hasResolvedValue = (value) => value !== undefined && value !== null
+  && (typeof value !== 'string' || value.trim() !== '');
+
+// Required goals reuse the quote-level conditional rules in
+// effectiveRequiredGoalIds, replacing product/quantity with line_items.
+const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) => {
+  const base = (Array.isArray(configuredGoalIds) ? configuredGoalIds : [])
+    .filter((goalId) => goalId !== 'product' && goalId !== 'quantity');
+  if (!base.includes('line_items')) base.push('line_items');
+  return effectiveRequiredGoalIds(base, policy, observations);
+};
+
+const validateV3AiProposalV31 = (policy, proposal) => {
+  const errors = [];
+  const candidateObservations = [];
+  const candidateMutations = [];
+  const withheldMutations = [];
+  const candidateEffects = [];
+  const proposalObject = isObject(proposal) ? proposal : {};
+  const policyDigestValid = policy?.version === V3_CONTRACTS.policy_v3_1
+    && typeof policy.policy_digest === 'string'
+    && digestPolicy(policy) === policy.policy_digest;
+
+  if (!policyDigestValid) errors.push(validationError('policy_invalid', 'policy'));
+  if (!exactKeys(proposalObject, TOP_LEVEL_PROPOSAL_KEYS_V31)) errors.push(validationError('proposal_shape_invalid', '$'));
+  if (proposalObject.version !== V3_CONTRACTS.proposal_v3_1) errors.push(validationError('proposal_version_invalid', 'version'));
+  if (proposalObject.policy_digest !== policy?.policy_digest) errors.push(validationError('policy_digest_mismatch', 'policy_digest'));
+  if (typeof proposalObject.reply_text !== 'string' || proposalObject.reply_text.length === 0) {
+    errors.push(validationError('reply_text_invalid', 'reply_text'));
+  }
+
+  const messageText = typeof policy?.turn?.message?.text === 'string' ? policy.turn.message.text : '';
+  const existingItems = existingLineItemsFromPolicy(policy);
+
+  // catalog_resolutions[]: one entry per item this turn resolves against the
+  // catalog. Every entry needs real message evidence, like v3's singular
+  // catalog_resolution.
+  const catalogResolutions = Array.isArray(proposalObject.catalog_resolutions) ? proposalObject.catalog_resolutions : [];
+  if (!Array.isArray(proposalObject.catalog_resolutions)) errors.push(validationError('catalog_resolutions_invalid', 'catalog_resolutions'));
+  const catalogResolutionByRef = new Map();
+  const validCatalogResolutionRefs = new Set();
+  for (const [index, resolution] of catalogResolutions.entries()) {
+    const path = `catalog_resolutions[${index}]`;
+    const shapeValid = exactKeys(resolution, CATALOG_RESOLUTION_KEYS_V31)
+      && CATALOG_RESOLUTION_STATUSES_V31.has(resolution?.status)
+      && typeof resolution?.item_ref === 'string' && resolution.item_ref.length > 0;
+    if (!shapeValid) {
+      errors.push(validationError('catalog_resolution_shape_invalid', path));
+      continue;
+    }
+    const occurrence = typeof resolution.evidence_quote === 'string'
+      ? findOccurrence(messageText, resolution.evidence_quote, resolution.evidence_occurrence)
+      : null;
+    if (!occurrence) {
+      errors.push(validationError('catalog_resolution_evidence_not_found', `${path}.evidence_quote`));
+      continue;
+    }
+    if (resolution.status === 'matched') {
+      const grounding = groundingEntries(policy).find((entry) => entry.ref === resolution.grounding_ref);
+      if (!grounding || grounding.concept !== 'product') {
+        errors.push(validationError(
+          'catalog_resolution_grounding_invalid', `${path}.grounding_ref`, [], groundingRefsForConcept(policy, 'product'),
+        ));
+        continue;
+      }
+    } else if (resolution.grounding_ref !== null) {
+      errors.push(validationError('catalog_resolution_grounding_forbidden', `${path}.grounding_ref`));
+      continue;
+    }
+    catalogResolutionByRef.set(resolution.item_ref, resolution);
+    validCatalogResolutionRefs.add(resolution.item_ref);
+  }
+
+  const primaryRequest = proposalObject.primary_request;
+  let primaryRequestValid = primaryRequest === null;
+  if (primaryRequest !== null) {
+    const itemRefOk = primaryRequest?.item_ref === null
+      || (typeof primaryRequest?.item_ref === 'string' && primaryRequest.item_ref.length > 0);
+    const requestGoalValid = typeof primaryRequest?.goal_id === 'string'
+      && (primaryRequest.goal_id === FINAL_CONFIRMATION_GOAL
+        || ITEM_FIELDS.has(primaryRequest.goal_id)
+        || (policy?.goals || []).some((goal) => goal.goal_id === primaryRequest.goal_id));
+    primaryRequestValid = exactKeys(primaryRequest, PRIMARY_REQUEST_KEYS_V31) && itemRefOk && requestGoalValid;
+    if (!primaryRequestValid) errors.push(validationError('primary_request_invalid', 'primary_request'));
+  }
+
+  const observations = Array.isArray(proposalObject.observations) ? proposalObject.observations : [];
+  if (!Array.isArray(proposalObject.observations)) errors.push(validationError('observations_invalid', 'observations'));
+  const observationIds = new Set();
+  const knownGoalIds = new Set((policy?.goals || []).map((goal) => goal.goal_id));
+  for (const [index, observationEntry] of observations.entries()) {
+    const path = `observations[${index}]`;
+    let valid = exactKeys(observationEntry, OBSERVATION_KEYS_V31)
+      && typeof observationEntry.id === 'string'
+      && observationEntry.id.length > 0
+      && typeof observationEntry.concept === 'string'
+      && typeof observationEntry.raw_value === 'string'
+      && typeof observationEntry.evidence_quote === 'string'
+      && Array.isArray(observationEntry.resolves_goal_ids)
+      && (observationEntry.item_ref === null
+        || (typeof observationEntry.item_ref === 'string' && observationEntry.item_ref.length > 0));
+    if (!valid) {
+      errors.push(validationError('observation_shape_invalid', path));
+      continue;
+    }
+    if (observationIds.has(observationEntry.id)) {
+      errors.push(validationError('observation_id_duplicate', `${path}.id`, [observationEntry.id]));
+      valid = false;
+    }
+    observationIds.add(observationEntry.id);
+    if (observationEntry.resolves_goal_ids.some((goalId) => goalId !== 'line_items' && !knownGoalIds.has(goalId))) {
+      errors.push(validationError('goal_reference_unknown', `${path}.resolves_goal_ids`, [observationEntry.id]));
+      valid = false;
+    }
+    const occurrence = findOccurrence(messageText, observationEntry.evidence_quote, observationEntry.evidence_occurrence);
+    if (!occurrence) {
+      errors.push(validationError('evidence_quote_not_found', `${path}.evidence_quote`, [observationEntry.id]));
+      valid = false;
+    }
+    if (GROUNDED_CONCEPTS.has(observationEntry.concept)) {
+      const grounding = groundingEntries(policy).find((entry) => entry.ref === observationEntry.grounding_ref);
+      const canonicalGroundedValue = groundingValue(grounding);
+      const groundingValid = grounding
+        && (!grounding.concept || grounding.concept === observationEntry.concept)
+        && canonicalGroundedValue !== null
+        && canonicalGroundedValue !== undefined
+        && sameGroundedValue(canonicalGroundedValue, normalizedComparable(observationEntry.normalized_value));
+      if (!groundingValid) {
+        errors.push(validationError(
+          'grounding_invalid', `${path}.grounding_ref`, [observationEntry.id],
+          groundingRefsForConcept(policy, observationEntry.concept),
+          'Replace grounding_ref with one allowed value, or remove this observation and every dependent mutation.',
+        ));
+        valid = false;
+      }
+      if (groundingValid && observationEntry.concept === 'service_scope') {
+        const scopeError = serviceScopeBothEvidenceError(policy, canonicalGroundedValue, messageText, occurrence, observationEntry, path);
+        if (scopeError) { errors.push(scopeError); valid = false; }
+      }
+      if (groundingValid && observationEntry.concept === 'fulfillment') {
+        const fulfillmentError = fulfillmentEvidenceError(policy, canonicalGroundedValue, messageText, occurrence, observationEntry, path);
+        if (fulfillmentError) { errors.push(fulfillmentError); valid = false; }
+      }
+    } else if (observationEntry.grounding_ref !== null) {
+      errors.push(validationError(
+        'grounding_ref_forbidden', `${path}.grounding_ref`, [observationEntry.id], [],
+        'Use grounding_ref null for evidence-backed free-text concepts.',
+      ));
+      valid = false;
+    }
+    if (observationEntry.concept === 'address') {
+      const addressError = addressRequiresStreetDetailsError(policy, observations, observationEntry, path);
+      if (addressError) { errors.push(addressError); valid = false; }
+    }
+    if (valid && occurrence) {
+      const startByte = utf8Length(messageText.slice(0, occurrence.index));
+      const endByte = startByte + utf8Length(observationEntry.evidence_quote);
+      candidateObservations.push({
+        ...jsonClone(observationEntry),
+        ...(GROUNDED_CONCEPTS.has(observationEntry.concept) ? {
+          normalized_value: jsonClone(groundingValue(
+            groundingEntries(policy).find((entry) => entry.ref === observationEntry.grounding_ref),
+          )),
+        } : {}),
+        evidence: {
+          message_id: policy.turn.message.id,
+          quote: observationEntry.evidence_quote,
+          occurrence: observationEntry.evidence_occurrence,
+          start_byte: startByte,
+          end_byte: endByte,
+          sha256: sha256(`${policy.turn.message.id}\u0000${startByte}\u0000${endByte}\u0000${observationEntry.evidence_quote}`),
+        },
+      });
+    }
+  }
+
+  const observationsById = new Map(candidateObservations.map((observationEntry) => [observationEntry.id, observationEntry]));
+
+  // Every item this turn touches: existing items known before the turn, plus
+  // any item_ref introduced this turn via an item-field observation or a
+  // catalog_resolutions entry.
+  const touchedItemRefs = new Set(existingItems.keys());
+  for (const observationEntry of candidateObservations) {
+    if (ITEM_FIELDS.has(observationEntry.concept) && observationEntry.item_ref) touchedItemRefs.add(observationEntry.item_ref);
+  }
+  for (const ref of validCatalogResolutionRefs) touchedItemRefs.add(ref);
+
+  // item_identity_required: a genuinely new item must be introduced through
+  // a catalog_resolutions entry (matched, ambiguous or unsupported).
+  for (const ref of touchedItemRefs) {
+    if (existingItems.has(ref) || validCatalogResolutionRefs.has(ref)) continue;
+    errors.push(validationError('item_identity_required', 'catalog_resolutions', [ref]));
+  }
+
+  if (touchedItemRefs.size > MAX_LINE_ITEMS) {
+    errors.push(validationError(
+      'line_items_limit_exceeded', 'state_mutations', [], [],
+      'Ask the customer to prioritize which items to keep, or hand off.',
+    ));
+  }
+
+  for (const ref of validCatalogResolutionRefs) {
+    const resolution = catalogResolutionByRef.get(ref);
+    if (resolution.status === 'matched'
+        && !candidateObservations.some((observationEntry) => observationEntry.item_ref === ref
+          && observationEntry.concept === 'product' && observationEntry.grounding_ref === resolution.grounding_ref)) {
+      errors.push(validationError(
+        'catalog_resolution_product_observation_required', 'catalog_resolutions', [ref],
+        groundingRefsForConcept(policy, 'product'),
+      ));
+    }
+  }
+  const ambiguousRefs = [...catalogResolutionByRef.values()]
+    .filter((resolution) => resolution.status === 'ambiguous')
+    .map((resolution) => resolution.item_ref);
+  if (ambiguousRefs.length > 0
+      && !(primaryRequestValid && primaryRequest?.goal_id === 'product' && ambiguousRefs.includes(primaryRequest.item_ref))) {
+    errors.push(validationError(
+      'catalog_resolution_clarification_required', 'primary_request', ambiguousRefs, ['product'],
+      'Ask one focused clarification that distinguishes the possible grounded products for the ambiguous item.',
+    ));
+  }
+
+  // Composed from v3's quantity_observation_required (design.md D11): an
+  // ambiguous/unsupported item already gets its own clarification notice
+  // above, so this generic quote-level nag only fires when no item is
+  // currently blocked on catalog resolution.
+  const anyAmbiguousOrUnsupportedItem = [...catalogResolutionByRef.values()]
+    .some((resolution) => ['ambiguous', 'unsupported'].includes(resolution.status));
+  const tracksLineItemsGoal = (policy?.goals || []).some((goal) => goal.goal_id === 'line_items');
+  const hasQuantityObservationV31 = candidateObservations.some((entry) => entry.concept === 'quantity');
+  if (!anyAmbiguousOrUnsupportedItem && tracksLineItemsGoal
+      && hasExplicitQuantityEvidence(messageText) && !hasQuantityObservationV31) {
+    errors.push(quantityObservationRequiredError());
+  }
+
+  const factsById = new Map((policy?.facts || []).map((fact) => [fact.fact_id, fact]));
+  const allowedMutations = Array.isArray(policy?.state_authority?.allowed_mutations)
+    ? policy.state_authority.allowed_mutations
+    : [];
+  const mutations = Array.isArray(proposalObject.state_mutations) ? proposalObject.state_mutations : [];
+  if (!Array.isArray(proposalObject.state_mutations)) errors.push(validationError('state_mutations_invalid', 'state_mutations'));
+  const seenMutationTargets = new Set();
+  const existingItemCountPreTurn = existingItems.size;
+  for (const [index, mutation] of mutations.entries()) {
+    const path = `state_mutations[${index}]`;
+    if (mutation?.operation === 'remove_item') {
+      const observationEntry = observationsById.get(mutation?.observation_id);
+      if (!exactKeys(mutation, MUTATION_KEYS_V31) || typeof mutation.item_ref !== 'string' || !mutation.item_ref || !observationEntry) {
+        errors.push(validationError('mutation_shape_invalid', path, mutation?.observation_id ? [mutation.observation_id] : []));
+        continue;
+      }
+      const targetKey = `remove_item\u0000${mutation.item_ref}`;
+      if (seenMutationTargets.has(targetKey)) {
+        errors.push(validationError('mutation_target_duplicate', path, [mutation.item_ref]));
+        continue;
+      }
+      seenMutationTargets.add(targetKey);
+      candidateMutations.push({
+        operation: 'remove_item', field: null, item_ref: mutation.item_ref,
+        observation_id: observationEntry.id, replaces_fact_id: null, projected_value: null,
+      });
+      continue;
+    }
+
+    const observationEntry = observationsById.get(mutation?.observation_id);
+    if (!exactKeys(mutation, MUTATION_KEYS_V31) || !['set', 'replace'].includes(mutation?.operation) || !observationEntry) {
+      errors.push(validationError('mutation_shape_invalid', path, mutation?.observation_id ? [mutation.observation_id] : []));
+      continue;
+    }
+    const canonicalField = CONCEPT_TO_FIELD[observationEntry.concept];
+    const allowed = allowedMutations.some((entry) => entry.operation === mutation.operation
+      && entry.concept === observationEntry.concept
+      && entry.field === mutation.field);
+    if (!canonicalField || canonicalField !== mutation.field || !allowed) {
+      errors.push(validationError('mutation_mapping_forbidden', `${path}.field`, [observationEntry.id], canonicalField ? [canonicalField] : []));
+      continue;
+    }
+    if (mutation.operation === 'set' && mutation.replaces_fact_id !== null) {
+      errors.push(validationError('set_cannot_replace_fact', `${path}.replaces_fact_id`, [observationEntry.id]));
+      continue;
+    }
+    if (mutation.operation === 'replace') {
+      const fact = factsById.get(mutation.replaces_fact_id);
+      const factItemId = itemIdFromFactId(mutation.replaces_fact_id);
+      const factMatchesItem = ITEM_FIELDS.has(mutation.field)
+        ? factItemId !== null && factItemId === (mutation.item_ref ?? factItemId)
+        : factItemId === null;
+      if (!fact || fact.field !== mutation.field || fact.mutability !== 'customer_correctable' || !factMatchesItem) {
+        errors.push(validationError('fact_not_replaceable', `${path}.replaces_fact_id`, [observationEntry.id]));
+        continue;
+      }
+    }
+
+    let itemRef = mutation.item_ref ?? null;
+    if (ITEM_FIELDS.has(mutation.field)) {
+      if (itemRef === null) {
+        if (existingItemCountPreTurn >= 2) {
+          errors.push(validationError(
+            'item_target_required', `${path}.item_ref`, [observationEntry.id], [],
+            'Drop this mutation and ask which item it refers to.',
+          ));
+          continue;
+        }
+        itemRef = existingItemCountPreTurn === 1 ? [...existingItems.keys()][0] : FLAT_ITEM_ID;
+      }
+      const targetKey = `${itemRef}\u0000${mutation.field}`;
+      if (seenMutationTargets.has(targetKey)) {
+        errors.push(validationError('mutation_target_duplicate', path, [observationEntry.id]));
+        continue;
+      }
+      seenMutationTargets.add(targetKey);
+
+      if (mutation.field === 'product') {
+        const resolution = catalogResolutionByRef.get(itemRef);
+        if (resolution && ['ambiguous', 'unsupported'].includes(resolution.status)) {
+          withheldMutations.push({
+            operation: mutation.operation, field: mutation.field, item_ref: itemRef,
+            observation_id: observationEntry.id, replaces_fact_id: mutation.replaces_fact_id,
+            projected_value: jsonClone(observationEntry.normalized_value),
+          });
+          continue;
+        }
+      }
+    } else {
+      const targetKey = `\u0000${mutation.field}`;
+      if (seenMutationTargets.has(targetKey)) {
+        errors.push(validationError('mutation_target_duplicate', path, [observationEntry.id]));
+        continue;
+      }
+      seenMutationTargets.add(targetKey);
+    }
+
+    candidateMutations.push({
+      operation: mutation.operation,
+      field: mutation.field,
+      item_ref: ITEM_FIELDS.has(mutation.field) ? itemRef : null,
+      observation_id: observationEntry.id,
+      replaces_fact_id: mutation.replaces_fact_id,
+      projected_value: jsonClone(observationEntry.normalized_value),
+    });
+  }
+
+  for (const rule of policy?.claim_authority?.rules || []) {
+    if (rule?.kind !== 'forbidden_pattern' || typeof rule.pattern !== 'string') continue;
+    let pattern;
+    try {
+      pattern = new RegExp(rule.pattern, String(rule.flags || 'iu').replace(/g/g, ''));
+    } catch (_error) {
+      errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
+      continue;
+    }
+    if (pattern.test(proposalObject.reply_text || '')) {
+      errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
+    }
+  }
+
+  // line_items resolution: 1-10 remaining items, each with a non-null
+  // product (never one withheld pending clarification) and quantity.
+  const removedItemRefs = new Set(
+    candidateMutations.filter((mutation) => mutation.operation === 'remove_item').map((mutation) => mutation.item_ref),
+  );
+  const remainingItemRefs = [...touchedItemRefs].filter((ref) => !removedItemRefs.has(ref));
+  const productFor = (ref) => {
+    const resolution = catalogResolutionByRef.get(ref);
+    if (resolution && ['ambiguous', 'unsupported'].includes(resolution.status)) return null;
+    const observed = candidateObservations.find((entry) => entry.item_ref === ref && entry.concept === 'product');
+    if (observed) return observed.normalized_value;
+    return existingItems.get(ref)?.product ?? null;
+  };
+  const quantityFor = (ref) => {
+    const observed = candidateObservations.find((entry) => entry.item_ref === ref && entry.concept === 'quantity');
+    if (observed) return observed.normalized_value;
+    return existingItems.get(ref)?.quantity ?? null;
+  };
+  const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
+  const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
+  const lineItemsResolved = remainingItemRefs.length >= 1 && remainingItemRefs.length <= MAX_LINE_ITEMS
+    && unresolvedProductRefs.length === 0 && unresolvedQuantityRefs.length === 0;
+
+  const permissions = new Set((policy?.effect_authority?.permissions || []).map((permission) => permission.type));
+  const requirements = new Map((policy?.effect_authority?.requirements || []).map((requirement) => [requirement.effect_type, requirement]));
+  const resolvedGoalIds = new Set([
+    ...(policy?.goals || []).filter((goal) => goal.status === 'resolved').map((goal) => goal.goal_id),
+    ...candidateObservations.flatMap((observationEntry) => observationEntry.resolves_goal_ids),
+  ]);
+  if (lineItemsResolved) resolvedGoalIds.add('line_items');
+  const createLeadRequirement = requirements.get('create_lead');
+  const createLeadRequiredGoalIds = effectiveRequiredGoalIdsV31(
+    createLeadRequirement?.required_goal_ids, policy, candidateObservations,
+  );
+  const createLeadUnresolvedRaw = createLeadRequiredGoalIds.filter((goalId) => goalId !== 'line_items' && !resolvedGoalIds.has(goalId));
+  const createLeadUnresolved = (lineItemsResolved || !createLeadRequiredGoalIds.includes('line_items'))
+    ? createLeadUnresolvedRaw
+    : [...createLeadUnresolvedRaw, ...unresolvedProductRefs, ...unresolvedQuantityRefs];
+  const unresolvedPolicyGoalIds = (policy?.goals || [])
+    .filter((goal) => goal.status !== 'resolved' && !resolvedGoalIds.has(goal.goal_id))
+    .map((goal) => goal.goal_id);
+  const allowedNextGoalIds = createLeadRequirement
+    ? (createLeadUnresolved.length > 0 ? createLeadUnresolved : [FINAL_CONFIRMATION_GOAL])
+    : unresolvedPolicyGoalIds;
+  if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null && resolvedGoalIds.has(primaryRequest.goal_id)) {
+    errors.push(validationError(
+      'primary_request_goal_resolved', 'primary_request.goal_id', [primaryRequest.goal_id], allowedNextGoalIds,
+      'Remove the request or ask for one of the allowed unresolved goals.',
+    ));
+  }
+  if (primaryRequestValid && primaryRequest?.goal_id === FINAL_CONFIRMATION_GOAL && createLeadUnresolved.length > 0) {
+    errors.push(validationError(
+      'final_confirmation_not_ready', 'primary_request.goal_id', createLeadUnresolved, createLeadUnresolved,
+      'Ask for one unresolved required goal instead of asking for final confirmation.',
+    ));
+  }
+
+  // Composed from v3's pickup_factory_address_required and
+  // primary_request_goal_inapplicable (design.md D11): both are quote-level
+  // (service_scope/fulfillment are quote-level facts, never item-scoped).
+  const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
+  const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
+  const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
+  const normalizedReplyText = String(proposalObject.reply_text || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
+  const normalizedTurnText = String(messageText || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
+  const asksPickupLocation = /\b(?:donde|direccion|ubicacion|lugar)\b/.test(normalizedTurnText)
+    && /\b(?:retir\w*|retiro|planta|fabrica|tienda)\b/.test(normalizedTurnText);
+  const pickupAddressRequired = serviceScope === 'material' && fulfillment === 'pickup'
+    && (requestedGoal === FINAL_CONFIRMATION_GOAL || asksPickupLocation);
+  if (pickupAddressRequired) {
+    const pickupError = pickupFactoryAddressRequiredError(normalizedReplyText);
+    if (pickupError) errors.push(pickupError);
+  }
+  const goalInapplicableError = primaryRequestGoalInapplicableError(requestedGoal, serviceScope, allowedNextGoalIds);
+  if (goalInapplicableError) errors.push(goalInapplicableError);
+
+  const pendingQuestionGoalId = policy?.turn?.pending_question_goal_id || null;
+  const createLeadDirectlyRequested = hasExplicitCreateLeadDirective(messageText);
+  const hydratesPriorRequest = candidateObservations.some((observationEntry) => {
+    const field = CONCEPT_TO_FIELD[observationEntry.concept];
+    return field && matchesPriorRequestValue(policy, field, observationEntry.normalized_value, observationEntry.evidence);
+  });
+  const createLeadAuthorized = pendingQuestionGoalId === FINAL_CONFIRMATION_GOAL
+    || (createLeadDirectlyRequested && !hydratesPriorRequest);
+
+  const effects = Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [];
+  if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
+  for (const [index, effect] of effects.entries()) {
+    const path = `effect_requests[${index}]`;
+    if (!exactKeys(effect, EFFECT_KEYS) || typeof effect.type !== 'string' || !Array.isArray(effect.reason_observation_ids)) {
+      errors.push(validationError('effect_shape_invalid', path));
+      continue;
+    }
+    if (!permissions.has(effect.type)) {
+      errors.push(validationError('effect_not_permitted', `${path}.type`, [], [...permissions]));
+      continue;
+    }
+    const unknownObservation = effect.reason_observation_ids.find((id) => !observationsById.has(id));
+    if (unknownObservation) {
+      errors.push(validationError('effect_observation_unknown', `${path}.reason_observation_ids`, [unknownObservation]));
+      continue;
+    }
+    const configuredGoalIds = requirements.get(effect.type)?.required_goal_ids || [];
+    const unresolved = effect.type === 'create_lead'
+      ? createLeadUnresolved
+      : configuredGoalIds.filter((goalId) => !resolvedGoalIds.has(goalId));
+    if (unresolved.length > 0) {
+      errors.push(validationError('effect_prerequisite_unresolved', path, unresolved));
+      continue;
+    }
+    if (effect.type === 'create_lead' && !createLeadAuthorized) {
+      errors.push(validationError(
+        'effect_trigger_context_invalid', path, [effect.type], [FINAL_CONFIRMATION_GOAL],
+        'Create the lead only after answering a pending final_confirmation, or after a direct request to create the lead.',
+      ));
+      continue;
+    }
+    candidateEffects.push(jsonClone(effect));
+  }
+  for (const requirement of requirements.values()) {
+    if (requirement?.trigger !== 'explicit_confirmation_when_ready') continue;
+    if (!permissions.has(requirement.effect_type)) continue;
+    const unresolvedForRequirement = requirement.effect_type === 'create_lead'
+      ? createLeadUnresolved
+      : (Array.isArray(requirement.required_goal_ids) ? requirement.required_goal_ids : [])
+        .filter((goalId) => !resolvedGoalIds.has(goalId));
+    const alreadyRequested = candidateEffects.some((effect) => effect.type === requirement.effect_type);
+    const triggered = requirement.effect_type === 'create_lead'
+      ? createLeadDirectlyRequested && !hydratesPriorRequest
+      : hasExplicitConfirmation(messageText);
+    if (unresolvedForRequirement.length === 0 && triggered && !alreadyRequested) {
+      errors.push(validationError(
+        'effect_required', 'effect_requests', [requirement.effect_type], [requirement.effect_type],
+        `Add one ${requirement.effect_type} effect_request because its prerequisites and configured trigger are satisfied.`,
+      ));
+    }
+  }
+
+  // Composed from v3's address_retry_exhausted/address_retry_handoff_required
+  // (design.md D11): quote-level only, never inspects item fields.
+  errors.push(...addressRetryBoundErrors(policy, candidateMutations, primaryRequestValid, primaryRequest, permissions, candidateEffects));
+
+  const blockingErrors = errors.filter((error) => !NON_BLOCKING_V31_CODES.has(error.code));
+  const valid = blockingErrors.length === 0;
+  return {
+    version: V3_CONTRACTS.validation_v3_1,
+    valid,
+    policy_digest: policy?.policy_digest || null,
+    proposal_digest: isObject(proposal) ? digestObject(proposal) : null,
+    errors,
+    catalog_resolutions: valid ? [...catalogResolutionByRef.values()].map(jsonClone) : [],
+    withheld_mutations: valid ? withheldMutations.map(jsonClone) : [],
+    accepted_observations: valid ? candidateObservations : [],
+    authorized_mutations: valid ? candidateMutations : [],
+    authorized_effect_requests: valid ? candidateEffects : [],
+  };
+};
+
+const validateV3AiProposalV3 = (policy, proposal) => {
   const errors = [];
   const candidateObservations = [];
   const candidateMutations = [];
@@ -497,21 +1167,8 @@ const validateV3AiProposal = (policy, proposal) => {
       valid = false;
     }
     if (observation.concept === 'address') {
-      const addressGoal = (policy.goals || []).find((goal) => goal.goal_id === 'address');
-      const knownCommune = projectedValueFor(policy, observations, 'commune')
-        ?? addressGoal?.guidance?.known_commune;
-      const comparableAddress = (value) => String(normalizedComparable(value) ?? '')
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es')
-        .replace(/[^a-z0-9]+/g, ' ').trim();
-      const communeText = comparableAddress(knownCommune);
-      if (communeText && (comparableAddress(observation.normalized_value) === communeText
-          || comparableAddress(observation.evidence_quote) === communeText)) {
-        errors.push(validationError(
-          'address_requires_street_details', `${path}.normalized_value`, [observation.id], [],
-          'The commune is already known. Ask for street and approximate number instead of treating the commune alone as an address.',
-        ));
-        valid = false;
-      }
+      const addressError = addressRequiresStreetDetailsError(policy, observations, observation, path);
+      if (addressError) { errors.push(addressError); valid = false; }
     }
     if (GROUNDED_CONCEPTS.has(observation.concept)) {
       const grounding = groundingEntries(policy).find((entry) => entry.ref === observation.grounding_ref);
@@ -531,34 +1188,13 @@ const validateV3AiProposal = (policy, proposal) => {
         ));
         valid = false;
       }
-      if (groundingValid && observation.concept === 'service_scope'
-          && canonicalGroundedValue === 'both'
-          && !hasExplicitBothScope(messageText)
-          && !matchesPriorRequestValue(
-            policy, 'service_scope', canonicalGroundedValue, occurrence,
-          )) {
-        errors.push(validationError(
-          'service_scope_both_evidence_invalid',
-          `${path}.grounding_ref`,
-          [observation.id],
-          groundingRefsForConcept(policy, 'service_scope').filter((ref) => ref !== 'service_scope:both'),
-          'Use both only when the customer explicitly requests two alternatives; a single installation request is installation.',
-        ));
-        valid = false;
+      if (groundingValid && observation.concept === 'service_scope') {
+        const scopeError = serviceScopeBothEvidenceError(policy, canonicalGroundedValue, messageText, occurrence, observation, path);
+        if (scopeError) { errors.push(scopeError); valid = false; }
       }
-      if (groundingValid && observation.concept === 'fulfillment'
-          && !hasExplicitFulfillmentEvidence(messageText, canonicalGroundedValue)
-          && !matchesPriorRequestValue(
-            policy, 'fulfillment', canonicalGroundedValue, occurrence,
-          )) {
-        errors.push(validationError(
-          'fulfillment_evidence_invalid',
-          `${path}.grounding_ref`,
-          [observation.id],
-          groundingRefsForConcept(policy, 'fulfillment'),
-          'Use pickup or delivery only when the customer explicitly chooses a fulfillment mode; a generic acknowledgement resolves neither.',
-        ));
-        valid = false;
+      if (groundingValid && observation.concept === 'fulfillment') {
+        const fulfillmentError = fulfillmentEvidenceError(policy, canonicalGroundedValue, messageText, occurrence, observation, path);
+        if (fulfillmentError) { errors.push(fulfillmentError); valid = false; }
       }
     } else if (observation.grounding_ref !== null) {
       errors.push(validationError(
@@ -597,13 +1233,7 @@ const validateV3AiProposal = (policy, proposal) => {
       && (policy?.goals || []).some((goal) => goal.goal_id === 'quantity')
       && hasExplicitQuantityEvidence(messageText)
       && !candidateObservations.some((observation) => observation.resolves_goal_ids.includes('quantity'))) {
-    errors.push(validationError(
-      'quantity_observation_required',
-      'observations',
-      [],
-      ['quantity'],
-      'The customer stated an explicit quantity with a unit; add an evidenced quantity observation and its authorized mutation.',
-    ));
+    errors.push(quantityObservationRequiredError());
   }
   if (catalogResolutionValid && catalogResolution.status === 'matched'
       && !candidateObservations.some((observation) => observation.concept === 'product'
@@ -766,26 +1396,12 @@ const validateV3AiProposal = (policy, proposal) => {
     && /\b(?:retir\w*|retiro|planta|fabrica|tienda)\b/.test(normalizedTurnText);
   const pickupAddressRequired = serviceScope === 'material' && fulfillment === 'pickup'
     && (requestedGoal === FINAL_CONFIRMATION_GOAL || asksPickupLocation);
-  if (pickupAddressRequired
-      && (!normalizedReplyText.includes('portezuelo 1502')
-        || !normalizedReplyText.includes('san bernardo'))) {
-    errors.push(validationError(
-      'pickup_factory_address_required',
-      'reply_text',
-      ['fulfillment'],
-      ['Portezuelo 1502, San Bernardo'],
-      'State the single official factory pickup address exactly: Portezuelo 1502, San Bernardo. Do not store it as the customer commune or project address.',
-    ));
+  if (pickupAddressRequired) {
+    const pickupError = pickupFactoryAddressRequiredError(normalizedReplyText);
+    if (pickupError) errors.push(pickupError);
   }
-  if (requestedGoal === 'fulfillment' && serviceScope === 'installation') {
-    errors.push(validationError(
-      'primary_request_goal_inapplicable',
-      'primary_request.goal_id',
-      ['fulfillment', 'installation'],
-      allowedNextGoalIds.filter((goalId) => goalId !== 'fulfillment'),
-      'Installation already implies delivery to the work site; do not ask pickup versus delivery.',
-    ));
-  }
+  const goalInapplicableError = primaryRequestGoalInapplicableError(requestedGoal, serviceScope, allowedNextGoalIds);
+  if (goalInapplicableError) errors.push(goalInapplicableError);
   const effects = Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [];
   if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
   for (const [index, effect] of effects.entries()) {
@@ -862,27 +1478,7 @@ const validateV3AiProposal = (policy, proposal) => {
     }
   }
 
-  const addressGoal = (policy?.goals || []).find((goal) => goal.goal_id === 'address');
-  const priorValues = new Map((policy?.facts || []).map((fact) => [fact.field, fact.value]));
-  const materialProgress = candidateMutations.some((mutation) => (
-    !['customer_type', 'lead_class', 'objection_detected', 'diagnostic_datos', 'executive_summary'].includes(mutation.field)
-    && canonicalJson(mutation.projected_value) !== canonicalJson(priorValues.get(mutation.field) ?? null)
-  ));
-  const addressRetryExhausted = policy?.turn?.pending_question_goal_id === 'address'
-    && addressGoal?.status !== 'resolved'
-    && Number(addressGoal?.guidance?.next_retry_count_without_progress || 0)
-      >= Number(addressGoal?.guidance?.handoff_at || 3)
-    && !materialProgress;
-  if (addressRetryExhausted) {
-    if (primaryRequestValid && primaryRequest !== null) {
-      errors.push(validationError('address_retry_exhausted', 'primary_request.goal_id', ['address'], [],
-        'Do not ask another qualification question without new commercial evidence after the address retry limit.'));
-    }
-    if (permissions.has('handoff') && !candidateEffects.some((effect) => effect.type === 'handoff')) {
-      errors.push(validationError('address_retry_handoff_required', 'effect_requests', ['address'], ['handoff'],
-        'Request the permitted handoff instead of repeating the address question; do not claim completed assignment before its receipt.'));
-    }
-  }
+  errors.push(...addressRetryBoundErrors(policy, candidateMutations, primaryRequestValid, primaryRequest, permissions, candidateEffects));
 
   const valid = errors.length === 0;
   return {
@@ -898,7 +1494,36 @@ const validateV3AiProposal = (policy, proposal) => {
   };
 };
 
-const authorizeV3ConversationDecision = (policy, proposal, validation) => {
+// Shared by authorizeV3ConversationDecisionV3 and authorizeV3ConversationDecisionV31
+// (design.md D11, orchestrator follow-up): the handoff escalation-reason
+// enrichment is quote-level (pending_question_goal_id/address goal guidance
+// are never item-scoped), so both authorizers call this exact function.
+// Downstream handoff routing (ensure-escalation-handoff.js REASON_TO_MOTIVE)
+// reads `escalation_reason`, so this must not silently differ by version.
+const buildV3EffectCommand = (policy, effect, authorizedMutationCount, operationKeyNamespace) => {
+  const payload = {
+    conversation_id: policy.turn.conversation_id,
+    turn_id: policy.turn.id,
+    reason_observation_ids: jsonClone(effect.reason_observation_ids),
+  };
+  if (effect.type === 'handoff'
+      && policy.turn.pending_question_goal_id === 'address'
+      && (policy.goals || []).find((goal) => goal.goal_id === 'address')?.guidance?.next_action_without_progress === 'handoff'
+      && authorizedMutationCount === 0) {
+    payload.escalation_reason = 'no_progress_commercial_question_loop';
+    payload.pending_question_key = 'address';
+  }
+  const payloadDigest = digestObject(payload);
+  return {
+    type: effect.type,
+    operation_key: sha256(`${operationKeyNamespace}\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${effect.type}\u0000${payloadDigest}`),
+    payload,
+    payload_digest: payloadDigest,
+    required_before_reply: true,
+  };
+};
+
+const authorizeV3ConversationDecisionV3 = (policy, proposal, validation) => {
   if (validation?.version !== V3_CONTRACTS.validation || validation.valid !== true) {
     throw new Error('validated_proposal_required');
   }
@@ -908,28 +1533,9 @@ const authorizeV3ConversationDecision = (policy, proposal, validation) => {
   const decisionId = sha256(`${V3_CONTRACTS.decision}\u0000${policy.policy_digest}\u0000${validation.proposal_digest}`);
   const replySha = sha256(proposal.reply_text);
   const deliveryKey = sha256(`turn_reply/v1\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${replySha}`);
-  const effectCommands = validation.authorized_effect_requests.map((effect) => {
-    const payload = {
-      conversation_id: policy.turn.conversation_id,
-      turn_id: policy.turn.id,
-      reason_observation_ids: jsonClone(effect.reason_observation_ids),
-    };
-    if (effect.type === 'handoff'
-        && policy.turn.pending_question_goal_id === 'address'
-        && (policy.goals || []).find((goal) => goal.goal_id === 'address')?.guidance?.next_action_without_progress === 'handoff'
-        && validation.authorized_mutations.length === 0) {
-      payload.escalation_reason = 'no_progress_commercial_question_loop';
-      payload.pending_question_key = 'address';
-    }
-    const payloadDigest = digestObject(payload);
-    return {
-      type: effect.type,
-      operation_key: sha256(`effect/v3\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${effect.type}\u0000${payloadDigest}`),
-      payload,
-      payload_digest: payloadDigest,
-      required_before_reply: true,
-    };
-  });
+  const effectCommands = validation.authorized_effect_requests.map((effect) => (
+    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3')
+  ));
   return {
     version: V3_CONTRACTS.decision,
     decision_id: decisionId,
@@ -956,6 +1562,73 @@ const authorizeV3ConversationDecision = (policy, proposal, validation) => {
     commit_policy: { mode: 'semantic_all_or_nothing' },
   };
 };
+
+// D1: an existing item_ref already IS the persisted item_id (dual-read never
+// rewrites a committed id). Only a brand-new handle needs deriving.
+const authorizeV3ConversationDecisionV31 = (policy, proposal, validation) => {
+  if (validation?.version !== V3_CONTRACTS.validation_v3_1 || validation.valid !== true) {
+    throw new Error('validated_proposal_required');
+  }
+  if (validation.policy_digest !== policy?.policy_digest || validation.proposal_digest !== digestObject(proposal)) {
+    throw new Error('validation_digest_mismatch');
+  }
+  const existingItems = existingLineItemsFromPolicy(policy);
+  const resolveItemId = (itemRef) => (itemRef === null || itemRef === undefined
+    ? null
+    : (existingItems.has(itemRef) ? itemRef : deriveItemIdV31(policy.turn.conversation_id, policy.turn.id, itemRef)));
+
+  const decisionId = sha256(`${V3_CONTRACTS.decision_v3_1}\u0000${policy.policy_digest}\u0000${validation.proposal_digest}`);
+  const replySha = sha256(proposal.reply_text);
+  const deliveryKey = sha256(`turn_reply/v1\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${replySha}`);
+  const effectCommands = validation.authorized_effect_requests.map((effect) => (
+    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3.1')
+  ));
+  return {
+    version: V3_CONTRACTS.decision_v3_1,
+    decision_id: decisionId,
+    outcome: 'authorized',
+    turn_id: policy.turn.id,
+    conversation_id: policy.turn.conversation_id,
+    conversation_revision_expected: policy.turn.conversation_revision,
+    expected_snapshot_digest: digestObject({
+      conversation_revision: policy.turn.conversation_revision,
+      facts: policy.facts,
+    }),
+    policy_digest: policy.policy_digest,
+    proposal_digest: validation.proposal_digest,
+    reply: {
+      text: proposal.reply_text,
+      sha256: replySha,
+      delivery_key: deliveryKey,
+      primary_request: proposal.primary_request === null ? null : jsonClone(proposal.primary_request),
+    },
+    catalog_resolutions: jsonClone(validation.catalog_resolutions),
+    withheld_mutations: jsonClone(validation.withheld_mutations),
+    observations: jsonClone(validation.accepted_observations),
+    state_mutations: validation.authorized_mutations.map((mutation) => ({
+      operation: mutation.operation,
+      field: mutation.field,
+      item_id: resolveItemId(mutation.item_ref),
+      observation_id: mutation.observation_id,
+      replaces_fact_id: mutation.replaces_fact_id,
+      projected_value: jsonClone(mutation.projected_value),
+    })),
+    effect_commands: effectCommands,
+    commit_policy: { mode: 'semantic_all_or_nothing' },
+  };
+};
+
+const validateV3AiProposal = (policy, proposal) => (
+  policy?.version === V3_CONTRACTS.policy_v3_1
+    ? validateV3AiProposalV31(policy, proposal)
+    : validateV3AiProposalV3(policy, proposal)
+);
+
+const authorizeV3ConversationDecision = (policy, proposal, validation) => (
+  validation?.version === V3_CONTRACTS.validation_v3_1
+    ? authorizeV3ConversationDecisionV31(policy, proposal, validation)
+    : authorizeV3ConversationDecisionV3(policy, proposal, validation)
+);
 
 module.exports = {
   V3_CONTRACTS,
