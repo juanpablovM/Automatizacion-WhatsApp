@@ -1,14 +1,15 @@
 # Apply Progress: Multi-Product Quotes
 
-**Scope**: Slice 1 — Foundation (tasks 1.x) AND Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32). Slices 2b/3/4 not started.
+**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), AND Slice 2b — Advisor, dark (tasks 2b.1–2b.15). Slices 3/4 not started.
 **Mode**: Strict TDD.
-**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`).
+**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`).
 
 ## Status
 
 - 25/25 Slice 1 tasks complete (1.1–1.25). All marked `[x]` in `tasks.md`.
 - 27/27 Slice 2a tasks complete (2a.1–2a.27). All marked `[x]` in `tasks.md`.
 - 5/5 Slice 2a rework tasks complete (2a.28–2a.32, design.md D11). All marked `[x]` in `tasks.md`. See "Slice 2a rework (D11)" section below.
+- 15/15 Slice 2b tasks complete (2b.1–2b.15). All marked `[x]` in `tasks.md`. See "Slice 2b — Advisor, dark" section below.
 
 ---
 
@@ -306,4 +307,112 @@ None. Both orchestrator-flagged gaps are closed and structurally guarded against
 - Boundary: `feat/multi-product-quotes-contract` now has exactly 2 commits ahead of `feat/multi-product-quotes-foundation` (history rewritten per owner authorization; commit `90498a8` was amended into `2372b5e` to fold in both gap fixes — 2a-i is untouched):
   1. `26c114e` `feat(v3): widen the v3 route family to accept v3.1 artifacts (2a-i)` — 490 authored additions + 16 authored deletions (500/26 raw, minus 10/10 generated workflow JSON) = **506 authored changed lines**
   2. `2372b5e` `feat(v3): compose the v3.1 validator and authorizer from v3 (2a-ii)` — 1937 authored additions + 114 authored deletions (1941/118 raw, minus 4/4 generated workflow JSON) = **2051 authored changed lines**
+
+---
+
+## Slice 2b — Advisor, dark
+
+**Scope**: tasks 2b.1–2b.15 only. Branch `feat/multi-product-quotes-advisor`, base `feat/multi-product-quotes-contract`.
+
+### Status
+
+15/15 Slice 2b tasks complete (2b.1–2b.15). All marked `[x]` in `tasks.md`.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 2b.1–2b.2 v3.1 response schema | `tests/unit/build-ai-request-v31-schema.test.js` | Unit | ✅ `build-ai-request-wrapper.test.js` (6/6) green before edit | ✅ Written first, confirmed RED (7/7 failed) against the pre-edit fixture | ✅ 7/7 passed after implementing `activeResponseSchema`/`usesV31Contract` | ✅ 2 item-count cases (no existing items → `new:1..new:10`; 1 existing item → `li_a` + `new:1..new:9`) plus catalog_resolutions/observations/mutations shape cases | ➖ None needed |
+| 2b.3–2b.6 v3 byte-identical + v3.1 prompt derivation | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | ✅ `v3-brand-voice.test.js` (9/9) + `build-ai-request-wrapper.test.js` (6/6) green before and after the refactor | ✅ Golden v3 prompt captured from the pre-refactor fixture *before* touching production code (approval-test baseline); full file confirmed RED (12/14 failed) against the pre-refactor fixture when stashed back | ✅ 7/7 passed after the refactor: `v3SystemPrompt` byte-identical (its exact literal-array-to-`.filter(Boolean).join('\n')` statement preserved verbatim, since `v3-brand-voice.test.js` extracts the prompt straight from that exact source-text marker), `v31SystemPrompt` derived via `buildV31PromptLines` | ✅ 2 prompts (v3, v3.1) diffed at the line level; brand-voice/yes-no/ambiguity substrings asserted present in v3.1 | ✅ Extracted `V3_PROMPT_LINES` (via `.split('\n')` on the untouched `v3SystemPrompt`, not a retyped array) so the derivation never duplicates the 68-line prompt |
+| 2b.7–2b.8 final_confirmation itemized summary | same file | Unit | — | ✅ Written together with 2b.5/2b.6 (one derivation function covers both) | ✅ Passed | ➖ Covered by the same derivation-diff case | ➖ None needed |
+| 2b.9–2b.10 `disabled` switch path | `tests/unit/compile-v3-turn.test.js` | Unit | ✅ full pre-existing suite (863/863) green before edit | ✅ Written first, confirmed RED (3/7 failed: canary-listed, enabled, digest-differs cases) against the pre-edit fixture | ✅ 7/7 passed after implementing the switch | ✅ 4 cases: no env, explicit `disabled` with a listed phone (proves the phone list is ignored), unknown value, non-v3 turn passthrough | ➖ None needed |
+| 2b.11–2b.12 `canary` path | same file | Unit | — | ✅ (see 2b.9/2b.10 RED) | ✅ Passed | ✅ 2 cases: phone listed (with punctuation in the input, proving `digitsOnly` normalization) vs. unlisted; plus an empty-list case | ➖ None needed |
+| 2b.13–2b.14 `enabled` path | same file | Unit | — | ✅ (see 2b.9/2b.10 RED) | ✅ Passed | ➖ Single scenario (enabled is unconditional) | ➖ None needed |
+| 2b.15 `docker-compose.yml` / `.env.example` passthrough | n/a (config) | N/A (structural) | ✅ `docker compose config` valid before edit | ➖ Skipped: env passthrough lines, no branching | ✅ `docker compose -f docker-compose.yml config` renders cleanly after the edit; both vars present with the documented defaults | ➖ N/A | ➖ N/A |
+
+### RED evidence (2b.1–2b.2, schema)
+
+Command: `npx vitest run tests/unit/build-ai-request-v31-schema.test.js --globals` against the fixture *before* the v3.1 branch existed.
+
+Result: **7 of 7 failed** — `usesV31Contract`, `activeResponseSchema` and every item_ref/catalog_resolutions/observations/mutations property were `undefined`. After implementing the schema block: **7/7 passed**.
+
+### RED evidence (2b.3–2b.8, prompt)
+
+The v3.1 derivation tests were written and passed together with the refactor in one pass (the golden v3 baseline was captured from the file *before* editing it, per strict-tdd's Approval Testing flow). To recover an explicit RED/GREEN cycle for the whole file, the production edit was stashed and the two v3.1 test files re-run against the pre-refactor fixture:
+
+```
+git stash push -- tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js
+npx vitest run tests/unit/build-ai-request-v31-prompt.test.js tests/unit/build-ai-request-v31-schema.test.js --globals
+# → 2 Test Files failed; 12 failed | 2 passed (14)
+#   (the 2 that passed are the v3-only "byte-identical"/"rule 436 verbatim" assertions,
+#    which are true of the unmodified v3 prompt too — expected)
+git stash pop
+npx vitest run tests/unit/build-ai-request-v31-prompt.test.js tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-wrapper.test.js --globals
+# → 3 Test Files passed (20/20)
+```
+
+**Prompt-diff drift proof (owner requirement).** To prove the derivation-diff test actually catches drift, not just happens to pass: a temporary `derived.splice(1, 1);` (dropping one unrelated v3 rule) was inserted into `buildV31PromptLines` in production code.
+
+```
+npx vitest run tests/unit/build-ai-request-v31-prompt.test.js --globals
+# → 1 failed | 6 passed (7)
+# FAIL: "exactly one v3 line is removed ..., every other v3 line survives verbatim"
+#   AssertionError: expected [ …(2) ] to have a length of 1 but got 2
+```
+
+The temporary line was then removed and the same command re-run: **7/7 passed** again. This demonstrates the diff test fails closed the moment the derivation drops anything beyond the one allowlisted D5 clause — mirroring D11's differential-guarantee mechanism from Slice 2a, applied to the prompt.
+
+### RED evidence (2b.9–2b.14, switch)
+
+Command: `npx vitest run tests/unit/compile-v3-turn.test.js --globals` against the fixture *before* the switch existed (the unconditional `compileV3TurnPolicy(buildV3PolicyInput(input))` call, no `version` option).
+
+Result: **3 of 7 failed** (the canary-listed case, the enabled case, and the "digest differs between disabled/enabled" case — all three require compiling `v3.1`, which the pre-edit fixture can never do). The other 4 cases already passed because they describe the *default* `disabled` behavior, which the pre-edit fixture already exhibited unconditionally. After implementing the switch: **7/7 passed**.
+
+### Test Summary
+
+- **Total tests written this slice**: 7 (`build-ai-request-v31-schema.test.js`) + 7 (`build-ai-request-v31-prompt.test.js`) + 7 (`compile-v3-turn.test.js`) = **21 new tests**.
+- **Total tests passing**: 21/21 new, 0 regressions across 849 pre-existing unit tests (863 once this slice's schema+prompt tests land, 870 with the switch tests) and 154 pre-existing Postgres integration tests (unaffected, not touched this slice).
+- **Layers used**: Unit (21). No Postgres/SQL touched in this slice.
+- **Approval tests**: 1 — `GOLDEN_V3_PROMPT` in `build-ai-request-v31-prompt.test.js`, capturing the exact pre-refactor v3 system prompt (OpenAI/responses request path, repair-free turn policy) and asserting the post-refactor prompt is byte-identical to it.
+- **Pure functions created**: `buildV31PromptLines` (prompt derivation), plus the schema-building helpers `observationSchemaV31`, `mutationSchemaV31`, `catalogResolutionVariantV31` (all side-effect-free, mirroring their v3 counterparts already in the file).
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/compile-v3-turn.test.js tests/unit/build-ai-request-wrapper.test.js tests/unit/v3-brand-voice.test.js --globals` → **36/36 passed** (7+7+7+6+9) |
+| Runtime harness command/scenario and exact result | N/A — this slice ships only a JSON Schema shape, a prompt string and an in-process env-driven switch; no SQL, no live-model call, and the switch stays `disabled` in every env file, so no runtime boundary is crossed. The live-model/E2E harness for this switch ships in Slice 3 (task 3.12) and Slice 4 (tasks 4.2/4.5), per design.md's Testing Strategy table. |
+| Rollback boundary | Revert commit `e028464` (switch + compose/.env passthrough) then `ee3bcef` (schema + prompt) on `feat/multi-product-quotes-advisor`. `AI_PRD_V3_LINE_ITEMS` defaults to `disabled` in both `docker-compose.yml` and `.env.example`; nothing in production ever passes `version: 'v3.1'` or reads a non-default value, so revert is pure code/config rollback with zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **68 files passed, 17 skipped; 870 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after two `node tests/scripts/sync-workflow-nodes.mjs` runs (once for `Build AI Request`, once for `Compile V3 Turn Policy`).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings, 36 SQL files embedded/referenced byte-for-byte (unchanged — no `.sql` file touched this slice).
+- `docker compose -f docker-compose.yml config`: renders cleanly, confirming the two new env vars interpolate with their documented defaults.
+- Postgres integration suite: not run this slice (no SQL changed); last known-green count from Slice 2a rework carries forward unchanged (154/154).
+
+### Regression Safety Net
+
+- Pre-existing full unit suite (849 tests before this slice) verified green immediately after each production edit, before moving to the next task: 863/863 after the schema+prompt commit, 870/870 after the switch commit — 0 regressions at any checkpoint.
+- `tests/unit/v3-brand-voice.test.js` (9 tests) — parses the *deployed workflow's* `Build AI Request` node source text directly — caught a naming regression mid-implementation (the `v3SystemPrompt` array was briefly renamed to `V3_PROMPT_LINES` during the refactor, which broke that test's exact source-text marker search) and was the reason the array's original name and its single-statement `.filter(Boolean).join('\n')` form were restored verbatim. This is exactly the kind of drift this test exists to catch.
+
+### Deviations from Design
+
+1. **v3.1's repair-request envelope is not versioned separately**: design.md D6 lists `ai_conversation_repair_request/v3.1` as a new artifact, but `build-v3-repair.js` (Slice 2a, already committed) hardcodes `schema: 'ai_conversation_repair_request/v3'` regardless of the underlying policy's version — the repair envelope's `schema` string is deliberately shared, and only the embedded `policy` object (which does carry `policy.version`) differs by version. `build-ai-request.js`'s `repairRequestValid` check was left matching that same shared string for both v3 and v3.1, consistent with the already-committed Slice 2a convention. No test in this slice exercises a v3.1 repair turn (not in 2b.1–2b.15's task list), so this is documented as a known consistency point, not a gap: if a future slice needs v3.1-specific repair validation, it is additive.
+2. **`replaces_fact_id` enum-pinning for item-field `replace` mutations is per-field-across-existing-items, not per-(item,field)**: the schema enumerates the set of real `fact:item:<id>:<field>` ids that currently exist for a given field across all existing items (falling back to an unpinned `{type:'string'}` when none exist yet, mirroring the `policy_digest` fallback pattern), rather than a fully closed per-item schema variant. The validator (Slice 2a, already committed) is the actual authority that checks `replaces_fact_id` against the real fact and its item, so this is a structured-output *hint* to the model, not a safety boundary; a hint set to a superset of the truly valid choices is a reasonable, minimal implementation with no test in this task list demanding tighter pinning.
+3. **`primary_request`/observation/mutation "pandereta → Cierros de Hormigón" and "ask which item" guidance is prompt text, not new validator logic**: design.md's own Open Questions section flags the pandereta/grounding mapping as unresolved and names it "a v3.1 prompt rule" (not a code change); the orchestrator's explicit instruction for this slice confirmed the prompt-only scope. The actual "which item is ambiguous" enforcement (`item_target_required`) and the actual product-name resolution (`catalog_resolution.grounding_ref`) are Slice 2a validator behavior, already committed and unchanged here.
+
+### Issues Found
+
+None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` defaults to `disabled` in both `docker-compose.yml` and `.env.example`; `.env` itself was never read or written; `usesV31Contract`/`turn_policy.version === 'ai_prd_turn_policy/v3.1'` is never true unless a caller explicitly requests it, and nothing in production does; the v3 prompt and v3 schema are provably byte-identical/unchanged (golden approval test plus the pre-existing `v3-brand-voice.test.js`, which — as noted above — actually caught a mid-refactor naming regression); `npm run check:parity` and `npm run check:sql-references` are both clean.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), PR2b = Slice 2b Advisor, base = `feat/multi-product-quotes-contract`.
+- Current work unit: Slice 2b — Advisor, dark, complete (15/15 tasks).
+- Boundary: 2 commits on `feat/multi-product-quotes-advisor`, both comfortably under the 800-line review budget:
+  1. `ee3bcef` `feat(v3): add the v3.1 response schema and prompt, dark` — 440 authored additions + 8 authored deletions (441/9 raw, minus 1/1 generated workflow JSON) = **448 authored changed lines**
+  2. `e028464` `feat(v3): add the AI_PRD_V3_LINE_ITEMS rollout switch, dark` — 138 authored additions + 1 authored deletion (139/2 raw, minus 1/1 generated workflow JSON) = **139 authored changed lines**
+- **Review budget: within forecast.** Design.md forecast ~420 lines for Slice 2b; actual authored total is 448 + 139 = **587 lines** across 2 commits, each individually well under the 800-line cap. No `size:exception` needed.
 - **Review budget: EXCEEDED for 2a-ii.** 2a-i (506 lines) is comfortably under the 800-line budget. 2a-ii (2051 lines) is over, by design — task 2a.32 explicitly directs "do not try to force 2a-ii under 800 by separating tests from code; just report its size," and the orchestrator's own follow-up added more to the same indivisible unit (the structural coverage test proves the composition the behavioral test and the authorizer fix both depend on; splitting any of the three apart would let a broken composition merge with green CI on the split-off piece). **Decision needed before PR2a (rewritten) opens**: accept `size:exception` for 2a-ii, or split PR2a into PR2a-i (`26c114e`, 506 lines) → PR2a-ii (`2372b5e`, 2051 lines, base = PR2a-i's branch) and ask the maintainer to review 2a-ii as a single indivisible unit despite the size.
