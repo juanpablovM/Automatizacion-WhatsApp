@@ -702,3 +702,4 @@ Captured canary evidence showed a first-turn proposal with `new:1` and `new:2` b
 | Rollback boundary | Revert this validator guard, captured fixture/test, and regenerated embedded workflow-node code together; no switch or production deployment was changed. |
 
 Task 3c.11 is complete. Rollout tasks 4.x remain pending; this local check is not a live canary rerun.
+Work-unit commit: `2a991b9` (`fix(v3): reject unscoped item fields in multi-item first turns`). Its 990 total changed lines include 741 lines of captured live-proposal evidence and 8 generated workflow-JSON lines; the focused authored code/test/docs change is 241 lines. The captured fixture is kept intact for reproducibility rather than shortened to meet a size target.
