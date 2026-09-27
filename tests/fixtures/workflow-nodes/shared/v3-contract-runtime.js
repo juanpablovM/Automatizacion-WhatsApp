@@ -463,12 +463,28 @@ const pickupFactoryAddressRequiredError = (normalizedReplyText) => {
   );
 };
 
-const installationRequiresDeliveryError = (serviceScope, fulfillment) => {
+const installationRequiresDeliveryError = (policy, serviceScope, fulfillment) => {
   if (!['installation', 'both'].includes(serviceScope) || fulfillment !== 'pickup') return null;
+  const deliveryRefs = groundingEntries(policy)
+    .filter((entry) => entry?.concept === 'fulfillment' && sameGroundedValue(groundingValue(entry), 'delivery'))
+    .map((entry) => entry.ref);
   return validationError(
-    'installation_requires_delivery', 'fulfillment', ['service_scope', 'fulfillment'], ['delivery', 'material'],
-    'Installation is available only with delivery. Correct fulfillment to delivery, or quote material-only pickup without installation. Do not offer installation with factory pickup.',
+    'installation_requires_delivery', 'fulfillment', ['service_scope', 'fulfillment'], deliveryRefs,
+    'Installation is available only with delivery. Correct fulfillment to delivery, or correct service_scope to material-only pickup without installation, but only with customer evidence. If this conflict is already persisted and the current message does not resolve it, ask whether the customer wants installation with delivery or material-only pickup; do not authorize an effect. Do not offer installation with factory pickup.',
   );
+};
+
+const isPersistedInstallationConflictClarification = (policy, observations, mutations, proposal, primaryRequestValid) => {
+  const serviceScope = projectedValueFor(policy, [], 'service_scope');
+  const fulfillment = projectedValueFor(policy, [], 'fulfillment');
+  return Boolean(installationRequiresDeliveryError(policy, serviceScope, fulfillment))
+    && primaryRequestValid
+    && (proposal.primary_request?.goal_id === 'service_scope'
+      || (serviceScope === 'both' && proposal.primary_request?.goal_id === 'fulfillment'))
+    && observations.length === 0
+    && mutations.length === 0
+    && Array.isArray(proposal.effect_requests)
+    && proposal.effect_requests.length === 0;
 };
 
 const primaryRequestGoalInapplicableError = (requestedGoal, serviceScope, allowedNextGoalIds) => {
@@ -1054,7 +1070,11 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const allowedNextGoalIds = createLeadRequirement
     ? (createLeadUnresolved.length > 0 ? createLeadUnresolved : [FINAL_CONFIRMATION_GOAL])
     : unresolvedPolicyGoalIds;
-  if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null && resolvedGoalIds.has(primaryRequest.goal_id)) {
+  const persistedConflictClarification = isPersistedInstallationConflictClarification(
+    policy, candidateObservations, candidateMutations, proposalObject, primaryRequestValid,
+  );
+  if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null
+      && resolvedGoalIds.has(primaryRequest.goal_id) && !persistedConflictClarification) {
     errors.push(validationError(
       'primary_request_goal_resolved', 'primary_request.goal_id', [primaryRequest.goal_id], allowedNextGoalIds,
       'Remove the request or ask for one of the allowed unresolved goals.',
@@ -1075,8 +1095,8 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
-  const installationDeliveryError = installationRequiresDeliveryError(serviceScope, fulfillment);
-  if (installationDeliveryError) errors.push(installationDeliveryError);
+  const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
+  if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
   const normalizedReplyText = String(proposalObject.reply_text || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
@@ -1463,7 +1483,11 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const allowedNextGoalIds = createLeadRequirement
     ? (createLeadUnresolved.length > 0 ? createLeadUnresolved : [FINAL_CONFIRMATION_GOAL])
     : unresolvedPolicyGoalIds;
-  if (primaryRequestValid && primaryRequest !== null && resolvedGoalIds.has(primaryRequest.goal_id)) {
+  const persistedConflictClarification = isPersistedInstallationConflictClarification(
+    policy, candidateObservations, candidateMutations, proposalObject, primaryRequestValid,
+  );
+  if (primaryRequestValid && primaryRequest !== null && resolvedGoalIds.has(primaryRequest.goal_id)
+      && !persistedConflictClarification) {
     errors.push(validationError(
       'primary_request_goal_resolved',
       'primary_request.goal_id',
@@ -1496,8 +1520,8 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
-  const installationDeliveryError = installationRequiresDeliveryError(serviceScope, fulfillment);
-  if (installationDeliveryError) errors.push(installationDeliveryError);
+  const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
+  if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
   const normalizedReplyText = String(proposalObject.reply_text || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')

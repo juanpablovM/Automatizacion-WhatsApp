@@ -43,7 +43,49 @@ describe.each(['v3', 'v3.1'])('%s installation requires delivery', (version) => 
     expect(validation.authorized_effect_requests).toEqual([]);
     expect(() => authorizeV3ConversationDecision(policy, proposal, validation)).toThrow();
     expect(validation.errors.find((error) => error.code === 'installation_requires_delivery'))
-      .toMatchObject({ disposition: 'repairable', allowed_values: ['delivery', 'material'] });
+      .toMatchObject({
+        disposition: 'repairable', path: 'fulfillment', allowed_values: ['fulfillment:delivery'],
+        instruction: expect.stringContaining('If this conflict is already persisted'),
+      });
+  });
+
+  test('a persisted conflict can ask to correct fulfillment without authorizing effects', () => {
+    const { policy, proposal, validation } = run(version,
+      { ...quote, service_scope: 'both', fulfillment: 'pickup' }, 'Continuemos', {
+        reply_text: 'La instalación requiere despacho. ¿Prefieres despacho o solo material con retiro?',
+        primary_request: { goal_id: 'fulfillment' },
+      });
+    expect(validation.valid).toBe(true);
+    expect(codes(validation)).not.toContain('primary_request_goal_resolved');
+    expect(validation.authorized_mutations).toEqual([]);
+    expect(validation.authorized_effect_requests).toEqual([]);
+    expect(authorizeV3ConversationDecision(policy, proposal, validation).effect_commands).toEqual([]);
+  });
+
+  test('a persisted installation-only conflict can ask to correct service scope', () => {
+    const { validation } = run(version,
+      { ...quote, service_scope: 'installation', fulfillment: 'pickup' }, 'Continuemos', {
+        reply_text: 'La instalación requiere despacho. ¿Necesitas instalación con despacho o solo material con retiro?',
+        primary_request: { goal_id: 'service_scope' },
+      });
+    expect(validation.valid).toBe(true);
+    expect(codes(validation)).not.toContain('primary_request_goal_resolved');
+  });
+
+  test('a persisted conflict still rejects a lead request or repeated invalid assertion', () => {
+    const context = { ...quote, service_scope: 'both', fulfillment: 'pickup' };
+    const { validation: withEffect } = run(version, context, 'Confirmo', {
+      primary_request: { goal_id: 'fulfillment' },
+      effect_requests: [{ type: 'create_lead', reason_observation_ids: [] }],
+    });
+    expect(codes(withEffect)).toContain('installation_requires_delivery');
+    expect(withEffect.authorized_effect_requests).toEqual([]);
+
+    const { validation: repeated } = run(version, context, 'retiro', {
+      primary_request: { goal_id: 'fulfillment' },
+      observations: [observation('fulfillment', 'retiro', 'pickup')],
+    });
+    expect(codes(repeated)).toContain('installation_requires_delivery');
   });
 
   test('rejects a same-turn installation + pickup proposal', () => {

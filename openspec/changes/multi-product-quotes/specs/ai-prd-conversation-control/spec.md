@@ -42,7 +42,7 @@ Each quote MUST produce exactly one lead and one ClickUp task listing every line
 
 ### Requirement: Installation Requires Delivery
 
-Installation **MUST** be provided only with delivery. A quote **MUST NOT** combine `fulfillment=pickup` with `service_scope=installation` or `service_scope=both`, whether those values were committed in prior turns or proposed in the current turn. Validation **MUST** reject the combination before authorizing mutations or effects and provide a repairable instruction. Material-only pickup **MUST** remain valid, and installation-only **MUST NOT** gain a new explicit fulfillment prerequisite.
+Installation **MUST** be provided only with delivery. A quote **MUST NOT** combine `fulfillment=pickup` with `service_scope=installation` or `service_scope=both`, whether those values were committed in prior turns or proposed in the current turn. Validation **MUST** reject the combination before authorizing mutations or effects and provide a repairable instruction. A quote with the combination already committed **MAY** ask for correction without mutations or effects; it **MUST NOT** create a lead or silently affirm the prohibited combination. Repair `allowed_values` **MUST** belong to the error path's field. Material-only pickup **MUST** remain valid, and installation-only **MUST NOT** gain a new explicit fulfillment prerequisite.
 
 #### Scenario: Installation with pickup is rejected
 - GIVEN a quote has installation or both service scope and factory pickup, from persisted facts or same-turn evidence
@@ -53,6 +53,11 @@ Installation **MUST** be provided only with delivery. A quote **MUST NOT** combi
 - GIVEN a quote has installation or both service scope and factory pickup
 - WHEN the customer corrects fulfillment to delivery or scope to material-only
 - THEN the corrected quote is not rejected for the former installation-pickup conflict
+
+#### Scenario: A persisted conflict can request correction
+- GIVEN a prior turn persisted installation or both with pickup, and the current message provides no corrective evidence
+- WHEN the advisor asks whether the customer wants installation with delivery or material-only pickup, without mutations or effects
+- THEN the clarification is allowed, but an effect or repeated invalid assertion remains forbidden
 
 #### Scenario: Valid fulfillment paths remain available
 - GIVEN a quote requests material-only pickup, installation-only without an explicit fulfillment choice, or installation with delivery

@@ -191,6 +191,7 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 ### Slice 3c owner-rule follow-up — installation requires delivery
 
 - [x] 3c.12 RED then GREEN: reject projected `service_scope=installation|both` with `fulfillment=pickup` in the shared v3/v3.1 validator; verify persisted and same-turn combinations, correction to delivery or material-only, material-only pickup, installation-only without explicit fulfillment, authorizer protection, and v3.1-only prompt guidance. Sync workflow nodes and run local checks. No live deployment in this task.
+- [x] 3c.13 RED then GREEN: keep repair `allowed_values` in the `fulfillment` domain, and allow a narrow mutation-free/effect-free clarification when the invalid combination was already committed. New invalid assertions and effects remain blocked in v3 and v3.1. No live deployment in this task.
 
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 

@@ -734,4 +734,23 @@ Both v3 and v3.1 now reject a quote projected as `service_scope=installation|bot
 
 Rollout tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; this local verification does not satisfy them. The prohibited path still needs a controlled live canary test after deployment.
 
+## D12 correction — valid repair values and persisted-state recovery (3c.13)
+
+The first D12 guard mixed `material` into a `fulfillment` error's `allowed_values`, even though `material` is a `service_scope` value. The repair builder forwards errors unchanged to the model, so this could have instructed an invalid fulfillment repair. The guard also rejected an effect-free clarification if an earlier turn had already committed the conflict. The correction keeps only the policy's delivery grounding ref (`fulfillment:delivery`) in `allowed_values` for the fulfillment path, names the separate `service_scope=material` option in the instruction, and allows only a mutation-free/effect-free corrective `primary_request` when the conflict is already persisted. It waives the resolved-goal check only for that narrow question. An invalid current-turn assertion or lead effect remains blocked.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.13 | `tests/unit/v3-installation-delivery-policy.test.js` | Unit | Existing policy + differential tests 24/24 passed before edit | 6/20 failed: two mixed-domain values and four blocked clarifications; later instruction and grounding-ref tests each failed 2/20 before their fixes | 20/20 passed after recovery rule and repair instruction | Same recovery in v3/v3.1, both vs installation-only, effect/repeated-assertion rejection | Shared pure recovery predicate; focused suite green |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-installation-delivery-policy.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js --globals` → 7 files, 78/78 passed |
+| Runtime harness | N/A — no SQL or external runtime change; generated Code-node JSON synced locally and `npm run check:parity` passed |
+| Full checks | `npm test` → 77 passed files, 17 skipped; 986 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert the narrowed repair value and persisted-clarification exception, their tests/docs, and regenerated workflow JSON without reverting the original D12 guard. No runtime deploy or migration occurred. |
+
 Verification for this documentation unit: compared the task wording with the recorded conversation/lead/ClickUp audit outcomes; `git diff --check` passed. Runtime harness: N/A — this unit only records existing live evidence. Rollback boundary: revert this task-status/evidence documentation commit; no implementation or runtime state is changed.
