@@ -793,6 +793,43 @@ The replay harness's `checkItemizedFinalConfirmation` previously treated every t
 | Full checks | `npm test` → 78 files passed, 17 skipped; 998 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
 | Rollback boundary | Revert the guidance helper and its call site, the v3.1 prompt rule, the harness applicability gate, their tests/docs, and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |
 
+## Requested product observed without its mutation (3c.15)
+
+Live production on 2026-09-28 (conversation 347, v3.1 enabled for all), customer message: "Necesito cotizar una pandereta de 500 metros de largo por 1,80 de altura, con concertina y alambre pua. Uds realizan ese servicio?". The proposal resolved pandereta as `unsupported` (`new:1`) and matched concertina (`new:2`, `product:alambre-concertina`) and "alambre pua" (`new:3`, `product:alambre-puas`), observed both wire products, but its `state_mutations` held only `new:1`'s quantity and measurements. It validated with `errors: []`: `catalog_resolution_product_observation_required` only checks for the observation, and the line-items resolution reads observations rather than mutations. The lead and the ClickUp task listed only Cierros de Hormigón. The captured policy and proposal are stored in `tests/fixtures/v3-line-items/captured-matched-products-dropped.json`.
+
+The v3.1 validator now raises `item_product_not_recorded` (repairable, blocking, one error per observation, `path: observations[i]`, `related_ids: [observation id]`, `allowed_values: [item_ref]`) for a valid `product` observation with a string `item_ref` when:
+- the item has no product yet: it is a new handle with a `matched` catalog resolution, or an existing item without a product fact;
+- D5 does not withhold it: the item has no `ambiguous` or `unsupported` resolution;
+- the item is not removed by a `remove_item` in the same proposal;
+- no proposal `state_mutation` with `field: product` targets that `item_ref` or cites that observation.
+
+The instruction reads: `Add a state_mutation with operation "set", field "product", item_ref "<ref>", observation_id "<id>" and replaces_fact_id null. Every product the customer requests, including accessories such as wire or concertina mentioned "with" another product, is its own item and needs its own product mutation; never leave a product observation without its mutation.`
+
+These cases are deliberately left alone for precision:
+- An item whose product is already a fact. Restating it ("el alambre de púas viene en rollos?") or naming another product in a comparison is not rejected; changing an existing product stays governed by `replace` and the existing rules.
+- A new handle without a catalog resolution. `item_identity_required` already rejects it.
+- `item_ref: null` product observations. `item_field_unscoped` and `item_target_required` own them.
+- A `matched` resolution with no product observation. `catalog_resolution_product_observation_required` already rejects it.
+
+The captured proposal is now rejected with exactly `['item_product_not_recorded', 'item_product_not_recorded']` (for `obs_product_1`/`new:2` and `obs_product_2`/`new:3`). Adding the two product `set` mutations makes it validate clean, and the authorizer then commits three items. A v3.1-only prompt rule, `V31_EVERY_PRODUCT_RECORDED_RULE`, says the same thing. The error code is v3.1-only, so the static coverage test (v3 ⊆ v3.1) and the differential tests need no allowlist change. The v3 validator branch, the v3 prompt (golden) and the v3 request are unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.15 validator | `tests/unit/v3-v31-item-product-not-recorded.test.js` | Unit | Baseline of every captured fixture's outcome recorded before the edit; `npm test` 998 passed | 4/30 failed: captured proposal, single recorded product, D5-unsupported sibling, existing product-less item clarification | 30/30 passed after the guard | Corrected proposal clean and authorizes 3 items; D5 ambiguous still withheld; unsupported exempt; restating or comparing an existing product accepted; every other captured fixture unchanged | Guard kept as one loop after the mutation pass; no further refactor |
+| 3c.15 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 12/12 passed | 1/13 failed on missing v3.1 rule | 13/13 passed after `V31_EVERY_PRODUCT_RECORDED_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run` over the new test, prompt, composition/authorizer differential, static error-code coverage, item-field-unscoped, live-evidence, spurious-resolution and replace-missing-fact suites (`--globals`) → 9 files, 101/101 passed |
+| Captured outcomes | Every proposal in `tests/fixtures/v3-line-items/` keeps its prior validity and error codes; only `captured-matched-products-dropped.json` changes, from valid to `item_product_not_recorded` ×2 |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 79 files passed, 17 skipped; 1029 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the guard, the v3.1 prompt rule, their tests, the captured fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
