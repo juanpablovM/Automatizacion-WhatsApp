@@ -206,10 +206,10 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [x] 4.5 Run the canary E2E on `56997093038`: replay the incident message through confirmation; assert one lead + one ClickUp task listing Cierros de Hormigón and the wire item with their own measurements, no flat `Cantidad` and `Medidas` lines, and empty `last_error` and `validation_errors`
 - [x] 4.5a Deploy the installation-delivery guard to the controlled canary and verify a factory-pickup plus installation request is declined without a lead or ClickUp effect (conversation 332; see `apply-progress.md`)
 
-- [ ] 4.6 Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
+- [x] 4.6 (2026-09-28 10:25 -03: n8n recreated with `AI_PRD_V3_LINE_ITEMS=enabled` passed as a compose override; `.env` still says `canary` until the owner updates it, and a recreate without the override falls back to canary. Non-canary phone 56993193035 then produced a `validated_conversation_decision/v3.1` turn storing two items, Adoquín 20 and Soleras y Solerillas 10) Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
 - [ ] 4.7 Monitor `conversation_turn_executions.last_error` and `advisor_decisions.validation_errors` for multi-product rejections; merge tracker → main once stable
 
-Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1 and 4.4 are verified from the rollout session record (see `apply-progress.md`, "Rollout transitions 4.1 and 4.4"); 4.6 and 4.7 remain open. Installation requiring delivery is now covered by a local validator guard and tests, but its negative path is not yet verified on the live canary.
+Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1 and 4.4 are verified from the rollout session record (see `apply-progress.md`, "Rollout transitions 4.1 and 4.4"); 4.7 remains open. Installation requiring delivery is now covered by a local validator guard and tests, but its negative path is not yet verified on the live canary.
 
 Rollback drain (ordered, per slice, latest first):
 - [ ] 4.8 Set `AI_PRD_V3_LINE_ITEMS=canary` (empty phone list) or `disabled`; recreate n8n — new turns compile v3
