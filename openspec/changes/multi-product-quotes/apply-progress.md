@@ -899,6 +899,39 @@ The new code is v3.1-only. The static error-code coverage test checks only that 
 | Full checks | `npm test` → 81 files passed, 17 skipped; 1071 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
 | Rollback boundary | Revert the span-entry tracking, `distributiveSpanErrorsV31`/`itemsNamedByMessageV31`, the measurements extension, the rewritten prompt rule, their tests, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
 
+## Item questions must not use the customer `name` goal (3c.18)
+
+Contract v3.1 only. Live 2026-09-28 the model used `primary_request.goal_id="name"` (the customer's own name goal, first in the goal enum) for questions about items:
+- Scenario B turn 2: "¿con 'pandereta' te refieres a cierros de hormigón?" with `{goal_id:"name", item_ref:"li_52d7e0a1c9f4"}`. It validated clean, so `pending_question_key` became `name` (captured as `captured-live-proposals.json#11`, `wire-correction-hashed-ids[1]`).
+- Scenario C: after "500 metros de cada uno de los alambres" the first proposal asked `final_confirmation` (correctly rejected by `distributive_assignment_unconfirmed`, 3c.17). The repair wrote the right question ("¿Confirmas que los 500 metros son tanto para el alambre concertina como para el alambre de púas?") but with `{goal_id:"name", item_ref:"li_2e3e2dd78cd4"}`, was rejected again and fell to contingency. Captured as `tests/fixtures/v3-line-items/captured-distributive-ambiguous.json`.
+
+Changes:
+- **Validator.** `validateV3AiProposalV31` raises the new repairable `primary_request_item_ref_invalid` when a shape-valid `primary_request` carries a string `item_ref` on a goal outside `ITEM_SCOPED_REQUEST_GOALS_V31` (product, quantity, measurements and `line_items`, which `catalog_resolution_clarification_required` already accepts as the item-clarification equivalent and live proposals use). Path `primary_request.item_ref`, `related_ids` = [goal], `allowed_values` = [null]. Instruction: "Goal "<goal>" is a quote-level goal, so primary_request.item_ref must be null for it. To ask or confirm something about one item use goal_id "product", "quantity" or "measurements" with that item's item_ref (for example, clarifying which product the customer means is "product"; confirming which items a quantity applies to is "quantity"). goal_id "name" only asks for the customer's own name." A `{goal_id:"name", item_ref:null}` request is unaffected. The path is not `primary_request.goal_id`, so it never creates a goal lock in the repair schema.
+- **Distributive instruction.** `distributive_assignment_unconfirmed` now adds: goal_id must be the literal "<field>"; never "name" (the customer's own name) or any other goal.
+- **Repair goal enum (root cause of scenario C).** In Build AI Request, every v3.1 repair turn used the quote-level goal list (policy goals + `final_confirmation`) for `primary_request.goal_id`, so "quantity" could not be emitted and the model chose "name". The v3.1 enum now narrows only when the repair has a `primary_request.goal_id` lock (unchanged, never widened); otherwise it keeps the first-pass enum with product/quantity/measurements. The v3 enum is unchanged.
+- **Prompt.** New v3.1-only `V31_ITEM_REQUEST_GOAL_RULE`, after `V31_ITEM_REF_GUIDANCE_RULE`: goal_id=name is only for the customer's name; item questions use product, quantity or measurements with their item_ref (clarifying "pandereta" is product; confirming which items a quantity applies to is quantity); quote-level goals take item_ref=null.
+- **Goal descriptions.** Neither the v3 nor the v3.1 schema describes goals (plain enum, no per-goal description), so no description was added.
+
+Known gap (not a validator rule): `wire-correction[4]` and `wire-correction-hashed-ids[0]`/`[2]` ask the pandereta clarification with `{goal_id:"name", item_ref:null}`. That shape is indistinguishable from a real name question without reading reply_text, so they still validate; the prompt rule targets them.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.18 validator | `tests/unit/v3-v31-primary-request-item-ref.test.js`, `tests/unit/v3-line-items-live-evidence.test.js` | Unit | `npm test` green before the change; distributive-assignment suite unchanged | 4/30 and 1/15 failed: name+item_ref accepted (scenarios B and C), commune+item_ref accepted, distributive instruction lacked the literal-goal sentence | 30/30 and 15/15 passed | Same proposals with `quantity` / `product` / `line_items` validate clean; `{name, null}` stays valid; every other captured proposal never raises the new code | None needed |
+| 3c.18 repair enum | `tests/unit/build-ai-request-v31-schema.test.js` | Unit | Existing schema tests 7/7 | 1/9 failed: unlocked repair enum lacked item goals | 9/9 passed | A `primary_request.goal_id` lock still yields exactly the locked goals | None needed |
+| 3c.18 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 15/15 | 1/16 failed on the missing rule | 16/16 passed | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run` over the new item-ref suite, live-evidence, v3.1 schema, v3.1 prompt and distributive-assignment suites → 5 files, 96/96 passed |
+| Captured outcomes | 21 captured proposals (19 prior + 2 new). Outcomes unchanged except, by design, `captured-live-proposals.json#11` (valid → `primary_request_item_ref_invalid`) and `captured-distributive-ambiguous.json#1` (`distributive_assignment_unconfirmed` → + `primary_request_item_ref_invalid`) |
+| Runtime harness | N/A — no SQL change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 82 files passed, 17 skipped; 1106 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the new validator check and constant, the distributive instruction sentence, the repair-enum condition, `V31_ITEM_REQUEST_GOAL_RULE`, their tests, the new fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
