@@ -830,6 +830,38 @@ The captured proposal is now rejected with exactly `['item_product_not_recorded'
 | Full checks | `npm test` → 79 files passed, 17 skipped; 1029 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
 | Rollback boundary | Revert the guard, the v3.1 prompt rule, their tests, the captured fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
 
+## Explicit distributive quantity on several items (3c.16)
+
+Live production on 2026-09-28 (contract v3.1): a quote with three items (Alambre Concertina and Alambre de Púas without quantity, Cierros de Hormigón with quantity). The bot asked "¿cuántos metros necesitas de alambre concertina y de alambre de púas?" and the customer answered "500 metros de cada uno". The model set 500 m only on the concertina item and asked again "¿también necesitas 500 metros de alambre de púas?".
+
+Before this unit the v3.1 validator rejected the correct proposal: two `quantity` mutations on different items citing the same `(field, evidence_quote, evidence_occurrence)` span raised `item_evidence_span_conflict` (task 3c.7), whatever the quote said. The new test reproduced it (RED).
+
+The guard now tracks the first observation per span and skips the conflict only when `isDistributiveQuantitySpanV31` holds:
+- the field is `quantity` (measurements are not covered);
+- the shared `evidence_quote`, folded (NFD, no diacritics, lowercase, collapsed whitespace), matches `\b(?:(?:de\s+)?cada\s+(?:uno|una|producto|item)|para\s+(?:ambos|ambas|los\s+dos|las\s+dos)|lo\s+mismo\s+para)\b`;
+- the observation's `normalized_value` is canonically identical to the first observation of that span.
+
+Still rejected with `item_evidence_span_conflict`: the same quote without a marker ("500 metros"), a marker elsewhere in the message but outside the shared quote, differing values or units, and a shared measurement span. The 3c.7 captured "copied" cases stay rejected unchanged. The exception lives only in the v3.1 validator branch.
+
+A v3.1-only prompt rule, `V31_DISTRIBUTIVE_QUANTITY_RULE`, placed right after `V31_NO_CROSS_ITEM_TRANSFER_RULE` (unchanged): an explicitly distributive quantity is recorded with the same value on each item it refers to (the items the message names or, if none, the items of the question being answered), with one quantity observation and one `set` mutation per item, each with its `item_ref` and the same `evidence_quote` including the distributive expression; this is not copying between items, and without that explicit expression the no-transfer rule still applies.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.16 validator | `tests/unit/v3-v31-distributive-quantity.test.js` | Unit | `tests/unit/v3-v31-item-evidence-span-conflict.test.js` 6/6; `npm test` 1029 passed | 8/14 failed: the live proposal, the authorizer commit and six marker variants rejected by `item_evidence_span_conflict` | 14/14 passed after the exception | Unmarked quote, marker outside the quote, different value, different unit and shared measurement span stay rejected; span-conflict suite 6/6 unchanged | Helper kept next to the other v3.1 helpers; no further refactor |
+| 3c.16 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 13/13 passed | 1/14 failed on missing v3.1 rule | 14/14 passed after `V31_DISTRIBUTIVE_QUANTITY_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule; the no-transfer rule is still present and precedes it | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-v31-distributive-quantity.test.js tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/unit/build-ai-request-v31-prompt.test.js` → 3 files, 34/34 passed |
+| Captured outcomes | All 19 proposals in `tests/fixtures/v3-line-items/` produce byte-identical validation results with the HEAD and the new runtime |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 80 files passed, 17 skipped; 1044 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the exception helper and its call site, the v3.1 prompt rule, their tests, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
