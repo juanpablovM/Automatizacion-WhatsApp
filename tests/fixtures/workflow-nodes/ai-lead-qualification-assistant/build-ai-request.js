@@ -702,6 +702,12 @@ if (usesV3Contract) {
   // that does not exist. The validator rejects it (and keeps rejecting it);
   // this v3.1-only rule steers a never-recorded item value to set.
   const V31_REPLACE_EXISTING_FACT_RULE = 'Usa replace solo para cambiar un valor que ya existe como fact, con su fact_id exacto en replaces_fact_id. Si el ítem todavía no tiene valor para ese campo (product, quantity o measurements), usa set con replaces_fact_id=null en ese item_ref, aunque el cliente lo llame corrección.';
+  // Live production 2026-09-28 (conversation 347): "pandereta ... con
+  // concertina y alambre pua" produced matched product observations for both
+  // wires but no product state_mutation, so the two products vanished from the
+  // lead. The validator now rejects that shape (item_product_not_recorded);
+  // this v3.1-only rule makes every requested product its own recorded item.
+  const V31_EVERY_PRODUCT_RECORDED_RULE = 'Cada producto que el cliente pide (incluidos accesorios como alambres o concertina mencionados "con" otro producto) es su propio ítem y lleva su state_mutation set de product con su item_ref, referenciando su observación; nunca dejes una observación de product sin su mutación. La única excepción es un ítem con catalog_resolution ambiguous o unsupported, cuyo product queda pendiente de aclarar.';
   const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment debe ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Para installation sin fulfillment explícito, no pidas esa elección: el despacho va implícito.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
@@ -717,6 +723,7 @@ if (usesV3Contract) {
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,
       V31_REPLACE_EXISTING_FACT_RULE,
+      V31_EVERY_PRODUCT_RECORDED_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;

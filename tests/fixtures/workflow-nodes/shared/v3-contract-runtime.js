@@ -1024,6 +1024,36 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     });
   }
 
+  // item_product_not_recorded (live 2026-09-28, conversation 347): a product
+  // the customer requests for an item that has no product yet — a `matched`
+  // new item, or an existing item with no product fact — only reaches the
+  // quote through a product state_mutation. Without one the item silently
+  // vanishes. Exempt: D5-withheld items (ambiguous/unsupported resolution),
+  // items removed in this proposal, items whose product is already a fact
+  // (restating or comparing), unresolved new handles (item_identity_required
+  // already fires) and item_ref:null observations (item-scope rules own them).
+  const removedItemRefsThisTurn = new Set(mutations
+    .filter((mutation) => mutation?.operation === 'remove_item' && typeof mutation.item_ref === 'string')
+    .map((mutation) => mutation.item_ref));
+  for (const [index, observationEntry] of observations.entries()) {
+    if (observationEntry?.concept !== 'product' || !observationsById.has(observationEntry.id)) continue;
+    const itemRef = observationEntry.item_ref;
+    if (typeof itemRef !== 'string' || removedItemRefsThisTurn.has(itemRef)) continue;
+    const resolution = catalogResolutionByRef.get(itemRef);
+    if (resolution && ['ambiguous', 'unsupported'].includes(resolution.status)) continue;
+    const productPending = existingItems.has(itemRef)
+      ? !hasResolvedValue(existingItems.get(itemRef).product)
+      : resolution?.status === 'matched';
+    if (!productPending) continue;
+    const recorded = mutations.some((mutation) => mutation?.field === 'product'
+      && (mutation.item_ref === itemRef || mutation.observation_id === observationEntry.id));
+    if (recorded) continue;
+    errors.push(validationError(
+      'item_product_not_recorded', `observations[${index}]`, [observationEntry.id], [itemRef],
+      `Add a state_mutation with operation "set", field "product", item_ref "${itemRef}", observation_id "${observationEntry.id}" and replaces_fact_id null. Every product the customer requests, including accessories such as wire or concertina mentioned "with" another product, is its own item and needs its own product mutation; never leave a product observation without its mutation.`,
+    ));
+  }
+
   for (const rule of policy?.claim_authority?.rules || []) {
     if (rule?.kind !== 'forbidden_pattern' || typeof rule.pattern !== 'string') continue;
     let pattern;

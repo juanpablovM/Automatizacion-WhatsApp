@@ -149,4 +149,19 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('Usa replace solo para cambiar un valor que ya existe como fact');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live production 2026-09-28 (conversation 347): "pandereta ... con
+  // concertina y alambre pua" produced matched product observations for the
+  // two wires with no product state_mutation, so both products vanished from
+  // the lead. The validator now rejects that shape (item_product_not_recorded);
+  // this v3.1-only rule says every requested product is its own item with its
+  // own product set mutation.
+  test('v3.1 adds a rule that every requested product is its own item with its own product mutation', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Cada producto que el cliente pide');
+    expect(v31Prompt).toContain('nunca dejes una observación de product sin su mutación');
+    expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
 });
