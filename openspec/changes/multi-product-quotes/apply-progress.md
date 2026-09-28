@@ -762,3 +762,33 @@ Guarded workflow sync for `85542d3` and `ab6dbfa` exited 0 with acceptance and r
 The single negative inbound `negative-install-pickup-20260927T2305Z` created conversation 332 / turn 406. The bot stated that installation cannot be combined with factory pickup and requires delivery. Its v3.1 decision authorized no pickup fulfillment or effect command; validation errors were empty, the turn was delivered with `last_error=null`, and the conversation created no lead or ClickUp task. Guarded acceptance used a separate conversation 331.
 
 Pre-deploy focused tests passed 44/44; parity, SQL references, preflight, runtime marker, and canonical webhook checks passed. This one negative canary scenario does not satisfy task 4.2's N≥10 live A/B gate.
+
+## Rollout transitions 4.1 and 4.4
+
+| Task | Evidence |
+|---|---|
+| 4.1 | Migration 025 applied to production; the previous `apply_v3_state_mutations` definition is saved at `backups/20260927-084107/apply_v3_state_mutations.before.sql`. Workflows were deployed with `scripts/dev/sync-n8n-workflows.sh --deploy 56997093038` while the running container had `AI_PRD_V3_LINE_ITEMS` unset (fails safe to `disabled`); acceptance passed and decisions stayed `validated_conversation_decision/v3`. |
+| 4.4 | `.env` gained `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; `docker compose up -d --no-deps n8n` recreated n8n, and the container reported `AI_PRD_V3_LINE_ITEMS=canary` with that phone list. The controlled phone then produced `validated_conversation_decision/v3.1` decisions. No non-canary phone has sent traffic since the recreate, so live proof that other numbers stay on v3 is still pending; the routing itself is covered by the `compile-v3-turn.js` switch tests. |
+
+## Replace on a never-recorded item value (3c.14)
+
+Live A/B (N=10, production catalog, transcript `pandereta-live-then-wire-correction`) on HEAD: after turn 1 the pandereta item holds 500 ml and 3 m (product withheld) and the Alambre de Púas item holds only its product. On "Corrección: el alambre de púas son 300 ml, no 500 ml", 4/10 runs emitted `replace` for the wire quantity with a `replaces_fact_id` that does not exist. `fact_not_replaceable` rejected it without guidance, the repair repeated the mistake, and the turn fell to contingency; the other 6 runs correctly used `set`. The v3.1 validator now attaches repair guidance to `fact_not_replaceable` when the mutation targets an item field of an existing item: if that item has no current fact for the field, the instruction says to use `set` with `replaces_fact_id: null` (`allowed_values: [null]`); if a customer-correctable fact exists but the id was wrong, the instruction names that fact id (`allowed_values: [<fact id>]`). Accept/reject outcomes are unchanged; quote-level and `item_ref:null` cases keep their exact previous error object. A v3.1-only prompt rule says the same. The v3 validator branch, the v3 prompt (golden) and the v3 request are unchanged.
+
+The replay harness's `checkItemizedFinalConfirmation` previously treated every turn with more than one committed item as a final confirmation, so all 20 runs reported `matches:false` although no scripted transcript reaches a real final-confirmation request. It now applies only when the turn's decision (or, without a decision, its proposal) has `primary_request.goal_id === 'final_confirmation'` and there are more than one item; otherwise it reports `checked:false` with `reason: 'turn does not ask for final_confirmation'`. No third transcript was added: reaching a real final confirmation needs every required goal answered, which is a long scripted conversation.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.14 validator | `tests/unit/v3-v31-replace-missing-fact.test.js` | Unit | Related v3.1 suites (differential, static error-code coverage, spurious-resolution) green before edit | 3/8 failed: missing set/null guidance (nonexistent id; other item's id) and missing correct-id guidance | 8/8 passed after `itemFactNotReplaceableGuidanceV31` | `set`/null and correct-id `replace` validate clean; quote-level and `item_ref:null` errors keep their exact object with no instruction | Guidance isolated in one pure helper; no further refactor |
+| 3c.14 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 11/11 passed | 1/12 failed on missing v3.1 rule | 12/12 passed after `V31_REPLACE_EXISTING_FACT_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+| 3c.14 harness | `tests/unit/v3-line-items-live-replay.test.js` | Unit | Existing harness tests 24/24 passed | 3/27 failed: non-final multi-item turns were checked; replay summary lacked the reason | 27/27 passed after the applicability gate | Decision-less turn reads the proposal's `primary_request`; single-item quote still not applicable | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-v31-replace-missing-fact.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-line-items-live-replay.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-confirmation-spurious-resolution.test.js --globals` → 7 files, 71/71 passed |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. The live A/B was not rerun in this unit. |
+| Full checks | `npm test` → 78 files passed, 17 skipped; 998 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert the guidance helper and its call site, the v3.1 prompt rule, the harness applicability gate, their tests/docs, and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |

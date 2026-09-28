@@ -193,19 +193,23 @@ Live A/B after 3c.1–3c.5 (N=10, production catalog): v3.1 first-turn validity 
 - [x] 3c.12 RED then GREEN: reject projected `service_scope=installation|both` with `fulfillment=pickup` in the shared v3/v3.1 validator; verify persisted and same-turn combinations, correction to delivery or material-only, material-only pickup, installation-only without explicit fulfillment, authorizer protection, and v3.1-only prompt guidance. Sync workflow nodes and run local checks. No live deployment in this task.
 - [x] 3c.13 RED then GREEN: keep repair `allowed_values` in the `fulfillment` domain, and allow a narrow mutation-free/effect-free clarification when the invalid combination was already committed. New invalid assertions and effects remain blocked in v3 and v3.1. No live deployment in this task.
 
+### Slice 3c bounded follow-up — replace on a never-recorded item value
+
+- [x] 3c.14 RED then GREEN (evidence: `tests/unit/v3-v31-replace-missing-fact.test.js` 8/8, prompt test 12/12, harness test 27/27; `npm test` 998 passed / 154 skipped; parity and SQL references pass; see `apply-progress.md`): live A/B (N=10) showed 4/10 wire-correction turns emitting `replace` on the wire item's never-recorded quantity with a nonexistent `replaces_fact_id`, rejected by `fact_not_replaceable` without guidance and falling to contingency. Add v3.1-only repair guidance on that error (use `set` with `replaces_fact_id: null`, or name the item's current fact id) and a v3.1-only prompt rule; accept/reject outcomes, the v3 validator, prompt and request are unchanged. Also make the replay harness's itemized final-confirmation property apply only to turns that request `final_confirmation` over more than one item (fixes a 20/20 false negative). No live deployment in this task.
+
 ## Slice 4 — Rollout & Verification (tracker `feat/multi-product-quotes`, no code changes)
 
-- [ ] 4.1 Apply migration 025 (safe superset while v3 decisions are in flight); deploy the four slices' workflows via `scripts/dev/sync-n8n-workflows.sh`; keep `AI_PRD_V3_LINE_ITEMS=disabled`
+- [x] 4.1 Apply migration 025 (safe superset while v3 decisions are in flight); deploy the four slices' workflows via `scripts/dev/sync-n8n-workflows.sh`; keep `AI_PRD_V3_LINE_ITEMS=disabled`
 - [ ] 4.2 Run `AI_REPLAY_LIVE=1 AI_REPLAY_RUNS=10 node tests/ops/v3-line-items-live-replay.mjs` against the real model, N≥10, including the live 2026-09-26 pandereta message, a confirmation turn, and correction turns; assert the itemized `final_confirmation` property (one `•` line per item) and no measurement misattribution
 - [x] 4.3 Check whether `CLICKUP_CF_REQUIREMENT_ID` accepts newlines; if not, join requirement lines with ` | ` in `build-clickup-payload.js` and re-run 3.5–3.9
-- [ ] 4.4 Set `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; recreate n8n (`docker compose up -d n8n`)
+- [x] 4.4 Set `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; recreate n8n (`docker compose up -d n8n`)
 - [x] 4.5 Run the canary E2E on `56997093038`: replay the incident message through confirmation; assert one lead + one ClickUp task listing Cierros de Hormigón and the wire item with their own measurements, no flat `Cantidad` and `Medidas` lines, and empty `last_error` and `validation_errors`
 - [x] 4.5a Deploy the installation-delivery guard to the controlled canary and verify a factory-pickup plus installation request is declined without a lead or ClickUp effect (conversation 332; see `apply-progress.md`)
 
 - [ ] 4.6 Set `AI_PRD_V3_LINE_ITEMS=enabled`; recreate n8n
 - [ ] 4.7 Monitor `conversation_turn_executions.last_error` and `advisor_decisions.validation_errors` for multi-product rejections; merge tracker → main once stable
 
-Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; the existing canary state is not proof that their prescribed transitions occurred. Installation requiring delivery is now covered by a local validator guard and tests, but its negative path is not yet verified on the live canary.
+Verified 2026-09-27 on conversation 330; see `apply-progress.md` for evidence. Tasks 4.1 and 4.4 are verified from the rollout session record (see `apply-progress.md`, "Rollout transitions 4.1 and 4.4"); 4.2, 4.6, and 4.7 remain open. Installation requiring delivery is now covered by a local validator guard and tests, but its negative path is not yet verified on the live canary.
 
 Rollback drain (ordered, per slice, latest first):
 - [ ] 4.8 Set `AI_PRD_V3_LINE_ITEMS=canary` (empty phone list) or `disabled`; recreate n8n — new turns compile v3
