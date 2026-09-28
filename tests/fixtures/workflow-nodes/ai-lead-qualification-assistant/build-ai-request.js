@@ -502,9 +502,13 @@ if (usesV3Contract) {
   // `item_target_required`'s repair instruction reuses `goal_id:<field>` for
   // quantity/measurements too), but `primaryRequestGoalIds` above only ever
   // contains real policy goal ids plus `final_confirmation` — it never
-  // contains an item concept name. Locked to `primaryRequestGoalIds` during a
-  // repair turn, so the repair's own `allowed_values` lock is never widened.
-  const primaryRequestGoalIdsV31 = hasRepairRequest
+  // contains an item concept name. Locked to `primaryRequestGoalIds` only when
+  // the repair locks primary_request.goal_id, so that lock is never widened.
+  // Task 3c.18 (live 2026-09-28): a repair without that lock (for example
+  // distributive_assignment_unconfirmed, which demands goal_id "quantity")
+  // keeps the first-pass enum; locking every repair to the quote-level list
+  // left the item goals unrepresentable and the model answered with "name".
+  const primaryRequestGoalIdsV31 = repairPrimaryGoalErrors.length > 0
     ? primaryRequestGoalIds
     : uniqueStrings([...primaryRequestGoalIds, ...ITEM_MUTATION_FIELDS_V31]);
   const v31ResponseSchema = {
@@ -719,6 +723,12 @@ if (usesV3Contract) {
   // this v3.1-only rule makes every requested product its own recorded item.
   const V31_EVERY_PRODUCT_RECORDED_RULE = 'Cada producto que el cliente pide (incluidos accesorios como alambres o concertina mencionados "con" otro producto) es su propio ítem y lleva su state_mutation set de product con su item_ref, referenciando su observación; nunca dejes una observación de product sin su mutación. La única excepción es un ítem con catalog_resolution ambiguous o unsupported, cuyo product queda pendiente de aclarar.';
   const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment debe ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Para installation sin fulfillment explícito, no pidas esa elección: el despacho va implícito.';
+  // Live 2026-09-28 (task 3c.18): the model asked the pandereta
+  // clarification and the distributive assignment question with
+  // primary_request.goal_id="name" plus an item_ref. The validator now rejects
+  // an item_ref on a quote-level goal (primary_request_item_ref_invalid); this
+  // v3.1-only rule keeps `name` for the customer's own name.
+  const V31_ITEM_REQUEST_GOAL_RULE = 'primary_request.goal_id=name es solo para pedir el nombre del cliente. Para preguntar o confirmar algo de un ítem usa product, quantity o measurements con su item_ref (por ejemplo, aclarar "pandereta" es product con el item_ref de ese ítem; confirmar a qué ítems va una cantidad es quantity). Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -727,6 +737,7 @@ if (usesV3Contract) {
     derived.push(
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
+      V31_ITEM_REQUEST_GOAL_RULE,
       V31_NO_CROSS_ITEM_TRANSFER_RULE,
       V31_DISTRIBUTIVE_QUANTITY_RULE,
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,

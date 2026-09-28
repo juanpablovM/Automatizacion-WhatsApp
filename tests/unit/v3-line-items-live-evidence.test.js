@@ -87,7 +87,7 @@ describe('captured wire-correction proposals — the correction stays scoped to 
   const cases = [
     ...wireCorrection.map((entry, index) => ({ entry, label: `wire-correction[${index}]` })),
     ...wireCorrectionHashed.map((entry, index) => ({ entry, label: `wire-correction-hashed-ids[${index}]` })),
-  ];
+  ].filter(({ label }) => label !== 'wire-correction-hashed-ids[1]');
 
   test.each(cases.map(({ label }) => label))('%s validates and corrects only the wire item', (label) => {
     const { entry } = cases.find((candidate) => candidate.label === label);
@@ -113,5 +113,24 @@ describe('captured wire-correction proposals — the correction stays scoped to 
     const wireAfter = state.line_items.find((item) => item.item_id === wireInputItem.item_id);
     expect(wireAfter.quantity).toEqual({ kind: 'exact', value: 300, unit: 'ml', name: null });
     expect(wireAfter.product).toBe('Alambre de Púas');
+  });
+
+  // Task 3c.18: this captured proposal asks the pandereta clarification with
+  // primary_request {goal_id:"name", item_ref:<pandereta item>}; "name" is the
+  // customer's own name goal, so it is now rejected on that request alone,
+  // and the same correction with goal_id "product" validates and stays scoped.
+  test('wire-correction-hashed-ids[1] asks the pandereta clarification with goal "name" and is rejected only for that', () => {
+    const entry = wireCorrectionHashed[1];
+    expect(entry.proposal.primary_request.goal_id).toBe('name');
+    expect(validationErrorCodes(validateV3AiProposal(entry.turn_policy, entry.proposal)))
+      .toEqual(['primary_request_item_ref_invalid']);
+
+    const proposal = JSON.parse(JSON.stringify(entry.proposal));
+    proposal.primary_request = { ...proposal.primary_request, goal_id: 'product' };
+    const validation = validateV3AiProposal(entry.turn_policy, proposal);
+    expect(validation.errors).toEqual([]);
+    const { decision } = decisionAndState({ ...entry, proposal }, validation);
+    const wireInputItem = entry.input.qualification_context.line_items.find((item) => item.product === 'Alambre de Púas');
+    expect(decision.state_mutations.find((mutation) => mutation.field === 'quantity').item_id).toBe(wireInputItem.item_id);
   });
 });

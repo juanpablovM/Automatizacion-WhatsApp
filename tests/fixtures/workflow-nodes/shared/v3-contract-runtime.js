@@ -537,6 +537,7 @@ const FLAT_ITEM_ID = 'li_0';
 const OBSERVATION_KEYS_V31 = new Set([...OBSERVATION_KEYS, 'item_ref']);
 const MUTATION_KEYS_V31 = new Set(['operation', 'field', 'item_ref', 'observation_id', 'replaces_fact_id']);
 const PRIMARY_REQUEST_KEYS_V31 = new Set(['goal_id', 'item_ref']);
+const ITEM_SCOPED_REQUEST_GOALS_V31 = new Set([...ITEM_FIELDS, 'line_items']);
 const CATALOG_RESOLUTION_KEYS_V31 = new Set([...CATALOG_RESOLUTION_KEYS, 'item_ref']);
 const CATALOG_RESOLUTION_STATUSES_V31 = new Set(['matched', 'unsupported', 'ambiguous']);
 const TOP_LEVEL_PROPOSAL_KEYS_V31 = new Set([
@@ -693,7 +694,7 @@ const distributiveSpanErrorsV31 = ({
         'distributive_assignment_unconfirmed',
         asksAssignment ? 'effect_requests' : 'primary_request',
         targetRefs, targetRefs,
-        `The customer did not name which products the distributive value "${entries[0].observation.evidence_quote}" applies to, and it is applied to ${targetRefs.length} items (${targetRefs.map((ref) => `${ref}: ${productLabel(ref)}`).join(', ')}). Keep these mutations, but do not ask for final confirmation or create the lead in this turn: ask the customer to confirm that the value applies to ${products.join(' y ')}, with exactly primary_request {"goal_id":"${field}","item_ref":"${targetRefs[0]}"} (required; primary_request null or any other request is rejected) and no create_lead effect.`,
+        `The customer did not name which products the distributive value "${entries[0].observation.evidence_quote}" applies to, and it is applied to ${targetRefs.length} items (${targetRefs.map((ref) => `${ref}: ${productLabel(ref)}`).join(', ')}). Keep these mutations, but do not ask for final confirmation or create the lead in this turn: ask the customer to confirm that the value applies to ${products.join(' y ')}, with exactly primary_request {"goal_id":"${field}","item_ref":"${targetRefs[0]}"} (required; goal_id must be the literal "${field}"; never "name" (the customer's own name) or any other goal; primary_request null or any other request is rejected) and no create_lead effect.`,
       ));
     }
   }
@@ -810,6 +811,18 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         || (policy?.goals || []).some((goal) => goal.goal_id === primaryRequest.goal_id));
     primaryRequestValid = exactKeys(primaryRequest, PRIMARY_REQUEST_KEYS_V31) && itemRefOk && requestGoalValid;
     if (!primaryRequestValid) errors.push(validationError('primary_request_invalid', 'primary_request'));
+    // Task 3c.18 (live 2026-09-28): the model asked item questions (the
+    // pandereta clarification, the 3c.17 distributive assignment) with the
+    // customer's `name` goal plus an item_ref. Only the item goals (and the
+    // line_items equivalent accepted for item clarification below) may be
+    // item-scoped; a quote-level goal takes item_ref null.
+    if (primaryRequestValid && typeof primaryRequest.item_ref === 'string'
+        && !ITEM_SCOPED_REQUEST_GOALS_V31.has(primaryRequest.goal_id)) {
+      errors.push(validationError(
+        'primary_request_item_ref_invalid', 'primary_request.item_ref', [primaryRequest.goal_id], [null],
+        `Goal "${primaryRequest.goal_id}" is a quote-level goal, so primary_request.item_ref must be null for it. To ask or confirm something about one item use goal_id "product", "quantity" or "measurements" with that item's item_ref (for example, clarifying which product the customer means is "product"; confirming which items a quantity applies to is "quantity"). goal_id "name" only asks for the customer's own name.`,
+      ));
+    }
   }
 
   const observations = Array.isArray(proposalObject.observations) ? proposalObject.observations : [];

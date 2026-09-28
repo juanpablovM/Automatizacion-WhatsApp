@@ -202,4 +202,22 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('Solo completa ítems que aún no tienen ese dato');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Task 3c.18, live 2026-09-28: the model asked "¿con 'pandereta' te
+  // refieres a cierros de hormigón?" and the distributive assignment
+  // question with primary_request.goal_id="name" plus an item_ref. The
+  // validator now rejects an item_ref on a quote-level goal
+  // (primary_request_item_ref_invalid); this v3.1-only rule says name is only
+  // the customer's own name and item questions use the item goals.
+  test('v3.1 adds a rule that goal_id=name is only the customer name and item questions use item goals', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('primary_request.goal_id=name es solo para pedir el nombre del cliente');
+    expect(v31Prompt).toContain('usa product, quantity o measurements con su item_ref');
+    expect(v31Prompt).toContain('aclarar "pandereta" es product con el item_ref de ese ítem');
+    expect(v31Prompt).toContain('confirmar a qué ítems va una cantidad es quantity');
+    expect(v31Prompt).toContain('Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null');
+    expect(v3Prompt).not.toContain('goal_id=name es solo para pedir el nombre del cliente');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
 });
