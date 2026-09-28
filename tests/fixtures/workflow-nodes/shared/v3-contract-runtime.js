@@ -575,6 +575,20 @@ const deriveItemIdV31 = (conversationId, turnId, handle) => {
   return `li_${sha256(seed).slice(0, 12)}`;
 };
 
+// 3c.16: an explicit distributive quantity ("500 metros de cada uno", "para
+// ambos") legitimately sets the same quantity on each item it refers to, so
+// one quantity span may authorize several item_ref values only when that
+// shared quote itself carries a distributive marker and every value is
+// identical. Measurements and any other shape stay item_evidence_span_conflict.
+const DISTRIBUTIVE_QUANTITY_MARKER_V31 = /\b(?:(?:de\s+)?cada\s+(?:uno|una|producto|item)|para\s+(?:ambos|ambas|los\s+dos|las\s+dos)|lo\s+mismo\s+para)\b/;
+const isDistributiveQuantitySpanV31 = (field, observationEntry, firstObservation) => {
+  if (field !== 'quantity' || !firstObservation) return false;
+  const quote = String(observationEntry.evidence_quote ?? '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/\s+/g, ' ');
+  return DISTRIBUTIVE_QUANTITY_MARKER_V31.test(quote)
+    && canonicalJson(observationEntry.normalized_value ?? null) === canonicalJson(firstObservation.normalized_value ?? null);
+};
+
 const hasResolvedValue = (value) => value !== undefined && value !== null
   && (typeof value !== 'string' || value.trim() !== '');
 
@@ -984,15 +998,16 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       seenMutationTargets.add(targetKey);
 
       const evidenceSpanKey = `${mutation.field}\u0000${observationEntry.evidence_quote}\u0000${observationEntry.evidence_occurrence}`;
-      const evidenceSpanItemRef = evidenceSpanItemsByField.get(evidenceSpanKey);
-      if (evidenceSpanItemRef !== undefined && evidenceSpanItemRef !== itemRef) {
+      const evidenceSpan = evidenceSpanItemsByField.get(evidenceSpanKey);
+      if (evidenceSpan !== undefined && evidenceSpan.itemRef !== itemRef
+          && !isDistributiveQuantitySpanV31(mutation.field, observationEntry, evidenceSpan.observation)) {
         errors.push(validationError(
           'item_evidence_span_conflict', path, [observationEntry.id], [],
           'This evidence already resolved this concept for a different item; attach it only to the item its evidence names, or drop this mutation and ask which item it refers to.',
         ));
         continue;
       }
-      evidenceSpanItemsByField.set(evidenceSpanKey, itemRef);
+      if (evidenceSpan === undefined) evidenceSpanItemsByField.set(evidenceSpanKey, { itemRef, observation: observationEntry });
 
       if (mutation.field === 'product') {
         const resolution = catalogResolutionByRef.get(itemRef);

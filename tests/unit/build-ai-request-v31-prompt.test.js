@@ -164,4 +164,23 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
+  // concertina y de alambre de púas?" the customer answered "500 metros de
+  // cada uno" and the model set 500 m only on the concertina item. This
+  // v3.1-only rule says an explicit distributive quantity is recorded on each
+  // item it refers to (one observation+mutation per item, same quote), which
+  // is not a cross-item copy; the no-transfer rule stays intact.
+  test('v3.1 adds a rule that an explicit distributive quantity is recorded on each item it refers to', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Una cantidad explícitamente distributiva');
+    expect(v31Prompt).toContain('"500 metros de cada uno"');
+    expect(v31Prompt).toContain('una observación de quantity y una mutación set por cada ítem');
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt.indexOf('Una cantidad explícitamente distributiva'))
+      .toBeGreaterThan(v31Prompt.indexOf('Nunca copies ni traslades una cantidad o medida de un ítem a otro'));
+    expect(v3Prompt).not.toContain('Una cantidad explícitamente distributiva');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
 });

@@ -689,6 +689,13 @@ if (usesV3Contract) {
   // validator cannot detect deterministically (a single, unambiguous span
   // moved to the wrong item, or one product split across two items).
   const V31_NO_CROSS_ITEM_TRANSFER_RULE = 'Nunca copies ni traslades una cantidad o medida de un ítem a otro: cada cantidad y cada medida se registra solo en el ítem cuya evidencia la describe en este mismo mensaje, aunque otro ítem también la necesite. Un producto mencionado una sola vez en el mensaje es un solo ítem: no lo dividas en dos ítems distintos aunque registres su cantidad y sus medidas en observaciones separadas.';
+  // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
+  // concertina y de alambre de púas?" the customer answered "500 metros de
+  // cada uno" and the model set 500 m only on the concertina item. The
+  // validator now accepts one distributive quantity quote on several items
+  // (task 3c.16); this v3.1-only rule records it on each item it refers to,
+  // without weakening the no-transfer rule above.
+  const V31_DISTRIBUTIVE_QUANTITY_RULE = 'Una cantidad explícitamente distributiva (por ejemplo "500 metros de cada uno", "cada uno", "para ambos", "para los dos", "lo mismo para los dos", "X de cada producto") se registra con esa misma cantidad en cada ítem al que se refiere: los ítems que nombra el mensaje o, si no nombra ninguno, los ítems de la pregunta que el cliente está respondiendo. Emite una observación de quantity y una mutación set por cada ítem, cada una con su item_ref y la misma evidence_quote que incluye la expresión distributiva. Esto no es copiar entre ítems: el cliente la dio explícitamente para cada uno. Sin esa expresión explícita, sigue aplicando la regla de no copiar ni trasladar cantidades.';
   const V31_CORRECTION_NAMED_ITEM_RULE = 'Si el cliente corrige un dato y nombra el producto o la descripción de un ítem existente, esa corrección se aplica únicamente a ese ítem, aunque la cotización tenga otros ítems; no traslades el dato corregido a un ítem distinto del nombrado.';
   // Live canary 2026-09-27 (final-confirmation turn, "Sí, está todo
   // correcto"): the model emitted a catalog_resolutions entry citing "todo"
@@ -718,6 +725,7 @@ if (usesV3Contract) {
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
       V31_NO_CROSS_ITEM_TRANSFER_RULE,
+      V31_DISTRIBUTIVE_QUANTITY_RULE,
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
