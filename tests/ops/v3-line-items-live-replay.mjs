@@ -240,17 +240,21 @@ export function aggregateRuns(runResults) {
   return summary;
 }
 
-// Property: once a v3.1 turn commits more than one item, the reply's
-// `final_confirmation` summary must show exactly one "•" line per item
-// (design.md's Supersession note + Testing Strategy row).
+// Property: when a v3.1 turn asks for `final_confirmation` over more than
+// one item, the reply's summary must show exactly one "•" line per item
+// (design.md's Supersession note + Testing Strategy row). A turn that asks
+// for any other goal is not a final confirmation and is never checked.
 export function checkItemizedFinalConfirmation(turnResult) {
   if (!turnResult) return { checked: false, reason: 'no turn result' };
   const text = turnResult.decision?.reply?.text ?? turnResult.proposal?.reply_text ?? '';
   const bulletLines = text.split('\n').filter((line) => line.trim().startsWith('•'));
   const items = readLineItems(turnResult.qualificationContext ?? {});
-  const applicable = items.length > 1;
+  const primaryRequest = (turnResult.decision ?? turnResult.proposal)?.primary_request ?? null;
+  const asksFinalConfirmation = primaryRequest?.goal_id === 'final_confirmation';
+  const applicable = asksFinalConfirmation && items.length > 1;
   return {
     checked: applicable,
+    ...(asksFinalConfirmation ? {} : { reason: 'turn does not ask for final_confirmation' }),
     itemCount: items.length,
     bulletCount: bulletLines.length,
     matches: !applicable || bulletLines.length === items.length,

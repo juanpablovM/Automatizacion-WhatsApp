@@ -135,4 +135,18 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live A/B 2026-09-28 (pandereta-live-then-wire-correction): on "Corrección:
+  // el alambre de púas son 300 ml, no 500 ml" the model emitted a replace for
+  // the wire item's quantity although that item had no quantity fact, and the
+  // validator rejected it. This v3.1-only rule says a correction of a value
+  // that was never recorded is a set with replaces_fact_id null.
+  test('v3.1 adds a rule to replace only an existing fact and set a never-recorded item value', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v31Prompt).toContain('usa set con replaces_fact_id=null');
+    expect(v3Prompt).not.toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
 });

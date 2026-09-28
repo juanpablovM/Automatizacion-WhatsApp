@@ -696,6 +696,12 @@ if (usesV3Contract) {
   // it (and keeps rejecting it); this v3.1-only rule keeps the model from
   // re-resolving an already-known item when the customer names no product.
   const V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE = 'catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje. Una confirmación, un "sí", un "todo correcto" o cualquier respuesta que no nombre un producto lleva catalog_resolutions=[]; nunca vuelvas a resolver ni reclasificar un ítem cuyo product ya está registrado, salvo que el cliente nombre en este mensaje un producto para ese ítem.';
+  // Live A/B 2026-09-28 (pandereta-live-then-wire-correction): on "Corrección:
+  // el alambre de púas son 300 ml, no 500 ml" the model emitted replace for
+  // the wire item's quantity, which had never been recorded, citing a fact id
+  // that does not exist. The validator rejects it (and keeps rejecting it);
+  // this v3.1-only rule steers a never-recorded item value to set.
+  const V31_REPLACE_EXISTING_FACT_RULE = 'Usa replace solo para cambiar un valor que ya existe como fact, con su fact_id exacto en replaces_fact_id. Si el ítem todavía no tiene valor para ese campo (product, quantity o measurements), usa set con replaces_fact_id=null en ese item_ref, aunque el cliente lo llame corrección.';
   const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment debe ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Para installation sin fulfillment explícito, no pidas esa elección: el despacho va implícito.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
@@ -710,6 +716,7 @@ if (usesV3Contract) {
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,
+      V31_REPLACE_EXISTING_FACT_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;

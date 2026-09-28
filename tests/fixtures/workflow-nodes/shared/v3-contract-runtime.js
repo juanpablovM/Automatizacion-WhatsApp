@@ -595,6 +595,29 @@ const quoteNamesCatalogProductV31 = (policy, quote) => {
 const CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31 = 'evidence_quote must be exact text from the current message. If the customer message names no product for this item, remove this entry: a message that names no product uses catalog_resolutions=[].';
 const spuriousCatalogResolutionInstructionV31 = (itemRefs) => `Remove the catalog_resolutions entry for ${itemRefs.join(', ')}: that item's product is already a known fact and the evidence_quote names no product from the catalog. A confirmation or answer that names no product uses catalog_resolutions=[].`;
 
+// Repair guidance only (never changes accept/reject): live A/B 2026-09-28
+// (pandereta-live-then-wire-correction) showed the model emitting `replace`
+// for an existing item's quantity that had never been recorded, citing a
+// fact id that does not exist. The guidance says to `set` instead, or names
+// the current fact id when the item field does hold a replaceable fact.
+const itemFactNotReplaceableGuidanceV31 = (factsById, existingItems, mutation) => {
+  const itemRef = mutation?.item_ref;
+  if (!ITEM_FIELDS.has(mutation?.field) || typeof itemRef !== 'string' || !existingItems.has(itemRef)) return null;
+  const currentFactId = `fact:item:${itemRef}:${mutation.field}`;
+  const currentFact = factsById.get(currentFactId);
+  if (!currentFact) {
+    return {
+      allowedValues: [null],
+      instruction: `Item ${itemRef} has no current ${mutation.field} value, so there is nothing to replace: use operation "set" with replaces_fact_id: null on item_ref ${itemRef}. A customer's correction of a value that was never recorded is a set.`,
+    };
+  }
+  if (currentFact.field !== mutation.field || currentFact.mutability !== 'customer_correctable') return null;
+  return {
+    allowedValues: [currentFactId],
+    instruction: `Item ${itemRef} already has a current ${mutation.field} fact: to correct it use operation "replace" with replaces_fact_id: "${currentFactId}".`,
+  };
+};
+
 // Required goals reuse the quote-level conditional rules in
 // effectiveRequiredGoalIds, replacing product/quantity with line_items.
 const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) => {
@@ -925,7 +948,11 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         ? factItemId !== null && factItemId === (mutation.item_ref ?? factItemId)
         : factItemId === null;
       if (!fact || fact.field !== mutation.field || fact.mutability !== 'customer_correctable' || !factMatchesItem) {
-        errors.push(validationError('fact_not_replaceable', `${path}.replaces_fact_id`, [observationEntry.id]));
+        const guidance = itemFactNotReplaceableGuidanceV31(factsById, existingItems, mutation);
+        errors.push(validationError(
+          'fact_not_replaceable', `${path}.replaces_fact_id`, [observationEntry.id],
+          guidance?.allowedValues ?? [], guidance?.instruction ?? null,
+        ));
         continue;
       }
     }
