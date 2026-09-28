@@ -167,20 +167,39 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
   // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
   // concertina y de alambre de púas?" the customer answered "500 metros de
   // cada uno" and the model set 500 m only on the concertina item. This
-  // v3.1-only rule says an explicit distributive quantity is recorded on each
+  // v3.1-only rule says an explicit distributive value is recorded on each
   // item it refers to (one observation+mutation per item, same quote), which
-  // is not a cross-item copy; the no-transfer rule stays intact.
-  test('v3.1 adds a rule that an explicit distributive quantity is recorded on each item it refers to', () => {
+  // is not a cross-item copy; the no-transfer rule stays intact. Task 3c.17
+  // extends it to measurements and adds the owner's limits: only items
+  // missing the field, only the named items when the message names any, and
+  // an item-assignment question (never final_confirmation/create_lead) when
+  // it names none and the value lands on two or more items.
+  test('v3.1 adds a rule that an explicit distributive quantity or measurement is recorded on each item it refers to', () => {
     const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
     const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
 
-    expect(v31Prompt).toContain('Una cantidad explícitamente distributiva');
+    expect(v31Prompt).toContain('Una cantidad o medida explícitamente distributiva');
     expect(v31Prompt).toContain('"500 metros de cada uno"');
-    expect(v31Prompt).toContain('una observación de quantity y una mutación set por cada ítem');
+    expect(v31Prompt).toContain('"2 metros de alto cada uno"');
+    expect(v31Prompt).toContain('una observación y una mutación set por cada ítem');
     expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
-    expect(v31Prompt.indexOf('Una cantidad explícitamente distributiva'))
+    expect(v31Prompt.indexOf('Una cantidad o medida explícitamente distributiva'))
       .toBeGreaterThan(v31Prompt.indexOf('Nunca copies ni traslades una cantidad o medida de un ítem a otro'));
-    expect(v3Prompt).not.toContain('Una cantidad explícitamente distributiva');
+    expect(v3Prompt).not.toContain('explícitamente distributiva');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+
+  test('v3.1 distributive rule: fill only missing values, only named items, and confirm the assignment first when none is named', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Solo completa ítems que aún no tienen ese dato');
+    expect(v31Prompt).toContain('para cambiarlo, el cliente debe nombrar ese producto');
+    expect(v31Prompt).toContain('Si el mensaje nombra productos, aplícala solo a los ítems nombrados');
+    expect(v31Prompt).toContain('no pidas final_confirmation ni emitas create_lead');
+    expect(v31Prompt).toContain('"¿Los 500 metros son para la concertina y para el alambre de púas?"');
+    expect(v31Prompt).toContain('primary_request.goal_id igual a ese campo (quantity o measurements) y el item_ref de uno de esos ítems');
+    expect(v3Prompt).not.toContain('Solo completa ítems que aún no tienen ese dato');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
 });

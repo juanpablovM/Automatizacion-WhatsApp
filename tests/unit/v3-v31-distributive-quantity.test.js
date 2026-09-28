@@ -52,8 +52,10 @@ const quantitySet = (itemRef, observationId) => ({
 const quantityTurn = (targetPolicy, observations) => ({
   version: V3_CONTRACTS.proposal_v3_1,
   policy_digest: targetPolicy.policy_digest,
-  reply_text: 'Perfecto, 500 metros de alambre concertina y 500 metros de alambre de púas.',
-  primary_request: null,
+  reply_text: 'Perfecto, 500 metros de cada uno. ¿Son para el alambre concertina y para el alambre de púas?',
+  // 3c.17 (owner decision): an unnamed distributive value on 2+ items must
+  // ask the item-assignment question through this item-scoped request.
+  primary_request: { goal_id: 'quantity', item_ref: CONCERTINA_REF },
   catalog_resolutions: [],
   observations,
   state_mutations: observations.map((entry) => quantitySet(entry.item_ref, entry.id)),
@@ -146,7 +148,9 @@ describe('explicit distributive quantity on several items (live "500 metros de c
     expect(errorCodes(validation)).toEqual(['item_evidence_span_conflict']);
   });
 
-  test('a distributive measurement span shared across items keeps the rejection (quantity only)', () => {
+  // 3c.17 (owner-approved) extends the exception to measurements, under the
+  // same conditions; see tests/unit/v3-v31-distributive-assignment.test.js.
+  test('a distributive measurement span shared across items missing measurements is accepted (3c.17)', () => {
     const message = '2 metros de alto cada uno';
     const targetPolicy = policyWith(message);
     const measurement = (id, itemRef) => ({
@@ -165,8 +169,10 @@ describe('explicit distributive quantity on several items (live "500 metros de c
       measurement('obs_meas_wire', WIRE_REF),
     ]);
     proposal.state_mutations = proposal.state_mutations.map((mutation) => ({ ...mutation, field: 'measurements' }));
+    proposal.primary_request = { goal_id: 'measurements', item_ref: CONCERTINA_REF };
     const validation = validateV3AiProposal(targetPolicy, proposal);
 
-    expect(errorCodes(validation)).toContain('item_evidence_span_conflict');
+    expect(validation.errors).toEqual([]);
+    expect(validation.valid).toBe(true);
   });
 });

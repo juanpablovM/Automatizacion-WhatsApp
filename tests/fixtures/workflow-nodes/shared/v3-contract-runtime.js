@@ -579,10 +579,13 @@ const deriveItemIdV31 = (conversationId, turnId, handle) => {
 // ambos") legitimately sets the same quantity on each item it refers to, so
 // one quantity span may authorize several item_ref values only when that
 // shared quote itself carries a distributive marker and every value is
-// identical. Measurements and any other shape stay item_evidence_span_conflict.
+// identical. 3c.17 extends it to measurements; every other field or shape stays
+// item_evidence_span_conflict, and distributiveSpanErrorsV31 below narrows
+// which items a distributive span may reach.
+const DISTRIBUTIVE_FIELDS_V31 = new Set(['quantity', 'measurements']);
 const DISTRIBUTIVE_QUANTITY_MARKER_V31 = /\b(?:(?:de\s+)?cada\s+(?:uno|una|producto|item)|para\s+(?:ambos|ambas|los\s+dos|las\s+dos)|lo\s+mismo\s+para)\b/;
 const isDistributiveQuantitySpanV31 = (field, observationEntry, firstObservation) => {
-  if (field !== 'quantity' || !firstObservation) return false;
+  if (!DISTRIBUTIVE_FIELDS_V31.has(field) || !firstObservation) return false;
   const quote = String(observationEntry.evidence_quote ?? '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/\s+/g, ' ');
   return DISTRIBUTIVE_QUANTITY_MARKER_V31.test(quote)
@@ -606,6 +609,97 @@ const quoteNamesCatalogProductV31 = (policy, quote) => {
     .map((entry) => foldForProductMatchV31(groundingValue(entry)))
     .some((name) => name.trim() !== '' && folded.includes(name));
 };
+// 3c.17: which quote items the current message names. Same folding as
+// quoteNamesCatalogProductV31 (accents and case), matched against each item's
+// product (a catalog value): the full product name, or a word of it (4+
+// letters, optional plural "s") that no other item's product shares, so
+// "concertina y púas" names "Alambre Concertina" and "Alambre de Púas" while
+// the shared word "alambre" names neither.
+const productNameTextV31 = (value) => (typeof value === 'string'
+  ? value
+  : (isObject(value) ? String(value.value ?? value.name ?? '') : ''));
+const productWordsV31 = (name) => foldForProductMatchV31(name).split(/[^a-z0-9]+/).filter((word) => word.length >= 4);
+const itemsNamedByMessageV31 = (messageText, productByRef) => {
+  const folded = foldForProductMatchV31(messageText);
+  const wordsByRef = new Map([...productByRef].map(([ref, product]) => [ref, productWordsV31(productNameTextV31(product))]));
+  const named = new Set();
+  for (const [ref, product] of productByRef) {
+    const fullName = foldForProductMatchV31(productNameTextV31(product)).trim();
+    if (fullName && folded.includes(fullName)) {
+      named.add(ref);
+      continue;
+    }
+    const otherWords = new Set([...wordsByRef].filter(([otherRef]) => otherRef !== ref).flatMap(([, words]) => words));
+    const distinctive = wordsByRef.get(ref).filter((word) => !otherWords.has(word));
+    if (distinctive.some((word) => new RegExp(`(?:^|[^a-z0-9])${word.replace(/s$/, '')}s?(?:$|[^a-z0-9])`).test(folded))) {
+      named.add(ref);
+    }
+  }
+  return named;
+};
+
+// 3c.17 (owner-approved): a distributive span shared by two or more items
+// (accepted by isDistributiveQuantitySpanV31) may only
+//   - set the field on items that hold no value for it yet (never overwrite);
+//   - reach the items the message names, when it names any quote item;
+//   - when it names none, ask the customer which items the value applies to
+//     (mandatory, owner decision) and stay out of a final_confirmation or
+//     create_lead turn.
+// The assignment question is an item-scoped primary_request for the
+// distributed field ({goal_id: field, item_ref: one target}): the validator
+// already accepts it (item fields are known goals and item-scoped requests
+// skip primary_request_goal_resolved), and 09_commit_v3_turn.sql persists it
+// as pending_question_key=<field>, so the next "sí" cannot authorize
+// create_lead (that needs a pending final_confirmation) and the next turn
+// asks the final confirmation normally.
+const distributiveSpanErrorsV31 = ({
+  spans, messageText, existingItems, factsById, productByRef, primaryRequest, effectRequests,
+}) => {
+  const errors = [];
+  const namedRefs = itemsNamedByMessageV31(messageText, productByRef);
+  const holdsValue = (ref, field) => factsById.has(`fact:item:${ref}:${field}`)
+    || hasResolvedValue(existingItems.get(ref)?.[field]);
+  const productLabel = (ref) => productNameTextV31(productByRef.get(ref)) || ref;
+  for (const entries of spans) {
+    const targetRefs = [...new Set(entries.map((entry) => entry.itemRef))];
+    if (targetRefs.length < 2) continue;
+    const { field } = entries[0];
+    const fillableRefs = targetRefs.filter((ref) => !holdsValue(ref, field));
+    const allowedNamedRefs = [...namedRefs].filter((ref) => !holdsValue(ref, field)).sort();
+    for (const entry of entries) {
+      if (entry.operation === 'replace' || holdsValue(entry.itemRef, field)) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', entry.path, [entry.observationId], fillableRefs,
+          `A distributive value (for example "de cada uno") only fills items that have no ${field} yet, and item ${entry.itemRef} already has a ${field} value. Apply it only to items missing that field; to change an existing value the customer must name that product.`,
+        ));
+        continue;
+      }
+      if (namedRefs.size > 0 && !namedRefs.has(entry.itemRef)) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', entry.path, [entry.observationId], allowedNamedRefs,
+          `The customer names products in this message, so this distributive value applies only to the named items missing ${field} (${allowedNamedRefs.join(', ') || 'none'}); remove the ${field} mutation for ${entry.itemRef}, or drop it and ask which items the value applies to.`,
+        ));
+      }
+    }
+    // Owner decision (3c.17): with no named item the assignment question is
+    // mandatory, so primary_request must be exactly {goal_id: field,
+    // item_ref: <a target>}; null, final_confirmation or any other request
+    // is rejected, and so is a create_lead request in that turn.
+    const asksAssignment = primaryRequest?.goal_id === field && targetRefs.includes(primaryRequest?.item_ref);
+    const requestsCreateLead = effectRequests.some((effect) => effect?.type === 'create_lead');
+    if (namedRefs.size === 0 && (!asksAssignment || requestsCreateLead)) {
+      const products = targetRefs.map(productLabel);
+      errors.push(validationError(
+        'distributive_assignment_unconfirmed',
+        asksAssignment ? 'effect_requests' : 'primary_request',
+        targetRefs, targetRefs,
+        `The customer did not name which products the distributive value "${entries[0].observation.evidence_quote}" applies to, and it is applied to ${targetRefs.length} items (${targetRefs.map((ref) => `${ref}: ${productLabel(ref)}`).join(', ')}). Keep these mutations, but do not ask for final confirmation or create the lead in this turn: ask the customer to confirm that the value applies to ${products.join(' y ')}, with exactly primary_request {"goal_id":"${field}","item_ref":"${targetRefs[0]}"} (required; primary_request null or any other request is rejected) and no create_lead effect.`,
+      ));
+    }
+  }
+  return errors;
+};
+
 const CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31 = 'evidence_quote must be exact text from the current message. If the customer message names no product for this item, remove this entry: a message that names no product uses catalog_resolutions=[].';
 const spuriousCatalogResolutionInstructionV31 = (itemRefs) => `Remove the catalog_resolutions entry for ${itemRefs.join(', ')}: that item's product is already a known fact and the evidence_quote names no product from the catalog. A confirmation or answer that names no product uses catalog_resolutions=[].`;
 
@@ -1007,7 +1101,12 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         ));
         continue;
       }
-      if (evidenceSpan === undefined) evidenceSpanItemsByField.set(evidenceSpanKey, { itemRef, observation: observationEntry });
+      if (evidenceSpan === undefined) {
+        evidenceSpanItemsByField.set(evidenceSpanKey, { itemRef, observation: observationEntry, entries: [] });
+      }
+      evidenceSpanItemsByField.get(evidenceSpanKey).entries.push({
+        itemRef, field: mutation.field, operation: mutation.operation, path, observationId: observationEntry.id, observation: observationEntry,
+      });
 
       if (mutation.field === 'product') {
         const resolution = catalogResolutionByRef.get(itemRef);
@@ -1101,6 +1200,15 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     if (observed) return observed.normalized_value;
     return existingItems.get(ref)?.quantity ?? null;
   };
+  errors.push(...distributiveSpanErrorsV31({
+    spans: [...evidenceSpanItemsByField.values()].map((span) => span.entries),
+    messageText,
+    existingItems,
+    factsById,
+    productByRef: new Map([...touchedItemRefs].map((ref) => [ref, productFor(ref)])),
+    primaryRequest: isObject(primaryRequest) ? primaryRequest : null,
+    effectRequests: Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [],
+  }));
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
   const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
   // Items unresolved ONLY because this proposal's own unsupported/ambiguous
