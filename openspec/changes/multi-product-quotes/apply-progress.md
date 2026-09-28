@@ -792,3 +792,26 @@ The replay harness's `checkItemizedFinalConfirmation` previously treated every t
 | Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. The live A/B was not rerun in this unit. |
 | Full checks | `npm test` → 78 files passed, 17 skipped; 998 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
 | Rollback boundary | Revert the guidance helper and its call site, the v3.1 prompt rule, the harness applicability gate, their tests/docs, and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |
+
+## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
+
+With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
+
+| Scenario | Turns | Outcome |
+|---|---|---|
+| Single product, material pickup | 2 | Lead 258, `Pastelones 50`; the confirmation states the factory address |
+| Single product, material delivery | 4 | Lead 260, Maipú |
+| Single product, installation | 6 | Lead 262; asked terrain, truck access and debris; a bare "Sí" and "No" were recorded |
+| Two products, material delivery | 4 | Lead 264, two bullet lines |
+| Quantity correction at confirmation | 4 | Lead 266, Pastelones 60 corrected to 80 |
+| Add an item mid-flow | 5 | Lead 268, second item added; the pending question was kept |
+| Remove an item at confirmation | 3 | Lead 274, only Placas de Hormigón 30 |
+| Company with invoice | 4 | Lead 272; company, RUT and `invoice_required` persisted |
+| Price and stock question | 1 | Declined to confirm price or stock, then asked for the quantity |
+| Opt-out mid-flow | 2 | Deterministic close, no handoff |
+| Delivery claim | 1 | Real handoff 525 (notified) |
+
+Observations, none blocking:
+- The claim handoff is routed to Ventas because `17_persist_v3_handoff_effect.sql` hardcodes the area for every v3 authorized handoff. This predates v3.1.
+- The claim turn also stored a product-only `Adoquín` item with no quantity.
+- Stored item quantities vary in shape (number, string, or object), and the multi-item requirement omits the unit when the quantity is a bare number (`• Pastelones — 80`).
