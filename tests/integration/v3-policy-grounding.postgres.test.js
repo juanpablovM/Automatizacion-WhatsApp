@@ -55,6 +55,16 @@ describeIntegration('v3 policy grounding authority', () => {
               ('BOMBEO', 'bombeo de hormigon', 'service', ARRAY['Santiago'], TRUE),
               ('OLD', 'producto retirado', 'product', ARRAY['Santiago'], FALSE)`,
     );
+    // Task 3c.19: synonyms live in metadata.synonyms (migration 026).
+    await client.query(
+      `INSERT INTO catalog_items (sku, name, item_type, applicable_cities, is_active, metadata)
+       VALUES ('BLQ', 'Bloques de Hormigón', 'product', ARRAY['Santiago'], TRUE,
+               '{"url": "https://example.test/bloques", "synonyms": ["bloques de cemento"]}'::jsonb),
+              ('EMPTY-SYN', 'producto sin sinonimos', 'product', ARRAY['Santiago'], TRUE,
+               '{"synonyms": []}'::jsonb),
+              ('BAD-SYN', 'producto con sinonimos invalidos', 'product', ARRAY['Santiago'], TRUE,
+               '{"synonyms": "bloque"}'::jsonb)`,
+    );
 
     const event = await client.query(
       `INSERT INTO inbound_events (
@@ -96,6 +106,28 @@ describeIntegration('v3 policy grounding authority', () => {
 
     // A retired item must not authorize claims about itself.
     expect(catalog.map(({ value }) => value)).not.toContain('producto retirado');
+  });
+
+  test('forwards non-empty metadata.synonyms and keeps every other entry shape unchanged', async () => {
+    const row = await loadRow();
+    const catalog = row.v3_grounding?.catalog || [];
+
+    expect(catalog).toContainEqual({
+      ref: 'product:BLQ', concept: 'product', value: 'Bloques de Hormigón', synonyms: ['bloques de cemento'],
+    });
+    expect(catalog).toContainEqual({ ref: 'product:EMPTY-SYN', concept: 'product', value: 'producto sin sinonimos' });
+    expect(catalog).toContainEqual({ ref: 'product:BAD-SYN', concept: 'product', value: 'producto con sinonimos invalidos' });
+  });
+
+  test('synonyms reach the v3.1 policy grounding but never the v3 one', async () => {
+    const row = await loadRow();
+    const v31 = compileV3TurnPolicy(buildV3PolicyInput(row, { version: 'v3.1' }));
+    const v3 = compileV3TurnPolicy(buildV3PolicyInput(row));
+
+    expect(v31.grounding.catalog.find((entry) => entry.ref === 'product:BLQ').synonyms).toEqual(['bloques de cemento']);
+    expect(v3.grounding.catalog.find((entry) => entry.ref === 'product:BLQ')).toEqual({
+      ref: 'product:BLQ', concept: 'product', value: 'Bloques de Hormigón',
+    });
   });
 
   test('lets an evidenced product observation validate against the compiled policy', async () => {

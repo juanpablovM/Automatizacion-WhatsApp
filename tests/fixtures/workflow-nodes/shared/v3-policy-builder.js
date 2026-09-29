@@ -107,11 +107,23 @@ const buildV3PolicyInput = (row, options = {}) => {
     ...canonicalModalitySynonyms,
   ].filter((entry, index, entries) => entry?.ref
     && entries.findIndex((candidate) => candidate?.ref === entry.ref) === index);
+  // Task 3c.19: catalog entries may carry optional `synonyms` (migration 026).
+  // v3.1 keeps them sanitized (distinct, trimmed, non-empty strings; the key
+  // is dropped when none survive). v3, the rollback path, never carries the
+  // key, so its policy stays identical to the pre-synonyms one.
+  const catalogEntryForVersion = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !('synonyms' in entry)) return entry;
+    const { synonyms, ...rest } = entry;
+    if (version !== 'v3.1' || !Array.isArray(synonyms)) return rest;
+    const kept = [...new Set(synonyms.filter((synonym) => typeof synonym === 'string').map((synonym) => synonym.trim()))]
+      .filter((synonym) => synonym !== '');
+    return kept.length > 0 ? { ...rest, synonyms: kept } : rest;
+  };
   const grounding = {
     catalog: [
       ...(Array.isArray(explicitGrounding.catalog) ? explicitGrounding.catalog : []),
       ...derivedCatalog,
-    ].filter((entry) => entry?.concept !== 'commune'),
+    ].filter((entry) => entry?.concept !== 'commune').map(catalogEntryForVersion),
     modality_synonyms: modalitySynonyms,
   };
   const facts = [];

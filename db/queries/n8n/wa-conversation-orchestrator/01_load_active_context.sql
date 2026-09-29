@@ -31,7 +31,17 @@ v3_grounding_entries AS (
                   || COALESCE(NULLIF(ci.sku, ''), ci.id::text),
            'concept', CASE WHEN ci.item_type = 'service' THEN 'service' ELSE 'product' END,
            'value', ci.name
-         ) AS entry
+         )
+         -- Task 3c.19: optional synonyms (migration 026), only when present,
+         -- so an entry without them keeps the exact {ref, concept, value} shape.
+         || CASE
+              WHEN jsonb_typeof(ci.metadata->'synonyms') = 'array' THEN
+                CASE WHEN jsonb_array_length(ci.metadata->'synonyms') > 0
+                  THEN jsonb_build_object('synonyms', ci.metadata->'synonyms')
+                  ELSE '{}'::jsonb
+                END
+              ELSE '{}'::jsonb
+            END AS entry
   FROM catalog_items ci
   WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL
 ),

@@ -602,10 +602,43 @@ const hasResolvedValue = (value) => value !== undefined && value !== null
 // (a final confirmation). These helpers let the repair prompt say so.
 const foldForProductMatchV31 = (value) => String(value ?? '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+// Task 3c.19: a catalog product entry may list `synonyms` (migration 026).
+// A mention is a whole-word phrase (accents, case and punctuation folded) of
+// the product's name or one of its synonyms; when two products' phrases
+// overlap, the longest one wins, so "placa de 50 reforzada" names only
+// Placas de 50 cm Reforzadas and "bloques de cemento" does not name Cemento.
+const phraseFoldV31 = (value) => foldForProductMatchV31(value).replace(/[^a-z0-9]+/g, ' ').trim();
+const productSynonymsV31 = (entry) => (Array.isArray(entry?.synonyms) ? entry.synonyms : [])
+  .filter((synonym) => typeof synonym === 'string' && synonym.trim() !== '');
+const catalogHasSynonymsV31 = (entries) => entries
+  .some((entry) => entry?.concept === 'product' && productSynonymsV31(entry).length > 0);
+const productRefsMentionedV31 = (entries, text) => {
+  const haystack = ` ${phraseFoldV31(text)} `;
+  const spans = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry?.concept !== 'product' || typeof entry.ref !== 'string' || entry.ref === '') continue;
+    const name = groundingValue(entry);
+    for (const phrase of [typeof name === 'string' ? name : '', ...productSynonymsV31(entry)]) {
+      const needle = phraseFoldV31(phrase);
+      if (!needle) continue;
+      for (let index = haystack.indexOf(` ${needle} `); index !== -1; index = haystack.indexOf(` ${needle} `, index + 1)) {
+        spans.push({ ref: entry.ref, start: index + 1, end: index + 1 + needle.length });
+      }
+    }
+  }
+  return new Set(spans
+    .filter((span) => !spans.some((other) => other.ref !== span.ref
+      && other.start <= span.start && span.end <= other.end
+      && other.end - other.start > span.end - span.start))
+    .map((span) => span.ref));
+};
 const quoteNamesCatalogProductV31 = (policy, quote) => {
   const folded = foldForProductMatchV31(quote);
   if (!folded.trim()) return false;
-  return groundingEntries(policy)
+  const entries = groundingEntries(policy);
+  // Without synonyms in the catalog this is exactly the pre-3c.19 check.
+  if (catalogHasSynonymsV31(entries) && productRefsMentionedV31(entries, quote).size > 0) return true;
+  return entries
     .filter((entry) => entry?.concept === 'product')
     .map((entry) => foldForProductMatchV31(groundingValue(entry)))
     .some((name) => name.trim() !== '' && folded.includes(name));
@@ -620,11 +653,22 @@ const productNameTextV31 = (value) => (typeof value === 'string'
   ? value
   : (isObject(value) ? String(value.value ?? value.name ?? '') : ''));
 const productWordsV31 = (name) => foldForProductMatchV31(name).split(/[^a-z0-9]+/).filter((word) => word.length >= 4);
-const itemsNamedByMessageV31 = (messageText, productByRef) => {
+// Task 3c.19: an item whose catalog product lists synonyms is also named when
+// the message mentions one of them (productRefsMentionedV31, longest match).
+// Items whose product has no synonyms keep exactly the 3c.17 matching.
+const itemsNamedByMessageV31 = (messageText, productByRef, catalogEntries = []) => {
   const folded = foldForProductMatchV31(messageText);
   const wordsByRef = new Map([...productByRef].map(([ref, product]) => [ref, productWordsV31(productNameTextV31(product))]));
   const named = new Set();
+  const productEntries = (Array.isArray(catalogEntries) ? catalogEntries : [])
+    .filter((entry) => entry?.concept === 'product' && productSynonymsV31(entry).length > 0);
+  const mentionedRefs = productEntries.length > 0 ? productRefsMentionedV31(catalogEntries, messageText) : new Set();
   for (const [ref, product] of productByRef) {
+    const catalogEntry = productEntries.find((entry) => sameGroundedValue(groundingValue(entry), productNameTextV31(product)));
+    if (catalogEntry && mentionedRefs.has(catalogEntry.ref)) {
+      named.add(ref);
+      continue;
+    }
     const fullName = foldForProductMatchV31(productNameTextV31(product)).trim();
     if (fullName && folded.includes(fullName)) {
       named.add(ref);
@@ -654,10 +698,10 @@ const itemsNamedByMessageV31 = (messageText, productByRef) => {
 // create_lead (that needs a pending final_confirmation) and the next turn
 // asks the final confirmation normally.
 const distributiveSpanErrorsV31 = ({
-  spans, messageText, existingItems, factsById, productByRef, primaryRequest, effectRequests,
+  spans, messageText, existingItems, factsById, productByRef, primaryRequest, effectRequests, catalogEntries = [],
 }) => {
   const errors = [];
-  const namedRefs = itemsNamedByMessageV31(messageText, productByRef);
+  const namedRefs = itemsNamedByMessageV31(messageText, productByRef, catalogEntries);
   const holdsValue = (ref, field) => factsById.has(`fact:item:${ref}:${field}`)
     || hasResolvedValue(existingItems.get(ref)?.[field]);
   const productLabel = (ref) => productNameTextV31(productByRef.get(ref)) || ref;
@@ -1219,6 +1263,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     existingItems,
     factsById,
     productByRef: new Map([...touchedItemRefs].map((ref) => [ref, productFor(ref)])),
+    catalogEntries: groundingEntries(policy),
     primaryRequest: isObject(primaryRequest) ? primaryRequest : null,
     effectRequests: Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [],
   }));
@@ -1967,4 +2012,5 @@ module.exports = {
   compileV3TurnPolicy,
   validateV3AiProposal,
   authorizeV3ConversationDecision,
+  productRefsMentionedV31,
 };

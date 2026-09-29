@@ -729,6 +729,13 @@ if (usesV3Contract) {
   // an item_ref on a quote-level goal (primary_request_item_ref_invalid); this
   // v3.1-only rule keeps `name` for the customer's own name.
   const V31_ITEM_REQUEST_GOAL_RULE = 'primary_request.goal_id=name es solo para pedir el nombre del cliente. Para preguntar o confirmar algo de un ítem usa product, quantity o measurements con su item_ref (por ejemplo, aclarar "pandereta" es product con el item_ref de ese ítem; confirmar a qué ítems va una cantidad es quantity). Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null.';
+  // Live 2026-09-29 (task 3c.19): "Bloques de cemento" -> the model asked
+  // "¿Te refieres a Bloques de Hormigón?" and then answered it could not
+  // confirm it was the same product. The v3.1 grounding now lists synonyms
+  // per product (migration 026); this v3.1-only rule makes a listed synonym
+  // that product without a clarification, while shared generic terms keep
+  // the existing ambiguous flow. v3 never receives synonyms nor this rule.
+  const V31_CATALOG_SYNONYMS_RULE = 'Algunas entradas product del grounding traen synonyms: son otros nombres de ese mismo producto, una relación explícita de la policy. Si el cliente usa uno de esos sinónimos (sin importar mayúsculas ni tildes), es ese producto: emite en catalog_resolutions matched con su grounding_ref, la observación product con normalized_value igual a su value canónico y evidence_quote con el texto exacto del cliente, sin preguntar si se refiere a ese producto. En nombres de productos, "cemento", "concreto" y "hormigón" son intercambiables (por ejemplo "bloques de cemento" son Bloques de Hormigón), excepto el producto Cemento, que es la bolsa o saco de cemento. Si el texto coincide con más de un nombre o sinónimo, vale la coincidencia más larga (por ejemplo "placa de 50 reforzada" es Placas de 50 cm Reforzadas, no Placas de 50 cm). Nunca digas que un sinónimo listado "no necesariamente es lo mismo" ni pidas confirmar esa equivalencia; si el cliente pregunta si es lo mismo, confírmale que sí. Los términos genéricos que comparten varios productos (por ejemplo pandereta, placa, poste o alambre) no son sinónimos y siguen requiriendo aclaración con ambiguous.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -741,6 +748,7 @@ if (usesV3Contract) {
       V31_NO_CROSS_ITEM_TRANSFER_RULE,
       V31_DISTRIBUTIVE_QUANTITY_RULE,
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
+      V31_CATALOG_SYNONYMS_RULE,
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,
