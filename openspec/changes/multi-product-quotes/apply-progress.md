@@ -964,6 +964,46 @@ Known pre-existing gap (unchanged): the 3c.17 matcher still uses plain substring
 | Deploy order | 1) apply migration 026 to the live DB (safe alone: the current loader ignores `metadata.synonyms`); 2) deploy the three workflows. Deploying workflows first is also safe (no synonyms yet → grounding unchanged). |
 | Rollback boundary | Revert the loader clause, the builder sanitize/strip, `V31_CATALOG_SYNONYMS_RULE`, `productRefsMentionedV31` and its two call sites, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit; on the DB run the 026 down file. No runtime deploy, env change, live send or migration apply occurred. |
 
+## Catalog technical sheets (3c.20)
+
+Contract v3.1 only. The owner's technical-sheet library was curated into per-product sheets so the assistant can answer technical questions (sizes, weight, yield per m², strength, colors, finishes) from official data only and defer anything unconfirmed to a sales executive. **The repository is public, so the sheet data is private:** no specs, variants, codes, descriptions, new-product names or descriptions, unconfirmed values or source file names are in any tracked file.
+
+Owner-approved criteria (applied to the private data):
+- Conflicts: a value from a clearly newer sheet is kept; otherwise both values go to `technical_sheet.unconfirmed`, which the assistant never states.
+- Supplier-origin sheets are Hormiglass products; supplier brands never reach model-facing data.
+- No prices anywhere (the generator rejects price-like keys and values).
+- No renames or merges: existing rows only gain `metadata.technical_sheet`; new products and one new service are created with their own unambiguous synonyms and existing categories; one inactive product is reactivated; the inactive duplicate stays untouched; 026 synonym lists are unchanged.
+
+Layout:
+- **Private (gitignored `db/seeds/private/`):** `technical_sheets.json` (36 items: 23 existing active products, 1 existing service, 1 reactivated product, 10 new products, 1 new service; plus a `checks` block with the private-only terms the local test verifies) and the generated `027_catalog_technical_sheets.sql` / `027_catalog_technical_sheets.down.sql`. Not under `infra/postgres/migrations/`, so no database applies it automatically.
+- **Tracked:** generator `scripts/catalog/technical-sheets.mjs` (data shape and apply/rollback commands in its header; also summarized in `docs/arquitectura.md`), the generic loader/builder/prompt code, a synthetic fixture `tests/fixtures/catalog/technical-sheets.synthetic.json` ("Producto Demo …") and the tests.
+
+Changes:
+- **Generator.** Validates shape, sku uniqueness, synonym uniqueness and plain source file names, and rejects any price-like key or value. Generated SQL, keyed by sku and idempotent: (1) `INSERT … ON CONFLICT (sku) DO NOTHING` for new items (category by code, `metadata.catalog_migration_027 = 'created'` plus synonyms); (2) reactivation only while inactive and not deleted (`'reactivated'` marker plus synonyms); (3) `jsonb_set` of `technical_sheet` only where it differs. The rollback deletes rows marked `created`, deactivates only rows marked `reactivated` (removing the synonyms it added and the marker), and removes only the `technical_sheet` key. `--check` fails if the private SQL is missing or stale.
+- **Loader.** `01_load_active_context.sql` appends `technical_sheet` (minus `source_files`) only when it is an object.
+- **Policy builder.** Always strips `technical_sheet`; v3.1 re-attaches a compact sheet (agreed keys only, empty fields dropped) to the products in the quote's line items and to the products (name or synonym, longest match via `productRefsMentionedV31`) or services (whole-phrase name) the current message names. All selected sheets together are capped at 6144 UTF-8 bytes: smallest first, each an equal share of the remaining budget, trailing variants dropped with `variants_omitted` (or `{omitted: true}`). Pure function of the turn input, so `policy_digest` is deterministic; v3 policies and digests are identical with or without sheets. The synced n8n node uses the concatenated contract runtime's matcher (tested by running it without `require`).
+- **Prompt.** New v3.1-only `V31_TECHNICAL_SHEET_RULE` after `V31_CATALOG_SYNONYMS_RULE`: technical data only from the product's `technical_sheet`, citing the variant; never invent or estimate; unconfirmed, missing or omitted data → say so and offer that an executive confirms; unit counts only from the sheet's yield, referential and never recorded as quantity; never prices or supplier brands.
+- **Validator.** Unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.20 generator | `tests/unit/catalog-technical-sheets-generator.test.js` | Unit (synthetic) | `npm test` 1134 passed / 159 skipped before the change | First version failed on the missing generator; after the private-data rework the suite was rewritten on the synthetic fixture | 13/13 | Five price-like shapes rejected; structural errors (update with a name, path in source_files, cross-item synonym, duplicate sku); apostrophe escaping | Generator generalized (any reactivated sku, optional synonyms) and moved to private output paths |
+| 3c.20 private data | `tests/unit/catalog-technical-sheets-private.test.js` | Unit (local only) | — | — | 8/8 locally; 8 skipped without the file | Coverage of the active catalog, forbidden terms and excluded-document markers read from the private `checks`, synonym uniqueness and longest match over 026 + private synonyms, SQL current, three largest sheets within the cap | — |
+| 3c.20 flow | `tests/unit/v3-v31-technical-sheets.test.js` | Unit (synthetic) | Synonyms and prompt suites green | 16/20 failed: loader clause, v3 strip, v3.1 selection, compaction, cap, prompt rule | 20/20 | Generic term selects nothing; longest match selects one sku; line-item product selected without a mention; oversized sheets within the cap with ordered truncation; same turn → same digest; synced node without `require` | Real-data values replaced by synthetic ones |
+| 3c.20 SQL | `tests/integration/catalog-technical-sheets.postgres.test.js`, `tests/integration/v3-policy-grounding.postgres.test.js` | Integration | Grounding suite 6/6 | Written before running against the test stack | 5/5 and 8/8 | Second run affects 0 rows; exact rollback; an already-active row is never deactivated by the rollback; non-object sheet omitted; sheet only in the v3.1 policy of a naming turn | — |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | Captured fixtures in `tests/fixtures/v3-line-items/` have no sheets and keep their outcomes |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; v3 policies with and without sheets are deep-equal with the same `policy_digest` |
+| Full checks | `npm test` → 87 files passed, 19 skipped; 1175 passed, 166 skipped locally (CI without the private file: the 8 private tests skip). `npm run test:integration:postgres` (dedicated test stack) → 19 files, 166/166. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `node scripts/catalog/technical-sheets.mjs --check` passed against the private file. Private SQL on the seed catalog (006 + 007 + 026), applied twice then rolled back in one transaction: second run affects 0 rows, 0 differing rows after rollback. |
+| Deploy order | 0) obtain the private data file, run the generator `--check`, and verify the target rows (the product to reactivate exists, inactive and not deleted; no new sku exists yet); 1) apply the private SQL with `psql -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.sql` (safe alone: the current loader ignores `technical_sheet`, but new and reactivated products join the catalog immediately); 2) deploy the three workflows. |
+| Rollback boundary | Code: revert the loader clause, the builder strip/selection, `V31_TECHNICAL_SHEET_RULE`, the generator, the synthetic fixture, the tests, `docs/arquitectura.md`, these docs and the three regenerated workflow JSON files as one unit. DB: run `db/seeds/private/027_catalog_technical_sheets.down.sql`. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
