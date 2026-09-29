@@ -1004,6 +1004,39 @@ Changes:
 | Deploy order | 0) obtain the private data file, run the generator `--check`, and verify the target rows (the product to reactivate exists, inactive and not deleted; no new sku exists yet); 1) apply the private SQL with `psql -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.sql` (safe alone: the current loader ignores `technical_sheet`, but new and reactivated products join the catalog immediately); 2) deploy the three workflows. |
 | Rollback boundary | Code: revert the loader clause, the builder strip/selection, `V31_TECHNICAL_SHEET_RULE`, the generator, the synthetic fixture, the tests, `docs/arquitectura.md`, these docs and the three regenerated workflow JSON files as one unit. DB: run `db/seeds/private/027_catalog_technical_sheets.down.sql`. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
 
+## Cierros are "muros", measured in linear meters (3c.21)
+
+Contract v3.1 only. Owner rules (Hormiglass):
+1. A customer who says "muro"/"muros" ("un muro de 20 metros", "muro perimetral", "muro prefabricado") without naming another product means Cierros de Hormigón. A product whose own name or synonyms hold a longer "muro ..." phrase keeps it by longest match.
+2. A cierro is measured only in metros lineales, plus the height as a measurement; never square meters. If the customer gives an area, the bot does not record it as the cierro quantity and asks for the linear meters and the height.
+3. Bloques de Hormigón are unrelated to cierros; their yield per m² stays valid for bloques.
+
+Changes:
+- **Data (migration 028).** `infra/postgres/migrations/028_cierros_muro_synonyms.sql` appends `muro`, `muros`, `muro perimetral`, `muros perimetrales`, `muro prefabricado`, `muros prefabricados`, `muro de cierre`, `muro de hormigón` to `cierros-hormigon`'s `metadata.synonyms`, after the 026 phrases and only those not already present; a row holding all of them is not touched (second run: 0 rows). The rollback `infra/postgres/rollback/028_cierros_muro_synonyms.down.sql` removes exactly those phrases (the key only if nothing is left). Uniqueness is tested against the public 026 lists and, when the private data file exists locally, against its products and synonyms.
+- **Private-data test.** `catalog-technical-sheets-private.test.js` now models the live list (026 + 028 merged per sku + private). The 028 phrases are an owner decision, so they are exempt from the private `checks.shared_generic_terms` (which still lists `muro`/`muros`) and from the overlap list, but only after asserting that every product name containing them still names only its own product.
+- **Validator.** New repairable `linear_quantity_required` (path `state_mutations[i]`, related id the quantity observation, allowed value the item_ref) when a `set`/`replace` of `quantity` on an item whose product is linear-only carries an area unit (NFKD-folded: `m2`, `m²`, `mt2`, `mts2`, `m^2`, `metro(s) cuadrado(s)`, `square`, `sq`). Linear-only is data-driven: `LINEAR_ONLY_PRODUCT_REFS_V31 = {product:cierros-hormigon}`, matched by the item's matched resolution, its product observation's `grounding_ref`, or its product value equal to that entry's grounded value. Placas and postes are not listed (sold per unit). To avoid a deadlock with `quantity_observation_required`, that rule does not fire when the only explicit quantity in the message is an m² and the proposal asks `primary_request {goal_id: "quantity", item_ref}` for a linear-only item; any other explicit quantity still requires its observation. v3's validator is untouched.
+- **Prompt.** New v3.1-only `V31_CIERROS_LINEAR_METERS_RULE` right after `V31_TECHNICAL_SHEET_RULE`.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.21 validator | `tests/unit/v3-v31-linear-quantity.test.js` | Unit | Captured-fixture outcomes snapshotted before the change | 13/28 failed (area units, replace, ask-instead nag) | 28/28 | Ten area spellings rejected; six linear spellings valid; replace of an existing cierro quantity; nag still fires when nothing is asked or when a linear quantity is also stated; bloques and adoquín m² quantities unaffected | Instruction moved to English like its neighbors |
+| 3c.21 prompt | same file | Unit | Golden v3 prompt test green | 1/30 failed (rule missing) | 30/30 | v3 prompt lacks the rule | — |
+| 3c.21 data | `tests/unit/catalog-cierros-muro-synonyms-migration.test.js` | Unit | 026 suite 12/12 | Suite failed on the missing migration | 7/7 (1 local-only) | Unique vs 026 + active catalog; locally vs private products/synonyms with longest match | SQL-shape regex relaxed to the multi-line `jsonb_set` |
+| 3c.21 SQL | `tests/integration/catalog-cierros-muro-synonyms.postgres.test.js` | Integration | 166/166 before | Written before running against the test stack | 5/5 | Append after 026 keeping other keys; idempotent; partial list appends only missing; exact rollback; empty result removes the key | — |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | All 21 captured proposals in `tests/fixtures/v3-line-items/` keep identical `valid` and error codes (before/after snapshot) |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; the v3 validator body never mentions the new code |
+| Full checks | `npm test` → 89 files passed, 20 skipped; 1212 passed, 171 skipped locally. `npm run test:integration:postgres` (dedicated test stack, 028 applies on the fresh DB) → 20 files, 171/171. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `git diff --check` passed. |
+| Known limits | "muro de camellón" / "muros camellón" (not a listed phrase) names both products and is left to the prompt; "muro de bloques" names Cierros for the matcher (the prompt says bloques are the Bloques product); the private `checks.shared_generic_terms` should drop `muro`/`muros` (owner action). |
+| Deploy order | 1) apply migration 028 to the live DB after 026 (safe alone: only adds synonyms); 2) deploy the three workflows. |
+| Rollback boundary | Code: revert the validator rule and its nag exemption, `V31_CIERROS_LINEAR_METERS_RULE`, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit. DB: run the 028 down file. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
