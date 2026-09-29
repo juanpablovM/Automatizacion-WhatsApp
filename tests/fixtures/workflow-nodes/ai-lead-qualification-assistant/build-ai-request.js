@@ -736,6 +736,13 @@ if (usesV3Contract) {
   // that product without a clarification, while shared generic terms keep
   // the existing ambiguous flow. v3 never receives synonyms nor this rule.
   const V31_CATALOG_SYNONYMS_RULE = 'Algunas entradas product del grounding traen synonyms: son otros nombres de ese mismo producto, una relación explícita de la policy. Si el cliente usa uno de esos sinónimos (sin importar mayúsculas ni tildes), es ese producto: emite en catalog_resolutions matched con su grounding_ref, la observación product con normalized_value igual a su value canónico y evidence_quote con el texto exacto del cliente, sin preguntar si se refiere a ese producto. En nombres de productos, "cemento", "concreto" y "hormigón" son intercambiables (por ejemplo "bloques de cemento" son Bloques de Hormigón), excepto el producto Cemento, que es la bolsa o saco de cemento. Si el texto coincide con más de un nombre o sinónimo, vale la coincidencia más larga (por ejemplo "placa de 50 reforzada" es Placas de 50 cm Reforzadas, no Placas de 50 cm). Nunca digas que un sinónimo listado "no necesariamente es lo mismo" ni pidas confirmar esa equivalencia; si el cliente pregunta si es lo mismo, confírmale que sí. Los términos genéricos que comparten varios productos (por ejemplo pandereta, placa, poste o alambre) no son sinónimos y siguen requiriendo aclaración con ambiguous.';
+  // Task 3c.20: the v3.1 grounding carries the owner's technical sheet
+  // (private data, scripts/catalog/technical-sheets.mjs) for the products relevant to the turn. This v3.1-only rule
+  // lets the model answer technical questions from that sheet alone, defer
+  // unconfirmed or missing data to a sales executive, compute units only from
+  // the sheet's yield, and never give prices or supplier brands. v3 never
+  // receives sheets nor this rule.
+  const V31_TECHNICAL_SHEET_RULE = 'Algunas entradas del grounding traen technical_sheet: es la ficha técnica de ese producto o servicio, y solo viene para los productos de la cotización o los que el cliente nombra en este mensaje. Si el cliente pregunta un dato técnico (medidas, peso, rendimiento por m², resistencia, colores o terminaciones), respóndelo solo si está en la technical_sheet de ese producto e indica a qué variante corresponde; nunca inventes ni estimes un dato, ni lo tomes de otro producto. Si el dato aparece en unconfirmed, no aparece en la ficha, la ficha trae variants_omitted u omitted, o el producto no trae technical_sheet, dilo con naturalidad y ofrece que una ejecutiva de Hormiglass lo confirme. Si el cliente pregunta cuántas unidades necesita, puedes calcularlo solo con el rendimiento (yield) de esa variante en la ficha, mostrando la cuenta y aclarando que es un cálculo referencial que la ejecutiva confirmará; una cantidad que calculas tú no es una cantidad dicha por el cliente, así que no la registres como quantity. Nunca des precios ni menciones marcas de proveedores o fabricantes.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -749,6 +756,7 @@ if (usesV3Contract) {
       V31_DISTRIBUTIVE_QUANTITY_RULE,
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
       V31_CATALOG_SYNONYMS_RULE,
+      V31_TECHNICAL_SHEET_RULE,
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,

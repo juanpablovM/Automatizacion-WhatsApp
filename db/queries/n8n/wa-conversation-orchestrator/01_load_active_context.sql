@@ -41,6 +41,15 @@ v3_grounding_entries AS (
                   ELSE '{}'::jsonb
                 END
               ELSE '{}'::jsonb
+            END
+         -- Task 3c.20: optional technical sheet (private data applied via scripts/catalog/technical-sheets.mjs), only when it
+         -- is an object and never with its source file names. The v3.1 policy
+         -- builder keeps it only for the products relevant to the turn; v3
+         -- drops it.
+         || CASE
+              WHEN jsonb_typeof(ci.metadata->'technical_sheet') = 'object'
+                THEN jsonb_build_object('technical_sheet', (ci.metadata->'technical_sheet') - 'source_files')
+              ELSE '{}'::jsonb
             END AS entry
   FROM catalog_items ci
   WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL

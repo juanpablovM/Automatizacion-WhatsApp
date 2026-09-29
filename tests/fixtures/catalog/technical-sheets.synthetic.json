@@ -1,0 +1,74 @@
+{
+  "note": "SYNTHETIC fixture for scripts/catalog/technical-sheets.mjs. Every name and value is made up; the real data file is private (db/seeds/private/technical_sheets.json).",
+  "items": [
+    {
+      "sku": "demo-existente",
+      "action": "update",
+      "technical_sheet": {
+        "description": "Producto Demo A, ficha inventada para pruebas.",
+        "general_specs": { "material": "Material Demo" },
+        "variants": [
+          { "name": "Demo A1", "code": "DEMO-A1", "dimensions": "1x2x3 cm", "weight": "1 kg", "yield": "99 un/m2 demo", "resistance": null, "colors": ["Gris Demo"], "finishes": [], "other": {} },
+          { "name": "Demo A2", "code": null, "dimensions": "2x3x4 cm", "weight": "2 kg", "yield": "98 un/m2 demo", "resistance": null, "colors": [], "finishes": ["Liso Demo"], "other": { "nota": "O'Demo, con apóstrofo" } }
+        ],
+        "unconfirmed": { "Demo A2 · espesor": ["41 cm demo", "42 cm demo"] },
+        "source_files": ["ficha-demo-a.pdf"]
+      }
+    },
+    {
+      "sku": "demo-inactivo",
+      "action": "reactivate",
+      "synonyms": ["demo inactivo", "producto demo dormido"],
+      "technical_sheet": {
+        "description": "Producto Demo B, ficha inventada para pruebas.",
+        "general_specs": {},
+        "variants": [
+          { "name": "Demo B1", "code": null, "dimensions": "3x3 cm", "weight": null, "yield": null, "resistance": null, "colors": [], "finishes": [], "other": {} }
+        ],
+        "unconfirmed": {},
+        "source_files": ["ficha-demo-b.pdf"]
+      }
+    },
+    {
+      "sku": "demo-nuevo",
+      "action": "create",
+      "name": "Producto Demo C",
+      "item_type": "product",
+      "category_code": "demo-categoria",
+      "short_description": "Producto Demo C, ficha inventada para pruebas.",
+      "service_keywords": ["demo"],
+      "applicable_cities": ["Ciudad Demo"],
+      "restrictions": { "requires_measurements": true },
+      "synonyms": ["demo c", "producto demo tercero"],
+      "technical_sheet": {
+        "description": "Producto Demo C, ficha inventada para pruebas.",
+        "general_specs": { "uso": "Pruebas" },
+        "variants": [
+          { "name": "Demo C1", "code": null, "dimensions": "5x5 cm", "weight": "5 kg", "yield": null, "resistance": "Demo 25", "colors": [], "finishes": [], "other": {} }
+        ],
+        "unconfirmed": {},
+        "source_files": []
+      }
+    },
+    {
+      "sku": "demo-servicio",
+      "action": "create",
+      "name": "Servicio Demo",
+      "item_type": "service",
+      "category_code": "demo-categoria",
+      "short_description": "Servicio Demo, ficha inventada para pruebas.",
+      "service_keywords": ["demo", "servicio"],
+      "applicable_cities": ["Ciudad Demo"],
+      "restrictions": { "requires_quote": true },
+      "technical_sheet": {
+        "description": "Servicio Demo, ficha inventada para pruebas.",
+        "general_specs": {},
+        "variants": [
+          { "name": "Máquina Demo", "code": null, "dimensions": null, "weight": "3 t", "yield": null, "resistance": null, "colors": [], "finishes": [], "other": { "capacidad": "1 t" } }
+        ],
+        "unconfirmed": {},
+        "source_files": []
+      }
+    }
+  ]
+}
