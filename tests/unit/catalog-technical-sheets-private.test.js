@@ -31,6 +31,9 @@ const ACTIVE_PRODUCTS = captured.policy.grounding.catalog
   .map((entry) => ({ sku: entry.ref.slice('product:'.length), name: entry.value }));
 const synonyms026 = [...fs.readFileSync('infra/postgres/migrations/026_catalog_product_synonyms.sql', 'utf8')
   .matchAll(/\(\s*'([a-z0-9-]+)',\s*'(\[[^']*\])'::jsonb\s*\)/g)].map(([, sku, json]) => ({ sku, synonyms: JSON.parse(json) }));
+// Task 3c.21: the public 028 "muro" synonyms appended to cierros-hormigon (owner rule).
+const synonyms028 = [...fs.readFileSync('infra/postgres/migrations/028_cierros_muro_synonyms.sql', 'utf8')
+  .matchAll(/\(\s*'([a-z0-9-]+)',\s*'(\[[^']*\])'::jsonb\s*\)/g)].map(([, sku, json]) => ({ sku, synonyms: JSON.parse(json) }));
 
 const fold = (value) => String(value).normalize('NFD').replace(/[̀-ͯ]/g, '')
   .toLocaleLowerCase('es').replace(/\s+/g, ' ').trim();
@@ -49,8 +52,13 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
     ...reactivated.map((item) => ({ sku: item.sku, name: checks.reactivated_names?.[item.sku] })),
     ...createdProducts.map((item) => ({ sku: item.sku, name: item.name })),
   ];
-  const synonymRows = [...synonyms026, ...items.filter((item) => item.synonyms).map((item) => ({ sku: item.sku, synonyms: item.synonyms }))];
-  const synonymsBySku = new Map(synonymRows.map((row) => [row.sku, row.synonyms]));
+  const synonymRows = [...synonyms026, ...synonyms028, ...items.filter((item) => item.synonyms).map((item) => ({ sku: item.sku, synonyms: item.synonyms }))];
+  // 026 and 028 both write cierros-hormigon's list: merge per sku as the live row holds it.
+  const synonymsBySku = new Map();
+  for (const row of synonymRows) synonymsBySku.set(row.sku, [...(synonymsBySku.get(row.sku) || []), ...row.synonyms]);
+  // Owner decision 3c.21: these phrases name Cierros de Hormigón even where the
+  // private checks still list them as shared generic terms.
+  const ownerAssigned028 = new Set(synonyms028.flatMap((row) => row.synonyms.map(fold)));
   const catalog = activeAfter.map((product) => ({
     ref: `product:${product.sku}`, concept: 'product', value: product.name, synonyms: synonymsBySku.get(product.sku) || [],
   }));
@@ -117,14 +125,24 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
     for (const { sku, synonyms } of synonymRows) {
       for (const synonym of synonyms) {
         for (const product of activeAfter.filter((candidate) => candidate.sku !== sku)) {
-          if (containsPhrase(product.name, synonym)) overlaps.push(`${synonym} < ${product.name}`);
+          if (!containsPhrase(product.name, synonym)) continue;
+          // A 028 "muro" phrase inside a longer product name is allowed only
+          // because that name, written alone, still names only its product.
+          if (ownerAssigned028.has(fold(synonym))) {
+            expect([...productRefsMentionedV31(catalog, product.name)], product.name).toEqual([`product:${product.sku}`]);
+            continue;
+          }
+          overlaps.push(`${synonym} < ${product.name}`);
         }
       }
     }
-    // The only overlap is the documented, public 026 one.
+    // The only other overlap is the documented, public 026 one.
     expect(overlaps).toEqual(['placas de 50 < Placas de 50 cm Reforzadas']);
     const folded = new Set(synonymRows.flatMap((row) => row.synonyms.map(fold)));
-    for (const term of checks.shared_generic_terms || []) expect(folded.has(term), term).toBe(false);
+    for (const term of checks.shared_generic_terms || []) {
+      if (ownerAssigned028.has(term)) continue;
+      expect(folded.has(term), term).toBe(false);
+    }
   });
 
   test('the private SQL files are generated and current', () => {

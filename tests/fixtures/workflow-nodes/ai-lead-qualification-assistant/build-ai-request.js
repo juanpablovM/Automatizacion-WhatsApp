@@ -743,6 +743,12 @@ if (usesV3Contract) {
   // the sheet's yield, and never give prices or supplier brands. v3 never
   // receives sheets nor this rule.
   const V31_TECHNICAL_SHEET_RULE = 'Algunas entradas del grounding traen technical_sheet: es la ficha técnica de ese producto o servicio, y solo viene para los productos de la cotización o los que el cliente nombra en este mensaje. Si el cliente pregunta un dato técnico (medidas, peso, rendimiento por m², resistencia, colores o terminaciones), respóndelo solo si está en la technical_sheet de ese producto e indica a qué variante corresponde; nunca inventes ni estimes un dato, ni lo tomes de otro producto. Si el dato aparece en unconfirmed, no aparece en la ficha, la ficha trae variants_omitted u omitted, o el producto no trae technical_sheet, dilo con naturalidad y ofrece que una ejecutiva de Hormiglass lo confirme. Si el cliente pregunta cuántas unidades necesita, puedes calcularlo solo con el rendimiento (yield) de esa variante en la ficha, mostrando la cuenta y aclarando que es un cálculo referencial que la ejecutiva confirmará; una cantidad que calculas tú no es una cantidad dicha por el cliente, así que no la registres como quantity. Nunca des precios ni menciones marcas de proveedores o fabricantes.';
+  // Task 3c.21 (owner rules): "muro" without another product is Cierros de
+  // Hormigón (migration 028 adds the synonyms), cierros are quoted only in
+  // linear meters plus a height (the v3.1 validator rejects an area quantity
+  // with linear_quantity_required), and bloques are unrelated to cierros.
+  // v3 never receives this rule.
+  const V31_CIERROS_LINEAR_METERS_RULE = 'Cuando el cliente dice "muro" o "muros" (por ejemplo "un muro de 20 metros", "muro perimetral" o "muro prefabricado") sin nombrar otro producto, se refiere a Cierros de Hormigón; "muro camellón" o "Muro Tipo Camellón" es otro producto (vale la coincidencia más larga). Los cierros se cotizan solo en metros lineales, más la altura como medida, nunca en m²: si el cliente da un área (m² o metros cuadrados) para un cierro o muro, no registres ese valor como quantity y pregúntale los metros lineales y la altura. Los Bloques de Hormigón no forman parte de los cierros: si el cliente nombra bloques, es el producto Bloques de Hormigón y su rendimiento por m² de la ficha técnica sigue siendo válido para ellos.';
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
@@ -757,6 +763,7 @@ if (usesV3Contract) {
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
       V31_CATALOG_SYNONYMS_RULE,
       V31_TECHNICAL_SHEET_RULE,
+      V31_CIERROS_LINEAR_METERS_RULE,
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
       V31_CORRECTION_NAMED_ITEM_RULE,

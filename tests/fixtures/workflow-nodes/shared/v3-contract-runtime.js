@@ -632,6 +632,25 @@ const productRefsMentionedV31 = (entries, text) => {
       && other.end - other.start > span.end - span.start))
     .map((span) => span.ref));
 };
+// Task 3c.21 (owner rule): some products are quoted only in linear meters plus
+// a height, never by area. Data-driven by catalog ref; today only Cierros de
+// Hormigón (placas and postes are sold per unit, so they are not listed).
+// An item's product is linear-only when its matched catalog resolution or its
+// product observation points at a listed ref, or when its product value is the
+// grounded value of a listed ref.
+const LINEAR_ONLY_PRODUCT_REFS_V31 = new Set(['product:cierros-hormigon']);
+const AREA_UNIT_V31 = /(?:^|[^a-z0-9])(?:m|mt|mts|mtr|mtrs|metros?)\s*\^?\s*2(?![0-9])|cuadrad|square|(?:^|[^a-z])sq(?![a-z])/;
+const isAreaUnitV31 = (unit) => typeof unit === 'string'
+  && AREA_UNIT_V31.test(unit.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es'));
+const AREA_QUANTITY_IN_MESSAGE_V31 = /\b\d+(?:[.,]\d+)?\s*(?:m2|m²)(?=\s|$|[.,;:])/giu;
+const isLinearOnlyProductV31 = (policy, product, groundingRefs = []) => {
+  if (groundingRefs.some((ref) => LINEAR_ONLY_PRODUCT_REFS_V31.has(ref))) return true;
+  const name = productNameTextV31(product);
+  if (!name.trim()) return false;
+  return groundingEntries(policy).some((entry) => entry?.concept === 'product'
+    && LINEAR_ONLY_PRODUCT_REFS_V31.has(entry.ref) && sameGroundedValue(groundingValue(entry), name));
+};
+const linearQuantityInstructionV31 = (itemRef) => `Cierros are measured only in metros lineales (linear meters) plus the height (altura), never by area. Never record an area (m², metros cuadrados) as this item's quantity: drop this state_mutation and its quantity observation, and ask for the linear meters and the height with primary_request {"goal_id": "quantity", "item_ref": "${itemRef}"}.`;
 const quoteNamesCatalogProductV31 = (policy, quote) => {
   const folded = foldForProductMatchV31(quote);
   if (!folded.trim()) return false;
@@ -1042,7 +1061,29 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     .some((resolution) => ['ambiguous', 'unsupported'].includes(resolution.status));
   const tracksLineItemsGoal = (policy?.goals || []).some((goal) => goal.goal_id === 'line_items');
   const hasQuantityObservationV31 = candidateObservations.some((entry) => entry.concept === 'quantity');
-  if (!anyAmbiguousOrUnsupportedItem && tracksLineItemsGoal
+  // Task 3c.21: the catalog refs this proposal ties to an item (its matched
+  // resolution and its product observation), for the linear-only rule.
+  const linearOnlyGroundingRefsFor = (itemRef) => [
+    ...(catalogResolutionByRef.get(itemRef)?.status === 'matched' ? [catalogResolutionByRef.get(itemRef).grounding_ref] : []),
+    ...candidateObservations
+      .filter((entry) => entry.item_ref === itemRef && entry.concept === 'product')
+      .map((entry) => entry.grounding_ref),
+  ].filter((ref) => typeof ref === 'string');
+  // Task 3c.21: when the only explicit quantity in the message is an area
+  // (m²) and the proposal asks for the quantity of a linear-only item
+  // (Cierros de Hormigón), leaving the m² out is the required behavior
+  // (linear_quantity_required), so this nag does not fire. Any other explicit
+  // quantity in the message still requires its observation.
+  const asksLinearQuantityForAreaOnlyMessage = isObject(primaryRequest)
+    && primaryRequest.goal_id === 'quantity' && typeof primaryRequest.item_ref === 'string'
+    && !hasExplicitQuantityEvidence(messageText.replace(AREA_QUANTITY_IN_MESSAGE_V31, ' '))
+    && isLinearOnlyProductV31(
+      policy,
+      candidateObservations.find((entry) => entry.item_ref === primaryRequest.item_ref && entry.concept === 'product')?.normalized_value
+        ?? existingItems.get(primaryRequest.item_ref)?.product ?? null,
+      linearOnlyGroundingRefsFor(primaryRequest.item_ref),
+    );
+  if (!anyAmbiguousOrUnsupportedItem && tracksLineItemsGoal && !asksLinearQuantityForAreaOnlyMessage
       && hasExplicitQuantityEvidence(messageText) && !hasQuantityObservationV31) {
     errors.push(quantityObservationRequiredError());
   }
@@ -1267,6 +1308,19 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     primaryRequest: isObject(primaryRequest) ? primaryRequest : null,
     effectRequests: Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [],
   }));
+  // Task 3c.21: a linear-only product (Cierros de Hormigón) never takes an
+  // area as its quantity; the repair asks for the linear meters and height.
+  for (const [index, mutation] of mutations.entries()) {
+    if (mutation?.field !== 'quantity' || !['set', 'replace'].includes(mutation?.operation)) continue;
+    const candidate = candidateMutations.find((entry) => entry.field === 'quantity' && entry.observation_id === mutation.observation_id);
+    if (!candidate || !isAreaUnitV31(candidate.projected_value?.unit)) continue;
+    const itemRef = candidate.item_ref;
+    if (!isLinearOnlyProductV31(policy, productFor(itemRef), linearOnlyGroundingRefsFor(itemRef))) continue;
+    errors.push(validationError(
+      'linear_quantity_required', `state_mutations[${index}]`, [mutation.observation_id], [itemRef],
+      linearQuantityInstructionV31(itemRef),
+    ));
+  }
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
   const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
   // Items unresolved ONLY because this proposal's own unsupported/ambiguous
