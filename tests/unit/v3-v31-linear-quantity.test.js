@@ -180,7 +180,9 @@ describe('v3.1 validator: a cierro quantity is never an area', () => {
     const targetPolicy = buildTurnPolicy('v3.1', {}, GROUNDING, { text: message });
     const validation = validateV3AiProposal(targetPolicy, newItemProposal(targetPolicy, {
       productQuote: 'cierro de hormigón', groundingRef: 'product:cierros-hormigon', productName: 'Cierros de Hormigón',
-      primaryRequest: { goal_id: 'measurements', item_ref: NEW_ITEM },
+      // Asking for the linear meters (quantity) or the height (measurements)
+      // of the cierro is the required behavior; any other question is not.
+      primaryRequest: { goal_id: 'service_scope', item_ref: null },
     }));
 
     expect(errorCodes(validation)).toContain('quantity_observation_required');
@@ -266,5 +268,37 @@ describe('the rule is v3.1-only', () => {
     expect(v3Body.length).toBeGreaterThan(0);
     expect(v3Body).not.toContain('linear_quantity_required');
     expect(v3Body).not.toContain('linearQuantity');
+  });
+});
+
+describe('captured live turn: a cierro asked in m² (2026-09-29)', () => {
+  // The first attempt did the right thing (left the m² out and asked for the
+  // linear meters and the height) but asked with goal "measurements"; the
+  // exemption accepted only "quantity", so the repair re-added the m² and fell
+  // into linear_quantity_required, ending in contingency.
+  const captured = JSON.parse(fs.readFileSync(
+    new URL('../fixtures/v3-line-items/captured-cierro-area-quantity.json', import.meta.url), 'utf8',
+  ));
+  const [askedWithMeasurements, repairWithArea] = captured.proposals;
+
+  test('asking for the linear meters and height with goal measurements is valid', () => {
+    expect(askedWithMeasurements.primary_request).toEqual({ goal_id: 'measurements', item_ref: 'new:1' });
+    expect(validateV3AiProposal(captured.policy, askedWithMeasurements).errors).toEqual([]);
+  });
+
+  test('asking the same with goal quantity stays valid', () => {
+    const proposal = { ...askedWithMeasurements, primary_request: { goal_id: 'quantity', item_ref: 'new:1' } };
+    expect(validateV3AiProposal(captured.policy, proposal).errors).toEqual([]);
+  });
+
+  test('recording the m² as the cierro quantity is still rejected', () => {
+    expect(validateV3AiProposal(captured.policy, repairWithArea).errors.map((error) => error.code))
+      .toEqual(['linear_quantity_required']);
+  });
+
+  test('another goal does not exempt the unrecorded m²', () => {
+    const proposal = { ...askedWithMeasurements, primary_request: { goal_id: 'commune', item_ref: null } };
+    expect(validateV3AiProposal(captured.policy, proposal).errors.map((error) => error.code))
+      .toContain('quantity_observation_required');
   });
 });

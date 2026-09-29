@@ -650,7 +650,7 @@ const isLinearOnlyProductV31 = (policy, product, groundingRefs = []) => {
   return groundingEntries(policy).some((entry) => entry?.concept === 'product'
     && LINEAR_ONLY_PRODUCT_REFS_V31.has(entry.ref) && sameGroundedValue(groundingValue(entry), name));
 };
-const linearQuantityInstructionV31 = (itemRef) => `Cierros are measured only in metros lineales (linear meters) plus the height (altura), never by area. Never record an area (m², metros cuadrados) as this item's quantity: drop this state_mutation and its quantity observation, and ask for the linear meters and the height with primary_request {"goal_id": "quantity", "item_ref": "${itemRef}"}.`;
+const linearQuantityInstructionV31 = (itemRef) => `Cierros are measured only in metros lineales (linear meters) plus the height (altura), never by area. Never record an area (m², metros cuadrados) as this item's quantity: drop this state_mutation and its quantity observation, and ask for the linear meters and the height with primary_request {"goal_id": "quantity", "item_ref": "${itemRef}"} (or "measurements" for the same item_ref); never re-add the area.`;
 const quoteNamesCatalogProductV31 = (policy, quote) => {
   const folded = foldForProductMatchV31(quote);
   if (!folded.trim()) return false;
@@ -1070,12 +1070,14 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       .map((entry) => entry.grounding_ref),
   ].filter((ref) => typeof ref === 'string');
   // Task 3c.21: when the only explicit quantity in the message is an area
-  // (m²) and the proposal asks for the quantity of a linear-only item
-  // (Cierros de Hormigón), leaving the m² out is the required behavior
-  // (linear_quantity_required), so this nag does not fire. Any other explicit
-  // quantity in the message still requires its observation.
+  // (m²) and the proposal asks for the linear meters (quantity) or the height
+  // (measurements) of a linear-only item (Cierros de Hormigón), leaving the m²
+  // out is the required behavior (linear_quantity_required), so this nag does
+  // not fire. Any other explicit quantity in the message still requires its
+  // observation.
   const asksLinearQuantityForAreaOnlyMessage = isObject(primaryRequest)
-    && primaryRequest.goal_id === 'quantity' && typeof primaryRequest.item_ref === 'string'
+    && (primaryRequest.goal_id === 'quantity' || primaryRequest.goal_id === 'measurements')
+    && typeof primaryRequest.item_ref === 'string'
     && !hasExplicitQuantityEvidence(messageText.replace(AREA_QUANTITY_IN_MESSAGE_V31, ' '))
     && isLinearOnlyProductV31(
       policy,
