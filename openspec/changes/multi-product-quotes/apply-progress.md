@@ -932,6 +932,38 @@ Known gap (not a validator rule): `wire-correction[4]` and `wire-correction-hash
 | Full checks | `npm test` → 82 files passed, 17 skipped; 1106 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
 | Rollback boundary | Revert the new validator check and constant, the distributive instruction sentence, the repair-enum condition, `V31_ITEM_REQUEST_GOAL_RULE`, their tests, the new fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
 
+## Catalog product synonyms (3c.19)
+
+Contract v3.1 only. Live 2026-09-29 the customer wrote "Bloques de cemento"; the bot asked "¿Te refieres a Bloques de Hormigón?", the customer asked "¿es lo mismo o no?", and the bot answered "No necesariamente… no puedo confirmar que sea exactamente lo mismo". The grounding only carried catalog names, and `service_keywords` are generic (piso, exterior…) and never reach the model.
+
+Changes:
+- **Data (migration 026).** `infra/postgres/migrations/026_catalog_product_synonyms.sql` sets `catalog_items.metadata.synonyms` (JSON array of strings) for the 24 active products with one `UPDATE … FROM (VALUES …)` keyed by sku, via `jsonb_set` on the `synonyms` key only, and skips rows that already hold the same list (a second run updates 0 rows). The rollback `infra/postgres/rollback/026_catalog_product_synonyms.down.sql` removes only that key for the same skus; it lives outside `migrations/` so `reset-test-db.mjs` never applies it forward. Inactive products (`adocesped`, `maceteros`) are not touched.
+- **Synonym rules.** Each synonym maps to exactly one product after accent/case folding, never equals a product name, and shared generic terms (pandereta, placa, poste, alambre, bloque, cierre, tapa, borde, maceta…) are never synonyms, so they keep the clarification flow. Overlapping phrases resolve by longest match; the only overlap with another product's name is "placas de 50" inside "Placas de 50 cm Reforzadas", and the test proves the longer name wins.
+- **Loader.** `01_load_active_context.sql` appends `{"synonyms": …}` to a grounding entry only when `metadata.synonyms` is a non-empty array, so every entry without synonyms keeps the exact `{ref, concept, value}` shape.
+- **Policy builder.** `buildV3PolicyInput` keeps synonyms for `version: 'v3.1'` (distinct, trimmed, non-empty strings; key dropped when none survive) and strips the key for v3. The v3 policy, its `policy_digest` and the v3 request are therefore identical with or without synonyms in the database. The v3.1 digests change when synonyms are present, as expected; `compileV3TurnPolicy` clones the entries unchanged and `policy_digest` pinning still works.
+- **Prompt.** New v3.1-only `V31_CATALOG_SYNONYMS_RULE`, after `V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE`: a listed synonym is that product (catalog_resolutions matched with its grounding_ref, canonical normalized_value, the customer's exact text as evidence, no question); "cemento", "concreto" and "hormigón" are interchangeable in product names, except the product Cemento (the bag/sack); longest match wins; never say a listed synonym "no necesariamente es lo mismo"; shared generic terms still need ambiguous. The model sees the synonyms inside `turn_policy.grounding.catalog`.
+- **Validator.** New `productRefsMentionedV31(entries, text)` (exported): whole-phrase mentions of a product's name or synonyms, accents/case/punctuation folded, a phrase inside a longer phrase of another product dropped. `quoteNamesCatalogProductV31` (repair guidance only) and the 3c.17 `itemsNamedByMessageV31` now also count a synonym as naming its product; both are unchanged when the catalog has no synonyms (every captured fixture). There is no other evidence check tying a matched resolution to the product name, so a synonym-matched resolution was already accepted.
+
+Known pre-existing gap (unchanged): the 3c.17 matcher still uses plain substring matching for full product names, so "bloques de cemento" also names a Cemento item when both are in the quote. The new synonym path does not have this problem.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.19 data | `tests/unit/catalog-product-synonyms-migration.test.js` | Unit | `npm test` green before the change | Suite failed: migration file missing | 12/12 passed | Every synonym alone names only its product; every product name alone names only itself; "placa de 50 (cm) reforzada", "bloques de cemento", "pandereta con placa y poste" | Replaced "no synonym inside another name" with the stronger longest-match property after "placas de 50" surfaced |
+| 3c.19 flow | `tests/unit/v3-v31-catalog-synonyms.test.js` | Unit | Distributive, spurious-resolution and prompt suites green | 7/13 failed: loader clause, builder sanitize/strip, prompt rule, distributive synonym naming, spurious guidance | 13/13 passed | Same distributive message without synonyms keeps `item_evidence_span_conflict` with `allowed_values` [adoquín]; an unnamed item stays excluded | None needed |
+| 3c.19 SQL | `tests/integration/catalog-product-synonyms.postgres.test.js`, `tests/integration/v3-policy-grounding.postgres.test.js` | Integration | Existing grounding suite 4/4 | New cases written before running against the test stack | 3/3 and 6/6 passed | Empty and non-array synonyms are omitted; v3 policy entry has no synonyms | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | All captured fixtures in `tests/fixtures/v3-line-items/` (no synonyms) keep their outcomes; live-evidence 15/15, distributive-assignment 26/26, spurious-resolution 9/9 unchanged |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; v3 policies built with and without synonyms are deep-equal with the same `policy_digest` |
+| Full checks | `npm test` → 84 files passed, 18 skipped; 1131 tests passed, 159 skipped. `npm run test:integration:postgres` (dedicated test stack) → 18 files, 159/159. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Deploy order | 1) apply migration 026 to the live DB (safe alone: the current loader ignores `metadata.synonyms`); 2) deploy the three workflows. Deploying workflows first is also safe (no synonyms yet → grounding unchanged). |
+| Rollback boundary | Revert the loader clause, the builder sanitize/strip, `V31_CATALOG_SYNONYMS_RULE`, `productRefsMentionedV31` and its two call sites, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit; on the DB run the 026 down file. No runtime deploy, env change, live send or migration apply occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
