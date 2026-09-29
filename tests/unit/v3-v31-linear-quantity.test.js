@@ -256,6 +256,13 @@ describe('the v3.1 prompt explains muros and linear meters; v3 stays unchanged',
     expect(rule).toContain('no forman parte de los cierros');
   });
 
+  test('the rule asks for linear meters kindly, never saying the area "no sirve"', () => {
+    const rule = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n').find((line) => line.startsWith(RULE_START));
+    expect(rule).toContain('con amabilidad');
+    expect(rule).toContain('nunca digas que el dato del cliente "no sirve"');
+    expect(rule).toContain('"Para los cierros trabajamos con metros lineales y altura');
+  });
+
   test('v3 does not get the rule', () => {
     expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain(RULE_START);
   });
