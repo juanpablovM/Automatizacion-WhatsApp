@@ -24,7 +24,7 @@ describe('Prepare Follow-Up Message — real n8n Code node wrapper', () => {
     ]);
 
     expect(output).toHaveLength(1);
-    expect(output[0].json.follow_up_text).toContain('aun no tuvimos novedades tuyas');
+    expect(output[0].json.follow_up_text).toContain('Aún no tenemos novedades tuyas');
     expect(output[0].json.follow_up_text).not.toContain('{{nombre}}');
     expect(output[0].json.follow_up_will_send).toBe(true);
     expect(output[0].json.response_kind).toBe('follow_up_day_3');

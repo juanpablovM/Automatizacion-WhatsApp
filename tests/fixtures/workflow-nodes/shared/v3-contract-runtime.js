@@ -346,8 +346,14 @@ const hasExplicitConfirmation = (value) => {
   return /\b(confirmo|confirmado|de acuerdo|adelante|procedan|proceder|procede|avancemos|pueden avanzar|quiero avanzar)\b/.test(text);
 };
 
+// Task 3c.22: replies use WhatsApp formatting (*bold*, _italics_, ~strike~).
+// Every reply_text text check reads the text as the customer sees it, without
+// those markers, so "ya *derivado*" or "*Tu cotización* ya está en proceso"
+// never slips past a forbidden claim and a bolded factory address still counts.
+const replyTextWithoutWhatsAppFormatting = (value) => String(value ?? '').replace(/[*_~]/g, '');
+
 const isGenericProductRequestion = (value) => {
-  const text = String(value ?? '')
+  const text = replyTextWithoutWhatsAppFormatting(value)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('es')
@@ -1277,7 +1283,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
       continue;
     }
-    if (pattern.test(proposalObject.reply_text || '')) {
+    if (pattern.test(replyTextWithoutWhatsAppFormatting(proposalObject.reply_text))) {
       errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
     }
   }
@@ -1391,7 +1397,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
   const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
   if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
-  const normalizedReplyText = String(proposalObject.reply_text || '')
+  const normalizedReplyText = replyTextWithoutWhatsAppFormatting(proposalObject.reply_text)
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
@@ -1753,7 +1759,7 @@ const validateV3AiProposalV3 = (policy, proposal) => {
       errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
       continue;
     }
-    if (pattern.test(proposalObject.reply_text || '')) {
+    if (pattern.test(replyTextWithoutWhatsAppFormatting(proposalObject.reply_text))) {
       errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
     }
   }
@@ -1816,7 +1822,7 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
   const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
   if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
-  const normalizedReplyText = String(proposalObject.reply_text || '')
+  const normalizedReplyText = replyTextWithoutWhatsAppFormatting(proposalObject.reply_text)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');

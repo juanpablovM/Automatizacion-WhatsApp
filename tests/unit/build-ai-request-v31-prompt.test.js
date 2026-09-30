@@ -53,15 +53,21 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(systemPromptFor('ai_prd_turn_policy/v3.1')).toContain(rule);
     expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain(rule);
   });
-  test('exactly one v3 line is removed (the D5 allowlisted clause), every other v3 line survives verbatim', () => {
+  // Only the allowlisted v3 lines are replaced: the D5 clause, plus the three
+  // WhatsApp-presentation lines of task 3c.22 (one-emoji rule, loose "•"
+  // summary line, new-request example with 😊). Every other v3 line survives.
+  test('only the allowlisted v3 lines are replaced, every other v3 line survives verbatim', () => {
     const v3Lines = systemPromptFor('ai_prd_turn_policy/v3').split('\n');
     const v31Lines = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n');
 
     const removed = v3Lines.filter((line) => !v31Lines.includes(line));
-    expect(removed).toHaveLength(1);
-    expect(removed[0]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
+    expect(removed).toHaveLength(4);
+    expect(removed[0]).toContain('Excepción: si el mensaje del cliente pide una nueva cotización');
+    expect(removed[1]).toContain('Usa emojis con moderación: como máximo uno por mensaje');
+    expect(removed[2]).toBe('Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.');
+    expect(removed[3]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
 
-    const kept = v3Lines.filter((line) => line !== removed[0]);
+    const kept = v3Lines.filter((line) => !removed.includes(line));
     for (const line of kept) {
       expect(v31Lines).toContain(line);
     }

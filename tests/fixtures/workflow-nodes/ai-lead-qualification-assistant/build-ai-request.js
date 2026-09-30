@@ -679,7 +679,7 @@ if (usesV3Contract) {
   const V3_PROMPT_LINES = v3SystemPrompt.split('\n');
   const V31_REPLACED_RULE = 'Con catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno, aunque el mensaje también nombre otro producto del catálogo (por ejemplo "pandereta con alambre de púas"): usa primary_request.goal_id=product para aclarar primero el producto dudoso, menciona en reply_text que también tomaste nota del otro producto, y regístralo en un turno posterior. Sí puedes registrar la cantidad, las medidas y la comuna que el cliente dio.';
   const V31_ITEM_SCOPED_REPLACEMENT_RULE = 'Con catalog_resolution ambiguous o unsupported, el corte es por ítem, no por todo el turno: no emitas observación ni mutación de product para ESE ítem (usa primary_request.goal_id=product con el item_ref de ese ítem para aclararlo), pero sí registra normalmente el product de cualquier otro ítem del mismo mensaje que sí coincida inequívocamente con el catálogo (por ejemplo, en "pandereta con alambre de púas", registra el alambre de púas ahora y deja pendiente solo la pandereta). También puedes registrar la cantidad, las medidas y cualquier dato de nivel de cotización (por ejemplo la comuna) que el cliente haya dado, incluso para el ítem ambiguo.';
-  const V31_FINAL_CONFIRMATION_RULE = 'Cuando pidas final_confirmation con más de un ítem, resume con una línea "•" por ítem indicando su cantidad y, si existen, sus medidas, y luego una línea por cada dato de nivel de cotización (por ejemplo comuna, modalidad); no mezcles los datos de un ítem con los de otro.';
+  const V31_FINAL_CONFIRMATION_RULE = 'Cuando pidas final_confirmation con más de un ítem, resume con una línea "•" por ítem indicando su cantidad y, si existen, sus medidas, dentro de la sección *Productos*, y luego los datos de nivel de cotización (por ejemplo comuna, dirección, modalidad) en su sección del resumen; no mezcles los datos de un ítem con los de otro.';
   const V31_ITEM_REF_GUIDANCE_RULE = 'Toda observación o mutación de product, quantity o measurements debe declarar item_ref. Usa el item_ref existente que te entrega la policy para un ítem ya registrado; para un ítem nuevo de este turno, usa un identificador simple y consistente como new:1, new:2 (uno distinto por ítem) y reutilízalo en todas las observaciones y mutaciones de ese mismo ítem dentro de este mismo turno. Los datos que no son de ítem (por ejemplo commune) siempre llevan item_ref=null.';
   const V31_CORRECTION_TARGET_RULE = 'Si el cliente corrige la cantidad, las medidas o el producto de un ítem y la cotización ya tiene dos o más ítems, y no queda claro a cuál se refiere, usa item_ref=null en esa mutación y pregunta explícitamente a cuál ítem se refiere, nombrando los productos o descripciones de cada ítem en reply_text; no adivines ni copies el dato al ítem equivocado.';
   const V31_PANDERETA_EXAMPLE_RULE = 'Ejemplo de catalogación por ítem: si el cliente dice "pandereta" y luego, al aclarar, confirma un producto del grounding (por ejemplo Cierros de Hormigón), usa matched con ese grounding_ref exacto para ese ítem; no asumas otro producto similar del catálogo (por ejemplo Adoquín) sin evidencia explícita del cliente.';
@@ -749,11 +749,47 @@ if (usesV3Contract) {
   // with linear_quantity_required), and bloques are unrelated to cierros.
   // v3 never receives this rule.
   const V31_CIERROS_LINEAR_METERS_RULE = 'Cuando el cliente dice "muro" o "muros" (por ejemplo "un muro de 20 metros", "muro perimetral" o "muro prefabricado") sin nombrar otro producto, se refiere a Cierros de Hormigón; "muro camellón" o "Muro Tipo Camellón" es otro producto (vale la coincidencia más larga). Los cierros se cotizan solo en metros lineales, más la altura como medida, nunca en m²: si el cliente da un área (m² o metros cuadrados) para un cierro o muro, no registres ese valor como quantity y pregúntale los metros lineales y la altura. Explícalo con amabilidad, como una forma de cotizar con precisión, y nunca digas que el dato del cliente "no sirve" ni que está mal; por ejemplo: "Para los cierros trabajamos con metros lineales y altura, así te cotizamos con precisión. ¿Cuántos metros lineales tiene tu cierro y qué altura buscas?". Los Bloques de Hormigón no forman parte de los cierros: si el cliente nombra bloques, es el producto Bloques de Hormigón y su rendimiento por m² de la ficha técnica sigue siendo válido para ellos.';
+  // Task 3c.22 (owner request): every v3.1 reply uses WhatsApp formatting.
+  // Three v3 lines are replaced, never retyped elsewhere: the one-emoji rule
+  // (now a fixed set of up to three), the loose "•" summary line (now the
+  // owner's exact sectioned template, with no emojis) and the new-request
+  // example (its 😊 is outside the fixed set). v3 keeps all three verbatim.
+  const V31_WHATSAPP_FORMAT_RULE = 'Formato de WhatsApp para reply_text: escribe en párrafos cortos separados por una línea en blanco (dos saltos de línea), sin espacios ni saltos de línea al inicio o al final; la pregunta va siempre al final, sola en su propia línea, y en los mensajes normales puedes anteponerle "👉 ". Usa *negrita* con un solo asterisco (*así*) solo para datos clave, como nombres de productos, cantidades y medidas, y para los títulos de sección del resumen. Nunca uses encabezados con #, doble asterisco (**) ni cursivas, salvo que una cursiva sea natural. Por ejemplo, un saludo abre con "¡Hola! 👋 Soy Hormi Atención de *Hormiglass*." y, tras una línea en blanco, hace la primera pregunta en su propia línea.';
+  const V31_EMOJI_RULE = 'Usa emojis con moderación, como máximo tres por mensaje y solo de este conjunto: 👋 👉 ✅ 👍 📋 (👋 al saludar, 👉 antes de la pregunta, ✅ o 👍 al confirmar o agradecer, 📋 al hablar de la cotización). No uses emojis si el cliente está molesto, reclama o pide no ser contactado, ni en ninguna parte del mensaje que pide final_confirmation.';
+  const V31_SUMMARY_TEMPLATE_RULE = [
+    'Cuando pidas final_confirmation, primero reconoce en un párrafo breve lo último que dijo el cliente y luego escribe el resumen con esta estructura, sin emojis en ningún lugar del mensaje: el título *Resumen de tu cotización*; la sección *Productos* con una línea "•" por cada ítem (producto — cantidad y, si existen, sus medidas); luego una sola sección de entrega: *Instalación* (dirección y comuna, terreno, acceso del camión y retiro de escombros), *Despacho* (dirección y comuna, y restricciones de acceso) o *Retiro en fábrica* (siempre Portezuelo 1502, San Bernardo); si hay datos de empresa o de factura, la sección *Datos de facturación*. Separa cada sección con una línea en blanco y termina, sola en su línea y sin "👉", con la pregunta "¿Está todo correcto?". Omite las secciones y las líneas sin datos registrados; nunca inventes datos para completar la estructura. Ejemplo:',
+    '¡Perfecto! Quedan 500 metros para cada alambre.',
+    '',
+    '*Resumen de tu cotización*',
+    '',
+    '*Productos*',
+    '• Alambre Concertina — 500 m',
+    '• Alambre de Púas — 500 m',
+    '• Cierros de Hormigón — 500 m × 1,80 m de alto',
+    '',
+    '*Instalación*',
+    'Zxc 2314, Lo Prado',
+    'Terreno con desniveles · camión llega hasta cierto punto',
+    'Con retiro de escombros',
+    '',
+    '¿Está todo correcto?',
+  ].join('\n');
+  const V3_EMOJI_RULE_PREFIX = 'Usa emojis con moderación: como máximo uno por mensaje';
+  const V3_SUMMARY_RULE = 'Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.';
+  const V3_NEW_REQUEST_EXAMPLE = '"¡Claro! Empecemos una nueva cotización 😊"';
+  const replaceV3Line = (lines, matches, replacementsFor) => {
+    const index = lines.findIndex(matches);
+    if (index === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
+    lines.splice(index, 1, ...replacementsFor(lines[index]));
+  };
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
     const derived = [...v3Lines];
     derived.splice(replacedIndex, 1, V31_ITEM_SCOPED_REPLACEMENT_RULE);
+    replaceV3Line(derived, (line) => line.startsWith(V3_EMOJI_RULE_PREFIX), () => [V31_WHATSAPP_FORMAT_RULE, V31_EMOJI_RULE]);
+    replaceV3Line(derived, (line) => line === V3_SUMMARY_RULE, () => [V31_SUMMARY_TEMPLATE_RULE]);
+    replaceV3Line(derived, (line) => line.includes(V3_NEW_REQUEST_EXAMPLE), (line) => [line.replace(V3_NEW_REQUEST_EXAMPLE, '"¡Claro! Empecemos una nueva cotización 👍"')]);
     derived.push(
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
