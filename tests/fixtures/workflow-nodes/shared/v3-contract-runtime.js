@@ -352,6 +352,78 @@ const hasExplicitConfirmation = (value) => {
 // never slips past a forbidden claim and a bolded factory address still counts.
 const replyTextWithoutWhatsAppFormatting = (value) => String(value ?? '').replace(/[*_~]/g, '');
 
+// Task 3c.23: the model follows the 3c.22 presentation rules only partially,
+// so every v3.1 AI reply_text is tidied deterministically before validation,
+// digests and delivery. Whitespace only: it never adds, removes or reorders a
+// visible character (words, emojis, asterisks), never touches a "•" line, and
+// is idempotent. Rules, in order:
+//   a. trim every line end and the whole text; collapse 3+ newlines to 2;
+//   b. the final question (the line holding the last "?", when that "?" ends
+//      the line) moves to its own paragraph when earlier sentences share its
+//      line, splitting at the start of its sentence so a leading connector
+//      ("Para definir la instalación, ¿…?") stays with it;
+//   c. a short opening "¡…!" gets a blank line after it when two or more
+//      sentences follow on its line (one following sentence keeps the
+//      prompt's own "¡Hola! 👋 Soy Hormi…" / "¡Perfecto! Quedan…" shape).
+// A sentence boundary is "." or "!" (plus closing markers and trailing
+// emojis other than 👉, which leads the next sentence), whitespace, then a
+// sentence start (uppercase, ¿, ¡, a formatting marker or an emoji), never
+// after a known abbreviation such as "Av." or "aprox.".
+const WHATSAPP_ABBREVIATIONS_V31 = new Set([
+  'av', 'avda', 'nro', 'num', 'no', 'n°', 'sr', 'sra', 'srta', 'dr', 'dra', 'aprox', 'etc',
+  'depto', 'dpto', 'pje', 'psje', 'ej', 'mt', 'mts', 'mtr', 'mtrs', 'm', 'ml', 'cm', 'mm', 'km',
+  'kg', 'lt', 'lts', 'u', 'ud', 'uds', 'unid', 'cía', 'cia', 'ltda', 'sta', 'sto', 'st',
+]);
+const WHATSAPP_SENTENCE_BOUNDARY_V31 = /[.!][*_~"”»)]*(?:[ \t]*(?:(?!👉)[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}])+)*(?=[ \t]+(?:[\p{Lu}¿¡*_~]|\p{Extended_Pictographic}))/gu;
+const whatsAppSentenceBoundariesV31 = (line) => {
+  const boundaries = [];
+  for (const match of line.matchAll(WHATSAPP_SENTENCE_BOUNDARY_V31)) {
+    const before = line.slice(0, match.index);
+    const word = (before.match(/[\p{L}\p{N}°]+$/u) || [''])[0].toLocaleLowerCase('es');
+    if (match[0][0] === '.' && WHATSAPP_ABBREVIATIONS_V31.has(word)) continue;
+    const end = match.index + match[0].length;
+    const next = end + line.slice(end).match(/^[ \t]+/)[0].length;
+    boundaries.push({ end, next });
+  }
+  return boundaries;
+};
+const isWhatsAppBulletLineV31 = (line) => line.trimStart().startsWith('•');
+const formatWhatsAppReplyV31 = (value) => {
+  if (typeof value !== 'string') return value;
+  const lines = value.replace(/\r\n?/g, '\n').split('\n').map((line) => line.replace(/[ \t ]+$/u, ''));
+  // b. final question on its own paragraph.
+  const questionIndex = lines.map((line) => line.includes('?')).lastIndexOf(true);
+  if (questionIndex >= 0 && !isWhatsAppBulletLineV31(lines[questionIndex])) {
+    const line = lines[questionIndex];
+    const questionEnd = line.lastIndexOf('?');
+    const endsLine = /^[*_~"”»)]*[\s\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}]*$/u.test(line.slice(questionEnd + 1));
+    const boundary = endsLine ? whatsAppSentenceBoundariesV31(line.slice(0, questionEnd)).pop() : null;
+    if (boundary) lines[questionIndex] = `${line.slice(0, boundary.end)}\n\n${line.slice(boundary.next)}`;
+  }
+  let text = lines.join('\n');
+  // c. short opening exclamation followed by two or more sentences.
+  const opening = text.match(/^[ \t\n]*(¡[^!\n]{1,58}![*_~]*(?:[ \t]*(?:(?!👉)[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}])+)*)[ \t]+(?=[^ \t\n])/u);
+  if (opening) {
+    const restStart = opening[0].length;
+    const restLine = text.slice(restStart).split('\n')[0];
+    if (!isWhatsAppBulletLineV31(restLine) && whatsAppSentenceBoundariesV31(restLine).length > 0) {
+      text = `${text.slice(0, restStart).replace(/[ \t]+$/, '')}\n\n${text.slice(restStart)}`;
+    }
+  }
+  // a. whitespace cleanup.
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+// Applied once, where the v3.1 proposal enters validation, so the validated,
+// digested, stored and sent reply_text are the same bytes. v3 proposals (the
+// golden rollback path) and malformed proposals are returned by reference.
+const prepareV3ProposalForValidation = (policy, proposal) => {
+  if (policy?.version !== V3_CONTRACTS.policy_v3_1) return proposal;
+  if (!isObject(proposal) || typeof proposal.reply_text !== 'string') return proposal;
+  const replyText = formatWhatsAppReplyV31(proposal.reply_text);
+  return replyText === proposal.reply_text ? proposal : { ...proposal, reply_text: replyText };
+};
+
 const isGenericProductRequestion = (value) => {
   const text = replyTextWithoutWhatsAppFormatting(value)
     .normalize('NFD')
@@ -2075,4 +2147,6 @@ module.exports = {
   validateV3AiProposal,
   authorizeV3ConversationDecision,
   productRefsMentionedV31,
+  formatWhatsAppReplyV31,
+  prepareV3ProposalForValidation,
 };
