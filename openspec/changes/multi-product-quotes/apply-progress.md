@@ -1037,6 +1037,59 @@ Changes:
 | Deploy order | 1) apply migration 028 to the live DB after 026 (safe alone: only adds synonyms); 2) deploy the three workflows. |
 | Rollback boundary | Code: revert the validator rule and its nag exemption, `V31_CIERROS_LINEAR_METERS_RULE`, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit. DB: run the 028 down file. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
 
+## WhatsApp presentation for every bot message (3c.22)
+
+Owner request: every message the bot sends on WhatsApp uses short paragraphs separated by a blank line, the question last and alone on its line (normal messages may prefix "👉 "), single-asterisk *bold* only for key data and summary section titles, and at most three emojis from 👋 👉 ✅ 👍 📋. The final confirmation summary has no emojis and follows the owner's template (*Resumen de tu cotización*, *Productos* with one "•" line per item, then *Instalación*, *Despacho* or *Retiro en fábrica*, and *Datos de facturación* when present, ending with "¿Está todo correcto?"). Presentation only: no message changes what it promises.
+
+### Outgoing text inventory
+
+Production runs v3.1, so AI replies plus the deterministic control-turn copy are what customers see. Legacy-lane copy (reached only when a turn routes to the pre-v3 contract) is listed but left unchanged.
+
+| Source | Text (before → after) | Audience | Status |
+|---|---|---|---|
+| `build-ai-request.js` v3.1 prompt | AI `reply_text` | Customer | New format, emoji and summary rules (v3.1 only) |
+| `evaluate-conversation-step.js` re-engagement choice | "¡Hola de nuevo! ¿Prefieres…?" → "¡Hola de nuevo! 👋⏎⏎👉 ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?" | Customer | Changed |
+| same, postponement / courtesy | three one-liners → two paragraphs with 👍/👋 | Customer | Changed |
+| same, lost interest | "Entendido. Cerramos tu solicitud. Si…" → "Entendido, cerramos tu solicitud.⏎⏎Si necesitas algo más, aquí estaremos." | Customer | Changed (no emoji) |
+| same, opt-out | "Entendido. No te escribiremos más." | Customer | Unchanged (one short line, no emoji) |
+| same, `ESCALATION_ALREADY_REQUIRED_REPLY` | → "…del equipo 👍⏎⏎Si necesitas una cotización distinta, escribe *nueva cotización*." | Customer | Changed |
+| same, `COMMERCIAL_REVIEW_PENDING_REPLY` | → "Tu solicitud ya está registrada ✅⏎⏎Está pendiente de revisión por el equipo comercial." | Customer | Changed |
+| `apply-ai-assistance.js` escalation routing | loop: two paragraphs, no emoji; human requested: "Por supuesto 👍⏎⏎Te derivaré…"; generic line unchanged | Customer | Changed |
+| same, no-processing fallback | → "No pude procesar tu respuesta.⏎⏎👉 ¿Podrías intentarlo nuevamente?" | Customer | Changed |
+| `v3-saga-runtime.js` + `build-v3-repair.js` contingency | "No pude completar la gestión automática.⏎⏎Derivé el caso al equipo para revisión." and the loop variant in two paragraphs | Customer | Changed (both copies) |
+| Dispatcher `Prepare Verified Handoff` (inline in `wa-inbound-downstream-dispatcher.json`) | "Gracias, ya registré tu solicitud y quedó asignada al equipo comercial ✅⏎⏎Una ejecutiva…" / unassigned variant | Customer | Changed |
+| `prepare-follow-up-message.js` + `follow-up-policy.js` | 15 templates: "Hola {{nombre}} 👋⏎⏎…⏎⏎👉 ¿…?", voseo and missing accents fixed; empty name renders "Hola 👋" | Customer | Changed |
+| Legacy lane (`evaluate-conversation-step.js` greetings/base questions/`confirmationText`, `apply-ai-assistance.js` advisor questions, `confirmationText`, correction question) | "Tengo esto:…", "Hola, gracias por escribir a Hormiglass…", etc. | Customer | Unchanged: not reachable on the v3/v3.1 lane |
+| `crm-seller-notification-dispatch.json` `Build Seller Notification` | "Nuevo lead listo para gestionar…" | Seller | Unchanged: posted as a ClickUp comment, not WhatsApp |
+| `ops-handoff-notification-scheduler` / ClickUp payloads | task text | Seller | Unchanged: ClickUp, not WhatsApp |
+| `Build Quotation` (`quotation_text`) | internal quotation draft | — | Unchanged: never sent |
+
+### Compatibility
+
+- Delivery: `build-outbound-payload.js` only trims and sends `text` in a JSON body to Evolution `sendText`; newlines, asterisks and emojis pass through unchanged.
+- Validator: forbidden-claim patterns failed on bold before this change ("ya *derivado*", "*Tu cotización* ya está en proceso", "*stock* disponible" were accepted). Both validators now test those patterns, the factory-address rule and the generic-product-question check on `reply_text` without `*`, `_`, `~`. Stripping markers only adds matches to the forbidden patterns; for the address rule it accepts a bolded address that WhatsApp shows exactly.
+- Harness: `checkItemizedFinalConfirmation` counts lines starting with "•"; the owner template yields one per item.
+- Question count: the only "?" counter (`test-advisor-vitacura-e2e.sh`) still sees one question.
+- Cooldown: `wasSentWithinCooldown` compares exact text, so a terminal line sent with the old copy in the 6 h before deploy can be sent once more with the new copy.
+- E2E: `test-reengagement-n8n-e2e.sh` now expects the formatted re-engagement text (`E'…\n\n…'`); `test-advisor-vitacura-e2e.sh` still matches "ya registré tu solicitud".
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.22 prompt | `tests/unit/whatsapp-message-formatting.test.js`, `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Golden v3 test green | 4 prompt tests failed; the derivation test then failed on 4 removed lines | 16/16 + prompt block green | v3 keeps all three original lines; allowlist test names each replaced line | Replacement helper `replaceV3Line` throws if a source line disappears |
+| 3c.22 validator | same new file | Unit | 1221 passing before | 7 formatted forbidden-claim / address cases failed | green | Plain claims, formatted clean reply, pickup summary without address still rejected; v3 rollback validator covered | Shared `replyTextWithoutWhatsAppFormatting` |
+| 3c.22 fixed copy | same new file, `prepare-follow-up-message-wrapper.test.js` | Unit | Existing copy tests green | 15 exact-text / style tests failed | green | Style checker: no `**`/`#`, trimmed, ≤3 emojis from the set, one question on the last line | Follow-up `fillTemplate` drops the space before an empty name |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; brand-voice test on the deployed workflow still green |
+| Full checks | `npm test` → 90 files passed, 20 skipped; 1258 passed, 171 skipped locally. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant, shadow evaluator and follow-up scheduler workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; dispatcher semantic integrity 3/3; `git diff --check` passed. No SQL changed, so the Postgres suite was not rerun. |
+| Deploy order | Deploy the five workflow JSON files together (orchestrator, AI assistant, shadow evaluator, follow-up scheduler, downstream dispatcher). No DB change. |
+| Rollback boundary | Revert the prompt rules, the validator helper, the fixed copy, the dispatcher node copy, the tests, the e2e expectation, these docs and the regenerated workflows as one unit. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
 ## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
 
 With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
