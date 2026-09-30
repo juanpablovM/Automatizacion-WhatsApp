@@ -1112,3 +1112,38 @@ Observations, none blocking:
 - The claim handoff is routed to Ventas because `17_persist_v3_handoff_effect.sql` hardcodes the area for every v3 authorized handoff. This predates v3.1.
 - The claim turn also stored a product-only `Adoquín` item with no quantity.
 - Stored item quantities vary in shape (number, string, or object), and the multi-item requirement omits the unit when the quantity is a bare number (`• Pastelones — 80`).
+
+## Deterministic WhatsApp tidy-up of v3.1 AI replies (3c.23)
+
+Owner request: the live test after 3c.22 showed the model follows the presentation rules only partially ("…en Maipú. Para definir la instalación, ¿cómo es el terreno…?" with the question glued to the paragraph; "¡Gracias por confirmar! Tu solicitud quedó registrada. Una ejecutiva…" as one block). Every v3.1 AI reply is now tidied deterministically before it is validated and sent.
+
+### Where and why
+
+- `formatWhatsAppReplyV31` and `prepareV3ProposalForValidation` live in `shared/v3-contract-runtime.js`, already composed into `Validate And Authorize V3`.
+- `Validate And Authorize V3` is the single entry for both the first AI proposal and the repaired one (`Build V3 Repair` → `Execute AI Lead Qualification` → `Merge AI Assistance` → `Use V3 Contract?` → `Validate And Authorize V3`). The node formats `ai_proposal.reply_text` before `validateV3AiProposal`, and emits the formatted `ai_proposal`, so `proposal_digest` (= `digestObject(ai_proposal)`), `decision_id`, `reply.sha256`, `delivery_key`, `decision_digest`, the persisted decision and `response_text` all cover the same bytes. The formatter always returns trimmed text, so the send step's `trim()` keeps delivery receipts equal.
+- `validateV3AiProposal` / `authorizeV3ConversationDecision` stay pure over the proposal they receive, so their existing digest binding (`validation.proposal_digest === digestObject(proposal)`) is unchanged.
+- v3 (golden rollback path): `prepareV3ProposalForValidation` returns the same reference, and the node output is byte-identical to before.
+- Shadow evaluator: runtime code re-composed only; it still validates the raw proposal (diagnostic, never sent).
+
+### Rules (whitespace only, idempotent)
+
+1. Trim every line end and the whole text; collapse 3+ newlines to 2.
+2. The final question — the line holding the last "?", when that "?" ends the line — moves to its own paragraph when earlier sentences share its line. The split is at the start of its sentence, so "Para definir la instalación, ¿…?" stays together; a question that is the only sentence is left alone.
+3. A short opening "¡…!" (≤ 60 chars, with any trailing emoji other than 👉) gets a blank line after it when two or more sentences follow on its line. One following sentence keeps the prompt's own "¡Hola! 👋 Soy Hormi Atención de *Hormiglass*." and "¡Perfecto! Quedan 500 metros para cada alambre." shape.
+4. Sentence boundary: "." or "!" (plus closing markers and trailing emojis except 👉), whitespace, then uppercase, ¿, ¡, a formatting marker or an emoji; never after a known abbreviation ("Av.", "aprox.", "mts.").
+5. Never touches a "•" line, never adds, removes or reorders a visible character (words, emojis, asterisks).
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.23 formatter | `tests/unit/whatsapp-reply-formatter-v31.test.js` | Unit | 1258 passing before | 25/26 failed (functions missing) | 26/26 | Both live examples, greeting and summary examples untouched, bullets, question-only, abbreviations, question mid-line, idempotence and whitespace-only property over 7 inputs, non-string input | Shared sentence-boundary helper for rules 2 and 3 |
+| 3c.23 pipeline | same file, synced `Validate And Authorize V3` node | Integration (node code from the workflow JSON) | — | failed with the node unchanged | green | Formatted text equals `reply_text`, `response_text`, decision text; digests and delivery key recomputed; glued and pre-formatted replies share `decision_id`/`delivery_key`; forbidden claim and factory address rules still enforced; v3 proposal passes by reference | Node emits `ai_proposal` only when it changed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| v3 | v3 proposals untouched (by reference); v3 golden prompt and composition-differential tests green |
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated `Compile V3 Turn Policy`, `Validate And Authorize V3` (orchestrator) and both shadow evaluator nodes; `npm test` → 91 files passed, 20 skipped; 1284 passed, 171 skipped locally; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `git diff --check` passed. No SQL changed. |
+| Deploy order | Deploy the orchestrator and shadow evaluator workflow JSON files. No DB change. |
