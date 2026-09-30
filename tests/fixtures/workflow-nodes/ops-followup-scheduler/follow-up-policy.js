@@ -21,18 +21,18 @@ const FOLLOW_UP_MOTIVES = ['cotizacion_lead', 'lead_sin_respuesta'];
 // Mensajes por step y motivo. {{nombre}} se reemplaza si hay dato de contacto.
 const MESSAGES = {
   cotizacion_lead: {
-    0: 'Hola {{nombre}}, quedamos a tu disposicion por la cotizacion que consultaste. ¿Seguimos avanzando?',
-    1: 'Hola {{nombre}}, te escribimos para saber si queres seguir avanzando con tu consulta sobre la cotizacion.',
-    3: 'Hola {{nombre}}, aun no tuvimos novedades tuyas. Si ya resolviste, avisanos; si no, seguimos a disposicion.',
-    7: 'Hola {{nombre}}, te recordamos que tu cotizacion sigue vigente. ¿Queres que la retomemos hoy?',
-    14: 'Hola {{nombre}}, este es nuestro ultimo recordatorio por este tema. Si seguis necesitando la cotizacion, escribinos cuando quieras.',
+    0: 'Hola {{nombre}} 👋\n\nQuedamos a tu disposición por la cotización que consultaste.\n\n👉 ¿Seguimos avanzando?',
+    1: 'Hola {{nombre}} 👋\n\nTe escribimos para saber si quieres seguir avanzando con tu consulta sobre la cotización.',
+    3: 'Hola {{nombre}} 👋\n\nAún no tenemos novedades tuyas. Si ya lo resolviste, avísanos; si no, seguimos a tu disposición.',
+    7: 'Hola {{nombre}} 👋\n\nTe recordamos que tu cotización sigue vigente.\n\n👉 ¿Quieres que la retomemos hoy?',
+    14: 'Hola {{nombre}} 👋\n\nEste es nuestro último recordatorio por este tema. Si sigues necesitando la cotización, escríbenos cuando quieras.',
   },
   lead_sin_respuesta: {
-    0: 'Hola {{nombre}}, te vimos escribiendo antes y nos quedamos con tu consulta. ¿En que podemos ayudarte?',
-    1: 'Hola {{nombre}}, queriamos retomar la consulta que nos dejaste. ¿Seguimos necesitando algo?',
-    3: 'Hola {{nombre}}, te buscamos por tu consulta anterior. Si ya no te hace falta, avisanos; si seguis interesado, aqui estamos.',
-    7: 'Hola {{nombre}}, te volvemos a escribir por tu consulta en Hormiglass. ¿Queres retomarla?',
-    14: 'Hola {{nombre}}, ultimo recordatorio por tu consulta en Hormiglass. Cuando quieras, seguimos a disposicion.',
+    0: 'Hola {{nombre}} 👋\n\nVimos que nos escribiste antes y nos quedamos con tu consulta.\n\n👉 ¿En qué podemos ayudarte?',
+    1: 'Hola {{nombre}} 👋\n\nQueríamos retomar la consulta que nos dejaste.\n\n👉 ¿Sigues necesitando algo?',
+    3: 'Hola {{nombre}} 👋\n\nTe buscamos por tu consulta anterior. Si ya no te hace falta, avísanos; si sigues interesado, aquí estamos.',
+    7: 'Hola {{nombre}} 👋\n\nTe volvemos a escribir por tu consulta en *Hormiglass*.\n\n👉 ¿Quieres retomarla?',
+    14: 'Hola {{nombre}} 👋\n\nÚltimo recordatorio por tu consulta en *Hormiglass*. Cuando quieras, seguimos a tu disposición.',
   },
 };
 

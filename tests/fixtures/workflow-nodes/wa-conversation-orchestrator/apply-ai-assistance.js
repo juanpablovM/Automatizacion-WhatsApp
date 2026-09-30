@@ -1121,10 +1121,10 @@ const LOOP_ESCALATION_REASONS = new Set([
 ]);
 const escalationRoutingText = () => {
   if (antiRepeatHandoff || LOOP_ESCALATION_REASONS.has(deterministic.escalation_reason)) {
-    return 'No quiero hacerte repetir lo mismo. Te derivaré con una persona del equipo para continuar.';
+    return 'No quiero hacerte repetir lo mismo.\n\nTe derivaré con una persona del equipo para continuar.';
   }
   if (deterministic.escalation_reason === 'human_requested') {
-    return 'Por supuesto. Te derivaré con una persona del equipo para que continúe contigo.';
+    return 'Por supuesto 👍\n\nTe derivaré con una persona del equipo para que continúe contigo.';
   }
   if (deterministic.escalation_reason === 'measurement_assistance_requested') return deterministic.deterministic_reply;
   return 'Voy a derivarte con una persona del equipo para que revise tu caso en detalle.';
@@ -1245,7 +1245,7 @@ const selectResponseText = () => {
 
   // PRIORITY 4: Fallback to deterministic
   return {
-    text: deterministic.response_text || deterministic.deterministic_reply || 'No pude procesar tu respuesta. ¿Podrías intentarlo nuevamente?',
+    text: deterministic.response_text || deterministic.deterministic_reply || 'No pude procesar tu respuesta.\n\n👉 ¿Podrías intentarlo nuevamente?',
     kind: deterministic.response_kind || 'deterministic_fallback',
   };
 };

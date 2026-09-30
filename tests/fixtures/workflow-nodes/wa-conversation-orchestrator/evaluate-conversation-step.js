@@ -60,8 +60,10 @@ const SUPPRESSED_REPLY_KIND = 'reply_suppressed';
 // and still greets a real customer who comes back the next morning.
 const TERMINAL_REPLY_COOLDOWN_HOURS = 6;
 
-const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo. Si necesitas una cotización distinta, escribe "nueva cotización".';
-const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada y pendiente de revisión por el equipo comercial.';
+// Task 3c.22: fixed customer copy follows the WhatsApp presentation (short
+// paragraphs, *bold* key words, emojis only from 👋 👉 ✅ 👍 📋).
+const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.';
 
 // A sticker or a reaction carries no requirement a human could quote, and the
 // pending-context branch already treats both as passive. Every other
@@ -685,7 +687,7 @@ function evaluateConversationStep(row) {
     responseKind = 'escalation_routing';
     responseText = isOptOut
       ? 'Entendido. No te escribiremos más.'
-      : 'Entendido. Cerramos tu solicitud. Si necesitas algo más, aquí estaremos.';
+      : 'Entendido, cerramos tu solicitud.\n\nSi necesitas algo más, aquí estaremos.';
     conversationStatusCode = 'closed';
   }
 
@@ -821,10 +823,10 @@ function evaluateConversationStep(row) {
     const courtesy = /^(?:muchas )?gracias(?: por (?:todo|la ayuda|tu ayuda|su ayuda))?$|^(?:chao|chau|hasta luego|adios|hasta manana|nos vemos)$/.test(normalizedText);
     const passiveNonText = ['reaction', 'sticker'].includes(messageType) || !normalizedText;
     responseText = passiveNonText ? ''
-      : tomorrowPostponement ? 'De acuerdo, dejamos la conversación pendiente para mañana. Cuando retomes, seguimos con tu solicitud.'
-      : unsupportedPostponement ? 'De acuerdo, lo dejamos pendiente. Cuando quieras retomar, seguimos con tu solicitud.'
-      : courtesy ? 'Gracias. Aquí estaremos cuando quieras retomar.'
-      : '¡Hola de nuevo! ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?';
+      : tomorrowPostponement ? 'De acuerdo, dejamos la conversación pendiente para mañana 👍\n\nCuando retomes, seguimos con tu solicitud.'
+      : unsupportedPostponement ? 'De acuerdo, lo dejamos pendiente 👍\n\nCuando quieras retomar, seguimos con tu solicitud.'
+      : courtesy ? '¡Gracias! 👋\n\nAquí estaremos cuando quieras retomar.'
+      : '¡Hola de nuevo! 👋\n\n👉 ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?';
   }
 
   // 6. NUEVA SOLICITUD: handoff ya hecho O firstInteraction + quiere nueva

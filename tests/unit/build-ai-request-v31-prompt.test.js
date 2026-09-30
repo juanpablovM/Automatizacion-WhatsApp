@@ -48,15 +48,26 @@ describe('Build AI Request — v3 prompt stays byte-identical after the v3.1 ref
 });
 
 describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped', () => {
-  test('exactly one v3 line is removed (the D5 allowlisted clause), every other v3 line survives verbatim', () => {
+  test('installation is only offered with delivery in v3.1, without changing the pinned v3 prompt', () => {
+    const rule = 'La instalación solo se ofrece con despacho';
+    expect(systemPromptFor('ai_prd_turn_policy/v3.1')).toContain(rule);
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain(rule);
+  });
+  // Only the allowlisted v3 lines are replaced: the D5 clause, plus the three
+  // WhatsApp-presentation lines of task 3c.22 (one-emoji rule, loose "•"
+  // summary line, new-request example with 😊). Every other v3 line survives.
+  test('only the allowlisted v3 lines are replaced, every other v3 line survives verbatim', () => {
     const v3Lines = systemPromptFor('ai_prd_turn_policy/v3').split('\n');
     const v31Lines = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n');
 
     const removed = v3Lines.filter((line) => !v31Lines.includes(line));
-    expect(removed).toHaveLength(1);
-    expect(removed[0]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
+    expect(removed).toHaveLength(4);
+    expect(removed[0]).toContain('Excepción: si el mensaje del cliente pide una nueva cotización');
+    expect(removed[1]).toContain('Usa emojis con moderación: como máximo uno por mensaje');
+    expect(removed[2]).toBe('Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.');
+    expect(removed[3]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
 
-    const kept = v3Lines.filter((line) => line !== removed[0]);
+    const kept = v3Lines.filter((line) => !removed.includes(line));
     for (const line of kept) {
       expect(v31Lines).toContain(line);
     }
@@ -90,5 +101,129 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v31Prompt).toContain('item_ref');
     expect(v31Prompt).toContain('Cierros de Hormigón');
     expect(v31Prompt).toContain('pregunta explícitamente a cuál ítem se refiere');
+  });
+
+  // Slice 3c follow-up (live A/B round 2): 3 of 20 first-turn proposals and
+  // 1 of 6 valid corrections misattributed a quantity/measurement across
+  // items. Task 3c.7's validator rule only catches the *duplicated*-evidence
+  // shape; these v3.1-only prompt additions (design's spec: "the system MUST
+  // NOT copy one item's quantity or measurements to another item without
+  // explicit evidence for that item") target the *moved*/split shapes the
+  // validator cannot detect deterministically.
+  test('v3.1 adds a rule against copying or moving a quantity/measurement between items, and against splitting one product into two items', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt).toContain('no lo dividas en dos ítems distintos');
+    expect(v3Prompt).not.toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v3Prompt).not.toContain('no lo dividas en dos ítems distintos');
+  });
+
+  test('v3.1 adds a rule that a correction naming an item\'s product or label applies only to that item', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('esa corrección se aplica únicamente a ese ítem');
+    expect(v3Prompt).not.toContain('esa corrección se aplica únicamente a ese ítem');
+  });
+
+  // Live canary 2026-09-27: on the final-confirmation turn ("Sí, está todo
+  // correcto") the model re-resolved an already-known item's product with a
+  // catalog_resolutions entry citing "todo". The validator correctly rejects
+  // it; this v3.1-only rule keeps the model from emitting it in the first place.
+  test('v3.1 adds a rule that catalog_resolutions only cover a product named in this message', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v31Prompt).toContain('catalog_resolutions=[]');
+    expect(v3Prompt).not.toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live A/B 2026-09-28 (pandereta-live-then-wire-correction): on "Corrección:
+  // el alambre de púas son 300 ml, no 500 ml" the model emitted a replace for
+  // the wire item's quantity although that item had no quantity fact, and the
+  // validator rejected it. This v3.1-only rule says a correction of a value
+  // that was never recorded is a set with replaces_fact_id null.
+  test('v3.1 adds a rule to replace only an existing fact and set a never-recorded item value', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v31Prompt).toContain('usa set con replaces_fact_id=null');
+    expect(v3Prompt).not.toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-09-28 (conversation 347): "pandereta ... con
+  // concertina y alambre pua" produced matched product observations for the
+  // two wires with no product state_mutation, so both products vanished from
+  // the lead. The validator now rejects that shape (item_product_not_recorded);
+  // this v3.1-only rule says every requested product is its own item with its
+  // own product set mutation.
+  test('v3.1 adds a rule that every requested product is its own item with its own product mutation', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Cada producto que el cliente pide');
+    expect(v31Prompt).toContain('nunca dejes una observación de product sin su mutación');
+    expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
+  // concertina y de alambre de púas?" the customer answered "500 metros de
+  // cada uno" and the model set 500 m only on the concertina item. This
+  // v3.1-only rule says an explicit distributive value is recorded on each
+  // item it refers to (one observation+mutation per item, same quote), which
+  // is not a cross-item copy; the no-transfer rule stays intact. Task 3c.17
+  // extends it to measurements and adds the owner's limits: only items
+  // missing the field, only the named items when the message names any, and
+  // an item-assignment question (never final_confirmation/create_lead) when
+  // it names none and the value lands on two or more items.
+  test('v3.1 adds a rule that an explicit distributive quantity or measurement is recorded on each item it refers to', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Una cantidad o medida explícitamente distributiva');
+    expect(v31Prompt).toContain('"500 metros de cada uno"');
+    expect(v31Prompt).toContain('"2 metros de alto cada uno"');
+    expect(v31Prompt).toContain('una observación y una mutación set por cada ítem');
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt.indexOf('Una cantidad o medida explícitamente distributiva'))
+      .toBeGreaterThan(v31Prompt.indexOf('Nunca copies ni traslades una cantidad o medida de un ítem a otro'));
+    expect(v3Prompt).not.toContain('explícitamente distributiva');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+
+  test('v3.1 distributive rule: fill only missing values, only named items, and confirm the assignment first when none is named', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Solo completa ítems que aún no tienen ese dato');
+    expect(v31Prompt).toContain('para cambiarlo, el cliente debe nombrar ese producto');
+    expect(v31Prompt).toContain('Si el mensaje nombra productos, aplícala solo a los ítems nombrados');
+    expect(v31Prompt).toContain('no pidas final_confirmation ni emitas create_lead');
+    expect(v31Prompt).toContain('"¿Los 500 metros son para la concertina y para el alambre de púas?"');
+    expect(v31Prompt).toContain('primary_request.goal_id igual a ese campo (quantity o measurements) y el item_ref de uno de esos ítems');
+    expect(v3Prompt).not.toContain('Solo completa ítems que aún no tienen ese dato');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Task 3c.18, live 2026-09-28: the model asked "¿con 'pandereta' te
+  // refieres a cierros de hormigón?" and the distributive assignment
+  // question with primary_request.goal_id="name" plus an item_ref. The
+  // validator now rejects an item_ref on a quote-level goal
+  // (primary_request_item_ref_invalid); this v3.1-only rule says name is only
+  // the customer's own name and item questions use the item goals.
+  test('v3.1 adds a rule that goal_id=name is only the customer name and item questions use item goals', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('primary_request.goal_id=name es solo para pedir el nombre del cliente');
+    expect(v31Prompt).toContain('usa product, quantity o measurements con su item_ref');
+    expect(v31Prompt).toContain('aclarar "pandereta" es product con el item_ref de ese ítem');
+    expect(v31Prompt).toContain('confirmar a qué ítems va una cantidad es quantity');
+    expect(v31Prompt).toContain('Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null');
+    expect(v3Prompt).not.toContain('goal_id=name es solo para pedir el nombre del cliente');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
 });

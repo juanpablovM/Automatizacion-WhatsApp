@@ -59,6 +59,108 @@ const externalLineItemsRuntime = (() => {
 const resolvedReadLineItems = externalLineItemsRuntime
   ? externalLineItemsRuntime.readLineItems
   : (typeof readLineItems === 'function' ? readLineItems : null);
+// Task 3c.20: the relevance selection of technical sheets reuses the v3.1
+// validator's product matcher (name or listed synonym, whole phrase, longest
+// match), so "bloques de cemento" selects Bloques de Hormigón, not Cemento.
+// Production Code nodes get shared/v3-contract-runtime.js concatenated ahead
+// of this file, so the function is an outer free variable there; Node test
+// harnesses load the sibling file instead, as for readLineItems above.
+const externalContractRuntime = (() => {
+  if (typeof module === 'undefined' || typeof require !== 'function') return null;
+  try {
+    return require('./v3-contract-runtime.js');
+  } catch (_error) {
+    return null;
+  }
+})();
+const resolvedProductRefsMentioned = externalContractRuntime?.productRefsMentionedV31
+  || (typeof productRefsMentionedV31 === 'function' ? productRefsMentionedV31 : null);
+
+// Task 3c.20: catalog_items.metadata.technical_sheet (private data applied via scripts/catalog/technical-sheets.mjs) is far too
+// large to send whole every turn. v3.1 keeps a compact sheet only for the
+// products in the quote's line items and the products or services the current
+// message names, and all selected sheets together stay within this many UTF-8
+// bytes of JSON. Everything here is a pure function of the turn input, so the
+// policy digest stays deterministic.
+const TECHNICAL_SHEETS_MAX_BYTES = 6144;
+const TECHNICAL_SHEET_VARIANT_KEYS = ['name', 'code', 'dimensions', 'weight', 'yield', 'resistance', 'colors', 'finishes', 'other'];
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isEmptySheetValue = (value) => value === null || value === undefined
+  || (typeof value === 'string' && value.trim() === '')
+  || (Array.isArray(value) && value.length === 0)
+  || (isPlainObject(value) && Object.keys(value).length === 0);
+const jsonBytes = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+// Only the agreed keys, without empty fields; source_files never reach the model.
+const compactTechnicalSheet = (sheet) => {
+  if (!isPlainObject(sheet)) return null;
+  const compact = {};
+  if (typeof sheet.description === 'string' && sheet.description.trim() !== '') compact.description = sheet.description.trim();
+  if (isPlainObject(sheet.general_specs) && Object.keys(sheet.general_specs).length > 0) compact.general_specs = sheet.general_specs;
+  const variants = (Array.isArray(sheet.variants) ? sheet.variants : [])
+    .filter(isPlainObject)
+    .map((variant) => Object.fromEntries(TECHNICAL_SHEET_VARIANT_KEYS
+      .filter((key) => !isEmptySheetValue(variant[key]))
+      .map((key) => [key, variant[key]])))
+    .filter((variant) => Object.keys(variant).length > 0);
+  if (variants.length > 0) compact.variants = variants;
+  if (isPlainObject(sheet.unconfirmed) && Object.keys(sheet.unconfirmed).length > 0) compact.unconfirmed = sheet.unconfirmed;
+  return Object.keys(compact).length > 0 ? compact : null;
+};
+// Drops trailing variants until the sheet fits, and says how many it dropped.
+const fitTechnicalSheet = (sheet, budget) => {
+  if (jsonBytes(sheet) <= budget) return sheet;
+  const variants = sheet.variants || [];
+  const { variants: _variants, ...base } = sheet;
+  for (let kept = variants.length - 1; kept >= 0; kept -= 1) {
+    const candidate = { ...base, ...(kept > 0 ? { variants: variants.slice(0, kept) } : {}), variants_omitted: variants.length - kept };
+    if (jsonBytes(candidate) <= budget) return candidate;
+  }
+  const omitted = { omitted: true };
+  return jsonBytes(omitted) <= budget ? omitted : null;
+};
+const phraseFoldForSheets = (value) => String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, ' ').trim();
+const lineItemProductText = (product) => (typeof product === 'string'
+  ? product
+  : (isPlainObject(product) ? String(product.value ?? product.name ?? '') : ''));
+// Priority: line-item products first (item order), then what the message names
+// (catalog order). The byte budget is shared by water-filling: smaller sheets
+// are placed first and each sheet may use an equal share of what is left.
+const selectTechnicalSheets = ({ catalog, rawSheets, messageText, lineItems }) => {
+  const productEntries = catalog.filter((entry) => entry?.concept === 'product');
+  const mentioned = (text) => (resolvedProductRefsMentioned && String(text ?? '').trim() !== ''
+    ? resolvedProductRefsMentioned(productEntries, text)
+    : new Set());
+  const relevant = [];
+  const addRef = (ref) => { if (rawSheets.has(ref) && !relevant.includes(ref)) relevant.push(ref); };
+  for (const item of lineItems) {
+    for (const ref of mentioned(lineItemProductText(item?.product))) addRef(ref);
+  }
+  const messageRefs = mentioned(messageText);
+  const foldedMessage = ` ${phraseFoldForSheets(messageText)} `;
+  for (const entry of catalog) {
+    if (entry?.concept === 'product' && messageRefs.has(entry.ref)) addRef(entry.ref);
+    if (entry?.concept === 'service' && typeof entry.value === 'string') {
+      const needle = phraseFoldForSheets(entry.value);
+      if (needle && foldedMessage.includes(` ${needle} `)) addRef(entry.ref);
+    }
+  }
+  const candidates = relevant
+    .map((ref, priority) => ({ ref, priority, sheet: compactTechnicalSheet(rawSheets.get(ref)) }))
+    .filter((candidate) => candidate.sheet !== null)
+    .map((candidate) => ({ ...candidate, size: jsonBytes(candidate.sheet) }))
+    .sort((left, right) => left.size - right.size || left.priority - right.priority);
+  const selected = new Map();
+  let remaining = TECHNICAL_SHEETS_MAX_BYTES;
+  candidates.forEach((candidate, index) => {
+    const fitted = fitTechnicalSheet(candidate.sheet, Math.floor(remaining / (candidates.length - index)));
+    if (!fitted) return;
+    selected.set(candidate.ref, fitted);
+    remaining -= jsonBytes(fitted);
+  });
+  return selected;
+};
+
 const primaryLineItem = (context) => {
   const items = resolvedReadLineItems ? resolvedReadLineItems(context) : [];
   return items[0] || {};
@@ -107,11 +209,51 @@ const buildV3PolicyInput = (row, options = {}) => {
     ...canonicalModalitySynonyms,
   ].filter((entry, index, entries) => entry?.ref
     && entries.findIndex((candidate) => candidate?.ref === entry.ref) === index);
+  // Task 3c.19: catalog entries may carry optional `synonyms` (migration 026).
+  // v3.1 keeps them sanitized (distinct, trimmed, non-empty strings; the key
+  // is dropped when none survive). v3, the rollback path, never carries the
+  // key, so its policy stays identical to the pre-synonyms one.
+  // Task 3c.20: the same holds for the optional `technical_sheet` (private
+  // catalog data): it is always removed here and v3.1 re-attaches a compact, capped
+  // sheet only to the entries selected for this turn (selectTechnicalSheets).
+  const catalogEntryForVersion = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+    if (!('synonyms' in entry) && !('technical_sheet' in entry)) return entry;
+    const { synonyms, technical_sheet: _technicalSheet, ...rest } = entry;
+    if (version !== 'v3.1' || !Array.isArray(synonyms)) return rest;
+    const kept = [...new Set(synonyms.filter((synonym) => typeof synonym === 'string').map((synonym) => synonym.trim()))]
+      .filter((synonym) => synonym !== '');
+    return kept.length > 0 ? { ...rest, synonyms: kept } : rest;
+  };
+  const sourceCatalog = [
+    ...(Array.isArray(explicitGrounding.catalog) ? explicitGrounding.catalog : []),
+    ...derivedCatalog,
+  ].filter((entry) => entry?.concept !== 'commune');
+  const versionedCatalog = sourceCatalog.map(catalogEntryForVersion);
+  let catalog = versionedCatalog;
+  if (version === 'v3.1') {
+    const rawSheets = new Map();
+    for (const entry of sourceCatalog) {
+      if (isPlainObject(entry) && typeof entry.ref === 'string' && isPlainObject(entry.technical_sheet)
+        && !rawSheets.has(entry.ref)) rawSheets.set(entry.ref, entry.technical_sheet);
+    }
+    if (rawSheets.size > 0) {
+      const selected = selectTechnicalSheets({
+        catalog: versionedCatalog,
+        rawSheets,
+        messageText: safe(input.text_body ?? input.message_current),
+        lineItems: resolvedReadLineItems ? resolvedReadLineItems(context) : [],
+      });
+      const attached = new Set();
+      catalog = versionedCatalog.map((entry) => {
+        if (!isPlainObject(entry) || !selected.has(entry.ref) || attached.has(entry.ref)) return entry;
+        attached.add(entry.ref);
+        return { ...entry, technical_sheet: selected.get(entry.ref) };
+      });
+    }
+  }
   const grounding = {
-    catalog: [
-      ...(Array.isArray(explicitGrounding.catalog) ? explicitGrounding.catalog : []),
-      ...derivedCatalog,
-    ].filter((entry) => entry?.concept !== 'commune'),
+    catalog,
     modality_synonyms: modalitySynonyms,
   };
   const facts = [];

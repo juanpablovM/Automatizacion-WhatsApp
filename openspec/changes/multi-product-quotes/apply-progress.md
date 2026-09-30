@@ -1,8 +1,8 @@
 # Apply Progress: Multi-Product Quotes
 
-**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), Slice 2b — Advisor, dark (tasks 2b.1–2b.15), AND Slice 3 — Output (tasks 3.1–3.12). Slice 4 (rollout) not started — no code changes, no switch flipped.
+**Scope**: Slice 1 — Foundation (tasks 1.x), Slice 2a — Contract, dark (tasks 2a.x, including the D11 rework 2a.28–2a.32), Slice 2b — Advisor, dark (tasks 2b.1–2b.15), Slice 3 — Output (tasks 3.1–3.12), Slice 3c — v3.1 contract alignment from live evidence (tasks 3c.1–3c.5; 3c.6 — the live A/B rerun — is explicitly out of scope, done by the orchestrator), AND the Slice 3c follow-up — item attribution, live A/B round 2 (tasks 3c.7–3c.9; 3c.10 — the second live A/B rerun — is explicitly out of scope). Slice 4 (rollout) not started — no code changes, no switch flipped.
 **Mode**: Strict TDD.
-**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`); `feat/multi-product-quotes-output` (Slice 3, base `feat/multi-product-quotes-advisor`).
+**Branches**: `feat/multi-product-quotes-foundation` (Slice 1, base tracker `feat/multi-product-quotes`); `feat/multi-product-quotes-contract` (Slice 2a, base `feat/multi-product-quotes-foundation`); `feat/multi-product-quotes-advisor` (Slice 2b, base `feat/multi-product-quotes-contract`); `feat/multi-product-quotes-output` (Slice 3, base `feat/multi-product-quotes-advisor`); `feat/multi-product-quotes-alignment` (Slice 3c, base `feat/multi-product-quotes-output`).
 
 ## Status
 
@@ -11,6 +11,9 @@
 - 5/5 Slice 2a rework tasks complete (2a.28–2a.32, design.md D11). All marked `[x]` in `tasks.md`. See "Slice 2a rework (D11)" section below.
 - 15/15 Slice 2b tasks complete (2b.1–2b.15). All marked `[x]` in `tasks.md`. See "Slice 2b — Advisor, dark" section below.
 - 12/12 Slice 3 tasks complete (3.1–3.12). All marked `[x]` in `tasks.md`. See "Slice 3 — Output" section below.
+- 5/5 Slice 3c tasks complete (3c.1–3c.5). All marked `[x]` in `tasks.md`. 3c.6 (live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c — v3.1 contract alignment, from live evidence" section below.
+- 3/3 Slice 3c follow-up tasks complete (3c.7–3c.9). All marked `[x]` in `tasks.md`. 3c.10 (the second live A/B rerun) is explicitly the orchestrator's job, not this batch's. See "Slice 3c follow-up — item attribution (live A/B round 2)" section below.
+- 1/1 bounded Slice 3c follow-up task complete (3c.11). The captured first-turn multi-item proposal cannot authorize an unscoped item field; rollout 4.x remains pending.
 
 ---
 
@@ -495,3 +498,652 @@ None. All hard constraints held: every pre-existing single-item assertion in `bu
   3. `e67e634` `test(v3): confirm the seller notification renders leads.requirement itemized` — 63 insertions + 2 deletions total, **65 authored changed lines**, zero production code
   4. `efdd6ca` `test(v3): add the opt-in v3/v3.1 live-replay A/B harness` — 664 insertions + 1 deletion total, **665 authored changed lines**
 - **Review budget: EXCEEDED for the slice total.** Design.md forecast ~700 lines for Slice 3; actual authored total is 167 + 480 + 65 + 665 = **1377 authored changed lines**, against the 800-line PR budget — same pattern as Slices 1 and 2a: each commit is individually reviewable and under budget, but PR3 as a whole (if delivered as one PR against `feat/multi-product-quotes-advisor`) exceeds it. Unlike Slice 2a's validator, these 4 commits have NO shared internal state forcing them together — they are already 4 independent, cleanly separable functional units on 4 non-overlapping files (lead-effect wiring; ClickUp extraction; a test-only confirmation; a new opt-in ops script). **Decision needed before PR3 opens**: accept `size:exception` for PR3 as a whole, or split PR3 into 4 child PRs against `feat/multi-product-quotes-output` at the exact commit boundaries above (PR3a=167, PR3b=480, PR3c=65, PR3d=665 lines) — each already independently green and independently revertible.
+
+---
+
+## Slice 3c — v3.1 contract alignment, from live evidence
+
+**Scope**: tasks 3c.1–3c.5 only. Branch `feat/multi-product-quotes-alignment`, base `feat/multi-product-quotes-output`. Task 3c.6 (rerun the live A/B, N=10, production catalog) is explicitly out of scope for this batch — the orchestrator runs it.
+
+### Why this slice exists
+
+Rollout step 3 ran the live A/B against the real model (N=10, production catalog). v3.1 first-turn proposals validated only 2/20 times (v3: 20/20). The captured real proposals (`tests/fixtures/v3-line-items/captured-live-proposals.json`, 15 entries: 5 `first-turn`, 5 `wire-correction`, 5 `wire-correction-hashed-ids`) show the model was semantically right and the v3.1 validator rejected it, because Slices 2a (validator/policy builder) and 2b (schema/prompt) were each built and tested against mocks and quietly disagreed on two points:
+
+1. **Per-item goal references.** `buildV3PolicyInput` (Slice 2a, deviation #3, already documented) emits a single quote-level `line_items` goal — no per-item `product`/`quantity`/`measurements` goal. Real model output legitimately used the item's own concept name (`resolves_goal_ids: ['product']`) as often as `['line_items']`. The validator only ever accepted the literal `'line_items'`, so `goal_reference_unknown` fired on the concept-name form, which then cascaded into `catalog_resolution_product_observation_required`, `quantity_observation_required` and `mutation_shape_invalid` — none of those were the real defect; they were fallout from the excluded observation.
+2. **`primary_request.goal_id` for the ambiguous-item clarification.** design.md's own validator rules table and its Slice 2a live-scenario test (`v3-contract-runtime.test.js`, "live scenario — pandereta + wire + commune") pin the literal `primary_request={goal_id:'product', item_ref}`. But `build-ai-request.js`'s `primaryRequestGoalIds` (Slice 2b) only ever contains real policy goal ids plus `final_confirmation` — it **never** contained `'product'`. The response schema is a strict enum, so the model could never literally emit `'product'` even though the v3.1 prompt (line 667) explicitly instructs it to. This made the validator's own documented rule structurally unsatisfiable by the schema it was validating against.
+
+### Decisions recorded (design was ambiguous; smallest coherent fix, no safety weakened)
+
+- **Per-item goal references (fixes `goal_reference_unknown`)**: `knownGoalIds` in `validateV3AiProposalV31` now includes the three item concept names (`product`, `quantity`, `measurements`) unconditionally, in addition to the policy's real goal ids. This mirrors `primary_request`'s own `requestGoalValid` check, which already treated these three names as always-valid literals (2a.11's `ITEM_FIELDS.has(...)` check) — the observation-side check was simply narrower than the primary_request-side check for the identical concept vocabulary. No new acceptance surface is introduced: the three literals were already part of the v3.1 contract's own vocabulary (`ITEM_FIELDS`), just not recognized in this one place.
+- **`primary_request.goal_id` schema (fixes the structural non-satisfiability of `catalog_resolution_clarification_required`)**: `build-ai-request.js` now offers a v3.1-only `primaryRequestGoalIdsV31` enum = `primaryRequestGoalIds ∪ {product, quantity, measurements}`, **except during an active repair turn**, where the repair's own `allowed_values` lock (`primaryRequestGoalIds`, already filtered) is left untouched — widening it there would defeat the repair lock's own safety property. This lets the model literally produce what the prompt already tells it to and what the validator already requires.
+- **`catalog_resolution_clarification_required` accepts `'line_items'` as an equivalent literal to `'product'`, scoped by `item_ref`**: this is the one place the design's literal (`'product'`) and the model's captured, semantically-correct behavior (`'line_items'`, entry `first-turn[3]`) disagreed, and the design's own contract doesn't expose a per-item `'product'` goal for the model to reliably discover before this slice's schema fix. Accepting `'line_items'` too — **only** when `primary_request.item_ref` exactly matches the ambiguous item — asks the identical question with no less specificity: the item_ref anchor is what actually pins the clarification to a real ambiguous item, not the literal spelling of the goal name. No proposal that fails to name the exact ambiguous item is accepted either way. Recorded here per the phase's ambiguity-resolution instruction: this is the one literal where I picked the option that lets the observed-correct captured output validate, without weakening the rule (item_ref anchoring is unchanged and still mandatory).
+- **Entries genuinely rejected, and why (not a contract bug)**: `first-turn[0]`, `first-turn[1]`, `first-turn[2]` and `first-turn[4]` are captured proposals where the model's single `primary_request` targeted an unrelated goal (`service`, `use_case`, `service_scope`) while an item's catalog resolution was `ambiguous`. Design.md's validator rule requires the ambiguous item's clarification to take priority in that turn. After the contract fixes above, these four still correctly fail with exactly one error: `catalog_resolution_clarification_required`. This is real, intended production behavior (the model did not follow the v3.1 prompt's own priority instruction that turn) — not a shape defect — and `tests/unit/v3-line-items-live-evidence.test.js` pins the exact single-code rejection so it stays documented and never silently regresses into an unrelated code.
+- **`wire-correction[4]` (`primary_request.goal_id: 'name'`) is left exactly as captured and is not "wrong"**: there is no ambiguous catalog resolution in that turn, so no rule requires a different `primary_request`; asking about an unresolved optional goal during an otherwise-valid correction is contractually fine. Noted here since the orchestrator's guidance flagged "`primary_request` choosing an unrelated goal during clarification" as a typical failure category — in this specific entry it is schema-legal, harmless model behavior, not a validation defect, and is left unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3c.1 | `tests/unit/v3-line-items-live-evidence.test.js` | Unit | ✅ full pre-existing suite (900/900 unit, 154/154 Postgres) green before this file existed | ✅ Written first against all 15 captured entries as-is | ✅ Confirmed RED against the pre-fix `v3-contract-runtime.js`/`build-ai-request.js`: **8/15 failed** (see RED evidence below) | ✅ 15 cases (5 `first-turn`, 5 `wire-correction`, 5 `wire-correction-hashed-ids`), covering both the ambiguous-item D5 path and the wire-correction scoping path | ➖ None needed — pure test file |
+| 3c.2 | `tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js` (`knownGoalIds`) | Unit | ✅ (see 3c.1) | ✅ (see 3c.1 RED — `goal_reference_unknown`/`mutation_shape_invalid` cases) | ✅ 15/15 passed after widening `knownGoalIds` to include `ITEM_FIELDS` | ✅ covered by the 15 captured cases (both item-concept-name and `line_items` forms of `resolves_goal_ids` are exercised) | ➖ None needed — one-line widening, comment added explaining the design cross-reference |
+| 3c.3 | `tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js` (`primaryRequestGoalIdsV31`) + `v3-contract-runtime.js` (ambiguous-item literal) | Unit | ✅ `build-ai-request-v31-schema.test.js` (7/7) + `build-ai-request-v31-prompt.test.js` (7/7) green before either edit | ✅ (see 3c.1 RED — `catalog_resolution_clarification_required` cascades and `first-turn[3]`'s false rejection) | ✅ 15/15 passed after both edits | ✅ covered by `first-turn[3]` (accepts `'line_items'` scoped to the ambiguous item) plus `first-turn[0,1,2,4]` (still correctly rejects an unrelated goal) | ➖ None needed |
+| 3c.4 | `tests/unit/v3-v31-contract-consistency.test.js` | Unit | ✅ full 3c.1–3c.3 suite green before this file existed | ✅ Written first, confirmed RED against the pre-fix code (**4/15 failed** — see RED evidence below) | ✅ 15/15 passed after 3c.2/3c.3's fixes (no new production change needed — this test is a pure regression guard) | ✅ 15 cases: 8 goal-id probes (schema enum ∪ curated literals, including a `not_a_real_goal` negative control) + 6 mutation-shape probes (`product`/`quantity`/`measurements`/`commune` positive, `name`/`service` negative) + 2 "the schema actually offers item literals" sanity checks | ➖ None needed — pure test file |
+| 3c.5 | full existing suites (no new file) | Unit + Integration | ✅ | N/A (confirmatory) | ✅ 932/932 unit (154 skipped without `TEST_PG_INTEGRATION=1`), 154/154 Postgres, `check:parity` 0 drift, `check:sql-references` 0 errors, 0 regressions | N/A | N/A |
+
+### RED evidence (3c.1 — `v3-line-items-live-evidence.test.js` against the pre-fix code)
+
+Command: `git stash push -- tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js && npx vitest run tests/unit/v3-line-items-live-evidence.test.js --globals`
+
+Result: **8 of 15 failed**, exactly the captured-entry indices predicted from the fixture's own recorded `validation_errors`:
+
+- `first-turn[0]`, `first-turn[1]`, `first-turn[4]` — expected exactly `['catalog_resolution_clarification_required']`, got the full cascade (`goal_reference_unknown` ×3, `catalog_resolution_product_observation_required`, `catalog_resolution_clarification_required`, `mutation_shape_invalid` ×3).
+- `first-turn[3]` — expected `valid: true`, got the same cascade (this entry uses `resolves_goal_ids: ['line_items']` throughout, so it failed only on the ambiguous-item literal check, not the goal-reference cascade).
+- `wire-correction[3]`, `wire-correction[4]`, `wire-correction-hashed-ids[0]`, `wire-correction-hashed-ids[1]` — expected `valid: true` (correction scoped to the wire item), got `goal_reference_unknown`/`catalog_resolution_product_observation_required`/`quantity_observation_required`/`mutation_shape_invalid` depending on which literal form that specific captured entry used.
+
+`git stash pop` restored the fix; the same command then passed **15/15**.
+
+### RED evidence (3c.4 — `v3-v31-contract-consistency.test.js` against the pre-fix code)
+
+Same stash procedure. Result: **4 of 15 failed** — the goal-id probes for `product`, `quantity`, `measurements` (schema enum did not contain them, but `requestGoalValid` already accepted them — an asymmetric drift the test caught) and the "the three item concepts are actually offered by the schema" sanity check. After the fix: **15/15 passed**. The mutation-shape half of the file (8 cases) was already consistent before this slice — it passed both before and after, which is expected: 2a/2b already agreed on `state_authority.allowed_mutations` shape; the drift was specifically in the goal-id vocabulary.
+
+### Test Summary
+
+- **Total tests written this slice**: 15 (`v3-line-items-live-evidence.test.js`) + 15 (`v3-v31-contract-consistency.test.js`) = **30 new tests**.
+- **Total tests passing**: 30/30 new, 0 regressions across 902 pre-existing unit tests and 154 pre-existing Postgres integration tests (`npm test`: 932/932 non-skipped after this slice).
+- **Layers used**: Unit (30). No SQL/DB-bound behavior changed this slice (no `.sql` file touched); the Postgres suite was re-run as a full regression check per 3c.5, not because any task in 3c.1–3c.5 changes SQL.
+- **Approval tests**: none — every assertion in both new files calls the real, unmocked validator/authorizer/reducer (`validateV3AiProposal`, `authorizeV3ConversationDecision`, `reduceV3StateMutations`) and the real `build-ai-request.js` code-node source via the same `new Function('items','$env',source)` harness prior slices already use.
+- **Pure functions created**: none new — this slice only changed the acceptance set of two already-existing pure checks (`knownGoalIds` construction inside `validateV3AiProposalV31`, and the ambiguous-item `primary_request` literal check) plus one already-existing pure schema builder's enum (`primaryRequestGoalIdsV31`, derived from the existing `primaryRequestGoalIds` and `ITEM_MUTATION_FIELDS_V31`).
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-policy-builder-v31-items.test.js tests/unit/v3-policy-builder-line-items-regression.test.js tests/unit/v3-artifact-version-widening.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/build-ai-request-wrapper.test.js tests/unit/v3-brand-voice.test.js tests/unit/compile-v3-turn.test.js tests/unit/mock-ai-valid-proposal.test.js tests/unit/shadow-evaluator-persistence.test.js tests/unit/v3-line-items-live-evidence.test.js tests/unit/v3-v31-contract-consistency.test.js tests/unit/build-v3-lead-effect.test.js tests/unit/v3-effect-execution-wrapper.test.js tests/unit/build-clickup-payload.test.js tests/unit/crm-seller-notification-dispatch.test.js tests/unit/v3-line-items-live-replay.test.js --globals` → **247/247 passed** (25 files) |
+| Runtime harness command/scenario and exact result | `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `docker compose -f docker-compose.test.yml down -v` → **17 files, 154/154 passed** (no `.sql` file changed this slice; migration 025 still applies cleanly; run as the full regression check 3c.5 requires) |
+| Rollback boundary | Revert the contract-alignment commit on `feat/multi-product-quotes-alignment` (production edits + `v3-line-items-live-evidence.test.js` + the captured fixture land together — the fix and its test cannot be usefully separated, since the test is what proves the fix) and, independently, the contract-consistency test commit. `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled` everywhere; nothing in production passes `version:'v3.1'`, so this slice has zero live-traffic exposure — it only changes which proposals the v3.1 validator/schema agree on, and v3.1 does not run. |
+
+### Full Suite Verification (exact counts, final state)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **73 files passed, 17 skipped; 932 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after `node tests/scripts/sync-workflow-nodes.mjs` (regenerated the 5 nodes that concatenate `v3-contract-runtime.js`/`build-ai-request.js`: `Build AI Request`, `Compile V3 Turn Policy`, `Validate And Authorize V3`, `Prepare Shadow Evaluation`, `Record Shadow Evaluation`).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings (no `.sql` file touched this slice).
+- `docker compose -f docker-compose.test.yml up -d --wait postgres && npm run db:reset:test && npm run test:integration:postgres` (`TEST_PG_INTEGRATION=1`) then `down -v`: **17 files passed, 154/154 tests passed**, migration 025 applies cleanly (unchanged since Slice 1).
+
+### Regression Safety Net
+
+- Every v3.1 test file that existed before this slice (`v3-contract-runtime.test.js`, `v3-runtime-compatibility.test.js`, `v3-v31-composition-differential.test.js`, `v3-v31-address-and-pickup-regression.test.js`, `v3-v31-static-error-code-coverage.test.js`, `v3-v31-authorizer-composition-differential.test.js`, `build-ai-request-v31-schema.test.js`, `build-ai-request-v31-prompt.test.js`, `compile-v3-turn.test.js`) was grepped for any assertion that depended on the OLD, narrower acceptance sets before widening them — none did (confirmed: the one existing test using an item-concept `resolves_goal_ids` literal, `v3-contract-runtime.test.js:465`, exercises the **v3** validator, not v3.1, and is unaffected; the existing v3.1 live-scenario test already used `resolves_goal_ids: []` and `primary_request.goal_id:'product'`, both still accepted). All ran green both before and after this slice's edits.
+- Full 932-test unit suite and 154-test Postgres suite re-run clean at the end of the slice; `check:parity`/`check:sql-references` clean.
+
+### Deviations from Design
+
+1. **`catalog_resolution_clarification_required` accepts `'line_items'` as an alias for `'product'`** when `primary_request.item_ref` matches the ambiguous item — design.md's literal is `'product'` only. See "Decisions recorded" above for the full reasoning; the alternative (rejecting `first-turn[3]`, which is otherwise the single cleanest, most-correct captured first-turn proposal, as "genuinely wrong") did not survive scrutiny once it became clear the schema itself made `'product'` unreachable until this slice's own fix.
+2. **`primaryRequestGoalIdsV31` widening is skipped during an active repair turn** (`hasRepairRequest`) — not discussed explicitly in design.md, but necessary: the repair path's own `allowed_values` lock is a safety mechanism (design's `failure_policy.max_repairs`/contingency guard), and unconditionally widening it would let a repaired turn re-request a goal the repair error just rejected. No captured entry exercises a v3.1 repair turn, so this path is unexercised by 3c.1's evidence and is a forward-looking safety preservation, not something this slice's tests can directly RED/GREEN — flagged here for the live A/B rerun (3c.6) and Slice 4 to watch.
+3. **`wire-correction[4]`'s `primary_request.goal_id:'name'` needed no fix** — see "Decisions recorded" above. Documented rather than silently treated as already-passing, since the orchestrator's guidance specifically named this pattern.
+
+### Issues Found
+
+None beyond the two contract-shape bugs this slice fixes. `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled`; nothing in production passes `version:'v3.1'`; the v3 validator, v3 schema and v3 prompt are untouched (confirmed by `v3-runtime-compatibility.test.js`, `build-ai-request-wrapper.test.js` and `v3-brand-voice.test.js` all passing unmodified); `.env` and the live n8n runtime were never touched; no Docker exec against production containers or OpenAI network calls were made.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), PR3c = Slice 3c Contract Alignment, base = `feat/multi-product-quotes-output`.
+- Current work unit: Slice 3c — v3.1 contract alignment from live evidence, complete for tasks 3c.1–3c.5. Task 3c.6 (live A/B rerun) is the orchestrator's next step, not part of this apply batch.
+- Boundary: 2 commits on `feat/multi-product-quotes-alignment`:
+  1. `fix(v3): align v3.1 goal ids and item primary_request literals across policy, validator and schema` — production fixes in `v3-contract-runtime.js` (+14/−2) and `build-ai-request.js` (+11/−1) = **26 authored changed lines**, plus the live-evidence test `v3-line-items-live-evidence.test.js` (117 new lines) that proves the fix against the real captured model output, plus the captured-evidence fixture `tests/fixtures/v3-line-items/captured-live-proposals.json` (real model output, not hand-authored — treated as evidence data, like a golden capture, not authored risk) and 3 regenerated workflow JSON files (10 generated lines, `node tests/scripts/sync-workflow-nodes.mjs`) = **143 authored changed lines** (excluding the evidence JSON and generated workflow JSON).
+  2. `test(v3): add a v3.1 contract-consistency test for goal ids and mutation shapes` — `v3-v31-contract-consistency.test.js` (173 new lines), plus the `tasks.md` checkbox marks (5 lines) and this `apply-progress.md` section = **178 authored changed lines** (excluding `apply-progress.md`'s own documentation length).
+- **Review budget: within forecast.** Total authored risk ≈ 26 (production) + 117 + 173 (tests) + 5 (`tasks.md`) = **321 authored changed lines**, comfortably under the 800-line cap — no `size:exception` needed. The 11,857-line captured-evidence JSON and the 10 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's golden/generated-artifact carve-out, but remain part of the complete snapshot for review/receipt purposes.
+
+---
+
+## Slice 3c follow-up — item attribution (live A/B round 2)
+
+**Scope**: tasks 3c.7–3c.9 only. Same branch (`feat/multi-product-quotes-alignment`), same base (`feat/multi-product-quotes-output`). Tasks 3c.10 (the orchestrator's live A/B rerun) and Slice 4 are explicitly out of scope for this batch.
+
+### Why this batch exists
+
+The live A/B rerun after 3c.1–3c.5 (N=10, production catalog) reached first-turn validity 20/20 (equal to v3; total 36/40 against v3's 30/40), but found two remaining item-attribution defects:
+- First turn, 3 of 20: the pandereta's quantity "500 ml" was copied onto the wire item (both items carried 500 ml, with the same evidence span), or moved onto the wire (wire 500 ml, pandereta only height), or the pandereta was split into two items.
+- Wire correction, 1 of 6 valid corrections put 300 ml on the pandereta instead of the wire. The canary gate ("every valid correction is scoped to the named item") failed.
+
+### Decisions recorded
+
+1. **The observed failures split into two shapes with different fixes.** "Copied" (the same evidenced text resolves the same item concept on two different items) is deterministically detectable: the same `(field, evidence_quote, evidence_occurrence)` triple can never legitimately authorize two different `item_ref` values in one proposal — no legitimate customer message repeats itself to mean two different items without a different occurrence number. "Moved" (one unambiguous, non-duplicated span attached to the wrong item) has no such signal: the validator has no ground truth for "the right item" when there is exactly one span and exactly one target. Task 3c.7 fixes the first shape in the validator; task 3c.8 addresses the second (and the "split into two items" pattern) in the v3.1-only prompt, per the orchestrator's own framing of the two tasks.
+2. **Split-item detection was considered and NOT implemented as a separate deterministic validator rule.** The task's own suggested signals were checked directly against the real contract surface and found unusable:
+   - *"two new items created with no product and no `requested_label`"*: this is not a reliable split signal — a customer can legitimately open a turn with two separate, still-unresolved new items (two genuinely different unclear products), which must not be rejected. There is no way to distinguish "two legitimately separate ambiguous items" from "one item wrongly split in two" from this shape alone.
+   - *"the same `requested_label` evidence on two items"*: `requested_label` is not part of the v3.1 proposal contract at all — it is a system-derived storage field on `line_items` (design.md D4/D10), absent from `OBSERVATION_KEYS_V31`, `CATALOG_RESOLUTION_KEYS_V31` and every other proposal-shape key set the validator checks. Grepping the reducer (`tests/fixtures/workflow-nodes/shared/v3-line-items.js`) confirms it is always set to `null` today (`newItem`, `readLineItems`'s flat-row branch) and never derived from anything — there is no `requested_label` value at validation time to compare across items.
+   - The one signal that *is* both unambiguous and already covered by the contract surface — two `catalog_resolutions` entries sharing the identical `evidence_quote`/`evidence_occurrence` but different `item_ref` — is exactly the same mechanism task 3c.7 already implements (the evidence-span-conflict key is keyed by field, and `product` is an `ITEM_FIELD`; a genuine "same catalog mention split across two items" case that also emits a duplicated `product` observation for both new items is already caught, see the fourth synthetic test below). A weaker, catalog-resolution-only version of the rule (matching span, no product observation on either side) was rejected: nothing requires the model to emit a `catalog_resolutions` entry with matching text for a genuine split (the observed live shape was one item getting quantity, the other getting measurements, with no guarantee their `catalog_resolutions` entries — if any — share the same span), so a rule keyed only on `catalog_resolutions` would not reliably catch the real shape and risks false positives on legitimately separate multi-product turns. This is why 3c.8 also adds an explicit prompt rule ("one mentioned product is one item, never split into two") — the general fix belongs in the model's own instructions, not a shape heuristic that cannot see the customer's intent.
+3. **The new validator code is v3.1-only and needs no static-coverage-allowlist entry.** `tests/unit/v3-v31-static-error-code-coverage.test.js` asserts V3 codes ⊆ V31 codes ∪ the closed D5 allowlist; it says nothing about codes that exist only in V3.1. `item_evidence_span_conflict` is never emitted by `validateV3AiProposalV3`, so the coverage test needed no change — confirmed green with no edits (see Full Suite Verification below).
+4. **The new validator error is repairable by construction, not by a special case.** Every error built via the shared `validationError(...)` helper carries `disposition: 'repairable'` unconditionally (same as every other v3/v3.1 code); `item_evidence_span_conflict` uses that same helper, so it automatically routes through the existing one-shot repair path rather than straight to contingency — no new dispatch logic was needed or added.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3c.7 (validator rule, synthetic cases) | `tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js` (new `item_evidence_span_conflict` describe block) | Unit | ✅ 17/17 pre-existing cases in this file green before the edit | ✅ Written first; confirmed RED via `git stash` (see RED evidence below) | ✅ 4/4 new cases pass after the fix | ✅ 4 cases: same span + same field + 2 items rejects; same text at a different occurrence does not; same span but different fields (quantity vs measurements) does not; the same rule also catches a duplicated `product` evidence span across two new matched items | ➖ None needed |
+| 3c.7 (validator rule, live-evidence cases) | `tests/unit/v3-v31-item-evidence-span-conflict.test.js` (new file) | Unit | ✅ 15/15 `v3-line-items-live-evidence.test.js` cases green before this file existed | ✅ Written first against REAL captured `turn_policy`/`proposal` pairs (`captured-live-proposals.json`, first-turn[3] and wire-correction[0]), never hand-authored policies; confirmed RED via `git stash` | ✅ 6/6 passed after the fix | ✅ 6 cases: 2 sanity (unmodified captured proposals still validate), 2 "copied" (rejected), 2 "moved" (documented gap — still validates, proving the boundary of what 3c.7 can and cannot catch) | ➖ None needed — pure test file |
+| 3c.8 (prompt rules) | `tests/unit/build-ai-request-v31-prompt.test.js` (2 new tests) | Unit | ✅ 7/7 pre-existing cases in this file green before the edit | ✅ Written first, confirmed RED (2/9 failed, exact text not yet present) | ✅ 9/9 passed after adding the two new prompt-line constants | ➖ Single scenario per rule (a prompt-line presence/absence check has one meaningful case: present in v3.1, absent from v3) | ➖ None needed |
+| 3c.9 (regression confirmation) | full existing suites, no new file | Unit | ✅ | N/A (confirmatory) | ✅ 944/944 non-skipped unit tests, 0 regressions, `check:parity`/`check:sql-references` clean (see Full Suite Verification) | N/A | N/A |
+
+### RED evidence (3c.7 — both new test files, against the pre-fix `v3-contract-runtime.js`)
+
+Command: `git stash push -- tests/fixtures/workflow-nodes/shared/v3-contract-runtime.js && npx vitest run tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js --globals`
+
+Result: **4 of 25 failed**, exactly the 2 "copied" cases in each file (the synthetic duplicate-quantity/duplicate-product cases, and the captured-evidence duplicate-quantity cases for both first-turn and wire-correction) — every other case (the 2 negative-control synthetic cases, the 2 sanity cases, and the 2 documented-gap "moved" cases) already passed before the fix, which is expected since they assert the absence of the new code. `git stash pop` restored the fix; the same command then passed **25/25**.
+
+### RED evidence (3c.8 — `build-ai-request-v31-prompt.test.js`, against the pre-fix `build-ai-request.js`)
+
+The two new tests were written first and run against the file before adding the two new prompt-line constants: **2 of 9 failed** (`expect(v31Prompt).toContain(...)` on text that did not exist yet). After adding `V31_NO_CROSS_ITEM_TRANSFER_RULE` and `V31_CORRECTION_NAMED_ITEM_RULE` to `buildV31PromptLines`'s `derived.push(...)` call: **9/9 passed**, including the pre-existing "exactly one v3 line is removed" test, confirming the v3 prompt stayed byte-identical and every other v3 line still reaches v3.1 verbatim (pure append, no v3 line touched).
+
+### Test Summary
+
+- **Total tests written this batch**: 4 (`v3-contract-runtime.test.js`, new describe block) + 6 (`v3-v31-item-evidence-span-conflict.test.js`, new file) + 2 (`build-ai-request-v31-prompt.test.js`) = **12 new tests**.
+- **Total tests passing**: 12/12 new, 0 regressions across 932 pre-existing unit tests (`npm test`: 944/944 non-skipped after this batch).
+- **Layers used**: Unit (12). No `.sql` file touched this batch — the Postgres suite was not re-run (no SQL/DB behavior changed; per the phase's own instruction, Postgres integration is only required when SQL/DB behavior changes).
+- **Approval tests**: none — every new assertion calls the real, unmocked `validateV3AiProposal`/`validateV3AiProposalV31` and the real `build-ai-request.js` prompt-building code via the same `new Function('items', '$env', source)` harness prior slices already use.
+- **Pure functions/constants created**: no new exported functions — `item_evidence_span_conflict` is one new branch inside the existing `validateV3AiProposalV31` mutation loop (keyed by a `Map<string, string>` local to that function call, so it is scoped per validation and side-effect-free across calls); `V31_NO_CROSS_ITEM_TRANSFER_RULE` and `V31_CORRECTION_NAMED_ITEM_RULE` are two new string constants appended (pure data) to the existing `buildV31PromptLines` derivation.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `npx vitest run tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/build-ai-request-v31-schema.test.js tests/unit/build-ai-request-wrapper.test.js tests/unit/v3-brand-voice.test.js tests/unit/compile-v3-turn.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js tests/unit/v3-runtime-compatibility.test.js tests/unit/v3-address-hardbound.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-line-items-live-evidence.test.js tests/unit/v3-v31-contract-consistency.test.js tests/unit/build-v3-lead-effect.test.js tests/unit/v3-effect-execution-wrapper.test.js tests/unit/build-clickup-payload.test.js tests/unit/crm-seller-notification-dispatch.test.js tests/unit/mock-ai-valid-proposal.test.js tests/unit/shadow-evaluator-persistence.test.js tests/unit/v3-line-items-live-replay.test.js --globals` → **245/245 passed** (23 files, includes every D11 guarantee suite plus every named "must stay green" suite) |
+| Runtime harness command/scenario and exact result | N/A — no SQL/DB behavior changed this batch (only the JS validator and the JS prompt builder), so the Postgres integration harness was not re-run, per the phase instruction limiting it to SQL/DB changes. The n8n Code-node runtime boundary is exercised indirectly by `npm run check:parity` (regenerates and diffs the 5 nodes embedding `v3-contract-runtime.js`/`build-ai-request.js`; clean after `node tests/scripts/sync-workflow-nodes.mjs`) |
+| Rollback boundary | Revert the two functional commits on `feat/multi-product-quotes-alignment` (validator guard + its tests; prompt rules + prompt tests) independently — each is self-contained with its own tests and neither depends on the other. `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled` everywhere; nothing in production passes `version:'v3.1'`, so this batch has zero live-traffic exposure. |
+
+### Full Suite Verification (exact counts)
+
+- `npm test` (unit + contract + smoke + ops, Postgres suites skipped): **74 files passed, 17 skipped; 944 tests passed, 154 skipped**.
+- `npm run check:parity`: exit 0, 0 drift, all nodes `[OK]` after `node tests/scripts/sync-workflow-nodes.mjs` regenerated the 3 workflow files embedding the two edited fixtures (`wa-conversation-orchestrator.json`: Validate And Authorize V3; `ai-prd-shadow-evaluator.json`: Prepare Shadow Evaluation + Record Shadow Evaluation; `ai-lead-qualification-assistant.json`: Build AI Request).
+- `npm run check:sql-references`: exit 0, 0 errors, 0 warnings (no `.sql` file touched this batch).
+- Postgres integration: not re-run (no SQL/DB behavior changed; migration 025 and its down file are unaffected).
+
+### Regression Safety Net
+
+- Every D11 guarantee suite (`v3-v31-static-error-code-coverage.test.js`, `v3-v31-composition-differential.test.js`, `v3-v31-authorizer-composition-differential.test.js`, `v3-v31-address-and-pickup-regression.test.js`, `v3-runtime-compatibility.test.js`, `v3-address-hardbound.test.js`, `v3-commercial-policy.test.js`) re-run green with no edits, confirming the new mutation-loop branch changes no existing v3 or v3.1 behavior for any case those suites cover.
+- The prompt-diff guarantee (`build-ai-request-v31-prompt.test.js`'s "exactly one v3 line is removed... every other v3 line survives verbatim" test) re-run green, confirming the two new prompt lines are pure appends and the v3 prompt stayed byte-identical (also proven directly by the unchanged `GOLDEN_V3_PROMPT` approval test in the same file).
+- `v3-line-items-live-evidence.test.js` and `v3-v31-contract-consistency.test.js` (the two Slice-3c guarantee files named in the phase instruction) both re-run green with no edits.
+
+### Deviations from Design
+
+1. **Split-item detection was not implemented as a separate deterministic validator rule.** See "Decisions recorded" #2 above for the full reasoning (the task's own suggested signals are either too broad — legitimate multi-item ambiguous turns would false-positive — or not present in the validator's input surface at all, since `requested_label` is never populated by any code path today). The general fix for the split-item and moved-item shapes is the v3.1-only prompt rule added in 3c.8, per the task's own framing ("implement only if it is unambiguous; otherwise leave it to the prompt").
+2. **The new error code's `related_ids` carries only the conflicting (later) mutation's observation id**, matching the exact convention `mutation_target_duplicate` already uses for item-field mutations (`[observationEntry.id]`), not both observation ids. This keeps every error in the mutation loop shaped consistently for any downstream repair-instruction renderer that reads `related_ids`.
+
+### Issues Found
+
+None. All hard constraints held: `AI_PRD_V3_LINE_ITEMS` was not touched and stays `disabled`; nothing in production passes `version:'v3.1'`; the v3 validator and v3 prompt are untouched (confirmed by `v3-runtime-compatibility.test.js`, `v3-address-hardbound.test.js`, `v3-commercial-policy.test.js` and the prompt file's own "byte-identical" approval test all passing unmodified); `.env` and the live n8n runtime were never touched; no Docker exec against production containers or OpenAI network calls were made; `untitled.md` was left untouched.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`), same PR3c = Slice 3c Contract Alignment, base = `feat/multi-product-quotes-output`.
+- Current work unit: Slice 3c follow-up, complete for tasks 3c.7–3c.9. Task 3c.10 (the orchestrator's live A/B rerun) is the next step, not part of this apply batch. Slice 4 not started.
+- Boundary: 3 commits added on `feat/multi-product-quotes-alignment` (on top of the 2 already-landed Slice 3c commits):
+  1. `feat(v3): reject a duplicated evidence span across two line items` — production fix in `v3-contract-runtime.js` (+24/−0 = **24 authored changed lines**), plus its tests: `v3-contract-runtime.test.js` (+130/−0) and the new `v3-v31-item-evidence-span-conflict.test.js` (142 new lines) = **296 authored changed lines**, plus 2 regenerated workflow JSON files (6 generated lines, excluded from authored risk).
+  2. `feat(v3): add v3.1 prompt rules against cross-item quantity/measurement transfer and item-mismatched corrections` — production fix in `build-ai-request.js` (+13/−0), plus its test `build-ai-request-v31-prompt.test.js` (+25/−0) = **38 authored changed lines**, plus 1 regenerated workflow JSON file (2 generated lines, excluded from authored risk).
+  3. `docs(sdd): record Slice 3c follow-up apply progress` — `tasks.md` checkbox marks (12/1) and this `apply-progress.md` section.
+- **Review budget: comfortably within forecast.** Total authored risk ≈ 24 + 130 + 142 (commit 1) + 13 + 25 (commit 2) = **334 authored changed lines** across the two functional commits, well under the 800-line cap — no `size:exception` needed. The 8 generated workflow-JSON lines are excluded from authored risk per the review-workload guard's golden/generated-artifact carve-out.
+
+## Bounded Slice 3c follow-up — first-turn unscoped item field (3c.11)
+
+Captured canary evidence showed a first-turn proposal with `new:1` and `new:2` but a quantity observation and mutation with `item_ref:null`. The validator counted zero items **before** the turn and silently mapped that quantity to `li_0`, creating a third headless item. The v3.1-only guard now uses the proposal's touched item refs: when fewer than two items existed before the turn but two or more are proposed, an unscoped item-field observation or mutation raises repairable `item_field_unscoped` with the candidate refs. A single unscoped observation/mutation pair yields one error. The existing `item_target_required` behavior for two preexisting items, v3 validation, and the zero/one-item fallback are unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Safety net | RED | GREEN | Triangulation | Refactor |
+|---|---|---|---|---|---|
+| 3c.11 | Existing `v3-contract-runtime.test.js`: 19/19 passed | Captured regression `v3-v31-item-field-unscoped.test.js`: 3 failed, 8 passed before production edit | 11/11 regression cases passed; focused D11/contract set 45/45 passed | Captured observation and mutation null refs, corrected two-item proposal, quote-level commune, zero/one-item fallback, two preexisting items | Sorted `allowed_values` for deterministic repair instructions; reran focused suite 45/45 |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test | `npx vitest run tests/unit/v3-v31-item-field-unscoped.test.js tests/fixtures/workflow-nodes/shared/v3-contract-runtime.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js --globals` → 5 files, 45/45 tests passed |
+| Runtime harness | N/A: no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` updated embedded nodes and `npm run check:parity` verified them |
+| Full checks | `npm test` → 76 passed files, 17 skipped; 965 passed tests, 154 skipped. `npm run check:parity` → pass. `npm run check:sql-references` → 0 errors, 0 warnings. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert this validator guard, captured fixture/test, and regenerated embedded workflow-node code together; no switch or production deployment was changed. |
+
+Task 3c.11 is complete. Rollout tasks 4.x remain pending; this local check is not a live canary rerun.
+Work-unit commit: `2a991b9` (`fix(v3): reject unscoped item fields in multi-item first turns`). Its 990 total changed lines include 741 lines of captured live-proposal evidence and 8 generated workflow-JSON lines; the focused authored code/test/docs change is 241 lines. The captured fixture is kept intact for reproducibility rather than shortened to meet a size target.
+
+## Rollout: original multi-product incident verified on canary
+
+Tasks 4.3 and 4.5 are complete. A controlled live E2E on phone `56997093038` reached confirmation in eight inbound turns (conversation 330). The first turn retained exactly two items: pandereta with 500 ml and 3 m, and Alambre de Púas without a copied quantity. After clarification, the final state was Cierros de Hormigón (500 ml, 3 m) and Alambre de Púas (300 ml), with `service_scope=both` and delivery. The customer received an itemized final summary.
+
+Confirmation produced one lead (252, `seller_id=2`) and one successful ClickUp task (`wdpgrxvfm5`). ClickUp audit 14714 recorded multiline itemized text in both the description and `CLICKUP_CF_REQUIREMENT_ID`/Requerimiento custom field, so no ` | ` fallback is needed. Neither output had flat `Cantidad` or `Medidas` lines. All eight advisor decisions had `validation_errors=[]`; the corresponding turns had `last_error=NULL`.
+
+This is evidence for the original incident path, not for the prescribed rollout transitions in 4.1, 4.2, or 4.4; those and 4.6–4.7 remain open. The owner subsequently clarified that installation is available **only with delivery**: pickup plus installation must never be offered or accepted. This E2E exercised installation plus delivery, not the prohibited combination. A separate gap was observed for `service_scope=both` plus pickup; policy enforcement and negative-path verification are pending, with no code or runtime change in this documentation unit.
+
+## Owner-rule follow-up — installation requires delivery (3c.12)
+
+Both v3 and v3.1 now reject a quote projected as `service_scope=installation|both` with `fulfillment=pickup`. A shared repairable validator error checks current-turn candidate observations before persisted facts, so correcting either field clears an existing conflict. The guard authorizes no mutation or effect on the invalid proposal. Material-only pickup and installation-only without explicit fulfillment remain valid. Only the v3.1 prompt gains the explanatory rule; the v3 prompt's pinned bytes are unchanged. This is a local code change, not a deployment or live negative-path verification.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.12 validator | `tests/unit/v3-installation-delivery-policy.test.js` | Unit | Relevant preexisting suite 42/42 passed | 4/10 new tests failed on missing `installation_requires_delivery` | 10/10 passed after shared guard | Added both+pickup same-turn and pickup against persisted installation; 14/14 passed | Shared pure error helper; 14/14 remained green |
+| 3c.12 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 10/10 passed before new test | 1/11 failed on missing v3.1 rule | 11/11 passed after v3.1-only rule | v3 byte-identity and v3.1 differential already covered by existing cases | No further refactor needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-installation-delivery-policy.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js --globals` → 7 files, 72/72 passed |
+| Runtime harness | N/A — no SQL or external runtime changed; generated n8n Code-node JSON was synced locally and `npm run check:parity` passed |
+| Full checks | `npm test` → 77 files passed, 17 skipped; 980 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration not run (no SQL change). |
+| Rollback boundary | Revert the shared validator guard, v3.1 prompt clause, their tests/spec/task evidence, and three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |
+
+Rollout tasks 4.1, 4.2, 4.4, 4.6, and 4.7 remain open; this local verification does not satisfy them. The prohibited path still needs a controlled live canary test after deployment.
+
+## D12 correction — valid repair values and persisted-state recovery (3c.13)
+
+The first D12 guard mixed `material` into a `fulfillment` error's `allowed_values`, even though `material` is a `service_scope` value. The repair builder forwards errors unchanged to the model, so this could have instructed an invalid fulfillment repair. The guard also rejected an effect-free clarification if an earlier turn had already committed the conflict. The correction keeps only the policy's delivery grounding ref (`fulfillment:delivery`) in `allowed_values` for the fulfillment path, names the separate `service_scope=material` option in the instruction, and allows only a mutation-free/effect-free corrective `primary_request` when the conflict is already persisted. It waives the resolved-goal check only for that narrow question. An invalid current-turn assertion or lead effect remains blocked.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.13 | `tests/unit/v3-installation-delivery-policy.test.js` | Unit | Existing policy + differential tests 24/24 passed before edit | 6/20 failed: two mixed-domain values and four blocked clarifications; later instruction and grounding-ref tests each failed 2/20 before their fixes | 20/20 passed after recovery rule and repair instruction | Same recovery in v3/v3.1, both vs installation-only, effect/repeated-assertion rejection | Shared pure recovery predicate; focused suite green |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-installation-delivery-policy.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-commercial-policy.test.js tests/unit/v3-v31-address-and-pickup-regression.test.js --globals` → 7 files, 78/78 passed |
+| Runtime harness | N/A — no SQL or external runtime change; generated Code-node JSON synced locally and `npm run check:parity` passed |
+| Full checks | `npm test` → 77 passed files, 17 skipped; 986 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert the narrowed repair value and persisted-clarification exception, their tests/docs, and regenerated workflow JSON without reverting the original D12 guard. No runtime deploy or migration occurred. |
+
+Verification for this documentation unit: compared the task wording with the recorded conversation/lead/ClickUp audit outcomes; `git diff --check` passed. Runtime harness: N/A — this unit only records existing live evidence. Rollback boundary: revert this task-status/evidence documentation commit; no implementation or runtime state is changed.
+
+## Controlled canary: installation requires delivery (2026-09-27)
+
+Guarded workflow sync for `85542d3` and `ab6dbfa` exited 0 with acceptance and replay checks. The durable pre-deploy snapshot is `backups/n8n-pre-installation-delivery-20260927T225650Z` (19 workflow JSON files). Runtime remained in `canary` for the controlled phone; no reset, migration, global enablement, or push occurred.
+
+The single negative inbound `negative-install-pickup-20260927T2305Z` created conversation 332 / turn 406. The bot stated that installation cannot be combined with factory pickup and requires delivery. Its v3.1 decision authorized no pickup fulfillment or effect command; validation errors were empty, the turn was delivered with `last_error=null`, and the conversation created no lead or ClickUp task. Guarded acceptance used a separate conversation 331.
+
+Pre-deploy focused tests passed 44/44; parity, SQL references, preflight, runtime marker, and canonical webhook checks passed. This one negative canary scenario does not satisfy task 4.2's N≥10 live A/B gate.
+
+## Rollout transitions 4.1 and 4.4
+
+| Task | Evidence |
+|---|---|
+| 4.1 | Migration 025 applied to production; the previous `apply_v3_state_mutations` definition is saved at `backups/20260927-084107/apply_v3_state_mutations.before.sql`. Workflows were deployed with `scripts/dev/sync-n8n-workflows.sh --deploy 56997093038` while the running container had `AI_PRD_V3_LINE_ITEMS` unset (fails safe to `disabled`); acceptance passed and decisions stayed `validated_conversation_decision/v3`. |
+| 4.4 | `.env` gained `AI_PRD_V3_LINE_ITEMS=canary` and `AI_PRD_V3_LINE_ITEMS_CANARY_PHONES=56997093038`; `docker compose up -d --no-deps n8n` recreated n8n, and the container reported `AI_PRD_V3_LINE_ITEMS=canary` with that phone list. The controlled phone then produced `validated_conversation_decision/v3.1` decisions. No non-canary phone has sent traffic since the recreate, so live proof that other numbers stay on v3 is still pending; the routing itself is covered by the `compile-v3-turn.js` switch tests. |
+
+## Replace on a never-recorded item value (3c.14)
+
+Live A/B (N=10, production catalog, transcript `pandereta-live-then-wire-correction`) on HEAD: after turn 1 the pandereta item holds 500 ml and 3 m (product withheld) and the Alambre de Púas item holds only its product. On "Corrección: el alambre de púas son 300 ml, no 500 ml", 4/10 runs emitted `replace` for the wire quantity with a `replaces_fact_id` that does not exist. `fact_not_replaceable` rejected it without guidance, the repair repeated the mistake, and the turn fell to contingency; the other 6 runs correctly used `set`. The v3.1 validator now attaches repair guidance to `fact_not_replaceable` when the mutation targets an item field of an existing item: if that item has no current fact for the field, the instruction says to use `set` with `replaces_fact_id: null` (`allowed_values: [null]`); if a customer-correctable fact exists but the id was wrong, the instruction names that fact id (`allowed_values: [<fact id>]`). Accept/reject outcomes are unchanged; quote-level and `item_ref:null` cases keep their exact previous error object. A v3.1-only prompt rule says the same. The v3 validator branch, the v3 prompt (golden) and the v3 request are unchanged.
+
+The replay harness's `checkItemizedFinalConfirmation` previously treated every turn with more than one committed item as a final confirmation, so all 20 runs reported `matches:false` although no scripted transcript reaches a real final-confirmation request. It now applies only when the turn's decision (or, without a decision, its proposal) has `primary_request.goal_id === 'final_confirmation'` and there are more than one item; otherwise it reports `checked:false` with `reason: 'turn does not ask for final_confirmation'`. No third transcript was added: reaching a real final confirmation needs every required goal answered, which is a long scripted conversation.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.14 validator | `tests/unit/v3-v31-replace-missing-fact.test.js` | Unit | Related v3.1 suites (differential, static error-code coverage, spurious-resolution) green before edit | 3/8 failed: missing set/null guidance (nonexistent id; other item's id) and missing correct-id guidance | 8/8 passed after `itemFactNotReplaceableGuidanceV31` | `set`/null and correct-id `replace` validate clean; quote-level and `item_ref:null` errors keep their exact object with no instruction | Guidance isolated in one pure helper; no further refactor |
+| 3c.14 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 11/11 passed | 1/12 failed on missing v3.1 rule | 12/12 passed after `V31_REPLACE_EXISTING_FACT_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+| 3c.14 harness | `tests/unit/v3-line-items-live-replay.test.js` | Unit | Existing harness tests 24/24 passed | 3/27 failed: non-final multi-item turns were checked; replay summary lacked the reason | 27/27 passed after the applicability gate | Decision-less turn reads the proposal's `primary_request`; single-item quote still not applicable | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-v31-replace-missing-fact.test.js tests/unit/build-ai-request-v31-prompt.test.js tests/unit/v3-line-items-live-replay.test.js tests/unit/v3-v31-composition-differential.test.js tests/unit/v3-v31-authorizer-composition-differential.test.js tests/unit/v3-v31-static-error-code-coverage.test.js tests/unit/v3-v31-confirmation-spurious-resolution.test.js --globals` → 7 files, 71/71 passed |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. The live A/B was not rerun in this unit. |
+| Full checks | `npm test` → 78 files passed, 17 skipped; 998 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. Postgres integration skipped (no SQL change). |
+| Rollback boundary | Revert the guidance helper and its call site, the v3.1 prompt rule, the harness applicability gate, their tests/docs, and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send, or migration occurred. |
+
+## Requested product observed without its mutation (3c.15)
+
+Live production on 2026-09-28 (conversation 347, v3.1 enabled for all), customer message: "Necesito cotizar una pandereta de 500 metros de largo por 1,80 de altura, con concertina y alambre pua. Uds realizan ese servicio?". The proposal resolved pandereta as `unsupported` (`new:1`) and matched concertina (`new:2`, `product:alambre-concertina`) and "alambre pua" (`new:3`, `product:alambre-puas`), observed both wire products, but its `state_mutations` held only `new:1`'s quantity and measurements. It validated with `errors: []`: `catalog_resolution_product_observation_required` only checks for the observation, and the line-items resolution reads observations rather than mutations. The lead and the ClickUp task listed only Cierros de Hormigón. The captured policy and proposal are stored in `tests/fixtures/v3-line-items/captured-matched-products-dropped.json`.
+
+The v3.1 validator now raises `item_product_not_recorded` (repairable, blocking, one error per observation, `path: observations[i]`, `related_ids: [observation id]`, `allowed_values: [item_ref]`) for a valid `product` observation with a string `item_ref` when:
+- the item has no product yet: it is a new handle with a `matched` catalog resolution, or an existing item without a product fact;
+- D5 does not withhold it: the item has no `ambiguous` or `unsupported` resolution;
+- the item is not removed by a `remove_item` in the same proposal;
+- no proposal `state_mutation` with `field: product` targets that `item_ref` or cites that observation.
+
+The instruction reads: `Add a state_mutation with operation "set", field "product", item_ref "<ref>", observation_id "<id>" and replaces_fact_id null. Every product the customer requests, including accessories such as wire or concertina mentioned "with" another product, is its own item and needs its own product mutation; never leave a product observation without its mutation.`
+
+These cases are deliberately left alone for precision:
+- An item whose product is already a fact. Restating it ("el alambre de púas viene en rollos?") or naming another product in a comparison is not rejected; changing an existing product stays governed by `replace` and the existing rules.
+- A new handle without a catalog resolution. `item_identity_required` already rejects it.
+- `item_ref: null` product observations. `item_field_unscoped` and `item_target_required` own them.
+- A `matched` resolution with no product observation. `catalog_resolution_product_observation_required` already rejects it.
+
+The captured proposal is now rejected with exactly `['item_product_not_recorded', 'item_product_not_recorded']` (for `obs_product_1`/`new:2` and `obs_product_2`/`new:3`). Adding the two product `set` mutations makes it validate clean, and the authorizer then commits three items. A v3.1-only prompt rule, `V31_EVERY_PRODUCT_RECORDED_RULE`, says the same thing. The error code is v3.1-only, so the static coverage test (v3 ⊆ v3.1) and the differential tests need no allowlist change. The v3 validator branch, the v3 prompt (golden) and the v3 request are unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.15 validator | `tests/unit/v3-v31-item-product-not-recorded.test.js` | Unit | Baseline of every captured fixture's outcome recorded before the edit; `npm test` 998 passed | 4/30 failed: captured proposal, single recorded product, D5-unsupported sibling, existing product-less item clarification | 30/30 passed after the guard | Corrected proposal clean and authorizes 3 items; D5 ambiguous still withheld; unsupported exempt; restating or comparing an existing product accepted; every other captured fixture unchanged | Guard kept as one loop after the mutation pass; no further refactor |
+| 3c.15 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 12/12 passed | 1/13 failed on missing v3.1 rule | 13/13 passed after `V31_EVERY_PRODUCT_RECORDED_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run` over the new test, prompt, composition/authorizer differential, static error-code coverage, item-field-unscoped, live-evidence, spurious-resolution and replace-missing-fact suites (`--globals`) → 9 files, 101/101 passed |
+| Captured outcomes | Every proposal in `tests/fixtures/v3-line-items/` keeps its prior validity and error codes; only `captured-matched-products-dropped.json` changes, from valid to `item_product_not_recorded` ×2 |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 79 files passed, 17 skipped; 1029 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the guard, the v3.1 prompt rule, their tests, the captured fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
+## Explicit distributive quantity on several items (3c.16)
+
+Live production on 2026-09-28 (contract v3.1): a quote with three items (Alambre Concertina and Alambre de Púas without quantity, Cierros de Hormigón with quantity). The bot asked "¿cuántos metros necesitas de alambre concertina y de alambre de púas?" and the customer answered "500 metros de cada uno". The model set 500 m only on the concertina item and asked again "¿también necesitas 500 metros de alambre de púas?".
+
+Before this unit the v3.1 validator rejected the correct proposal: two `quantity` mutations on different items citing the same `(field, evidence_quote, evidence_occurrence)` span raised `item_evidence_span_conflict` (task 3c.7), whatever the quote said. The new test reproduced it (RED).
+
+The guard now tracks the first observation per span and skips the conflict only when `isDistributiveQuantitySpanV31` holds:
+- the field is `quantity` (measurements are not covered);
+- the shared `evidence_quote`, folded (NFD, no diacritics, lowercase, collapsed whitespace), matches `\b(?:(?:de\s+)?cada\s+(?:uno|una|producto|item)|para\s+(?:ambos|ambas|los\s+dos|las\s+dos)|lo\s+mismo\s+para)\b`;
+- the observation's `normalized_value` is canonically identical to the first observation of that span.
+
+Still rejected with `item_evidence_span_conflict`: the same quote without a marker ("500 metros"), a marker elsewhere in the message but outside the shared quote, differing values or units, and a shared measurement span. The 3c.7 captured "copied" cases stay rejected unchanged. The exception lives only in the v3.1 validator branch.
+
+A v3.1-only prompt rule, `V31_DISTRIBUTIVE_QUANTITY_RULE`, placed right after `V31_NO_CROSS_ITEM_TRANSFER_RULE` (unchanged): an explicitly distributive quantity is recorded with the same value on each item it refers to (the items the message names or, if none, the items of the question being answered), with one quantity observation and one `set` mutation per item, each with its `item_ref` and the same `evidence_quote` including the distributive expression; this is not copying between items, and without that explicit expression the no-transfer rule still applies.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.16 validator | `tests/unit/v3-v31-distributive-quantity.test.js` | Unit | `tests/unit/v3-v31-item-evidence-span-conflict.test.js` 6/6; `npm test` 1029 passed | 8/14 failed: the live proposal, the authorizer commit and six marker variants rejected by `item_evidence_span_conflict` | 14/14 passed after the exception | Unmarked quote, marker outside the quote, different value, different unit and shared measurement span stay rejected; span-conflict suite 6/6 unchanged | Helper kept next to the other v3.1 helpers; no further refactor |
+| 3c.16 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 13/13 passed | 1/14 failed on missing v3.1 rule | 14/14 passed after `V31_DISTRIBUTIVE_QUANTITY_RULE` | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule; the no-transfer rule is still present and precedes it | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run tests/unit/v3-v31-distributive-quantity.test.js tests/unit/v3-v31-item-evidence-span-conflict.test.js tests/unit/build-ai-request-v31-prompt.test.js` → 3 files, 34/34 passed |
+| Captured outcomes | All 19 proposals in `tests/fixtures/v3-line-items/` produce byte-identical validation results with the HEAD and the new runtime |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 80 files passed, 17 skipped; 1044 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the exception helper and its call site, the v3.1 prompt rule, their tests, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
+## Distributive values: measurements, no overwrite, named targets, assignment confirmation (3c.17)
+
+Owner-approved refinement of 3c.16 (contract v3.1 only). In the live case the quote held Cierros de Hormigón with 500 m and both wires without quantity; after "500 metros de cada uno" a proposal could set 500 m on both wires and ask `final_confirmation` in the same turn, so the customer never confirmed which items the unnamed value belonged to, and nothing stopped the shared span from also overwriting the Cierros quantity.
+
+`isDistributiveQuantitySpanV31` now accepts `quantity` and `measurements` (`DISTRIBUTIVE_FIELDS_V31`), with the unchanged marker regex, identical `normalized_value` and same `(field, evidence_quote, evidence_occurrence)` span. Every mutation citing a span is recorded, and after the mutation loop `distributiveSpanErrorsV31` checks each span that reached two or more items:
+- **No overwrite.** An entry whose operation is `replace`, or whose item already holds `fact:item:<ref>:<field>` (or a resolved value), raises `item_evidence_span_conflict` at that mutation. `allowed_values` lists the span's fillable refs. Instruction: "A distributive value (for example "de cada uno") only fills items that have no <field> yet, and item <ref> already has a <field> value. Apply it only to items missing that field; to change an existing value the customer must name that product."
+- **Named targets.** `itemsNamedByMessageV31` folds the message the same way as `quoteNamesCatalogProductV31` (NFD, no diacritics, lowercase). It matches each quote item's product (a catalog value) by its full name, or by a word of 4+ letters (optional plural "s") that no other item's product shares. So "concertina y púas" names both wires, and the shared "alambre" names neither. When at least one quote item is named, an entry on an unnamed item raises `item_evidence_span_conflict`, with `allowed_values` = named items missing the field. Instruction: "The customer names products in this message, so this distributive value applies only to the named items missing <field> (<refs>); remove the <field> mutation for <ref>, or drop it and ask which items the value applies to."
+- **Assignment confirmation (mandatory, owner decision).** When no quote item is named and the span reaches two or more items, `primary_request` must be exactly `{goal_id: <field>, item_ref: <one of the target items>}` and the proposal must not request `create_lead`. Anything else — `primary_request: null`, `final_confirmation`, another goal, a non-target or null `item_ref`, or a `create_lead` request — raises the new repairable `distributive_assignment_unconfirmed` (path `primary_request`, or `effect_requests` when only `create_lead` is wrong). `related_ids` and `allowed_values` are the target refs. Instruction: "The customer did not name which products the distributive value "<quote>" applies to, and it is applied to N items (<ref: product>, …). Keep these mutations, but do not ask for final confirmation or create the lead in this turn: ask the customer to confirm that the value applies to <products>, with exactly primary_request {"goal_id":"<field>","item_ref":"<first target>"} (required; primary_request null or any other request is rejected) and no create_lead effect."
+
+The assignment question uses an item-scoped `primary_request` for the distributed field (`{goal_id: 'quantity'|'measurements', item_ref: <one target>}`), for three reasons:
+- The existing validator already accepts it: item fields are known request goals, and item-scoped requests skip `primary_request_goal_resolved`.
+- `09_commit_v3_turn.sql` persists it as `pending_question_key=<field>`, not `final_confirmation`. The next "sí" therefore cannot authorize `create_lead`, which needs a pending `final_confirmation` (tested: `effect_trigger_context_invalid`), and the next turn asks the final confirmation normally (tested: valid).
+- `line_items` with an item_ref is also accepted, but the field goal matches the question asked.
+
+The owner then made that question mandatory: with `primary_request: null` the stored pending question would stay as it was (possibly `final_confirmation` when only measurements were missing), and the next "sí" could create the lead without the assignment ever being confirmed. The 3c.16 proposals that relied on null in the unnamed case now carry the item-scoped request; a test proves null is rejected. The named-products path is unaffected.
+
+The new code is v3.1-only. The static error-code coverage test checks only that v3 codes are a subset of v3.1 codes, and the differential suites enumerate v3 rules, so neither needs a registration change; both stay green unchanged.
+
+`V31_DISTRIBUTIVE_QUANTITY_RULE` (same position, after the unchanged no-transfer rule) now covers quantity or measurement. It keeps one observation and one `set` per item with the same quote, and adds three limits: only fill items that lack the field (never replace; changing a value needs the product named), only the named items when the message names products, and, when it names none and the value lands on two or more items, record it but ask which items it applies to (for example "¿Los 500 metros son para la concertina y para el alambre de púas?") with `primary_request.goal_id` = that field and one target's item_ref, never `final_confirmation` or `create_lead` in that turn.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.17 validator | `tests/unit/v3-v31-distributive-assignment.test.js`, `tests/unit/v3-v31-distributive-quantity.test.js` | Unit | `npm test` 1044 passed; span-conflict suite 6/6 | 12/34 failed: final_confirmation/create_lead not rejected, Cierros overwrite (set, replace, first-in-span) accepted, unnamed third item and single-named cases accepted, measurement spans rejected | 34/34 passed; then the mandatory-question decision: 5/40 failed (null, non-target item_ref, other goal, other field, quote-level request accepted) → 40/40 passed | Assignment question on either target valid; create_lead alongside it still rejected; next-turn "sí" reaches final_confirmation and cannot create the lead; named and accent/case-folded messages go straight to final confirmation; unmarked or differing measurements stay rejected; an item with measurements is not overwritten | Two-measurement-case fixture setup corrected (quantities present so only measurements are missing) |
+| 3c.17 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 14/14 | 2/15 failed on the rewritten rule | 15/15 passed | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule; the no-transfer rule still precedes it | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run --globals` over the two distributive suites, span-conflict, v3.1 prompt, static error-code coverage and both composition differential suites → 7 files, 76/76 passed |
+| Captured outcomes | All 19 proposals in `tests/fixtures/v3-line-items/` produce byte-identical validation results before and after (validity and full error objects) |
+| Runtime harness | N/A — no SQL or external runtime change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 81 files passed, 17 skipped; 1071 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the span-entry tracking, `distributiveSpanErrorsV31`/`itemsNamedByMessageV31`, the measurements extension, the rewritten prompt rule, their tests, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
+## Item questions must not use the customer `name` goal (3c.18)
+
+Contract v3.1 only. Live 2026-09-28 the model used `primary_request.goal_id="name"` (the customer's own name goal, first in the goal enum) for questions about items:
+- Scenario B turn 2: "¿con 'pandereta' te refieres a cierros de hormigón?" with `{goal_id:"name", item_ref:"li_52d7e0a1c9f4"}`. It validated clean, so `pending_question_key` became `name` (captured as `captured-live-proposals.json#11`, `wire-correction-hashed-ids[1]`).
+- Scenario C: after "500 metros de cada uno de los alambres" the first proposal asked `final_confirmation` (correctly rejected by `distributive_assignment_unconfirmed`, 3c.17). The repair wrote the right question ("¿Confirmas que los 500 metros son tanto para el alambre concertina como para el alambre de púas?") but with `{goal_id:"name", item_ref:"li_2e3e2dd78cd4"}`, was rejected again and fell to contingency. Captured as `tests/fixtures/v3-line-items/captured-distributive-ambiguous.json`.
+
+Changes:
+- **Validator.** `validateV3AiProposalV31` raises the new repairable `primary_request_item_ref_invalid` when a shape-valid `primary_request` carries a string `item_ref` on a goal outside `ITEM_SCOPED_REQUEST_GOALS_V31` (product, quantity, measurements and `line_items`, which `catalog_resolution_clarification_required` already accepts as the item-clarification equivalent and live proposals use). Path `primary_request.item_ref`, `related_ids` = [goal], `allowed_values` = [null]. Instruction: "Goal "<goal>" is a quote-level goal, so primary_request.item_ref must be null for it. To ask or confirm something about one item use goal_id "product", "quantity" or "measurements" with that item's item_ref (for example, clarifying which product the customer means is "product"; confirming which items a quantity applies to is "quantity"). goal_id "name" only asks for the customer's own name." A `{goal_id:"name", item_ref:null}` request is unaffected. The path is not `primary_request.goal_id`, so it never creates a goal lock in the repair schema.
+- **Distributive instruction.** `distributive_assignment_unconfirmed` now adds: goal_id must be the literal "<field>"; never "name" (the customer's own name) or any other goal.
+- **Repair goal enum (root cause of scenario C).** In Build AI Request, every v3.1 repair turn used the quote-level goal list (policy goals + `final_confirmation`) for `primary_request.goal_id`, so "quantity" could not be emitted and the model chose "name". The v3.1 enum now narrows only when the repair has a `primary_request.goal_id` lock (unchanged, never widened); otherwise it keeps the first-pass enum with product/quantity/measurements. The v3 enum is unchanged.
+- **Prompt.** New v3.1-only `V31_ITEM_REQUEST_GOAL_RULE`, after `V31_ITEM_REF_GUIDANCE_RULE`: goal_id=name is only for the customer's name; item questions use product, quantity or measurements with their item_ref (clarifying "pandereta" is product; confirming which items a quantity applies to is quantity); quote-level goals take item_ref=null.
+- **Goal descriptions.** Neither the v3 nor the v3.1 schema describes goals (plain enum, no per-goal description), so no description was added.
+
+Known gap (not a validator rule): `wire-correction[4]` and `wire-correction-hashed-ids[0]`/`[2]` ask the pandereta clarification with `{goal_id:"name", item_ref:null}`. That shape is indistinguishable from a real name question without reading reply_text, so they still validate; the prompt rule targets them.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.18 validator | `tests/unit/v3-v31-primary-request-item-ref.test.js`, `tests/unit/v3-line-items-live-evidence.test.js` | Unit | `npm test` green before the change; distributive-assignment suite unchanged | 4/30 and 1/15 failed: name+item_ref accepted (scenarios B and C), commune+item_ref accepted, distributive instruction lacked the literal-goal sentence | 30/30 and 15/15 passed | Same proposals with `quantity` / `product` / `line_items` validate clean; `{name, null}` stays valid; every other captured proposal never raises the new code | None needed |
+| 3c.18 repair enum | `tests/unit/build-ai-request-v31-schema.test.js` | Unit | Existing schema tests 7/7 | 1/9 failed: unlocked repair enum lacked item goals | 9/9 passed | A `primary_request.goal_id` lock still yields exactly the locked goals | None needed |
+| 3c.18 prompt | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Existing prompt tests 15/15 | 1/16 failed on the missing rule | 16/16 passed | v3 prompt still equals `GOLDEN_V3_PROMPT` and lacks the rule | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused check | `npx vitest run` over the new item-ref suite, live-evidence, v3.1 schema, v3.1 prompt and distributive-assignment suites → 5 files, 96/96 passed |
+| Captured outcomes | 21 captured proposals (19 prior + 2 new). Outcomes unchanged except, by design, `captured-live-proposals.json#11` (valid → `primary_request_item_ref_invalid`) and `captured-distributive-ambiguous.json#1` (`distributive_assignment_unconfirmed` → + `primary_request_item_ref_invalid`) |
+| Runtime harness | N/A — no SQL change; `node tests/scripts/sync-workflow-nodes.mjs` regenerated three workflow JSON files and `npm run check:parity` passed. No live A/B rerun in this unit. |
+| Full checks | `npm test` → 82 files passed, 17 skipped; 1106 tests passed, 154 skipped. `npm run check:parity` passed. `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Rollback boundary | Revert the new validator check and constant, the distributive instruction sentence, the repair-enum condition, `V31_ITEM_REQUEST_GOAL_RULE`, their tests, the new fixture, these docs and the three regenerated workflow JSON files as one unit. No runtime deploy, env change, live send or migration occurred. |
+
+## Catalog product synonyms (3c.19)
+
+Contract v3.1 only. Live 2026-09-29 the customer wrote "Bloques de cemento"; the bot asked "¿Te refieres a Bloques de Hormigón?", the customer asked "¿es lo mismo o no?", and the bot answered "No necesariamente… no puedo confirmar que sea exactamente lo mismo". The grounding only carried catalog names, and `service_keywords` are generic (piso, exterior…) and never reach the model.
+
+Changes:
+- **Data (migration 026).** `infra/postgres/migrations/026_catalog_product_synonyms.sql` sets `catalog_items.metadata.synonyms` (JSON array of strings) for the 24 active products with one `UPDATE … FROM (VALUES …)` keyed by sku, via `jsonb_set` on the `synonyms` key only, and skips rows that already hold the same list (a second run updates 0 rows). The rollback `infra/postgres/rollback/026_catalog_product_synonyms.down.sql` removes only that key for the same skus; it lives outside `migrations/` so `reset-test-db.mjs` never applies it forward. Inactive products (`adocesped`, `maceteros`) are not touched.
+- **Synonym rules.** Each synonym maps to exactly one product after accent/case folding, never equals a product name, and shared generic terms (pandereta, placa, poste, alambre, bloque, cierre, tapa, borde, maceta…) are never synonyms, so they keep the clarification flow. Overlapping phrases resolve by longest match; the only overlap with another product's name is "placas de 50" inside "Placas de 50 cm Reforzadas", and the test proves the longer name wins.
+- **Loader.** `01_load_active_context.sql` appends `{"synonyms": …}` to a grounding entry only when `metadata.synonyms` is a non-empty array, so every entry without synonyms keeps the exact `{ref, concept, value}` shape.
+- **Policy builder.** `buildV3PolicyInput` keeps synonyms for `version: 'v3.1'` (distinct, trimmed, non-empty strings; key dropped when none survive) and strips the key for v3. The v3 policy, its `policy_digest` and the v3 request are therefore identical with or without synonyms in the database. The v3.1 digests change when synonyms are present, as expected; `compileV3TurnPolicy` clones the entries unchanged and `policy_digest` pinning still works.
+- **Prompt.** New v3.1-only `V31_CATALOG_SYNONYMS_RULE`, after `V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE`: a listed synonym is that product (catalog_resolutions matched with its grounding_ref, canonical normalized_value, the customer's exact text as evidence, no question); "cemento", "concreto" and "hormigón" are interchangeable in product names, except the product Cemento (the bag/sack); longest match wins; never say a listed synonym "no necesariamente es lo mismo"; shared generic terms still need ambiguous. The model sees the synonyms inside `turn_policy.grounding.catalog`.
+- **Validator.** New `productRefsMentionedV31(entries, text)` (exported): whole-phrase mentions of a product's name or synonyms, accents/case/punctuation folded, a phrase inside a longer phrase of another product dropped. `quoteNamesCatalogProductV31` (repair guidance only) and the 3c.17 `itemsNamedByMessageV31` now also count a synonym as naming its product; both are unchanged when the catalog has no synonyms (every captured fixture). There is no other evidence check tying a matched resolution to the product name, so a synonym-matched resolution was already accepted.
+
+Known pre-existing gap (unchanged): the 3c.17 matcher still uses plain substring matching for full product names, so "bloques de cemento" also names a Cemento item when both are in the quote. The new synonym path does not have this problem.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.19 data | `tests/unit/catalog-product-synonyms-migration.test.js` | Unit | `npm test` green before the change | Suite failed: migration file missing | 12/12 passed | Every synonym alone names only its product; every product name alone names only itself; "placa de 50 (cm) reforzada", "bloques de cemento", "pandereta con placa y poste" | Replaced "no synonym inside another name" with the stronger longest-match property after "placas de 50" surfaced |
+| 3c.19 flow | `tests/unit/v3-v31-catalog-synonyms.test.js` | Unit | Distributive, spurious-resolution and prompt suites green | 7/13 failed: loader clause, builder sanitize/strip, prompt rule, distributive synonym naming, spurious guidance | 13/13 passed | Same distributive message without synonyms keeps `item_evidence_span_conflict` with `allowed_values` [adoquín]; an unnamed item stays excluded | None needed |
+| 3c.19 SQL | `tests/integration/catalog-product-synonyms.postgres.test.js`, `tests/integration/v3-policy-grounding.postgres.test.js` | Integration | Existing grounding suite 4/4 | New cases written before running against the test stack | 3/3 and 6/6 passed | Empty and non-array synonyms are omitted; v3 policy entry has no synonyms | None needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | All captured fixtures in `tests/fixtures/v3-line-items/` (no synonyms) keep their outcomes; live-evidence 15/15, distributive-assignment 26/26, spurious-resolution 9/9 unchanged |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; v3 policies built with and without synonyms are deep-equal with the same `policy_digest` |
+| Full checks | `npm test` → 84 files passed, 18 skipped; 1131 tests passed, 159 skipped. `npm run test:integration:postgres` (dedicated test stack) → 18 files, 159/159. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings. `git diff --check` passed. |
+| Deploy order | 1) apply migration 026 to the live DB (safe alone: the current loader ignores `metadata.synonyms`); 2) deploy the three workflows. Deploying workflows first is also safe (no synonyms yet → grounding unchanged). |
+| Rollback boundary | Revert the loader clause, the builder sanitize/strip, `V31_CATALOG_SYNONYMS_RULE`, `productRefsMentionedV31` and its two call sites, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit; on the DB run the 026 down file. No runtime deploy, env change, live send or migration apply occurred. |
+
+## Catalog technical sheets (3c.20)
+
+Contract v3.1 only. The owner's technical-sheet library was curated into per-product sheets so the assistant can answer technical questions (sizes, weight, yield per m², strength, colors, finishes) from official data only and defer anything unconfirmed to a sales executive. **The repository is public, so the sheet data is private:** no specs, variants, codes, descriptions, new-product names or descriptions, unconfirmed values or source file names are in any tracked file.
+
+Owner-approved criteria (applied to the private data):
+- Conflicts: a value from a clearly newer sheet is kept; otherwise both values go to `technical_sheet.unconfirmed`, which the assistant never states.
+- Supplier-origin sheets are Hormiglass products; supplier brands never reach model-facing data.
+- No prices anywhere (the generator rejects price-like keys and values).
+- No renames or merges: existing rows only gain `metadata.technical_sheet`; new products and one new service are created with their own unambiguous synonyms and existing categories; one inactive product is reactivated; the inactive duplicate stays untouched; 026 synonym lists are unchanged.
+
+Layout:
+- **Private (gitignored `db/seeds/private/`):** `technical_sheets.json` (36 items: 23 existing active products, 1 existing service, 1 reactivated product, 10 new products, 1 new service; plus a `checks` block with the private-only terms the local test verifies) and the generated `027_catalog_technical_sheets.sql` / `027_catalog_technical_sheets.down.sql`. Not under `infra/postgres/migrations/`, so no database applies it automatically.
+- **Tracked:** generator `scripts/catalog/technical-sheets.mjs` (data shape and apply/rollback commands in its header; also summarized in `docs/arquitectura.md`), the generic loader/builder/prompt code, a synthetic fixture `tests/fixtures/catalog/technical-sheets.synthetic.json` ("Producto Demo …") and the tests.
+
+Changes:
+- **Generator.** Validates shape, sku uniqueness, synonym uniqueness and plain source file names, and rejects any price-like key or value. Generated SQL, keyed by sku and idempotent: (1) `INSERT … ON CONFLICT (sku) DO NOTHING` for new items (category by code, `metadata.catalog_migration_027 = 'created'` plus synonyms); (2) reactivation only while inactive and not deleted (`'reactivated'` marker plus synonyms); (3) `jsonb_set` of `technical_sheet` only where it differs. The rollback deletes rows marked `created`, deactivates only rows marked `reactivated` (removing the synonyms it added and the marker), and removes only the `technical_sheet` key. `--check` fails if the private SQL is missing or stale.
+- **Loader.** `01_load_active_context.sql` appends `technical_sheet` (minus `source_files`) only when it is an object.
+- **Policy builder.** Always strips `technical_sheet`; v3.1 re-attaches a compact sheet (agreed keys only, empty fields dropped) to the products in the quote's line items and to the products (name or synonym, longest match via `productRefsMentionedV31`) or services (whole-phrase name) the current message names. All selected sheets together are capped at 6144 UTF-8 bytes: smallest first, each an equal share of the remaining budget, trailing variants dropped with `variants_omitted` (or `{omitted: true}`). Pure function of the turn input, so `policy_digest` is deterministic; v3 policies and digests are identical with or without sheets. The synced n8n node uses the concatenated contract runtime's matcher (tested by running it without `require`).
+- **Prompt.** New v3.1-only `V31_TECHNICAL_SHEET_RULE` after `V31_CATALOG_SYNONYMS_RULE`: technical data only from the product's `technical_sheet`, citing the variant; never invent or estimate; unconfirmed, missing or omitted data → say so and offer that an executive confirms; unit counts only from the sheet's yield, referential and never recorded as quantity; never prices or supplier brands.
+- **Validator.** Unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.20 generator | `tests/unit/catalog-technical-sheets-generator.test.js` | Unit (synthetic) | `npm test` 1134 passed / 159 skipped before the change | First version failed on the missing generator; after the private-data rework the suite was rewritten on the synthetic fixture | 13/13 | Five price-like shapes rejected; structural errors (update with a name, path in source_files, cross-item synonym, duplicate sku); apostrophe escaping | Generator generalized (any reactivated sku, optional synonyms) and moved to private output paths |
+| 3c.20 private data | `tests/unit/catalog-technical-sheets-private.test.js` | Unit (local only) | — | — | 8/8 locally; 8 skipped without the file | Coverage of the active catalog, forbidden terms and excluded-document markers read from the private `checks`, synonym uniqueness and longest match over 026 + private synonyms, SQL current, three largest sheets within the cap | — |
+| 3c.20 flow | `tests/unit/v3-v31-technical-sheets.test.js` | Unit (synthetic) | Synonyms and prompt suites green | 16/20 failed: loader clause, v3 strip, v3.1 selection, compaction, cap, prompt rule | 20/20 | Generic term selects nothing; longest match selects one sku; line-item product selected without a mention; oversized sheets within the cap with ordered truncation; same turn → same digest; synced node without `require` | Real-data values replaced by synthetic ones |
+| 3c.20 SQL | `tests/integration/catalog-technical-sheets.postgres.test.js`, `tests/integration/v3-policy-grounding.postgres.test.js` | Integration | Grounding suite 6/6 | Written before running against the test stack | 5/5 and 8/8 | Second run affects 0 rows; exact rollback; an already-active row is never deactivated by the rollback; non-object sheet omitted; sheet only in the v3.1 policy of a naming turn | — |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | Captured fixtures in `tests/fixtures/v3-line-items/` have no sheets and keep their outcomes |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; v3 policies with and without sheets are deep-equal with the same `policy_digest` |
+| Full checks | `npm test` → 87 files passed, 19 skipped; 1175 passed, 166 skipped locally (CI without the private file: the 8 private tests skip). `npm run test:integration:postgres` (dedicated test stack) → 19 files, 166/166. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `node scripts/catalog/technical-sheets.mjs --check` passed against the private file. Private SQL on the seed catalog (006 + 007 + 026), applied twice then rolled back in one transaction: second run affects 0 rows, 0 differing rows after rollback. |
+| Deploy order | 0) obtain the private data file, run the generator `--check`, and verify the target rows (the product to reactivate exists, inactive and not deleted; no new sku exists yet); 1) apply the private SQL with `psql -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.sql` (safe alone: the current loader ignores `technical_sheet`, but new and reactivated products join the catalog immediately); 2) deploy the three workflows. |
+| Rollback boundary | Code: revert the loader clause, the builder strip/selection, `V31_TECHNICAL_SHEET_RULE`, the generator, the synthetic fixture, the tests, `docs/arquitectura.md`, these docs and the three regenerated workflow JSON files as one unit. DB: run `db/seeds/private/027_catalog_technical_sheets.down.sql`. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
+## Cierros are "muros", measured in linear meters (3c.21)
+
+Contract v3.1 only. Owner rules (Hormiglass):
+1. A customer who says "muro"/"muros" ("un muro de 20 metros", "muro perimetral", "muro prefabricado") without naming another product means Cierros de Hormigón. A product whose own name or synonyms hold a longer "muro ..." phrase keeps it by longest match.
+2. A cierro is measured only in metros lineales, plus the height as a measurement; never square meters. If the customer gives an area, the bot does not record it as the cierro quantity and asks for the linear meters and the height.
+3. Bloques de Hormigón are unrelated to cierros; their yield per m² stays valid for bloques.
+
+Changes:
+- **Data (migration 028).** `infra/postgres/migrations/028_cierros_muro_synonyms.sql` appends `muro`, `muros`, `muro perimetral`, `muros perimetrales`, `muro prefabricado`, `muros prefabricados`, `muro de cierre`, `muro de hormigón` to `cierros-hormigon`'s `metadata.synonyms`, after the 026 phrases and only those not already present; a row holding all of them is not touched (second run: 0 rows). The rollback `infra/postgres/rollback/028_cierros_muro_synonyms.down.sql` removes exactly those phrases (the key only if nothing is left). Uniqueness is tested against the public 026 lists and, when the private data file exists locally, against its products and synonyms.
+- **Private-data test.** `catalog-technical-sheets-private.test.js` now models the live list (026 + 028 merged per sku + private). The 028 phrases are an owner decision, so they are exempt from the private `checks.shared_generic_terms` (which still lists `muro`/`muros`) and from the overlap list, but only after asserting that every product name containing them still names only its own product.
+- **Validator.** New repairable `linear_quantity_required` (path `state_mutations[i]`, related id the quantity observation, allowed value the item_ref) when a `set`/`replace` of `quantity` on an item whose product is linear-only carries an area unit (NFKD-folded: `m2`, `m²`, `mt2`, `mts2`, `m^2`, `metro(s) cuadrado(s)`, `square`, `sq`). Linear-only is data-driven: `LINEAR_ONLY_PRODUCT_REFS_V31 = {product:cierros-hormigon}`, matched by the item's matched resolution, its product observation's `grounding_ref`, or its product value equal to that entry's grounded value. Placas and postes are not listed (sold per unit). To avoid a deadlock with `quantity_observation_required`, that rule does not fire when the only explicit quantity in the message is an m² and the proposal asks `primary_request {goal_id: "quantity", item_ref}` for a linear-only item; any other explicit quantity still requires its observation. v3's validator is untouched.
+- **Prompt.** New v3.1-only `V31_CIERROS_LINEAR_METERS_RULE` right after `V31_TECHNICAL_SHEET_RULE`.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.21 validator | `tests/unit/v3-v31-linear-quantity.test.js` | Unit | Captured-fixture outcomes snapshotted before the change | 13/28 failed (area units, replace, ask-instead nag) | 28/28 | Ten area spellings rejected; six linear spellings valid; replace of an existing cierro quantity; nag still fires when nothing is asked or when a linear quantity is also stated; bloques and adoquín m² quantities unaffected | Instruction moved to English like its neighbors |
+| 3c.21 prompt | same file | Unit | Golden v3 prompt test green | 1/30 failed (rule missing) | 30/30 | v3 prompt lacks the rule | — |
+| 3c.21 data | `tests/unit/catalog-cierros-muro-synonyms-migration.test.js` | Unit | 026 suite 12/12 | Suite failed on the missing migration | 7/7 (1 local-only) | Unique vs 026 + active catalog; locally vs private products/synonyms with longest match | SQL-shape regex relaxed to the multi-line `jsonb_set` |
+| 3c.21 SQL | `tests/integration/catalog-cierros-muro-synonyms.postgres.test.js` | Integration | 166/166 before | Written before running against the test stack | 5/5 | Append after 026 keeping other keys; idempotent; partial list appends only missing; exact rollback; empty result removes the key | — |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Captured outcomes | All 21 captured proposals in `tests/fixtures/v3-line-items/` keep identical `valid` and error codes (before/after snapshot) |
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; the v3 validator body never mentions the new code |
+| Full checks | `npm test` → 89 files passed, 20 skipped; 1212 passed, 171 skipped locally. `npm run test:integration:postgres` (dedicated test stack, 028 applies on the fresh DB) → 20 files, 171/171. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow-evaluator workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `git diff --check` passed. |
+| Known limits | "muro de camellón" / "muros camellón" (not a listed phrase) names both products and is left to the prompt; "muro de bloques" names Cierros for the matcher (the prompt says bloques are the Bloques product); the private `checks.shared_generic_terms` should drop `muro`/`muros` (owner action). |
+| Deploy order | 1) apply migration 028 to the live DB after 026 (safe alone: only adds synonyms); 2) deploy the three workflows. |
+| Rollback boundary | Code: revert the validator rule and its nag exemption, `V31_CIERROS_LINEAR_METERS_RULE`, the tests, the migration pair, these docs and the three regenerated workflow JSON files as one unit. DB: run the 028 down file. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
+## WhatsApp presentation for every bot message (3c.22)
+
+Owner request: every message the bot sends on WhatsApp uses short paragraphs separated by a blank line, the question last and alone on its line (normal messages may prefix "👉 "), single-asterisk *bold* only for key data and summary section titles, and at most three emojis from 👋 👉 ✅ 👍 📋. The final confirmation summary has no emojis and follows the owner's template (*Resumen de tu cotización*, *Productos* with one "•" line per item, then *Instalación*, *Despacho* or *Retiro en fábrica*, and *Datos de facturación* when present, ending with "¿Está todo correcto?"). Presentation only: no message changes what it promises.
+
+### Outgoing text inventory
+
+Production runs v3.1, so AI replies plus the deterministic control-turn copy are what customers see. Legacy-lane copy (reached only when a turn routes to the pre-v3 contract) is listed but left unchanged.
+
+| Source | Text (before → after) | Audience | Status |
+|---|---|---|---|
+| `build-ai-request.js` v3.1 prompt | AI `reply_text` | Customer | New format, emoji and summary rules (v3.1 only) |
+| `evaluate-conversation-step.js` re-engagement choice | "¡Hola de nuevo! ¿Prefieres…?" → "¡Hola de nuevo! 👋⏎⏎👉 ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?" | Customer | Changed |
+| same, postponement / courtesy | three one-liners → two paragraphs with 👍/👋 | Customer | Changed |
+| same, lost interest | "Entendido. Cerramos tu solicitud. Si…" → "Entendido, cerramos tu solicitud.⏎⏎Si necesitas algo más, aquí estaremos." | Customer | Changed (no emoji) |
+| same, opt-out | "Entendido. No te escribiremos más." | Customer | Unchanged (one short line, no emoji) |
+| same, `ESCALATION_ALREADY_REQUIRED_REPLY` | → "…del equipo 👍⏎⏎Si necesitas una cotización distinta, escribe *nueva cotización*." | Customer | Changed |
+| same, `COMMERCIAL_REVIEW_PENDING_REPLY` | → "Tu solicitud ya está registrada ✅⏎⏎Está pendiente de revisión por el equipo comercial." | Customer | Changed |
+| `apply-ai-assistance.js` escalation routing | loop: two paragraphs, no emoji; human requested: "Por supuesto 👍⏎⏎Te derivaré…"; generic line unchanged | Customer | Changed |
+| same, no-processing fallback | → "No pude procesar tu respuesta.⏎⏎👉 ¿Podrías intentarlo nuevamente?" | Customer | Changed |
+| `v3-saga-runtime.js` + `build-v3-repair.js` contingency | "No pude completar la gestión automática.⏎⏎Derivé el caso al equipo para revisión." and the loop variant in two paragraphs | Customer | Changed (both copies) |
+| Dispatcher `Prepare Verified Handoff` (inline in `wa-inbound-downstream-dispatcher.json`) | "Gracias, ya registré tu solicitud y quedó asignada al equipo comercial ✅⏎⏎Una ejecutiva…" / unassigned variant | Customer | Changed |
+| `prepare-follow-up-message.js` + `follow-up-policy.js` | 15 templates: "Hola {{nombre}} 👋⏎⏎…⏎⏎👉 ¿…?", voseo and missing accents fixed; empty name renders "Hola 👋" | Customer | Changed |
+| Legacy lane (`evaluate-conversation-step.js` greetings/base questions/`confirmationText`, `apply-ai-assistance.js` advisor questions, `confirmationText`, correction question) | "Tengo esto:…", "Hola, gracias por escribir a Hormiglass…", etc. | Customer | Unchanged: not reachable on the v3/v3.1 lane |
+| `crm-seller-notification-dispatch.json` `Build Seller Notification` | "Nuevo lead listo para gestionar…" | Seller | Unchanged: posted as a ClickUp comment, not WhatsApp |
+| `ops-handoff-notification-scheduler` / ClickUp payloads | task text | Seller | Unchanged: ClickUp, not WhatsApp |
+| `Build Quotation` (`quotation_text`) | internal quotation draft | — | Unchanged: never sent |
+
+### Compatibility
+
+- Delivery: `build-outbound-payload.js` only trims and sends `text` in a JSON body to Evolution `sendText`; newlines, asterisks and emojis pass through unchanged.
+- Validator: forbidden-claim patterns failed on bold before this change ("ya *derivado*", "*Tu cotización* ya está en proceso", "*stock* disponible" were accepted). Both validators now test those patterns, the factory-address rule and the generic-product-question check on `reply_text` without `*`, `_`, `~`. Stripping markers only adds matches to the forbidden patterns; for the address rule it accepts a bolded address that WhatsApp shows exactly.
+- Harness: `checkItemizedFinalConfirmation` counts lines starting with "•"; the owner template yields one per item.
+- Question count: the only "?" counter (`test-advisor-vitacura-e2e.sh`) still sees one question.
+- Cooldown: `wasSentWithinCooldown` compares exact text, so a terminal line sent with the old copy in the 6 h before deploy can be sent once more with the new copy.
+- E2E: `test-reengagement-n8n-e2e.sh` now expects the formatted re-engagement text (`E'…\n\n…'`); `test-advisor-vitacura-e2e.sh` still matches "ya registré tu solicitud".
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.22 prompt | `tests/unit/whatsapp-message-formatting.test.js`, `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | Golden v3 test green | 4 prompt tests failed; the derivation test then failed on 4 removed lines | 16/16 + prompt block green | v3 keeps all three original lines; allowlist test names each replaced line | Replacement helper `replaceV3Line` throws if a source line disappears |
+| 3c.22 validator | same new file | Unit | 1221 passing before | 7 formatted forbidden-claim / address cases failed | green | Plain claims, formatted clean reply, pickup summary without address still rejected; v3 rollback validator covered | Shared `replyTextWithoutWhatsAppFormatting` |
+| 3c.22 fixed copy | same new file, `prepare-follow-up-message-wrapper.test.js` | Unit | Existing copy tests green | 15 exact-text / style tests failed | green | Style checker: no `**`/`#`, trimmed, ≤3 emojis from the set, one question on the last line | Follow-up `fillTemplate` drops the space before an empty name |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| v3 | Prompt equals `GOLDEN_V3_PROMPT`; brand-voice test on the deployed workflow still green |
+| Full checks | `npm test` → 90 files passed, 20 skipped; 1258 passed, 171 skipped locally. `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant, shadow evaluator and follow-up scheduler workflows; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; dispatcher semantic integrity 3/3; `git diff --check` passed. No SQL changed, so the Postgres suite was not rerun. |
+| Deploy order | Deploy the five workflow JSON files together (orchestrator, AI assistant, shadow evaluator, follow-up scheduler, downstream dispatcher). No DB change. |
+| Rollback boundary | Revert the prompt rules, the validator helper, the fixed copy, the dispatcher node copy, the tests, the e2e expectation, these docs and the regenerated workflows as one unit. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
+## Rollout 4.7 — live behavior battery after enabling (2026-09-28)
+
+With `AI_PRD_V3_LINE_ITEMS=enabled`, an adaptive runner drove the controlled phone `56997093038` through 11 scenarios (the removal scenario was rerun so that the removal arrives at the confirmation turn). Every AI turn was `validated_conversation_decision/v3.1` with `validation_errors=[]` and no `last_error`; there were 0 contingencies.
+
+| Scenario | Turns | Outcome |
+|---|---|---|
+| Single product, material pickup | 2 | Lead 258, `Pastelones 50`; the confirmation states the factory address |
+| Single product, material delivery | 4 | Lead 260, Maipú |
+| Single product, installation | 6 | Lead 262; asked terrain, truck access and debris; a bare "Sí" and "No" were recorded |
+| Two products, material delivery | 4 | Lead 264, two bullet lines |
+| Quantity correction at confirmation | 4 | Lead 266, Pastelones 60 corrected to 80 |
+| Add an item mid-flow | 5 | Lead 268, second item added; the pending question was kept |
+| Remove an item at confirmation | 3 | Lead 274, only Placas de Hormigón 30 |
+| Company with invoice | 4 | Lead 272; company, RUT and `invoice_required` persisted |
+| Price and stock question | 1 | Declined to confirm price or stock, then asked for the quantity |
+| Opt-out mid-flow | 2 | Deterministic close, no handoff |
+| Delivery claim | 1 | Real handoff 525 (notified) |
+
+Observations, none blocking:
+- The claim handoff is routed to Ventas because `17_persist_v3_handoff_effect.sql` hardcodes the area for every v3 authorized handoff. This predates v3.1.
+- The claim turn also stored a product-only `Adoquín` item with no quantity.
+- Stored item quantities vary in shape (number, string, or object), and the multi-item requirement omits the unit when the quantity is a bare number (`• Pastelones — 80`).
+
+## Deterministic WhatsApp tidy-up of v3.1 AI replies (3c.23)
+
+Owner request: the live test after 3c.22 showed the model follows the presentation rules only partially ("…en Maipú. Para definir la instalación, ¿cómo es el terreno…?" with the question glued to the paragraph; "¡Gracias por confirmar! Tu solicitud quedó registrada. Una ejecutiva…" as one block). Every v3.1 AI reply is now tidied deterministically before it is validated and sent.
+
+### Where and why
+
+- `formatWhatsAppReplyV31` and `prepareV3ProposalForValidation` live in `shared/v3-contract-runtime.js`, already composed into `Validate And Authorize V3`.
+- `Validate And Authorize V3` is the single entry for both the first AI proposal and the repaired one (`Build V3 Repair` → `Execute AI Lead Qualification` → `Merge AI Assistance` → `Use V3 Contract?` → `Validate And Authorize V3`). The node formats `ai_proposal.reply_text` before `validateV3AiProposal`, and emits the formatted `ai_proposal`, so `proposal_digest` (= `digestObject(ai_proposal)`), `decision_id`, `reply.sha256`, `delivery_key`, `decision_digest`, the persisted decision and `response_text` all cover the same bytes. The formatter always returns trimmed text, so the send step's `trim()` keeps delivery receipts equal.
+- `validateV3AiProposal` / `authorizeV3ConversationDecision` stay pure over the proposal they receive, so their existing digest binding (`validation.proposal_digest === digestObject(proposal)`) is unchanged.
+- v3 (golden rollback path): `prepareV3ProposalForValidation` returns the same reference, and the node output is byte-identical to before.
+- Shadow evaluator: runtime code re-composed only; it still validates the raw proposal (diagnostic, never sent).
+
+### Rules (whitespace only, idempotent)
+
+1. Trim every line end and the whole text; collapse 3+ newlines to 2.
+2. The final question — the line holding the last "?", when that "?" ends the line — moves to its own paragraph when earlier sentences share its line. The split is at the start of its sentence, so "Para definir la instalación, ¿…?" stays together; a question that is the only sentence is left alone.
+3. A short opening "¡…!" (≤ 60 chars, with any trailing emoji other than 👉) gets a blank line after it when two or more sentences follow on its line. One following sentence keeps the prompt's own "¡Hola! 👋 Soy Hormi Atención de *Hormiglass*." and "¡Perfecto! Quedan 500 metros para cada alambre." shape.
+4. Sentence boundary: "." or "!" (plus closing markers and trailing emojis except 👉), whitespace, then uppercase, ¿, ¡, a formatting marker or an emoji; never after a known abbreviation ("Av.", "aprox.", "mts.").
+5. Never touches a "•" line, never adds, removes or reorders a visible character (words, emojis, asterisks).
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3c.23 formatter | `tests/unit/whatsapp-reply-formatter-v31.test.js` | Unit | 1258 passing before | 25/26 failed (functions missing) | 26/26 | Both live examples, greeting and summary examples untouched, bullets, question-only, abbreviations, question mid-line, idempotence and whitespace-only property over 7 inputs, non-string input | Shared sentence-boundary helper for rules 2 and 3 |
+| 3c.23 pipeline | same file, synced `Validate And Authorize V3` node | Integration (node code from the workflow JSON) | — | failed with the node unchanged | green | Formatted text equals `reply_text`, `response_text`, decision text; digests and delivery key recomputed; glued and pre-formatted replies share `decision_id`/`delivery_key`; forbidden claim and factory address rules still enforced; v3 proposal passes by reference | Node emits `ai_proposal` only when it changed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| v3 | v3 proposals untouched (by reference); v3 golden prompt and composition-differential tests green |
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated `Compile V3 Turn Policy`, `Validate And Authorize V3` (orchestrator) and both shadow evaluator nodes; `npm test` → 91 files passed, 20 skipped; 1284 passed, 171 skipped locally; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `git diff --check` passed. No SQL changed. |
+| Deploy order | Deploy the orchestrator and shadow evaluator workflow JSON files. No DB change. |

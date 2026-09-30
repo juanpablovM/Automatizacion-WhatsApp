@@ -29,6 +29,42 @@ const responseSchemaFor = (turnPolicy, env = baseEnv) => {
   return runCodeNode(source, [{ json: { contract_version: 'v3', turn_policy: turnPolicy } }], env)[0].json.response_schema;
 };
 
+
+// Task 3c.18: live 2026-09-28 the 3c.17 repair ("ask which items the
+// distributive value applies to, with primary_request {goal_id:"quantity",
+// item_ref}") came back with goal_id "name": every repair turn replaced the
+// v3.1 goal enum with the quote-level list, which never contains an item
+// field, so "quantity" was unrepresentable. A repair with no
+// primary_request.goal_id lock keeps the first-pass v3.1 enum; a real lock
+// stays exactly the lock.
+const repairSchemaFor = (turnPolicy, repairErrors) => {
+  const source = fs.readFileSync(fixturePath, 'utf8');
+  return runCodeNode(source, [{ json: {
+    contract_version: 'v3', turn_policy: turnPolicy, ai_repair_request: { errors: repairErrors },
+  } }], baseEnv)[0].json.response_schema;
+};
+
+describe('Build AI Request — v3.1 primary_request goal enum in a repair turn', () => {
+  const policy = () => v31Policy({ goals: [{ goal_id: 'name' }, { goal_id: 'commune' }, { goal_id: 'line_items' }] });
+
+  test('a repair without a goal lock (distributive_assignment_unconfirmed) still offers the item goals', () => {
+    const schema = repairSchemaFor(policy(), [{
+      code: 'distributive_assignment_unconfirmed', path: 'primary_request', related_ids: ['li_a', 'li_b'], allowed_values: ['li_a', 'li_b'],
+    }]);
+
+    expect(schema.properties.primary_request.properties.goal_id.enum)
+      .toEqual(['name', 'commune', 'line_items', 'final_confirmation', 'product', 'quantity', 'measurements']);
+  });
+
+  test('a repair that locks primary_request.goal_id keeps exactly the locked goals', () => {
+    const schema = repairSchemaFor(policy(), [{
+      code: 'final_confirmation_not_ready', path: 'primary_request.goal_id', related_ids: ['commune'], allowed_values: ['commune'],
+    }]);
+
+    expect(schema.properties.primary_request.properties.goal_id.enum).toEqual(['commune']);
+  });
+});
+
 describe('Build AI Request — v3.1 line-items schema pins', () => {
   test('pins policy_digest to this turn, the same way the v3 schema does', () => {
     const digest = 'd'.repeat(64);

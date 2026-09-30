@@ -346,8 +346,86 @@ const hasExplicitConfirmation = (value) => {
   return /\b(confirmo|confirmado|de acuerdo|adelante|procedan|proceder|procede|avancemos|pueden avanzar|quiero avanzar)\b/.test(text);
 };
 
+// Task 3c.22: replies use WhatsApp formatting (*bold*, _italics_, ~strike~).
+// Every reply_text text check reads the text as the customer sees it, without
+// those markers, so "ya *derivado*" or "*Tu cotización* ya está en proceso"
+// never slips past a forbidden claim and a bolded factory address still counts.
+const replyTextWithoutWhatsAppFormatting = (value) => String(value ?? '').replace(/[*_~]/g, '');
+
+// Task 3c.23: the model follows the 3c.22 presentation rules only partially,
+// so every v3.1 AI reply_text is tidied deterministically before validation,
+// digests and delivery. Whitespace only: it never adds, removes or reorders a
+// visible character (words, emojis, asterisks), never touches a "•" line, and
+// is idempotent. Rules, in order:
+//   a. trim every line end and the whole text; collapse 3+ newlines to 2;
+//   b. the final question (the line holding the last "?", when that "?" ends
+//      the line) moves to its own paragraph when earlier sentences share its
+//      line, splitting at the start of its sentence so a leading connector
+//      ("Para definir la instalación, ¿…?") stays with it;
+//   c. a short opening "¡…!" gets a blank line after it when two or more
+//      sentences follow on its line (one following sentence keeps the
+//      prompt's own "¡Hola! 👋 Soy Hormi…" / "¡Perfecto! Quedan…" shape).
+// A sentence boundary is "." or "!" (plus closing markers and trailing
+// emojis other than 👉, which leads the next sentence), whitespace, then a
+// sentence start (uppercase, ¿, ¡, a formatting marker or an emoji), never
+// after a known abbreviation such as "Av." or "aprox.".
+const WHATSAPP_ABBREVIATIONS_V31 = new Set([
+  'av', 'avda', 'nro', 'num', 'no', 'n°', 'sr', 'sra', 'srta', 'dr', 'dra', 'aprox', 'etc',
+  'depto', 'dpto', 'pje', 'psje', 'ej', 'mt', 'mts', 'mtr', 'mtrs', 'm', 'ml', 'cm', 'mm', 'km',
+  'kg', 'lt', 'lts', 'u', 'ud', 'uds', 'unid', 'cía', 'cia', 'ltda', 'sta', 'sto', 'st',
+]);
+const WHATSAPP_SENTENCE_BOUNDARY_V31 = /[.!][*_~"”»)]*(?:[ \t]*(?:(?!👉)[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}])+)*(?=[ \t]+(?:[\p{Lu}¿¡*_~]|\p{Extended_Pictographic}))/gu;
+const whatsAppSentenceBoundariesV31 = (line) => {
+  const boundaries = [];
+  for (const match of line.matchAll(WHATSAPP_SENTENCE_BOUNDARY_V31)) {
+    const before = line.slice(0, match.index);
+    const word = (before.match(/[\p{L}\p{N}°]+$/u) || [''])[0].toLocaleLowerCase('es');
+    if (match[0][0] === '.' && WHATSAPP_ABBREVIATIONS_V31.has(word)) continue;
+    const end = match.index + match[0].length;
+    const next = end + line.slice(end).match(/^[ \t]+/)[0].length;
+    boundaries.push({ end, next });
+  }
+  return boundaries;
+};
+const isWhatsAppBulletLineV31 = (line) => line.trimStart().startsWith('•');
+const formatWhatsAppReplyV31 = (value) => {
+  if (typeof value !== 'string') return value;
+  const lines = value.replace(/\r\n?/g, '\n').split('\n').map((line) => line.replace(/[ \t ]+$/u, ''));
+  // b. final question on its own paragraph.
+  const questionIndex = lines.map((line) => line.includes('?')).lastIndexOf(true);
+  if (questionIndex >= 0 && !isWhatsAppBulletLineV31(lines[questionIndex])) {
+    const line = lines[questionIndex];
+    const questionEnd = line.lastIndexOf('?');
+    const endsLine = /^[*_~"”»)]*[\s\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}]*$/u.test(line.slice(questionEnd + 1));
+    const boundary = endsLine ? whatsAppSentenceBoundariesV31(line.slice(0, questionEnd)).pop() : null;
+    if (boundary) lines[questionIndex] = `${line.slice(0, boundary.end)}\n\n${line.slice(boundary.next)}`;
+  }
+  let text = lines.join('\n');
+  // c. short opening exclamation followed by two or more sentences.
+  const opening = text.match(/^[ \t\n]*(¡[^!\n]{1,58}![*_~]*(?:[ \t]*(?:(?!👉)[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}])+)*)[ \t]+(?=[^ \t\n])/u);
+  if (opening) {
+    const restStart = opening[0].length;
+    const restLine = text.slice(restStart).split('\n')[0];
+    if (!isWhatsAppBulletLineV31(restLine) && whatsAppSentenceBoundariesV31(restLine).length > 0) {
+      text = `${text.slice(0, restStart).replace(/[ \t]+$/, '')}\n\n${text.slice(restStart)}`;
+    }
+  }
+  // a. whitespace cleanup.
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+// Applied once, where the v3.1 proposal enters validation, so the validated,
+// digested, stored and sent reply_text are the same bytes. v3 proposals (the
+// golden rollback path) and malformed proposals are returned by reference.
+const prepareV3ProposalForValidation = (policy, proposal) => {
+  if (policy?.version !== V3_CONTRACTS.policy_v3_1) return proposal;
+  if (!isObject(proposal) || typeof proposal.reply_text !== 'string') return proposal;
+  const replyText = formatWhatsAppReplyV31(proposal.reply_text);
+  return replyText === proposal.reply_text ? proposal : { ...proposal, reply_text: replyText };
+};
+
 const isGenericProductRequestion = (value) => {
-  const text = String(value ?? '')
+  const text = replyTextWithoutWhatsAppFormatting(value)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('es')
@@ -463,6 +541,30 @@ const pickupFactoryAddressRequiredError = (normalizedReplyText) => {
   );
 };
 
+const installationRequiresDeliveryError = (policy, serviceScope, fulfillment) => {
+  if (!['installation', 'both'].includes(serviceScope) || fulfillment !== 'pickup') return null;
+  const deliveryRefs = groundingEntries(policy)
+    .filter((entry) => entry?.concept === 'fulfillment' && sameGroundedValue(groundingValue(entry), 'delivery'))
+    .map((entry) => entry.ref);
+  return validationError(
+    'installation_requires_delivery', 'fulfillment', ['service_scope', 'fulfillment'], deliveryRefs,
+    'Installation is available only with delivery. Correct fulfillment to delivery, or correct service_scope to material-only pickup without installation, but only with customer evidence. If this conflict is already persisted and the current message does not resolve it, ask whether the customer wants installation with delivery or material-only pickup; do not authorize an effect. Do not offer installation with factory pickup.',
+  );
+};
+
+const isPersistedInstallationConflictClarification = (policy, observations, mutations, proposal, primaryRequestValid) => {
+  const serviceScope = projectedValueFor(policy, [], 'service_scope');
+  const fulfillment = projectedValueFor(policy, [], 'fulfillment');
+  return Boolean(installationRequiresDeliveryError(policy, serviceScope, fulfillment))
+    && primaryRequestValid
+    && (proposal.primary_request?.goal_id === 'service_scope'
+      || (serviceScope === 'both' && proposal.primary_request?.goal_id === 'fulfillment'))
+    && observations.length === 0
+    && mutations.length === 0
+    && Array.isArray(proposal.effect_requests)
+    && proposal.effect_requests.length === 0;
+};
+
 const primaryRequestGoalInapplicableError = (requestedGoal, serviceScope, allowedNextGoalIds) => {
   if (!(requestedGoal === 'fulfillment' && serviceScope === 'installation')) return null;
   return validationError(
@@ -513,6 +615,7 @@ const FLAT_ITEM_ID = 'li_0';
 const OBSERVATION_KEYS_V31 = new Set([...OBSERVATION_KEYS, 'item_ref']);
 const MUTATION_KEYS_V31 = new Set(['operation', 'field', 'item_ref', 'observation_id', 'replaces_fact_id']);
 const PRIMARY_REQUEST_KEYS_V31 = new Set(['goal_id', 'item_ref']);
+const ITEM_SCOPED_REQUEST_GOALS_V31 = new Set([...ITEM_FIELDS, 'line_items']);
 const CATALOG_RESOLUTION_KEYS_V31 = new Set([...CATALOG_RESOLUTION_KEYS, 'item_ref']);
 const CATALOG_RESOLUTION_STATUSES_V31 = new Set(['matched', 'unsupported', 'ambiguous']);
 const TOP_LEVEL_PROPOSAL_KEYS_V31 = new Set([
@@ -551,8 +654,219 @@ const deriveItemIdV31 = (conversationId, turnId, handle) => {
   return `li_${sha256(seed).slice(0, 12)}`;
 };
 
+// 3c.16: an explicit distributive quantity ("500 metros de cada uno", "para
+// ambos") legitimately sets the same quantity on each item it refers to, so
+// one quantity span may authorize several item_ref values only when that
+// shared quote itself carries a distributive marker and every value is
+// identical. 3c.17 extends it to measurements; every other field or shape stays
+// item_evidence_span_conflict, and distributiveSpanErrorsV31 below narrows
+// which items a distributive span may reach.
+const DISTRIBUTIVE_FIELDS_V31 = new Set(['quantity', 'measurements']);
+const DISTRIBUTIVE_QUANTITY_MARKER_V31 = /\b(?:(?:de\s+)?cada\s+(?:uno|una|producto|item)|para\s+(?:ambos|ambas|los\s+dos|las\s+dos)|lo\s+mismo\s+para)\b/;
+const isDistributiveQuantitySpanV31 = (field, observationEntry, firstObservation) => {
+  if (!DISTRIBUTIVE_FIELDS_V31.has(field) || !firstObservation) return false;
+  const quote = String(observationEntry.evidence_quote ?? '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/\s+/g, ' ');
+  return DISTRIBUTIVE_QUANTITY_MARKER_V31.test(quote)
+    && canonicalJson(observationEntry.normalized_value ?? null) === canonicalJson(firstObservation.normalized_value ?? null);
+};
+
 const hasResolvedValue = (value) => value !== undefined && value !== null
   && (typeof value !== 'string' || value.trim() !== '');
+
+// Repair guidance only (never changes accept/reject): live canary 2026-09-27
+// showed the model emitting a catalog_resolutions entry for an item whose
+// product was already a known fact while the customer named no product
+// (a final confirmation). These helpers let the repair prompt say so.
+const foldForProductMatchV31 = (value) => String(value ?? '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+// Task 3c.19: a catalog product entry may list `synonyms` (migration 026).
+// A mention is a whole-word phrase (accents, case and punctuation folded) of
+// the product's name or one of its synonyms; when two products' phrases
+// overlap, the longest one wins, so "placa de 50 reforzada" names only
+// Placas de 50 cm Reforzadas and "bloques de cemento" does not name Cemento.
+const phraseFoldV31 = (value) => foldForProductMatchV31(value).replace(/[^a-z0-9]+/g, ' ').trim();
+const productSynonymsV31 = (entry) => (Array.isArray(entry?.synonyms) ? entry.synonyms : [])
+  .filter((synonym) => typeof synonym === 'string' && synonym.trim() !== '');
+const catalogHasSynonymsV31 = (entries) => entries
+  .some((entry) => entry?.concept === 'product' && productSynonymsV31(entry).length > 0);
+const productRefsMentionedV31 = (entries, text) => {
+  const haystack = ` ${phraseFoldV31(text)} `;
+  const spans = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry?.concept !== 'product' || typeof entry.ref !== 'string' || entry.ref === '') continue;
+    const name = groundingValue(entry);
+    for (const phrase of [typeof name === 'string' ? name : '', ...productSynonymsV31(entry)]) {
+      const needle = phraseFoldV31(phrase);
+      if (!needle) continue;
+      for (let index = haystack.indexOf(` ${needle} `); index !== -1; index = haystack.indexOf(` ${needle} `, index + 1)) {
+        spans.push({ ref: entry.ref, start: index + 1, end: index + 1 + needle.length });
+      }
+    }
+  }
+  return new Set(spans
+    .filter((span) => !spans.some((other) => other.ref !== span.ref
+      && other.start <= span.start && span.end <= other.end
+      && other.end - other.start > span.end - span.start))
+    .map((span) => span.ref));
+};
+// Task 3c.21 (owner rule): some products are quoted only in linear meters plus
+// a height, never by area. Data-driven by catalog ref; today only Cierros de
+// Hormigón (placas and postes are sold per unit, so they are not listed).
+// An item's product is linear-only when its matched catalog resolution or its
+// product observation points at a listed ref, or when its product value is the
+// grounded value of a listed ref.
+const LINEAR_ONLY_PRODUCT_REFS_V31 = new Set(['product:cierros-hormigon']);
+const AREA_UNIT_V31 = /(?:^|[^a-z0-9])(?:m|mt|mts|mtr|mtrs|metros?)\s*\^?\s*2(?![0-9])|cuadrad|square|(?:^|[^a-z])sq(?![a-z])/;
+const isAreaUnitV31 = (unit) => typeof unit === 'string'
+  && AREA_UNIT_V31.test(unit.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es'));
+const AREA_QUANTITY_IN_MESSAGE_V31 = /\b\d+(?:[.,]\d+)?\s*(?:m2|m²)(?=\s|$|[.,;:])/giu;
+const isLinearOnlyProductV31 = (policy, product, groundingRefs = []) => {
+  if (groundingRefs.some((ref) => LINEAR_ONLY_PRODUCT_REFS_V31.has(ref))) return true;
+  const name = productNameTextV31(product);
+  if (!name.trim()) return false;
+  return groundingEntries(policy).some((entry) => entry?.concept === 'product'
+    && LINEAR_ONLY_PRODUCT_REFS_V31.has(entry.ref) && sameGroundedValue(groundingValue(entry), name));
+};
+const linearQuantityInstructionV31 = (itemRef) => `Cierros are measured only in metros lineales (linear meters) plus the height (altura), never by area. Never record an area (m², metros cuadrados) as this item's quantity: drop this state_mutation and its quantity observation, and ask for the linear meters and the height with primary_request {"goal_id": "quantity", "item_ref": "${itemRef}"} (or "measurements" for the same item_ref); never re-add the area.`;
+const quoteNamesCatalogProductV31 = (policy, quote) => {
+  const folded = foldForProductMatchV31(quote);
+  if (!folded.trim()) return false;
+  const entries = groundingEntries(policy);
+  // Without synonyms in the catalog this is exactly the pre-3c.19 check.
+  if (catalogHasSynonymsV31(entries) && productRefsMentionedV31(entries, quote).size > 0) return true;
+  return entries
+    .filter((entry) => entry?.concept === 'product')
+    .map((entry) => foldForProductMatchV31(groundingValue(entry)))
+    .some((name) => name.trim() !== '' && folded.includes(name));
+};
+// 3c.17: which quote items the current message names. Same folding as
+// quoteNamesCatalogProductV31 (accents and case), matched against each item's
+// product (a catalog value): the full product name, or a word of it (4+
+// letters, optional plural "s") that no other item's product shares, so
+// "concertina y púas" names "Alambre Concertina" and "Alambre de Púas" while
+// the shared word "alambre" names neither.
+const productNameTextV31 = (value) => (typeof value === 'string'
+  ? value
+  : (isObject(value) ? String(value.value ?? value.name ?? '') : ''));
+const productWordsV31 = (name) => foldForProductMatchV31(name).split(/[^a-z0-9]+/).filter((word) => word.length >= 4);
+// Task 3c.19: an item whose catalog product lists synonyms is also named when
+// the message mentions one of them (productRefsMentionedV31, longest match).
+// Items whose product has no synonyms keep exactly the 3c.17 matching.
+const itemsNamedByMessageV31 = (messageText, productByRef, catalogEntries = []) => {
+  const folded = foldForProductMatchV31(messageText);
+  const wordsByRef = new Map([...productByRef].map(([ref, product]) => [ref, productWordsV31(productNameTextV31(product))]));
+  const named = new Set();
+  const productEntries = (Array.isArray(catalogEntries) ? catalogEntries : [])
+    .filter((entry) => entry?.concept === 'product' && productSynonymsV31(entry).length > 0);
+  const mentionedRefs = productEntries.length > 0 ? productRefsMentionedV31(catalogEntries, messageText) : new Set();
+  for (const [ref, product] of productByRef) {
+    const catalogEntry = productEntries.find((entry) => sameGroundedValue(groundingValue(entry), productNameTextV31(product)));
+    if (catalogEntry && mentionedRefs.has(catalogEntry.ref)) {
+      named.add(ref);
+      continue;
+    }
+    const fullName = foldForProductMatchV31(productNameTextV31(product)).trim();
+    if (fullName && folded.includes(fullName)) {
+      named.add(ref);
+      continue;
+    }
+    const otherWords = new Set([...wordsByRef].filter(([otherRef]) => otherRef !== ref).flatMap(([, words]) => words));
+    const distinctive = wordsByRef.get(ref).filter((word) => !otherWords.has(word));
+    if (distinctive.some((word) => new RegExp(`(?:^|[^a-z0-9])${word.replace(/s$/, '')}s?(?:$|[^a-z0-9])`).test(folded))) {
+      named.add(ref);
+    }
+  }
+  return named;
+};
+
+// 3c.17 (owner-approved): a distributive span shared by two or more items
+// (accepted by isDistributiveQuantitySpanV31) may only
+//   - set the field on items that hold no value for it yet (never overwrite);
+//   - reach the items the message names, when it names any quote item;
+//   - when it names none, ask the customer which items the value applies to
+//     (mandatory, owner decision) and stay out of a final_confirmation or
+//     create_lead turn.
+// The assignment question is an item-scoped primary_request for the
+// distributed field ({goal_id: field, item_ref: one target}): the validator
+// already accepts it (item fields are known goals and item-scoped requests
+// skip primary_request_goal_resolved), and 09_commit_v3_turn.sql persists it
+// as pending_question_key=<field>, so the next "sí" cannot authorize
+// create_lead (that needs a pending final_confirmation) and the next turn
+// asks the final confirmation normally.
+const distributiveSpanErrorsV31 = ({
+  spans, messageText, existingItems, factsById, productByRef, primaryRequest, effectRequests, catalogEntries = [],
+}) => {
+  const errors = [];
+  const namedRefs = itemsNamedByMessageV31(messageText, productByRef, catalogEntries);
+  const holdsValue = (ref, field) => factsById.has(`fact:item:${ref}:${field}`)
+    || hasResolvedValue(existingItems.get(ref)?.[field]);
+  const productLabel = (ref) => productNameTextV31(productByRef.get(ref)) || ref;
+  for (const entries of spans) {
+    const targetRefs = [...new Set(entries.map((entry) => entry.itemRef))];
+    if (targetRefs.length < 2) continue;
+    const { field } = entries[0];
+    const fillableRefs = targetRefs.filter((ref) => !holdsValue(ref, field));
+    const allowedNamedRefs = [...namedRefs].filter((ref) => !holdsValue(ref, field)).sort();
+    for (const entry of entries) {
+      if (entry.operation === 'replace' || holdsValue(entry.itemRef, field)) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', entry.path, [entry.observationId], fillableRefs,
+          `A distributive value (for example "de cada uno") only fills items that have no ${field} yet, and item ${entry.itemRef} already has a ${field} value. Apply it only to items missing that field; to change an existing value the customer must name that product.`,
+        ));
+        continue;
+      }
+      if (namedRefs.size > 0 && !namedRefs.has(entry.itemRef)) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', entry.path, [entry.observationId], allowedNamedRefs,
+          `The customer names products in this message, so this distributive value applies only to the named items missing ${field} (${allowedNamedRefs.join(', ') || 'none'}); remove the ${field} mutation for ${entry.itemRef}, or drop it and ask which items the value applies to.`,
+        ));
+      }
+    }
+    // Owner decision (3c.17): with no named item the assignment question is
+    // mandatory, so primary_request must be exactly {goal_id: field,
+    // item_ref: <a target>}; null, final_confirmation or any other request
+    // is rejected, and so is a create_lead request in that turn.
+    const asksAssignment = primaryRequest?.goal_id === field && targetRefs.includes(primaryRequest?.item_ref);
+    const requestsCreateLead = effectRequests.some((effect) => effect?.type === 'create_lead');
+    if (namedRefs.size === 0 && (!asksAssignment || requestsCreateLead)) {
+      const products = targetRefs.map(productLabel);
+      errors.push(validationError(
+        'distributive_assignment_unconfirmed',
+        asksAssignment ? 'effect_requests' : 'primary_request',
+        targetRefs, targetRefs,
+        `The customer did not name which products the distributive value "${entries[0].observation.evidence_quote}" applies to, and it is applied to ${targetRefs.length} items (${targetRefs.map((ref) => `${ref}: ${productLabel(ref)}`).join(', ')}). Keep these mutations, but do not ask for final confirmation or create the lead in this turn: ask the customer to confirm that the value applies to ${products.join(' y ')}, with exactly primary_request {"goal_id":"${field}","item_ref":"${targetRefs[0]}"} (required; goal_id must be the literal "${field}"; never "name" (the customer's own name) or any other goal; primary_request null or any other request is rejected) and no create_lead effect.`,
+      ));
+    }
+  }
+  return errors;
+};
+
+const CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31 = 'evidence_quote must be exact text from the current message. If the customer message names no product for this item, remove this entry: a message that names no product uses catalog_resolutions=[].';
+const spuriousCatalogResolutionInstructionV31 = (itemRefs) => `Remove the catalog_resolutions entry for ${itemRefs.join(', ')}: that item's product is already a known fact and the evidence_quote names no product from the catalog. A confirmation or answer that names no product uses catalog_resolutions=[].`;
+
+// Repair guidance only (never changes accept/reject): live A/B 2026-09-28
+// (pandereta-live-then-wire-correction) showed the model emitting `replace`
+// for an existing item's quantity that had never been recorded, citing a
+// fact id that does not exist. The guidance says to `set` instead, or names
+// the current fact id when the item field does hold a replaceable fact.
+const itemFactNotReplaceableGuidanceV31 = (factsById, existingItems, mutation) => {
+  const itemRef = mutation?.item_ref;
+  if (!ITEM_FIELDS.has(mutation?.field) || typeof itemRef !== 'string' || !existingItems.has(itemRef)) return null;
+  const currentFactId = `fact:item:${itemRef}:${mutation.field}`;
+  const currentFact = factsById.get(currentFactId);
+  if (!currentFact) {
+    return {
+      allowedValues: [null],
+      instruction: `Item ${itemRef} has no current ${mutation.field} value, so there is nothing to replace: use operation "set" with replaces_fact_id: null on item_ref ${itemRef}. A customer's correction of a value that was never recorded is a set.`,
+    };
+  }
+  if (currentFact.field !== mutation.field || currentFact.mutability !== 'customer_correctable') return null;
+  return {
+    allowedValues: [currentFactId],
+    instruction: `Item ${itemRef} already has a current ${mutation.field} fact: to correct it use operation "replace" with replaces_fact_id: "${currentFactId}".`,
+  };
+};
 
 // Required goals reuse the quote-level conditional rules in
 // effectiveRequiredGoalIds, replacing product/quantity with line_items.
@@ -605,7 +919,10 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       ? findOccurrence(messageText, resolution.evidence_quote, resolution.evidence_occurrence)
       : null;
     if (!occurrence) {
-      errors.push(validationError('catalog_resolution_evidence_not_found', `${path}.evidence_quote`));
+      errors.push(validationError(
+        'catalog_resolution_evidence_not_found', `${path}.evidence_quote`, [], [],
+        CATALOG_RESOLUTION_EVIDENCE_NOT_FOUND_INSTRUCTION_V31,
+      ));
       continue;
     }
     if (resolution.status === 'matched') {
@@ -635,12 +952,30 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         || (policy?.goals || []).some((goal) => goal.goal_id === primaryRequest.goal_id));
     primaryRequestValid = exactKeys(primaryRequest, PRIMARY_REQUEST_KEYS_V31) && itemRefOk && requestGoalValid;
     if (!primaryRequestValid) errors.push(validationError('primary_request_invalid', 'primary_request'));
+    // Task 3c.18 (live 2026-09-28): the model asked item questions (the
+    // pandereta clarification, the 3c.17 distributive assignment) with the
+    // customer's `name` goal plus an item_ref. Only the item goals (and the
+    // line_items equivalent accepted for item clarification below) may be
+    // item-scoped; a quote-level goal takes item_ref null.
+    if (primaryRequestValid && typeof primaryRequest.item_ref === 'string'
+        && !ITEM_SCOPED_REQUEST_GOALS_V31.has(primaryRequest.goal_id)) {
+      errors.push(validationError(
+        'primary_request_item_ref_invalid', 'primary_request.item_ref', [primaryRequest.goal_id], [null],
+        `Goal "${primaryRequest.goal_id}" is a quote-level goal, so primary_request.item_ref must be null for it. To ask or confirm something about one item use goal_id "product", "quantity" or "measurements" with that item's item_ref (for example, clarifying which product the customer means is "product"; confirming which items a quantity applies to is "quantity"). goal_id "name" only asks for the customer's own name.`,
+      ));
+    }
   }
 
   const observations = Array.isArray(proposalObject.observations) ? proposalObject.observations : [];
   if (!Array.isArray(proposalObject.observations)) errors.push(validationError('observations_invalid', 'observations'));
   const observationIds = new Set();
-  const knownGoalIds = new Set((policy?.goals || []).map((goal) => goal.goal_id));
+  // Design D11/Interfaces: v3.1's policy exposes a single quote-level
+  // `line_items` goal (no per-item product/quantity/measurements goal is
+  // emitted — see design.md's Deviations note). An item-scoped observation
+  // legitimately resolves the field it observed, so the three item concept
+  // names are known goal references too, exactly like `primary_request`'s
+  // `requestGoalValid` below already treats them.
+  const knownGoalIds = new Set([...(policy?.goals || []).map((goal) => goal.goal_id), ...ITEM_FIELDS]);
   for (const [index, observationEntry] of observations.entries()) {
     const path = `observations[${index}]`;
     let valid = exactKeys(observationEntry, OBSERVATION_KEYS_V31)
@@ -738,6 +1073,22 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   }
   for (const ref of validCatalogResolutionRefs) touchedItemRefs.add(ref);
 
+  // A first turn can introduce several items even when none existed before it.
+  // In that case a null item_ref must not materialize a third, flat item.
+  const unscopedItemObservationIds = new Set();
+  const newMultiItemProposal = existingItems.size < 2 && touchedItemRefs.size >= 2;
+  const itemScopeValues = [...touchedItemRefs].sort();
+  const itemScopeInstruction = `Set item_ref to the item whose product this value describes (one of: ${itemScopeValues.join(', ')}); a quantity or measurement written next to a product belongs to that product's item. Never leave a product, quantity or measurements observation or state_mutation without item_ref when the quote has several items.`;
+  if (newMultiItemProposal) {
+    for (const [index, observationEntry] of observations.entries()) {
+      if (!ITEM_FIELDS.has(observationEntry?.concept) || observationEntry.item_ref !== null
+          || !observationsById.has(observationEntry.id)) continue;
+      errors.push(validationError('item_field_unscoped', `observations[${index}].item_ref`,
+        [observationEntry.id], itemScopeValues, itemScopeInstruction));
+      unscopedItemObservationIds.add(observationEntry.id);
+    }
+  }
+
   // item_identity_required: a genuinely new item must be introduced through
   // a catalog_resolutions entry (matched, ambiguous or unsupported).
   for (const ref of touchedItemRefs) {
@@ -766,8 +1117,14 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const ambiguousRefs = [...catalogResolutionByRef.values()]
     .filter((resolution) => resolution.status === 'ambiguous')
     .map((resolution) => resolution.item_ref);
+  // Design's literal is `goal_id:'product'`. The policy only ever exposes the
+  // single quote-level `line_items` goal for items (no per-item goal), so a
+  // `primary_request` naming that item's `line_items` goal, scoped to the
+  // exact ambiguous item_ref, asks the identical question with no less
+  // specificity — accepted as an equivalent literal, never a looser one.
   if (ambiguousRefs.length > 0
-      && !(primaryRequestValid && primaryRequest?.goal_id === 'product' && ambiguousRefs.includes(primaryRequest.item_ref))) {
+      && !(primaryRequestValid && ['product', 'line_items'].includes(primaryRequest?.goal_id)
+        && ambiguousRefs.includes(primaryRequest.item_ref))) {
     errors.push(validationError(
       'catalog_resolution_clarification_required', 'primary_request', ambiguousRefs, ['product'],
       'Ask one focused clarification that distinguishes the possible grounded products for the ambiguous item.',
@@ -782,7 +1139,31 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     .some((resolution) => ['ambiguous', 'unsupported'].includes(resolution.status));
   const tracksLineItemsGoal = (policy?.goals || []).some((goal) => goal.goal_id === 'line_items');
   const hasQuantityObservationV31 = candidateObservations.some((entry) => entry.concept === 'quantity');
-  if (!anyAmbiguousOrUnsupportedItem && tracksLineItemsGoal
+  // Task 3c.21: the catalog refs this proposal ties to an item (its matched
+  // resolution and its product observation), for the linear-only rule.
+  const linearOnlyGroundingRefsFor = (itemRef) => [
+    ...(catalogResolutionByRef.get(itemRef)?.status === 'matched' ? [catalogResolutionByRef.get(itemRef).grounding_ref] : []),
+    ...candidateObservations
+      .filter((entry) => entry.item_ref === itemRef && entry.concept === 'product')
+      .map((entry) => entry.grounding_ref),
+  ].filter((ref) => typeof ref === 'string');
+  // Task 3c.21: when the only explicit quantity in the message is an area
+  // (m²) and the proposal asks for the linear meters (quantity) or the height
+  // (measurements) of a linear-only item (Cierros de Hormigón), leaving the m²
+  // out is the required behavior (linear_quantity_required), so this nag does
+  // not fire. Any other explicit quantity in the message still requires its
+  // observation.
+  const asksLinearQuantityForAreaOnlyMessage = isObject(primaryRequest)
+    && (primaryRequest.goal_id === 'quantity' || primaryRequest.goal_id === 'measurements')
+    && typeof primaryRequest.item_ref === 'string'
+    && !hasExplicitQuantityEvidence(messageText.replace(AREA_QUANTITY_IN_MESSAGE_V31, ' '))
+    && isLinearOnlyProductV31(
+      policy,
+      candidateObservations.find((entry) => entry.item_ref === primaryRequest.item_ref && entry.concept === 'product')?.normalized_value
+        ?? existingItems.get(primaryRequest.item_ref)?.product ?? null,
+      linearOnlyGroundingRefsFor(primaryRequest.item_ref),
+    );
+  if (!anyAmbiguousOrUnsupportedItem && tracksLineItemsGoal && !asksLinearQuantityForAreaOnlyMessage
       && hasExplicitQuantityEvidence(messageText) && !hasQuantityObservationV31) {
     errors.push(quantityObservationRequiredError());
   }
@@ -794,6 +1175,19 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const mutations = Array.isArray(proposalObject.state_mutations) ? proposalObject.state_mutations : [];
   if (!Array.isArray(proposalObject.state_mutations)) errors.push(validationError('state_mutations_invalid', 'state_mutations'));
   const seenMutationTargets = new Set();
+  // 3c.7 (design.md D4/Requirement "Item-Scoped Line Items...": a quantity
+  // or measurement fact MUST attach only to the item its evidence names).
+  // Live A/B round 2 found the model sometimes reused the exact same
+  // evidenced text (same evidence_quote + evidence_occurrence in this
+  // message) to resolve the same item concept on two different items —
+  // copying or duplicating a fact instead of attaching it once. That one
+  // shape is deterministically detectable: the same (field, evidence_quote,
+  // evidence_occurrence) triple can never legitimately authorize two
+  // different item_ref values in one proposal. A single span reattached to
+  // the *wrong* item (no duplicate) has no such signal and is not caught
+  // here — see design.md's Deviations/D11 follow-up notes and the v3.1
+  // prompt rule added in task 3c.8.
+  const evidenceSpanItemsByField = new Map();
   const existingItemCountPreTurn = existingItems.size;
   for (const [index, mutation] of mutations.entries()) {
     const path = `state_mutations[${index}]`;
@@ -840,7 +1234,11 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         ? factItemId !== null && factItemId === (mutation.item_ref ?? factItemId)
         : factItemId === null;
       if (!fact || fact.field !== mutation.field || fact.mutability !== 'customer_correctable' || !factMatchesItem) {
-        errors.push(validationError('fact_not_replaceable', `${path}.replaces_fact_id`, [observationEntry.id]));
+        const guidance = itemFactNotReplaceableGuidanceV31(factsById, existingItems, mutation);
+        errors.push(validationError(
+          'fact_not_replaceable', `${path}.replaces_fact_id`, [observationEntry.id],
+          guidance?.allowedValues ?? [], guidance?.instruction ?? null,
+        ));
         continue;
       }
     }
@@ -848,6 +1246,13 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     let itemRef = mutation.item_ref ?? null;
     if (ITEM_FIELDS.has(mutation.field)) {
       if (itemRef === null) {
+        if (newMultiItemProposal) {
+          if (!unscopedItemObservationIds.has(observationEntry.id)) {
+            errors.push(validationError('item_field_unscoped', `${path}.item_ref`,
+              [observationEntry.id], itemScopeValues, itemScopeInstruction));
+          }
+          continue;
+        }
         if (existingItemCountPreTurn >= 2) {
           errors.push(validationError(
             'item_target_required', `${path}.item_ref`, [observationEntry.id], [],
@@ -863,6 +1268,23 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         continue;
       }
       seenMutationTargets.add(targetKey);
+
+      const evidenceSpanKey = `${mutation.field}\u0000${observationEntry.evidence_quote}\u0000${observationEntry.evidence_occurrence}`;
+      const evidenceSpan = evidenceSpanItemsByField.get(evidenceSpanKey);
+      if (evidenceSpan !== undefined && evidenceSpan.itemRef !== itemRef
+          && !isDistributiveQuantitySpanV31(mutation.field, observationEntry, evidenceSpan.observation)) {
+        errors.push(validationError(
+          'item_evidence_span_conflict', path, [observationEntry.id], [],
+          'This evidence already resolved this concept for a different item; attach it only to the item its evidence names, or drop this mutation and ask which item it refers to.',
+        ));
+        continue;
+      }
+      if (evidenceSpan === undefined) {
+        evidenceSpanItemsByField.set(evidenceSpanKey, { itemRef, observation: observationEntry, entries: [] });
+      }
+      evidenceSpanItemsByField.get(evidenceSpanKey).entries.push({
+        itemRef, field: mutation.field, operation: mutation.operation, path, observationId: observationEntry.id, observation: observationEntry,
+      });
 
       if (mutation.field === 'product') {
         const resolution = catalogResolutionByRef.get(itemRef);
@@ -894,6 +1316,36 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     });
   }
 
+  // item_product_not_recorded (live 2026-09-28, conversation 347): a product
+  // the customer requests for an item that has no product yet — a `matched`
+  // new item, or an existing item with no product fact — only reaches the
+  // quote through a product state_mutation. Without one the item silently
+  // vanishes. Exempt: D5-withheld items (ambiguous/unsupported resolution),
+  // items removed in this proposal, items whose product is already a fact
+  // (restating or comparing), unresolved new handles (item_identity_required
+  // already fires) and item_ref:null observations (item-scope rules own them).
+  const removedItemRefsThisTurn = new Set(mutations
+    .filter((mutation) => mutation?.operation === 'remove_item' && typeof mutation.item_ref === 'string')
+    .map((mutation) => mutation.item_ref));
+  for (const [index, observationEntry] of observations.entries()) {
+    if (observationEntry?.concept !== 'product' || !observationsById.has(observationEntry.id)) continue;
+    const itemRef = observationEntry.item_ref;
+    if (typeof itemRef !== 'string' || removedItemRefsThisTurn.has(itemRef)) continue;
+    const resolution = catalogResolutionByRef.get(itemRef);
+    if (resolution && ['ambiguous', 'unsupported'].includes(resolution.status)) continue;
+    const productPending = existingItems.has(itemRef)
+      ? !hasResolvedValue(existingItems.get(itemRef).product)
+      : resolution?.status === 'matched';
+    if (!productPending) continue;
+    const recorded = mutations.some((mutation) => mutation?.field === 'product'
+      && (mutation.item_ref === itemRef || mutation.observation_id === observationEntry.id));
+    if (recorded) continue;
+    errors.push(validationError(
+      'item_product_not_recorded', `observations[${index}]`, [observationEntry.id], [itemRef],
+      `Add a state_mutation with operation "set", field "product", item_ref "${itemRef}", observation_id "${observationEntry.id}" and replaces_fact_id null. Every product the customer requests, including accessories such as wire or concertina mentioned "with" another product, is its own item and needs its own product mutation; never leave a product observation without its mutation.`,
+    ));
+  }
+
   for (const rule of policy?.claim_authority?.rules || []) {
     if (rule?.kind !== 'forbidden_pattern' || typeof rule.pattern !== 'string') continue;
     let pattern;
@@ -903,7 +1355,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
       continue;
     }
-    if (pattern.test(proposalObject.reply_text || '')) {
+    if (pattern.test(replyTextWithoutWhatsAppFormatting(proposalObject.reply_text))) {
       errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
     }
   }
@@ -926,8 +1378,46 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     if (observed) return observed.normalized_value;
     return existingItems.get(ref)?.quantity ?? null;
   };
+  errors.push(...distributiveSpanErrorsV31({
+    spans: [...evidenceSpanItemsByField.values()].map((span) => span.entries),
+    messageText,
+    existingItems,
+    factsById,
+    productByRef: new Map([...touchedItemRefs].map((ref) => [ref, productFor(ref)])),
+    catalogEntries: groundingEntries(policy),
+    primaryRequest: isObject(primaryRequest) ? primaryRequest : null,
+    effectRequests: Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [],
+  }));
+  // Task 3c.21: a linear-only product (Cierros de Hormigón) never takes an
+  // area as its quantity; the repair asks for the linear meters and height.
+  for (const [index, mutation] of mutations.entries()) {
+    if (mutation?.field !== 'quantity' || !['set', 'replace'].includes(mutation?.operation)) continue;
+    const candidate = candidateMutations.find((entry) => entry.field === 'quantity' && entry.observation_id === mutation.observation_id);
+    if (!candidate || !isAreaUnitV31(candidate.projected_value?.unit)) continue;
+    const itemRef = candidate.item_ref;
+    if (!isLinearOnlyProductV31(policy, productFor(itemRef), linearOnlyGroundingRefsFor(itemRef))) continue;
+    errors.push(validationError(
+      'linear_quantity_required', `state_mutations[${index}]`, [mutation.observation_id], [itemRef],
+      linearQuantityInstructionV31(itemRef),
+    ));
+  }
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
   const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
+  // Items unresolved ONLY because this proposal's own unsupported/ambiguous
+  // resolution withholds a product the policy already holds, with evidence
+  // that names no catalog product: the repair hint says to drop it.
+  const spuriousResolutionProductIds = new Set(remainingItemRefs
+    .filter((ref) => {
+      const resolution = catalogResolutionByRef.get(ref);
+      return resolution && ['ambiguous', 'unsupported'].includes(resolution.status)
+        && hasResolvedValue(existingItems.get(ref)?.product)
+        && !quoteNamesCatalogProductV31(policy, resolution.evidence_quote);
+    })
+    .map((ref) => `product@${ref}`));
+  const spuriousResolutionInstructionFor = (unresolvedIds) => {
+    const itemRefs = unresolvedIds.filter((id) => spuriousResolutionProductIds.has(id)).map((id) => id.slice('product@'.length));
+    return itemRefs.length > 0 ? spuriousCatalogResolutionInstructionV31(itemRefs) : null;
+  };
   const lineItemsResolved = remainingItemRefs.length >= 1 && remainingItemRefs.length <= MAX_LINE_ITEMS
     && unresolvedProductRefs.length === 0 && unresolvedQuantityRefs.length === 0;
 
@@ -952,16 +1442,22 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const allowedNextGoalIds = createLeadRequirement
     ? (createLeadUnresolved.length > 0 ? createLeadUnresolved : [FINAL_CONFIRMATION_GOAL])
     : unresolvedPolicyGoalIds;
-  if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null && resolvedGoalIds.has(primaryRequest.goal_id)) {
+  const persistedConflictClarification = isPersistedInstallationConflictClarification(
+    policy, candidateObservations, candidateMutations, proposalObject, primaryRequestValid,
+  );
+  if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null
+      && resolvedGoalIds.has(primaryRequest.goal_id) && !persistedConflictClarification) {
     errors.push(validationError(
       'primary_request_goal_resolved', 'primary_request.goal_id', [primaryRequest.goal_id], allowedNextGoalIds,
       'Remove the request or ask for one of the allowed unresolved goals.',
     ));
   }
   if (primaryRequestValid && primaryRequest?.goal_id === FINAL_CONFIRMATION_GOAL && createLeadUnresolved.length > 0) {
+    const spuriousInstruction = spuriousResolutionInstructionFor(createLeadUnresolved);
     errors.push(validationError(
       'final_confirmation_not_ready', 'primary_request.goal_id', createLeadUnresolved, createLeadUnresolved,
-      'Ask for one unresolved required goal instead of asking for final confirmation.',
+      ['Ask for one unresolved required goal instead of asking for final confirmation.', spuriousInstruction]
+        .filter(Boolean).join(' '),
     ));
   }
 
@@ -971,7 +1467,9 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
-  const normalizedReplyText = String(proposalObject.reply_text || '')
+  const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
+  if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
+  const normalizedReplyText = replyTextWithoutWhatsAppFormatting(proposalObject.reply_text)
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es');
@@ -1017,7 +1515,9 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       ? createLeadUnresolved
       : configuredGoalIds.filter((goalId) => !resolvedGoalIds.has(goalId));
     if (unresolved.length > 0) {
-      errors.push(validationError('effect_prerequisite_unresolved', path, unresolved));
+      errors.push(validationError(
+        'effect_prerequisite_unresolved', path, unresolved, [], spuriousResolutionInstructionFor(unresolved),
+      ));
       continue;
     }
     if (effect.type === 'create_lead' && !createLeadAuthorized) {
@@ -1331,7 +1831,7 @@ const validateV3AiProposalV3 = (policy, proposal) => {
       errors.push(validationError('claim_rule_invalid', 'policy.claim_authority.rules', [rule.rule_id].filter(Boolean)));
       continue;
     }
-    if (pattern.test(proposalObject.reply_text || '')) {
+    if (pattern.test(replyTextWithoutWhatsAppFormatting(proposalObject.reply_text))) {
       errors.push(validationError('forbidden_claim', 'reply_text', [rule.rule_id].filter(Boolean)));
     }
   }
@@ -1355,7 +1855,11 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const allowedNextGoalIds = createLeadRequirement
     ? (createLeadUnresolved.length > 0 ? createLeadUnresolved : [FINAL_CONFIRMATION_GOAL])
     : unresolvedPolicyGoalIds;
-  if (primaryRequestValid && primaryRequest !== null && resolvedGoalIds.has(primaryRequest.goal_id)) {
+  const persistedConflictClarification = isPersistedInstallationConflictClarification(
+    policy, candidateObservations, candidateMutations, proposalObject, primaryRequestValid,
+  );
+  if (primaryRequestValid && primaryRequest !== null && resolvedGoalIds.has(primaryRequest.goal_id)
+      && !persistedConflictClarification) {
     errors.push(validationError(
       'primary_request_goal_resolved',
       'primary_request.goal_id',
@@ -1388,7 +1892,9 @@ const validateV3AiProposalV3 = (policy, proposal) => {
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
   const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
   const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
-  const normalizedReplyText = String(proposalObject.reply_text || '')
+  const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
+  if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
+  const normalizedReplyText = replyTextWithoutWhatsAppFormatting(proposalObject.reply_text)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
   const normalizedTurnText = String(messageText || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
@@ -1640,4 +2146,7 @@ module.exports = {
   compileV3TurnPolicy,
   validateV3AiProposal,
   authorizeV3ConversationDecision,
+  productRefsMentionedV31,
+  formatWhatsAppReplyV31,
+  prepareV3ProposalForValidation,
 };

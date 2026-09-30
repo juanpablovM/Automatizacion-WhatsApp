@@ -261,6 +261,136 @@ describe('item_target_required (2a.11/2a.12)', () => {
   });
 });
 
+// Slice 3c follow-up (live A/B round 2): 3 of 20 live first-turn proposals
+// and 1 of 6 valid corrections misattributed a quantity/measurement across
+// items — the same evidenced text ended up resolving the same item concept
+// on two different items. That specific shape is deterministically
+// detectable (spec's "A quantity or measurement fact MUST attach only to the
+// item its evidence names"): the same (evidence_quote, evidence_occurrence,
+// field) triple can never legitimately authorize two different item_ref
+// values in one proposal. A single span reattached to the *wrong* item (no
+// duplicate) is a different, non-shape-detectable defect — see
+// tests/unit/v3-v31-item-evidence-span-conflict.test.js for that documented
+// boundary and task 3c.8's prompt fix.
+describe('item_evidence_span_conflict (3c.7)', () => {
+  test('rejects the same evidence span resolving quantity on two different items', () => {
+    const policy = policyV31For('aprox 500 ml de alambre y pandereta', {
+      items: [
+        { item_id: 'li_a', product: 'Adoquín', quantity: null, measurements: null },
+        { item_id: 'li_b', product: 'Pastelón', quantity: null, measurements: null },
+      ],
+    });
+    const validation = validateV3AiProposal(policy, proposalV31(policy, {
+      observations: [
+        observation({
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: 500,
+          evidence_quote: 'aprox 500 ml', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
+        }),
+        observation({
+          id: 'obs-qty-b', concept: 'quantity', normalized_value: 500,
+          evidence_quote: 'aprox 500 ml', evidence_occurrence: 1, item_ref: 'li_b', resolves_goal_ids: [],
+        }),
+      ],
+      state_mutations: [
+        { operation: 'set', field: 'quantity', item_ref: 'li_a', observation_id: 'obs-qty-a', replaces_fact_id: null },
+        { operation: 'set', field: 'quantity', item_ref: 'li_b', observation_id: 'obs-qty-b', replaces_fact_id: null },
+      ],
+    }));
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors).toContainEqual(expect.objectContaining({ code: 'item_evidence_span_conflict' }));
+  });
+
+  test('does not flag the same text cited at two different occurrences (distinct evidence spans)', () => {
+    const policy = policyV31For('aprox 500 ml de alambre, aprox 500 ml de pandereta', {
+      items: [
+        { item_id: 'li_a', product: 'Adoquín', quantity: null, measurements: null },
+        { item_id: 'li_b', product: 'Pastelón', quantity: null, measurements: null },
+      ],
+    });
+    const validation = validateV3AiProposal(policy, proposalV31(policy, {
+      observations: [
+        observation({
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: 500,
+          evidence_quote: 'aprox 500 ml', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
+        }),
+        observation({
+          id: 'obs-qty-b', concept: 'quantity', normalized_value: 500,
+          evidence_quote: 'aprox 500 ml', evidence_occurrence: 2, item_ref: 'li_b', resolves_goal_ids: [],
+        }),
+      ],
+      state_mutations: [
+        { operation: 'set', field: 'quantity', item_ref: 'li_a', observation_id: 'obs-qty-a', replaces_fact_id: null },
+        { operation: 'set', field: 'quantity', item_ref: 'li_b', observation_id: 'obs-qty-b', replaces_fact_id: null },
+      ],
+    }));
+
+    expect(validation.errors).not.toContainEqual(expect.objectContaining({ code: 'item_evidence_span_conflict' }));
+    expect(validation.valid).toBe(true);
+  });
+
+  test('does not flag the same evidence text used for two different item concepts', () => {
+    const policy = policyV31For('3 metros de cierre', {
+      items: [
+        { item_id: 'li_a', product: 'Adoquín', quantity: null, measurements: null },
+        { item_id: 'li_b', product: 'Pastelón', quantity: null, measurements: null },
+      ],
+    });
+    const validation = validateV3AiProposal(policy, proposalV31(policy, {
+      observations: [
+        observation({
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: 3,
+          evidence_quote: '3 metros', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
+        }),
+        observation({
+          id: 'obs-measure-b', concept: 'measurements', normalized_value: '3 metros',
+          evidence_quote: '3 metros', evidence_occurrence: 1, item_ref: 'li_b', resolves_goal_ids: [],
+        }),
+      ],
+      state_mutations: [
+        { operation: 'set', field: 'quantity', item_ref: 'li_a', observation_id: 'obs-qty-a', replaces_fact_id: null },
+        { operation: 'set', field: 'measurements', item_ref: 'li_b', observation_id: 'obs-measure-b', replaces_fact_id: null },
+      ],
+    }));
+
+    expect(validation.errors).not.toContainEqual(expect.objectContaining({ code: 'item_evidence_span_conflict' }));
+    expect(validation.valid).toBe(true);
+  });
+
+  test('also rejects a duplicated product evidence span across two new, matched items', () => {
+    const policy = policyV31For('del listado quiero a y b', {
+      items: [],
+      grounding: { catalog: [
+        { ref: 'product:a', concept: 'product', value: 'Adoquín' },
+        { ref: 'product:b', concept: 'product', value: 'Pastelón' },
+      ] },
+    });
+    const validation = validateV3AiProposal(policy, proposalV31(policy, {
+      catalog_resolutions: [
+        { item_ref: 'new:1', status: 'matched', evidence_quote: 'listado', evidence_occurrence: 1, grounding_ref: 'product:a' },
+        { item_ref: 'new:2', status: 'matched', evidence_quote: 'listado', evidence_occurrence: 1, grounding_ref: 'product:b' },
+      ],
+      observations: [
+        observation({
+          id: 'obs-product-a', concept: 'product', normalized_value: 'Adoquín',
+          evidence_quote: 'listado', evidence_occurrence: 1, item_ref: 'new:1', grounding_ref: 'product:a',
+        }),
+        observation({
+          id: 'obs-product-b', concept: 'product', normalized_value: 'Pastelón',
+          evidence_quote: 'listado', evidence_occurrence: 1, item_ref: 'new:2', grounding_ref: 'product:b',
+        }),
+      ],
+      state_mutations: [
+        { operation: 'set', field: 'product', item_ref: 'new:1', observation_id: 'obs-product-a', replaces_fact_id: null },
+        { operation: 'set', field: 'product', item_ref: 'new:2', observation_id: 'obs-product-b', replaces_fact_id: null },
+      ],
+    }));
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors).toContainEqual(expect.objectContaining({ code: 'item_evidence_span_conflict' }));
+  });
+});
+
 describe('withholding an ambiguous/unsupported item product mutation (2a.13/2a.14)', () => {
   test('drops the product mutation into withheld_mutations while quantity and measurements still authorize', () => {
     const policy = policyV31For('pandereta de 3 metros, son 500 ml', {
