@@ -1214,3 +1214,54 @@ Known limit: a product re-added by name and later replaced by another product co
 | Deploy order | Deploy `wa-conversation-orchestrator.json`, `ai-lead-qualification-assistant.json`, `ai-prd-shadow-evaluator.json` and `wa-inbound-downstream-dispatcher.json` together. No migration and no DB function change. |
 | Production data notes | Day-3 follow-ups 891 (conversation 390) and 892 (393) are `pending` for 2026-10-03; conversations 390 and 393 are still `waiting_user`. The new code does not retroactively change them; cancelling them and moving both conversations to `escalation_required` is an operator decision. |
 | Rollback boundary | Revert the four SQL files, the three fixture modules, the prompt rules, the tests, these docs and the regenerated workflows as one unit. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
+## Baldosa split: Baldosa Minvu vs Baldosas (3c.27)
+
+Owner decision (2026-10-03): the product `baldosa-minvu` ("Baldosa Minvu") held every tile sheet, but only the tactile MINVU tiles are MINVU. The sku and name stay unchanged (old leads and ClickUp tasks keep working); every other tile becomes a new product `baldosas` ("Baldosas"). The sheet data is private (gitignored `db/seeds/private/`); this record gives counts only.
+
+### Data
+
+- **Private sheets.** `baldosa-minvu` keeps 3 variants (the tactile MINVU sheets), with its description, general specs and source files (3) rescoped to those sheets; the specs stated only by one tactile sheet are labelled with that variant. It has no unconfirmed entry left. The new `baldosas` (create, category `pisos`, item_type product) holds the other 9 variants unchanged, the single unconfirmed entry and the other 9 source files; its general specs are the previous shared ones. Cities and restrictions are copied from baldosa-minvu except `certification: "MINVU"`, which would be false for these tiles. A private test checks that the split redistributes the previous variants, unconfirmed entries and source files exactly.
+- **Public synonyms (migration 029).** `029_baldosa_minvu_synonyms.sql` removes "baldosa", "baldosas", "baldosa de vereda" from baldosa-minvu (exact text) and appends "baldosa minvu táctil", "baldosa táctil", "baldosas táctiles", "baldosa podotáctil", "baldosas podotáctiles" after the kept "baldosas minvu"; idempotent (a row with no removed phrase and every added one is not touched). The rollback `infra/postgres/rollback/029_baldosa_minvu_synonyms.down.sql` swaps them back, restoring the exact 026 list and order.
+- **Private synonyms.** Baldosas holds "baldosa" and "baldosa de vereda"; "baldosas" is not a synonym because it equals its name (a synonym equal to a product name is rejected by the 026/private tests). Variant names are not synonyms: the only public-safe candidates are already covered by "baldosa" (Baldosas) or "baldosa táctil" (Baldosa Minvu).
+- **Longest match.** "baldosa minvu", "baldosas minvu", "baldosa táctil", "baldosas podotáctiles" name Baldosa Minvu; "baldosa", "Baldosas", "baldosa lisa", "baldosa de vereda" and every Baldosas variant name name Baldosas; "baldosas lisas y baldosa minvu" names both. The only new name overlap is "baldosa" (Baldosas) inside "Baldosa Minvu", which longest match keeps on Baldosa Minvu. Without the private step a database has no product for the bare word "baldosa".
+
+### Private delta step
+
+The private 027 SQL is already applied live, so the split ships as its own private step. `scripts/catalog/technical-sheets.mjs` gains `deltas[]` in the data file: `{ id: '030', name: 'baldosas_split', task: '3c.27', skus: ['baldosa-minvu', 'baldosas'], previous_technical_sheets: { 'baldosa-minvu': … } }`. The data file keeps the final state (so the regenerated 027 pair still builds or removes the whole catalog at once) and the generator also writes `db/seeds/private/030_catalog_baldosas_split.sql` and `.down.sql`. The delta apply creates its new rows (`metadata.catalog_migration_030 = 'created'`, `ON CONFLICT DO NOTHING`) and rewrites only its sheets that differ; the delta rollback deletes the rows it created and restores each updated sku's previous sheet only while the delta's sheet is still there. The regenerated 027 rollback also deletes delta-created rows. Validation: delta ids after 027, safe names, known skus, update/create only, one delta per sku, a previous sheet (valid shape, different, no price-like data) for every updated sku. Alternative considered: re-applying a regenerated idempotent 027; rejected because its rollback reverts the whole 3c.20 catalog and no longer knows the sheet baldosa-minvu had before the split.
+
+### Prompt
+
+`V31_REMOVED_PRODUCT_RULE` (v3.1 only) used "baldosas" as its example of a synonym that is not enough to re-add a removed product; "Baldosas" is now another product. The example is now "baldosa táctil", and the rule says another catalog product (e.g. "Baldosas") may be recorded. The validator (`product_previously_rejected`) is unchanged: replaying conversation 387 on the new catalog, after "No quiero baldosas minvu" the message "Baldosas" may record Baldosas, while recording Baldosa Minvu from "Baldosas" or "baldosa táctil" is still rejected and "baldosas minvu" re-adds it.
+
+### Deploy and rollback (manual, in this order)
+
+1. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/029_baldosa_minvu_synonyms.sql` (frees "baldosa"/"baldosa de vereda" first).
+2. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/030_catalog_baldosas_split.sql` (private file).
+3. Deploy `n8n/workflows/ai-lead-qualification-assistant.json` (prompt rule).
+
+Rollback, reverse order: revert the workflow; `psql … -f db/seeds/private/030_catalog_baldosas_split.down.sql`; then `psql … -f infra/postgres/rollback/029_baldosa_minvu_synonyms.down.sql`. A full catalog rollback after the split is the regenerated `db/seeds/private/027_catalog_technical_sheets.down.sql` followed by the 029 rollback.
+
+Live dry-run (2026-10-03, `crm_whatsapp_app`, one transaction ended with `ROLLBACK`, no commit): 029 `UPDATE 1`; 030 `INSERT 0 1`, `UPDATE 2`; afterwards baldosa-minvu has 3 variants and 6 synonyms, baldosas has 9 variants, 2 synonyms, 1 unconfirmed entry, category pisos; no synonym is shared by two active items; only those two rows differ from the snapshot. A second apply changed 0 rows. 030 rollback (`DELETE 1`, `UPDATE 1`) then 029 rollback (`UPDATE 1`) left 0 rows different from the snapshot (updated_at aside); a second rollback changed 0 rows. The regenerated 027 rollback plus the 029 rollback after the split produced the same catalog state hash as the previous 027 rollback on the current live state. The live rows were checked unchanged afterwards.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | RED | GREEN |
+|---|---|---|---|---|
+| 3c.27 | `tests/unit/catalog-baldosa-minvu-synonyms-migration.test.js` | Unit (029 data, uniqueness, longest match, SQL shape; private part local only) | file failed (029 missing) | 20/20 |
+| 3c.27 | `tests/unit/catalog-technical-sheets-generator.test.js` | Unit (delta validation and SQL, synthetic) | 14 new failed | 29/29 |
+| 3c.27 | `tests/unit/catalog-technical-sheets-private.test.js` | Unit (private, local only) | failed (no 029, no delta) | 9/9 |
+| 3c.27 | `tests/unit/catalog-cierros-muro-synonyms-migration.test.js` | Unit (private part now models 029) | 1 failed (029 missing) | 7/7 |
+| 3c.27 | `tests/unit/v3-v31-product-previously-rejected.test.js` | Unit (3c.27 catalog replay, prompt) | prompt test failed; the 7 replay tests characterize unchanged validator behavior | 22/22 |
+| 3c.27 | `tests/integration/catalog-baldosa-minvu-synonyms.postgres.test.js` | Postgres | written before 029 | 5/5 |
+| 3c.27 | `tests/integration/catalog-technical-sheets.postgres.test.js` | Postgres (synthetic delta on an applied 027) | written before the delta builders | 9/9 |
+| 3c.27 | `tests/integration/v3-removed-products.postgres.test.js` | Postgres (Baldosas never marked) | — | 3/3 |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Tracked vs private | Tracked: 029 migration and rollback, generator, tests, `tests/support/catalog-synonym-migrations.mjs`, `tests/support/technical-sheets-split.mjs` (synthetic), prompt fixture and its workflow, these docs. Private (gitignored `db/seeds/private/`): `technical_sheets.json`, regenerated 027 pair, new 030 pair. No sheet data in tracked files. |
+| v3 | v3 prompt equals `GOLDEN_V3_PROMPT`; v3 policy and validators unchanged. |
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the AI assistant workflow; `npm test` → 95 files passed, 23 skipped; 1363 passed, 191 skipped; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `node scripts/catalog/technical-sheets.mjs --check` up to date (37 items); test stack up, `npm run db:reset:test` (applies 029), `npm run test:integration:postgres` → 23 files, 191/191; stack down. |
+| Rollback boundary | Code: revert the migration pair, generator, tests, prompt rule, regenerated workflow and these docs as one unit. DB: 030 rollback, then 029 rollback. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
