@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   buildMigrationSql, buildRollbackSql, validateTechnicalSheetsData, DEFAULT_DATA_PATH, DEFAULT_APPLY_PATH,
+  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor, rollbackPathFor,
 } from '../../scripts/catalog/technical-sheets.mjs';
+import { splitFixture } from '../support/technical-sheets-split.mjs';
 
 // -----------------------------------------------------------------------------
 // Task 3c.20: the real technical-sheet data is private (the repository is
@@ -87,10 +89,87 @@ describe('generated SQL', () => {
     expect(sql()).toContain("O''Demo, con apóstrofo");
   });
 
+  test('without delta steps the rollback has no delta statement', () => {
+    expect(rollback()).not.toMatch(/catalog_migration_0(?!27)/);
+  });
+
   test('the rollback removes only what the apply SQL added', () => {
     expect(rollback()).toMatch(/DELETE FROM catalog_items\s+WHERE metadata->>'catalog_migration_027' = 'created'\s+AND sku IN \('demo-nuevo', 'demo-servicio'\)/);
     expect(rollback()).toMatch(/is_active = FALSE,\s+metadata = metadata - 'synonyms' - 'catalog_migration_027'\s+WHERE sku = 'demo-inactivo'\s+AND metadata->>'catalog_migration_027' = 'reactivated'/);
     expect(rollback()).toContain("metadata = metadata - 'technical_sheet'");
     expect(rollback()).not.toMatch(/metadata\s*=\s*'/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Task 3c.27: a later change to data already applied live (the 027 SQL) ships
+// as its own private delta step: `deltas[]` names the skus it touches and the
+// sheets they had before, and the generator writes <id>_catalog_<name>.sql and
+// .down.sql next to the 027 pair. The data file keeps the final state, so the
+// regenerated 027 pair still builds (or removes) the whole catalog at once.
+// -----------------------------------------------------------------------------
+describe('delta steps', () => {
+  const split = () => splitFixture(fixture());
+  const delta = (data = split()) => data.deltas[0];
+
+  test('the split fixture is valid and the delta paths stay under db/seeds/private/', () => {
+    expect(validateTechnicalSheetsData(split())).toEqual([]);
+    expect(deltaPathFor(DEFAULT_APPLY_PATH, delta())).toBe('db/seeds/private/030_catalog_demo_split.sql');
+    expect(rollbackPathFor(deltaPathFor(DEFAULT_APPLY_PATH, delta()))).toBe('db/seeds/private/030_catalog_demo_split.down.sql');
+  });
+
+  test.each([
+    ['an id that is not after 027', (data) => { data.deltas[0].id = '027'; }, 'id must be'],
+    ['an unsafe name', (data) => { data.deltas[0].name = 'demo split'; }, 'name must match'],
+    ['an unknown sku', (data) => { data.deltas[0].skus.push('demo-fantasma'); }, 'unknown sku demo-fantasma'],
+    ['a reactivated sku', (data) => { data.deltas[0].skus.push('demo-inactivo'); }, 'only update and create'],
+    ['an update without its previous sheet', (data) => { delete data.deltas[0].previous_technical_sheets['demo-existente']; }, 'needs its previous technical_sheet'],
+    ['a previous sheet for a created sku', (data) => { data.deltas[0].previous_technical_sheets['demo-dividido'] = data.deltas[0].previous_technical_sheets['demo-existente']; }, 'only updated skus'],
+    ['a previous sheet equal to the new one', (data) => { data.deltas[0].previous_technical_sheets['demo-existente'] = data.items[0].technical_sheet; }, 'equals the new one'],
+    ['a malformed previous sheet', (data) => { data.deltas[0].previous_technical_sheets['demo-existente'] = { description: 'x' }; }, 'previous technical_sheet must have'],
+    ['a sku in two deltas', (data) => { data.deltas.push({ ...data.deltas[0], id: '031', name: 'otra', previous_technical_sheets: { ...data.deltas[0].previous_technical_sheets } }); }, 'already in delta 030'],
+  ])('rejects %s', (_label, mutate, message) => {
+    const data = split();
+    mutate(data);
+    expect(validateTechnicalSheetsData(data).some((error) => error.includes(message)), validateTechnicalSheetsData(data).join('\n')).toBe(true);
+  });
+
+  test('rejects a price in a previous sheet', () => {
+    const data = split();
+    data.deltas[0].previous_technical_sheets['demo-existente'].general_specs.precio = '1';
+    expect(validateTechnicalSheetsData(data).some((error) => error.startsWith('price-like data is not allowed'))).toBe(true);
+  });
+
+  test('the delta apply SQL only creates and updates its own skus, idempotently', () => {
+    const sql = buildDeltaMigrationSql(split(), '030');
+    expect(sql).toBe(buildDeltaMigrationSql(split(), '030'));
+    expect(sql).toContain("'demo-dividido'");
+    expect(sql).toContain('"catalog_migration_030":"created"');
+    expect(sql).toMatch(/ON CONFLICT \(sku\) DO NOTHING/);
+    expect(sql).toMatch(/ci\.metadata->'technical_sheet' IS DISTINCT FROM data\.technical_sheet/);
+    for (const other of ['demo-nuevo', 'demo-servicio', 'demo-inactivo']) expect(sql).not.toContain(`'${other}'`);
+    expect(sql).not.toMatch(/catalog_migration_027/);
+    expect(sql).not.toMatch(/\b(DELETE|ALTER|DROP|TRUNCATE)\b/i);
+    expect(sql).not.toMatch(/is_active\s*=/);
+  });
+
+  test('the delta rollback deletes what it created and restores the previous sheet only while the delta sheet is there', () => {
+    const data = split();
+    const sql = buildDeltaRollbackSql(data, '030');
+    expect(sql).toMatch(/DELETE FROM catalog_items\s+WHERE \(metadata->>'catalog_migration_030' = 'created' OR metadata->>'catalog_migration_027' = 'created'\)\s+AND sku IN \('demo-dividido'\)/);
+    expect(sql).toContain(JSON.stringify(data.deltas[0].previous_technical_sheets['demo-existente']).replace(/'/g, "''"));
+    expect(sql).toMatch(/AND ci\.metadata->'technical_sheet' = data\.new_technical_sheet/);
+    for (const other of ['demo-nuevo', 'demo-servicio', 'demo-inactivo']) expect(sql).not.toContain(`'${other}'`);
+    expect(sql).not.toMatch(/metadata - 'technical_sheet'/);
+  });
+
+  test('the 027 rollback also deletes the rows a delta created', () => {
+    const sql = buildRollbackSql(split());
+    expect(sql).toMatch(/WHERE metadata->>'catalog_migration_027' = 'created'\s+AND sku IN \('demo-nuevo', 'demo-servicio', 'demo-dividido'\)/);
+    expect(sql).toMatch(/DELETE FROM catalog_items\s+WHERE metadata->>'catalog_migration_030' = 'created'\s+AND sku IN \('demo-dividido'\)/);
+  });
+
+  test('an unknown delta id is an error', () => {
+    expect(() => buildDeltaMigrationSql(split(), '099')).toThrow(/no delta 099/);
   });
 });

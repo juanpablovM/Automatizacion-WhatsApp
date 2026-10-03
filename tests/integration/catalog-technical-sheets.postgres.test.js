@@ -6,7 +6,10 @@
 import fs from 'node:fs';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { buildMigrationSql, buildRollbackSql } from '../../scripts/catalog/technical-sheets.mjs';
+import {
+  buildMigrationSql, buildRollbackSql, buildDeltaMigrationSql, buildDeltaRollbackSql,
+} from '../../scripts/catalog/technical-sheets.mjs';
+import { splitFixture } from '../support/technical-sheets-split.mjs';
 
 const enabled = process.env.TEST_PG_INTEGRATION === '1';
 const describeIntegration = enabled ? describe : describe.skip;
@@ -113,5 +116,83 @@ describeIntegration('catalog technical sheets SQL (synthetic data)', () => {
     expect((await rowBySku('demo-inactivo')).metadata).not.toHaveProperty('catalog_migration_027');
     await client.query(rollbackSql);
     expect(await snapshot()).toEqual(activeBefore);
+  });
+});
+
+// Task 3c.27: a delta step on top of an already applied 027 (synthetic split,
+// shaped like the private baldosa split). The delta creates the new product and
+// rewrites the split sheet; its rollback restores the exact rows the 027 apply
+// left; the regenerated 027 rollback still removes everything at once.
+describeIntegration('catalog technical sheets delta step (synthetic split)', () => {
+  const client = new pg.Client(connection);
+  const next = splitFixture(data);
+  const deltaApply = buildDeltaMigrationSql(next, '030');
+  const deltaRollback = buildDeltaRollbackSql(next, '030');
+  const DELTA_SKUS = [...SKUS, 'demo-dividido'];
+  let pristine;
+  let after027;
+
+  const snapshot = async () => (await client.query(
+    `SELECT to_jsonb(ci) - 'updated_at' - 'id' AS row FROM catalog_items ci WHERE sku = ANY($1::text[]) ORDER BY sku`,
+    [DELTA_SKUS],
+  )).rows.map((row) => row.row);
+  const metadataOf = async (sku) => (await client.query('SELECT metadata FROM catalog_items WHERE sku = $1', [sku])).rows[0]?.metadata;
+
+  beforeAll(async () => {
+    await client.connect();
+    await client.query('BEGIN');
+    await client.query('DELETE FROM catalog_items WHERE sku = ANY($1::text[])', [DELTA_SKUS]);
+    await client.query(`INSERT INTO catalog_categories (code, name) VALUES ('demo-categoria', 'Categoría Demo') ON CONFLICT (code) DO NOTHING`);
+    await client.query(
+      `INSERT INTO catalog_items (sku, name, item_type, short_description, is_active, metadata) VALUES
+         ('demo-existente', 'Producto Demo A', 'product', 'descripción demo A', TRUE,
+          '{"url": "https://example.test/demo-a", "synonyms": ["demo a"]}'::jsonb),
+         ('demo-inactivo', 'Producto Demo B', 'product', NULL, FALSE, '{"url": "https://example.test/demo-b"}'::jsonb),
+         ('demo-control', 'Producto Demo Control', 'product', NULL, TRUE, '{"url": "https://example.test/control"}'::jsonb)`,
+    );
+    pristine = await snapshot();
+    await client.query(applySql); // the 027 already applied live (before the split)
+    after027 = await snapshot();
+  });
+
+  afterAll(async () => {
+    if (enabled) {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
+
+  test('creates the new product and rewrites only the split sheet', async () => {
+    await client.query(deltaApply);
+    const created = next.items.find((candidate) => candidate.sku === 'demo-dividido');
+    expect(await metadataOf('demo-dividido')).toEqual({
+      catalog_migration_030: 'created', synonyms: created.synonyms, technical_sheet: created.technical_sheet,
+    });
+    expect(await metadataOf('demo-existente')).toEqual({
+      url: 'https://example.test/demo-a', synonyms: ['demo a'],
+      technical_sheet: next.items.find((candidate) => candidate.sku === 'demo-existente').technical_sheet,
+    });
+    const untouched = (rows) => rows.filter((row) => !['demo-existente', 'demo-dividido'].includes(row.sku));
+    expect(untouched(await snapshot())).toEqual(untouched(after027));
+  });
+
+  test('is idempotent', async () => {
+    const afterFirst = await snapshot();
+    const results = [].concat(await client.query(deltaApply));
+    expect(results.map((result) => result.rowCount ?? 0).filter((count) => count > 0)).toEqual([]);
+    expect(await snapshot()).toEqual(afterFirst);
+  });
+
+  test('the delta rollback restores the exact rows the 027 apply left, and is idempotent', async () => {
+    await client.query(deltaRollback);
+    expect(await snapshot()).toEqual(after027);
+    await client.query(deltaRollback);
+    expect(await snapshot()).toEqual(after027);
+  });
+
+  test('after the delta, the regenerated 027 rollback restores the pristine rows', async () => {
+    await client.query(deltaApply);
+    await client.query(buildRollbackSql(next));
+    expect(await snapshot()).toEqual(pristine);
   });
 });

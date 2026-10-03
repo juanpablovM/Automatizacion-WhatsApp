@@ -3,7 +3,9 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import {
   buildMigrationSql, buildRollbackSql, validateTechnicalSheetsData, rollbackPathFor, DEFAULT_DATA_PATH, DEFAULT_APPLY_PATH,
+  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor,
 } from '../../scripts/catalog/technical-sheets.mjs';
+import { livePublicSynonymRows, rows028 } from '../support/catalog-synonym-migrations.mjs';
 
 const require = createRequire(import.meta.url);
 const { productRefsMentionedV31 } = require('../fixtures/workflow-nodes/shared/v3-contract-runtime.js');
@@ -29,12 +31,9 @@ const captured = JSON.parse(fs.readFileSync('tests/fixtures/v3-line-items/captur
 const ACTIVE_PRODUCTS = captured.policy.grounding.catalog
   .filter((entry) => entry.concept === 'product')
   .map((entry) => ({ sku: entry.ref.slice('product:'.length), name: entry.value }));
-const synonyms026 = [...fs.readFileSync('infra/postgres/migrations/026_catalog_product_synonyms.sql', 'utf8')
-  .matchAll(/\(\s*'([a-z0-9-]+)',\s*'(\[[^']*\])'::jsonb\s*\)/g)].map(([, sku, json]) => ({ sku, synonyms: JSON.parse(json) }));
-// Task 3c.21: the public 028 "muro" synonyms appended to cierros-hormigon (owner rule).
-const synonyms028 = [...fs.readFileSync('infra/postgres/migrations/028_cierros_muro_synonyms.sql', 'utf8')
-  .matchAll(/\(\s*'([a-z0-9-]+)',\s*'(\[[^']*\])'::jsonb\s*\)/g)].map(([, sku, json]) => ({ sku, synonyms: JSON.parse(json) }));
-
+// Task 3c.21: 028 appends the "muro" synonyms to cierros-hormigon (owner rule).
+// Task 3c.27: 029 moves the generic "baldosa" phrases off baldosa-minvu.
+const synonyms028 = rows028();
 const fold = (value) => String(value).normalize('NFD').replace(/[̀-ͯ]/g, '')
   .toLocaleLowerCase('es').replace(/\s+/g, ' ').trim();
 const containsPhrase = (text, phrase) => ` ${fold(text).replace(/[^a-z0-9]+/g, ' ')} `
@@ -52,8 +51,8 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
     ...reactivated.map((item) => ({ sku: item.sku, name: checks.reactivated_names?.[item.sku] })),
     ...createdProducts.map((item) => ({ sku: item.sku, name: item.name })),
   ];
-  const synonymRows = [...synonyms026, ...synonyms028, ...items.filter((item) => item.synonyms).map((item) => ({ sku: item.sku, synonyms: item.synonyms }))];
-  // 026 and 028 both write cierros-hormigon's list: merge per sku as the live row holds it.
+  // The public lists as the live rows hold them (026, then 028 and 029), plus the private ones.
+  const synonymRows = [...livePublicSynonymRows(), ...items.filter((item) => item.synonyms).map((item) => ({ sku: item.sku, synonyms: item.synonyms }))];
   const synonymsBySku = new Map();
   for (const row of synonymRows) synonymsBySku.set(row.sku, [...(synonymsBySku.get(row.sku) || []), ...row.synonyms]);
   // Owner decision 3c.21: these phrases name Cierros de Hormigón even where the
@@ -136,8 +135,10 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
         }
       }
     }
-    // The only other overlap is the documented, public 026 one.
-    expect(overlaps).toEqual(['placas de 50 < Placas de 50 cm Reforzadas']);
+    // The only other overlaps are the documented public 026 one and, since
+    // 3c.27, the generic "baldosa" inside "Baldosa Minvu" (longest match keeps
+    // "Baldosa Minvu" on its own product: see the name test above).
+    expect(overlaps).toEqual(['placas de 50 < Placas de 50 cm Reforzadas', 'baldosa < Baldosa Minvu']);
     const folded = new Set(synonymRows.flatMap((row) => row.synonyms.map(fold)));
     for (const term of checks.shared_generic_terms || []) {
       if (ownerAssigned028.has(term)) continue;
@@ -148,6 +149,27 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
   test('the private SQL files are generated and current', () => {
     expect(fs.readFileSync(DEFAULT_APPLY_PATH, 'utf8')).toBe(buildMigrationSql(data));
     expect(fs.readFileSync(rollbackPathFor(DEFAULT_APPLY_PATH), 'utf8')).toBe(buildRollbackSql(data));
+    for (const delta of data.deltas || []) {
+      expect(fs.readFileSync(deltaPathFor(DEFAULT_APPLY_PATH, delta), 'utf8'), delta.id).toBe(buildDeltaMigrationSql(data, delta.id));
+      expect(fs.readFileSync(rollbackPathFor(deltaPathFor(DEFAULT_APPLY_PATH, delta)), 'utf8'), delta.id).toBe(buildDeltaRollbackSql(data, delta.id));
+    }
+  });
+
+  // Task 3c.27: a split moves sheet content between the products of one delta
+  // without losing or inventing any variant, unconfirmed entry or source file.
+  test('every split delta redistributes the previous sheets exactly', () => {
+    for (const delta of data.deltas || []) {
+      const previous = Object.values(delta.previous_technical_sheets);
+      const now = delta.skus.map((sku) => bySku.get(sku).technical_sheet);
+      const variantKeys = (sheets) => sheets.flatMap((sheet) => sheet.variants.map((variant) => JSON.stringify(variant))).sort();
+      expect(variantKeys(now), delta.id).toEqual(variantKeys(previous));
+      const unconfirmed = (sheets) => sheets.flatMap((sheet) => Object.entries(sheet.unconfirmed).map((entry) => JSON.stringify(entry))).sort();
+      expect(unconfirmed(now), delta.id).toEqual(unconfirmed(previous));
+      const files = (sheets) => sheets.flatMap((sheet) => sheet.source_files).sort();
+      expect([...new Set(files(now))], delta.id).toEqual([...new Set(files(previous))]);
+      // Each variant lives in exactly one product of the delta.
+      expect(new Set(variantKeys(now)).size, delta.id).toBe(variantKeys(now).length);
+    }
   });
 
   test('the three largest sheets named in one turn stay within the 6144-byte cap', () => {

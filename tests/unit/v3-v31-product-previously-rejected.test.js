@@ -18,6 +18,10 @@ const { validateV3AiProposal, V3_CONTRACTS } = require('../fixtures/workflow-nod
 // product (`product_previously_rejected`, repairable) unless the current
 // message names it by its full catalog name. A synonym is not enough:
 // "baldosas" was exactly the generic word the customer was moving away from.
+//
+// CATALOG is the catalog of conversation 387 (026 synonyms, before 3c.27).
+// Since 3c.27 "Baldosas" is its own product (CATALOG_3C27, end of this file):
+// after removing Baldosa Minvu the customer may ask for Baldosas.
 // -----------------------------------------------------------------------------
 
 const CATALOG = [
@@ -164,7 +168,7 @@ describe('v3.1 validator: conv 387 replay, a removed product is not re-added', (
     expect(codes(validation)).toEqual([]);
   });
 
-  test('without a removal "Baldosas" keeps recording Baldosa Minvu', () => {
+  test('without a removal "Baldosas" keeps recording Baldosa Minvu (conversation 387 catalog, before 3c.27)', () => {
     const policy = buildTurnPolicy('v3.1', contextWithItems([]), groundingWith(null), { text: 'Baldosas' });
     const validation = validateV3AiProposal(policy, setProductProposal(policy, { quote: 'Baldosas' }));
     expect(codes(validation)).toEqual([]);
@@ -188,5 +192,77 @@ describe('v3.1 prompt rule', () => {
     expect(prompt).toContain('no lo vuelvas a registrar salvo que el cliente lo pida de nuevo');
     expect(prompt).toContain('alternativas reales del catálogo');
     expect(systemPrompt('v3')).not.toContain('removed_by_customer');
+  });
+
+  test('3c.27: the rule never calls "baldosas" a synonym (it is another product) and lets another product be recorded', () => {
+    const prompt = systemPrompt('v3.1');
+    expect(prompt).not.toContain('(por ejemplo "baldosas") no basta');
+    expect(prompt).toContain('un sinónimo (por ejemplo "baldosa táctil") no basta');
+    expect(prompt).toContain('Otro producto distinto del catálogo (por ejemplo "Baldosas") sí puede registrarse');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Task 3c.27 (owner decision): Baldosa Minvu is only the tactile MINVU tiles and
+// "Baldosas" is a different product that owns the generic phrases (029 plus the
+// private catalog data). Replaying conversation 387 on that catalog: after "No
+// quiero baldosas minvu", "Baldosas" may be recorded as Baldosas; recording
+// Baldosa Minvu again from a generic word or a synonym is still rejected.
+// -----------------------------------------------------------------------------
+const CATALOG_3C27 = [
+  {
+    ref: 'product:baldosa-minvu', concept: 'product', value: 'Baldosa Minvu',
+    synonyms: ['baldosas minvu', 'baldosa minvu táctil', 'baldosa táctil', 'baldosas táctiles', 'baldosa podotáctil', 'baldosas podotáctiles'],
+  },
+  { ref: 'product:baldosas', concept: 'product', value: 'Baldosas', synonyms: ['baldosa', 'baldosa de vereda'] },
+  { ref: 'product:pastelones', concept: 'product', value: 'Pastelones', synonyms: ['pastelón', 'losetas'] },
+];
+const recordProduct = (policy, { quote, ref, name }) => {
+  const proposal = setProductProposal(policy, { quote });
+  return {
+    ...proposal,
+    reply_text: `Perfecto, anoto *${name}*.\n\n👉 ¿Qué cantidad necesitas?`,
+    catalog_resolutions: [{ ...proposal.catalog_resolutions[0], grounding_ref: ref }],
+    observations: [{ ...proposal.observations[0], normalized_value: name, grounding_ref: ref }],
+  };
+};
+
+describe('3c.27 catalog: Baldosas is a different product from Baldosa Minvu', () => {
+  const turn = (text, removed = ['Baldosa Minvu']) => buildTurnPolicy('v3.1', contextWithItems([]),
+    { catalog: CATALOG_3C27, ...(removed ? { removed_products: removed } : {}) }, { text, pendingQuestionKey: 'product' });
+
+  test('only Baldosa Minvu is marked after "No quiero baldosas minvu"', () => {
+    const policy = turn('Baldosas');
+    expect(policy.grounding.catalog.find((entry) => entry.ref === 'product:baldosa-minvu').removed_by_customer).toBe(true);
+    expect(policy.grounding.catalog.find((entry) => entry.ref === 'product:baldosas')).not.toHaveProperty('removed_by_customer');
+  });
+
+  test.each(['Baldosas', 'baldosa lisa', 'Necesito baldosas de vereda'])('"%s" may record Baldosas', (text) => {
+    const policy = turn(text);
+    const quote = text.match(/baldosas?/i)[0];
+    const validation = validateV3AiProposal(policy, recordProduct(policy, { quote, ref: 'product:baldosas', name: 'Baldosas' }));
+    expect(codes(validation)).toEqual([]);
+    expect(validation.valid).toBe(true);
+  });
+
+  test('recording Baldosa Minvu again from "Baldosas" is still rejected', () => {
+    const policy = turn('Baldosas');
+    const validation = validateV3AiProposal(policy, setProductProposal(policy, { quote: 'Baldosas' }));
+    expect(codes(validation)).toEqual(['product_previously_rejected']);
+  });
+
+  test('a Baldosa Minvu synonym is not enough to re-add it, its full name is', () => {
+    const bySynonym = turn('mejor baldosa táctil');
+    expect(codes(validateV3AiProposal(bySynonym, setProductProposal(bySynonym, { quote: 'baldosa táctil' }))))
+      .toEqual(['product_previously_rejected']);
+    const byName = turn('Bueno, sí quiero las baldosas minvu');
+    expect(codes(validateV3AiProposal(byName, setProductProposal(byName, { quote: 'baldosas minvu' })))).toEqual([]);
+  });
+
+  test('removing Baldosas does not block Baldosa Minvu', () => {
+    const policy = turn('baldosa minvu', ['Baldosas']);
+    expect(policy.grounding.catalog.find((entry) => entry.ref === 'product:baldosas').removed_by_customer).toBe(true);
+    expect(policy.grounding.catalog.find((entry) => entry.ref === 'product:baldosa-minvu')).not.toHaveProperty('removed_by_customer');
+    expect(codes(validateV3AiProposal(policy, setProductProposal(policy, { quote: 'baldosa minvu' })))).toEqual([]);
   });
 });

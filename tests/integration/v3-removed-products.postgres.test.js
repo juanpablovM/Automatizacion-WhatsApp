@@ -101,7 +101,8 @@ describeIntegration('Load Conversation State lists the products the customer rem
     sourceNumberId = number.rows[0].id;
     await client.query(
       `INSERT INTO catalog_items (sku, name, item_type, applicable_cities, is_active, metadata)
-       VALUES ('baldosa-minvu', 'Baldosa Minvu', 'product', ARRAY['Santiago'], TRUE, '{"synonyms": ["baldosas", "baldosa"]}'::jsonb),
+       VALUES ('baldosa-minvu', 'Baldosa Minvu', 'product', ARRAY['Santiago'], TRUE, '{"synonyms": ["baldosas minvu", "baldosa táctil"]}'::jsonb),
+              ('baldosas', 'Baldosas', 'product', ARRAY['Santiago'], TRUE, '{"synonyms": ["baldosa"]}'::jsonb),
               ('pastelones', 'Pastelones', 'product', ARRAY['Santiago'], TRUE, '{}'::jsonb)`,
     );
     const status = await client.query("SELECT id FROM conversation_statuses WHERE code = 'waiting_user'");
@@ -146,6 +147,8 @@ describeIntegration('Load Conversation State lists the products the customer rem
     expect(v31.grounding.catalog.find((entry) => entry.ref === 'product:baldosa-minvu'))
       .toMatchObject({ value: 'Baldosa Minvu', removed_by_customer: true });
     expect(v31.grounding.catalog.find((entry) => entry.ref === 'product:pastelones')).not.toHaveProperty('removed_by_customer');
+    // Task 3c.27: Baldosas is a different product; removing Baldosa Minvu never marks it.
+    expect(v31.grounding.catalog.find((entry) => entry.ref === 'product:baldosas')).not.toHaveProperty('removed_by_customer');
     const v3 = compileV3TurnPolicy(buildV3PolicyInput(row));
     expect(v3.grounding.catalog.find((entry) => entry.ref === 'product:baldosa-minvu')).toEqual({
       ref: 'product:baldosa-minvu', concept: 'product', value: 'Baldosa Minvu',

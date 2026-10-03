@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
+import { livePublicSynonymRows } from '../support/catalog-synonym-migrations.mjs';
 
 const require = createRequire(import.meta.url);
 const { productRefsMentionedV31 } = require('../fixtures/workflow-nodes/shared/v3-contract-runtime.js');
@@ -113,10 +114,12 @@ describe('028_cierros_muro_synonyms data', () => {
 
   describe.skipIf(!privatePresent)('against the private data (local only)', () => {
     test('is unique against the private products and synonyms, and longer private phrases win', () => {
+      // Task 3c.27: the live public lists also carry 029 (the generic "baldosa"
+      // phrases left baldosa-minvu for a private product).
       const products = [...ACTIVE_PRODUCTS, ...privateProducts];
-      checkUniqueness(products, [...rows026, ...rows028, ...privateSynonymRows]);
+      checkUniqueness(products, [...livePublicSynonymRows(), ...privateSynonymRows]);
       // Private phrases that start with a 028 synonym resolve to their own product.
-      const { catalog } = mergedCatalog(products, [...rows026, ...rows028, ...privateSynonymRows]);
+      const { catalog } = mergedCatalog(products, [...livePublicSynonymRows(), ...privateSynonymRows]);
       for (const { sku, synonyms } of privateSynonymRows) {
         for (const synonym of synonyms.filter((phrase) => MURO_SYNONYMS.some((muro) => containsPhrase(phrase, muro)))) {
           expect([...productRefsMentionedV31(catalog, `necesito 10 ${synonym}`)], synonym).toEqual([`product:${sku}`]);
