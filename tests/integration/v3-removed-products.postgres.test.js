@@ -164,4 +164,22 @@ describeIntegration('Load Conversation State lists the products the customer rem
     const row = await loadRow();
     expect(Object.keys(row.v3_grounding)).toEqual(['catalog']);
   });
+
+  // Live regression 2026-10-03: the first turn of a new conversation loads the
+  // previous, already closed conversation (the new one does not exist yet), so
+  // its removals leaked and "baldosa táctil" was refused in a fresh quote.
+  test('removals of a closed conversation do not carry into the next conversation', async () => {
+    const closed = await client.query("SELECT id FROM conversation_statuses WHERE code = 'closed'");
+    const conversation = await client.query(`
+      INSERT INTO conversations (source_number_id, phone_number, conversation_status_id, current_step, qualification_context, started_at, closed_at)
+      VALUES ($1, $2, $3, 'product', '{}'::jsonb, NOW() + INTERVAL '2 seconds', NOW() + INTERVAL '3 seconds') RETURNING id
+    `, [sourceNumberId, PHONE, closed.rows[0].id]);
+    conversationId = conversation.rows[0].id;
+    await seedCommittedTurn({
+      mutations: [{ operation: 'remove_item', field: null, item_id: 'li_c', projected_value: null }],
+      stateBefore: lineItemsContext([item('li_c', 'Baldosa Minvu')]),
+    });
+    const row = await loadRow();
+    expect(Object.keys(row.v3_grounding)).toEqual(['catalog']);
+  });
 });

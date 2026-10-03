@@ -190,6 +190,9 @@ v3_removed_products AS (
       AND jsonb_typeof(removed_item.value->'product') = 'string'
       AND NULLIF(btrim(removed_item.value->>'product'), '') IS NOT NULL
       AND (lcr.reset_at IS NULL OR execution.created_at > lcr.reset_at)
+      -- A closed conversation never carries its removals: the first turn of a
+      -- new conversation still loads the previous one.
+      AND lc.conversation_status_code <> 'closed'
   ) removed
 ),
 recent_messages AS (
