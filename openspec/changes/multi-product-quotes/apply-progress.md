@@ -1147,3 +1147,70 @@ Owner request: the live test after 3c.22 showed the model follows the presentati
 | v3 | v3 proposals untouched (by reference); v3 golden prompt and composition-differential tests green |
 | Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated `Compile V3 Turn Policy`, `Validate And Authorize V3` (orchestrator) and both shadow evaluator nodes; `npm test` → 91 files passed, 20 skipped; 1284 passed, 171 skipped locally; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `git diff --check` passed. No SQL changed. |
 | Deploy order | Deploy the orchestrator and shadow evaluator workflow JSON files. No DB change. |
+
+## QA review fixes 3c.24–3c.26 (conversations 387–393, 2026-09-30)
+
+Evidence was read from the production app database (read-only). The n8n execution data for 2026-09-30 is already pruned (retention starts 2026-10-01), so the raw first-attempt proposals are not available; the stored decisions (`advisor_decisions.input_payload.proposal`, `policy`, `validation`) and the turn ledger are.
+
+### 3c.24 — installation implies delivery (conversations 388, 389)
+
+Root cause, from the stored policies and proposals:
+- Both conversations had `service_scope=both` ("Ambas opciones" / "Ambos"). `effectiveRequiredGoalIds` and the policy builder add `fulfillment` as a required goal for `material` and `both`, so after terrain, truck access and debris removal the only unresolved required goal was `fulfillment` and the model asked "¿confirmas que entreguemos el material en …?".
+- The customer's bare "Si" is not fulfillment evidence (`fulfillment_evidence_invalid`, `hasExplicitFulfillmentEvidence` needs despacho/entrega/…). The accepted proposals of the "Si" turns (388: messages 3630, 3634, 3638; 389: 3651, 3653, 3657, 3659) carry no observation and `primary_request.goal_id=fulfillment`, so the bot asked again, and finally asked the customer to type "despacho" (388: 3643, 389: 3661, the only turns that recorded `fulfillment=delivery`).
+- The v3.1 prompt contradicted itself: the shared v3 lines "Si service_scope es material o both, necesitas resolver fulfillment" and "Si service_scope es material o both: fulfillment." against `V31_INSTALLATION_DELIVERY_RULE` ("el despacho va implícito").
+
+Change (v3.1 only, except the lead effect):
+- `v3-policy-builder.js`: for v3.1, fulfillment is not a required goal when the scope is installation or both (goal `optional`, not in `create_lead.required_goal_ids`).
+- `effectiveRequiredGoalIdsV31`: drops fulfillment for a projected installation/both scope (covers in-flight conversations whose policy was compiled before).
+- `primaryRequestGoalInapplicableErrorV31`: asking fulfillment with scope both is `primary_request_goal_inapplicable` (allowed values = the other open goals, e.g. `final_confirmation`), unless the projected fulfillment is `pickup` (the persisted installation conflict, whose clarification may still ask fulfillment). Installation-only keeps the shared v3 rule.
+- Prompt: the two v3 lines are replaced in the v3.1 derivation (`V31_FULFILLMENT_SCOPE_RULE`, the required-data clause now "Si service_scope es material: fulfillment."); `V31_INSTALLATION_DELIVERY_RULE` says never to ask or confirm the delivery (not even with a "sí" or by asking to write "despacho") and to go to the next pending goal or `final_confirmation`; an explicit delivery mention may still be recorded.
+- `Build V3 Lead Effect` (v3 and v3.1): for installation/both without an explicit fulfillment, the lead's `qualification_context.fulfillment` is `delivery`; an explicit value is never overwritten. The lead `service` is unchanged ("material e instalacion" / "instalacion").
+- Unchanged: `installation_requires_delivery` (pickup with installation still rejected, persisted or same turn), `fulfillment_evidence_invalid` (a bare "sí" never chooses pickup/delivery), material-only fulfillment, the v3 policy, prompt and request.
+
+Design choice: no automatic state mutation (a derived mutation would need an observation and evidence and would change the decision contract). The fulfillment is implied by the scope at the two places that consume it: the required goals (policy and validator) and the lead.
+
+### 3c.25 — a handoff closes the conversation flow (conversations 390, 393)
+
+Root cause:
+- `09_commit_v3_turn.sql` set `escalation_required` / `escalation` / `pending_question_key=NULL` only for the bounded address handoff (`no_progress_commercial_question_loop`). Any other authorized v3 handoff (390: an executive confirms cierro sizes; 393: the customer asked for a real person) kept `waiting_user` and the turn's `primary_request` (390 `measurements`, 393 `final_confirmation`).
+- The follow-up policy is gated by `follow_up_is_eligible` (`lead_sin_respuesta` only while `waiting_user`), so the day-1 follow-ups 860 and 890 were scheduled and sent ("¿Sigues necesitando algo?"); day-3 follow-ups 891 and 892 are still `pending` in production (scheduled 2026-10-03).
+- Because the conversation stayed in the AI flow, the next customer message ("Perfecto", "Gracias que me llamen…") produced a second authorized handoff (529, 533): `17_persist_v3_handoff_effect.sql` is idempotent only per operation key.
+
+Change:
+- `09_commit_v3_turn.sql`: new `handoff_effect_succeeded` (a succeeded handoff receipt and a handoff command in the decision). Status precedence: bounded handoff → `escalation_required`; succeeded lead → `handed_to_sales`; succeeded handoff → `escalation_required` (`current_step=escalation`, `pending_question_key=NULL`); otherwise unchanged. The same commit cancels the conversation's `pending`/`error` follow-ups (`metadata.cancel_reason=v3_handoff`, `decision_id`); a `sending` row keeps its own delivery outcome, and `escalation_required` makes later schedules and claims ineligible. `escalation_required` is the status the legacy human-request path sets and the one the ClickUp closure (`05_close_handoff_from_clickup.sql`) closes.
+- `17_persist_v3_handoff_effect.sql`: exact replay first; else the conversation's open handoff (pending/notified/acknowledged) created in the last 48 hours is reused and receipted (same `v3_effect_receipt/v1` shape, its `handoff_id`); else a new handoff. Resolved or older open handoffs get a new one, so a re-engagement is notified again.
+- `handoff-routing/01_upsert_handoff.sql` (dispatcher): after the status fix, the next customer message gets the deterministic "Tu solicitud ya está derivada" reply with `escalation_already_required` (as in conversation 391, handoffs 530/531). That reminder now reuses the conversation's open handoff (`outcome=reused_open`, audited); every other motive still opens its own handoff, as designed.
+
+Data completeness (no automatic lead; owner decision pending):
+- 390: not complete. Installation in Puente Alto with address, terrain, truck access and debris removal, but the third item (Cierros de Hormigón) has no quantity or height; the customer asked which sizes exist.
+- 393: complete. Soleras y Solerillas 190 metros, material with delivery to Avenida el valle 147, Chicureo, access restrictions "No"; the summary was sent and only the final confirmation is missing (the customer asked for a person and to be called by phone instead).
+
+### 3c.26 — a removed product is not re-added (conversation 387)
+
+Root cause: turn 3590 ("No quiero baldosas minvu") committed `remove_item li_371e9a2881e9`. Turn 3596 ("Baldosas") proposed `catalog_resolutions matched product:baldosa-minvu` and `set product=Baldosa Minvu` on `new:1`, and the reply said "aunque me habías comentado que no buscas Baldosa Minvu". "baldosas" is a listed synonym of Baldosa Minvu (026), and nothing in the policy said the product had been removed: after the removal the item is gone from `qualification_context`.
+
+Design (minimal, no migration): the removal is already durable in the committed turn ledger. `01_load_active_context.sql` lists `v3_grounding.removed_products` (only when non-empty, so every other grounding keeps its exact shape): for committed executions (`state_receipt IS NOT NULL`) of this conversation after the latest reset, each `remove_item` mutation of the decision resolved to the product its item held in `state_receipt.state_before.line_items`. The v3.1 policy builder marks the matching product entries `removed_by_customer: true` unless the product is in the quote again (re-added by name). The v3.1 validator rejects a `set`/`replace` product mutation to a marked product with the new repairable `product_previously_rejected` (path `state_mutations[i]`, related observation, allowed values = the product ref) unless the current message names the product by its full catalog name (each word may differ by a plural ending); a synonym does not count. The repair instruction says to drop the mutation, observation and catalog resolution, acknowledge, and offer real catalog alternatives with `primary_request {goal_id: product, item_ref: null}`. `V31_REMOVED_PRODUCT_RULE` says the same in the prompt. Alternative considered: a `rejected_products` list in `qualification_context` maintained by `apply_v3_state_mutations`; rejected because it needs a migration of that function plus its JS mirror for the same information the ledger already holds.
+
+Known limit: a product re-added by name and later replaced by another product counts as removed again (it left the quote), so it needs its full name once more.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | RED | GREEN |
+|---|---|---|---|---|
+| 3c.24 | `tests/unit/v3-v31-installation-implies-delivery.test.js` | Unit (policy, validator, prompt, lead effect) | 8/17 failed | 17/17 |
+| 3c.24 | `tests/unit/build-ai-request-v31-prompt.test.js` | Unit | allowlist test failed (6 replaced lines) | 16/16 |
+| 3c.25 | `tests/integration/conversation-turn-execution.postgres.test.js` | Postgres | 2 of 5 new failed (closure, reuse) | 47/47 |
+| 3c.25 | `tests/integration/handoff-upsert-open-escalation.postgres.test.js` | Postgres | 1/3 failed (reuse) | 3/3 |
+| 3c.26 | `tests/unit/v3-v31-product-previously-rejected.test.js` | Unit (builder, validator, prompt) | 5/14 failed | 14/14 |
+| 3c.26 | `tests/integration/v3-removed-products.postgres.test.js` | Postgres (load query → v3.1 policy) | 1/3 failed | 3/3 |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| v3 | v3 prompt equals `GOLDEN_V3_PROMPT`; the v3 policy still requires fulfillment for both and never carries `removed_by_customer`; the v3 validator is unchanged. The lead effect default and the SQL changes apply to both versions. |
+| Captured fixtures | Every fixture in `tests/fixtures/v3-line-items/` keeps its outcome. |
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow evaluator nodes; the dispatcher's `Upsert Escalation Handoff` query was re-embedded byte-for-byte from `01_upsert_handoff.sql` (that file is outside the SQL parity gate); `npm test` → 93 files passed, 22 skipped; 1315 passed, 182 skipped; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; Postgres stack up, `npm run db:reset:test`, `npm run test:integration:postgres` → 22 files, 182/182; stack down. |
+| Deploy order | Deploy `wa-conversation-orchestrator.json`, `ai-lead-qualification-assistant.json`, `ai-prd-shadow-evaluator.json` and `wa-inbound-downstream-dispatcher.json` together. No migration and no DB function change. |
+| Production data notes | Day-3 follow-ups 891 (conversation 390) and 892 (393) are `pending` for 2026-10-03; conversations 390 and 393 are still `waiting_user`. The new code does not retroactively change them; cancelling them and moving both conversations to `escalation_required` is an operator decision. |
+| Rollback boundary | Revert the four SQL files, the three fixture modules, the prompt rules, the tests, these docs and the regenerated workflows as one unit. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
