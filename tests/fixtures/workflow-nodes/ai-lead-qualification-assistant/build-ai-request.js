@@ -722,7 +722,16 @@ if (usesV3Contract) {
   // lead. The validator now rejects that shape (item_product_not_recorded);
   // this v3.1-only rule makes every requested product its own recorded item.
   const V31_EVERY_PRODUCT_RECORDED_RULE = 'Cada producto que el cliente pide (incluidos accesorios como alambres o concertina mencionados "con" otro producto) es su propio ítem y lleva su state_mutation set de product con su item_ref, referenciando su observación; nunca dejes una observación de product sin su mutación. La única excepción es un ítem con catalog_resolution ambiguous o unsupported, cuyo product queda pendiente de aclarar.';
-  const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment debe ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Para installation sin fulfillment explícito, no pidas esa elección: el despacho va implícito.';
+  // Task 3c.26: a removed product is never re-added on a generic word.
+  const V31_REMOVED_PRODUCT_RULE = 'Algunas entradas product del grounding traen removed_by_customer=true: el cliente quitó ese producto de esta cotización. Tras quitar un producto, no lo vuelvas a registrar salvo que el cliente lo pida de nuevo nombrándolo por su nombre completo del catálogo (por ejemplo "Baldosa Minvu"); un término genérico o un sinónimo (por ejemplo "baldosas") no basta. En ese caso no emitas observación, mutación ni catalog_resolution de ese producto: reconoce con amabilidad que no lo busca y ofrece alternativas reales del catálogo, con primary_request.goal_id=product e item_ref=null.';
+  const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment solo puede ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Con service_scope=installation o both el despacho va implícito: nunca preguntes por fulfillment ni pidas confirmar el despacho (tampoco con un "sí" ni pidiendo que el cliente escriba "despacho"); avanza directo al siguiente dato pendiente o a final_confirmation. Si el cliente menciona el despacho por iniciativa propia, puedes registrarlo como fulfillment=delivery.';
+  // Task 3c.24: the v3 lines that make fulfillment required for service_scope
+  // both contradict V31_INSTALLATION_DELIVERY_RULE; v3.1 replaces them.
+  const V3_FULFILLMENT_SCOPE_RULE = 'Si service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.';
+  const V31_FULFILLMENT_SCOPE_RULE = 'Si service_scope es material, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address. Si service_scope es installation o both, fulfillment no se pregunta: el despacho va implícito.';
+  const V3_REQUIRED_DATA_RULE_PREFIX = 'Los datos obligatorios dependen de lo que el cliente pide';
+  const V3_REQUIRED_DATA_FULFILLMENT_CLAUSE = 'Si service_scope es material o both: fulfillment.';
+  const V31_REQUIRED_DATA_FULFILLMENT_CLAUSE = 'Si service_scope es material: fulfillment.';
   // Live 2026-09-28 (task 3c.18): the model asked the pandereta
   // clarification and the distributive assignment question with
   // primary_request.goal_id="name" plus an item_ref. The validator now rejects
@@ -790,6 +799,12 @@ if (usesV3Contract) {
     replaceV3Line(derived, (line) => line.startsWith(V3_EMOJI_RULE_PREFIX), () => [V31_WHATSAPP_FORMAT_RULE, V31_EMOJI_RULE]);
     replaceV3Line(derived, (line) => line === V3_SUMMARY_RULE, () => [V31_SUMMARY_TEMPLATE_RULE]);
     replaceV3Line(derived, (line) => line.includes(V3_NEW_REQUEST_EXAMPLE), (line) => [line.replace(V3_NEW_REQUEST_EXAMPLE, '"¡Claro! Empecemos una nueva cotización 👍"')]);
+    replaceV3Line(derived, (line) => line === V3_FULFILLMENT_SCOPE_RULE, () => [V31_FULFILLMENT_SCOPE_RULE]);
+    replaceV3Line(
+      derived,
+      (line) => line.startsWith(V3_REQUIRED_DATA_RULE_PREFIX) && line.includes(V3_REQUIRED_DATA_FULFILLMENT_CLAUSE),
+      (line) => [line.replace(V3_REQUIRED_DATA_FULFILLMENT_CLAUSE, V31_REQUIRED_DATA_FULFILLMENT_CLAUSE)],
+    );
     derived.push(
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
@@ -805,6 +820,7 @@ if (usesV3Contract) {
       V31_CORRECTION_NAMED_ITEM_RULE,
       V31_REPLACE_EXISTING_FACT_RULE,
       V31_EVERY_PRODUCT_RECORDED_RULE,
+      V31_REMOVED_PRODUCT_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;

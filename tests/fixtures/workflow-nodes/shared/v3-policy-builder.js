@@ -251,6 +251,26 @@ const buildV3PolicyInput = (row, options = {}) => {
         return { ...entry, technical_sheet: selected.get(entry.ref) };
       });
     }
+    // Task 3c.26: `Load Conversation State` lists the products the customer
+    // removed from this quote (v3_grounding.removed_products, from committed
+    // remove_item turns). v3.1 marks those catalog entries so the model and
+    // the validator know not to re-add them; a product that is back in the
+    // quote is not marked. Without removals no entry changes, so the policy
+    // and its digest are the same as before. v3 never reads the list.
+    const removedProducts = Array.isArray(explicitGrounding.removed_products)
+      ? explicitGrounding.removed_products.filter((name) => typeof name === 'string')
+      : [];
+    if (removedProducts.length > 0) {
+      const foldName = (value) => String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLocaleLowerCase('es').replace(/\s+/g, ' ').trim();
+      const inQuote = new Set((resolvedReadLineItems ? resolvedReadLineItems(context) : [])
+        .map((item) => foldName(lineItemProductText(item?.product))));
+      const removed = new Set(removedProducts.map(foldName).filter((name) => name !== '' && !inQuote.has(name)));
+      catalog = catalog.map((entry) => (isPlainObject(entry) && entry.concept === 'product'
+        && typeof entry.value === 'string' && removed.has(foldName(entry.value))
+        ? { ...entry, removed_by_customer: true }
+        : entry));
+    }
   }
   const grounding = {
     catalog,
@@ -263,6 +283,10 @@ const buildV3PolicyInput = (row, options = {}) => {
   const fulfillment = context.fulfillment ?? legacyFulfillment;
   const requiredGoals = new Set(['product', 'quantity', 'service_scope']);
   if (scope === 'material' || scope === 'both') requiredGoals.add('fulfillment');
+  // Task 3c.24 (v3.1 only): installation is only offered with delivery
+  // (owner rule, 3c.12), so with installation in scope fulfillment is never a
+  // goal to ask. v3, the rollback path, keeps its exact policy.
+  if (version === 'v3.1' && (scope === 'installation' || scope === 'both')) requiredGoals.delete('fulfillment');
   if (scope === 'installation' || scope === 'both') {
     for (const field of ['commune', 'address', 'terrain', 'truck_access', 'debris_removal']) requiredGoals.add(field);
   }

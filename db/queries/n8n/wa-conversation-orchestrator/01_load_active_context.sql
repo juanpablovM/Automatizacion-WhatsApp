@@ -161,6 +161,37 @@ latest_conversation_reset AS (
     AND al.event_name = 'conversation_state_evaluated'
     AND COALESCE((al.metadata->>'reset_conversation_lead')::boolean, FALSE)
 ),
+-- Task 3c.26: products the customer removed from this conversation's quote.
+-- Evidence is the committed turn ledger only: a remove_item mutation of an
+-- authorized decision whose turn committed (state_receipt), resolved to the
+-- product its item held just before that commit (state_receipt.state_before).
+-- Removals before the latest conversation reset no longer count. The v3.1
+-- policy builder marks the matching catalog entries; v3 ignores the list.
+v3_removed_products AS (
+  SELECT jsonb_agg(removed.product ORDER BY removed.product) AS value
+  FROM (
+    SELECT DISTINCT removed_item.value->>'product' AS product
+    FROM latest_conversation lc
+    JOIN conversation_turn_executions execution
+      ON execution.conversation_id = lc.conversation_id
+     AND execution.state_receipt IS NOT NULL
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    LEFT JOIN latest_conversation_reset lcr ON TRUE
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(decision.output_payload->'state_mutations') = 'array'
+        THEN decision.output_payload->'state_mutations' ELSE '[]'::jsonb END
+    ) mutation(value)
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(execution.state_receipt#>'{state_before,line_items}') = 'array'
+        THEN execution.state_receipt#>'{state_before,line_items}' ELSE '[]'::jsonb END
+    ) removed_item(value)
+    WHERE mutation.value->>'operation' = 'remove_item'
+      AND removed_item.value->>'item_id' = mutation.value->>'item_id'
+      AND jsonb_typeof(removed_item.value->'product') = 'string'
+      AND NULLIF(btrim(removed_item.value->>'product'), '') IS NOT NULL
+      AND (lcr.reset_at IS NULL OR execution.created_at > lcr.reset_at)
+  ) removed
+),
 recent_messages AS (
   SELECT COALESCE(
     jsonb_agg(
@@ -364,7 +395,8 @@ SELECT
   COALESCE(lcs.state_service, ll.service) AS last_known_service,
   COALESCE(lcs.state_city, ll.city) AS last_known_city,
   COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement,
-  vg.value AS v3_grounding
+  vg.value || CASE WHEN vrp.value IS NOT NULL
+    THEN jsonb_build_object('removed_products', vrp.value) ELSE '{}'::jsonb END AS v3_grounding
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
 LEFT JOIN active_contract_route acr ON TRUE
@@ -378,4 +410,5 @@ LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
 LEFT JOIN chat_authority ca ON TRUE
 LEFT JOIN follow_up_status fs ON TRUE
-LEFT JOIN v3_grounding vg ON TRUE;
+LEFT JOIN v3_grounding vg ON TRUE
+LEFT JOIN v3_removed_products vrp ON TRUE;

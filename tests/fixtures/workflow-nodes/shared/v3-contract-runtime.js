@@ -729,6 +729,28 @@ const isLinearOnlyProductV31 = (policy, product, groundingRefs = []) => {
     && LINEAR_ONLY_PRODUCT_REFS_V31.has(entry.ref) && sameGroundedValue(groundingValue(entry), name));
 };
 const linearQuantityInstructionV31 = (itemRef) => `Cierros are measured only in metros lineales (linear meters) plus the height (altura), never by area. Never record an area (m², metros cuadrados) as this item's quantity: drop this state_mutation and its quantity observation, and ask for the linear meters and the height with primary_request {"goal_id": "quantity", "item_ref": "${itemRef}"} (or "measurements" for the same item_ref); never re-add the area.`;
+// Task 3c.26: products the customer removed from the quote earlier in this
+// conversation carry `removed_by_customer: true` in the v3.1 policy grounding
+// (v3-policy-builder.js). Re-requesting one needs its full catalog name in the
+// current message (each word may differ only by a plural ending); a synonym is
+// not enough, because the generic word is often what the customer was moving
+// away from ("No quiero baldosas minvu" ... "Baldosas").
+const removedCatalogProductV31 = (policy, product, groundingRef) => {
+  const name = productNameTextV31(product);
+  return groundingEntries(policy).find((entry) => entry?.concept === 'product'
+    && entry.removed_by_customer === true && typeof entry.value === 'string'
+    && ((typeof groundingRef === 'string' && groundingRef === entry.ref)
+      || (name.trim() !== '' && sameGroundedValue(groundingValue(entry), name)))) || null;
+};
+const messageNamesFullProductV31 = (messageText, productName) => {
+  const words = phraseFoldV31(productName).split(' ').filter(Boolean);
+  if (words.length === 0) return false;
+  const pattern = words
+    .map((word) => `${word.replace(/(?:es|s)$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:es|s)?`)
+    .join(' ');
+  return new RegExp(`(?:^| )${pattern}(?= |$)`).test(phraseFoldV31(messageText));
+};
+const productPreviouslyRejectedInstructionV31 = (productName) => `The customer removed ${productName} from this quote earlier in the conversation and the current message does not ask for it again by name: do not record it. Drop this product state_mutation, its product observation and its catalog_resolution, acknowledge in reply_text that they do not want ${productName}, and offer real alternatives from the catalog grounding with primary_request {"goal_id": "product", "item_ref": null}. Record ${productName} again only when the customer names it explicitly.`;
 const quoteNamesCatalogProductV31 = (policy, quote) => {
   const folded = foldForProductMatchV31(quote);
   if (!folded.trim()) return false;
@@ -874,7 +896,29 @@ const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) =>
   const base = (Array.isArray(configuredGoalIds) ? configuredGoalIds : [])
     .filter((goalId) => goalId !== 'product' && goalId !== 'quantity');
   if (!base.includes('line_items')) base.push('line_items');
-  return effectiveRequiredGoalIds(base, policy, observations);
+  const required = effectiveRequiredGoalIds(base, policy, observations);
+  // Task 3c.24: with installation in scope delivery is the only valid
+  // fulfillment (owner rule, 3c.12), so it is never a goal to resolve. A
+  // pickup with installation is still rejected by installation_requires_delivery.
+  const serviceScope = projectedValueFor(policy, observations, 'service_scope');
+  return serviceScope === 'installation' || serviceScope === 'both'
+    ? required.filter((goalId) => goalId !== 'fulfillment')
+    : required;
+};
+
+// Task 3c.24: v3 rejects asking fulfillment only for installation. v3.1 also
+// rejects it for both (material and installation), unless the projected
+// fulfillment is a pickup: that is the persisted installation conflict whose
+// clarification may ask fulfillment.
+const primaryRequestGoalInapplicableErrorV31 = (requestedGoal, serviceScope, fulfillment, allowedNextGoalIds) => {
+  const sharedError = primaryRequestGoalInapplicableError(requestedGoal, serviceScope, allowedNextGoalIds);
+  if (sharedError) return sharedError;
+  if (!(requestedGoal === 'fulfillment' && serviceScope === 'both' && fulfillment !== 'pickup')) return null;
+  return validationError(
+    'primary_request_goal_inapplicable', 'primary_request.goal_id', ['fulfillment', 'both'],
+    allowedNextGoalIds.filter((goalId) => goalId !== 'fulfillment'),
+    'Installation already implies delivery to the work site; do not ask pickup versus delivery or ask to confirm the delivery. Ask for the next allowed goal instead.',
+  );
 };
 
 const validateV3AiProposalV31 = (policy, proposal) => {
@@ -1401,6 +1445,21 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       linearQuantityInstructionV31(itemRef),
     ));
   }
+  // Task 3c.26: a product the customer removed from this quote (marked
+  // removed_by_customer by the policy) is never recorded again unless the
+  // current message names it by its full catalog name.
+  for (const [index, mutation] of mutations.entries()) {
+    if (mutation?.field !== 'product' || !['set', 'replace'].includes(mutation?.operation)) continue;
+    const candidate = candidateMutations.find((entry) => entry.field === 'product' && entry.observation_id === mutation.observation_id);
+    if (!candidate) continue;
+    const observation = candidateObservations.find((entry) => entry.id === mutation.observation_id);
+    const rejectedEntry = removedCatalogProductV31(policy, candidate.projected_value, observation?.grounding_ref);
+    if (!rejectedEntry || messageNamesFullProductV31(messageText, rejectedEntry.value)) continue;
+    errors.push(validationError(
+      'product_previously_rejected', `state_mutations[${index}]`, [mutation.observation_id], [rejectedEntry.ref],
+      productPreviouslyRejectedInstructionV31(rejectedEntry.value),
+    ));
+  }
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
   const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
   // Items unresolved ONLY because this proposal's own unsupported/ambiguous
@@ -1481,7 +1540,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     const pickupError = pickupFactoryAddressRequiredError(normalizedReplyText);
     if (pickupError) errors.push(pickupError);
   }
-  const goalInapplicableError = primaryRequestGoalInapplicableError(requestedGoal, serviceScope, allowedNextGoalIds);
+  const goalInapplicableError = primaryRequestGoalInapplicableErrorV31(requestedGoal, serviceScope, fulfillment, allowedNextGoalIds);
   if (goalInapplicableError) errors.push(goalInapplicableError);
 
   const pendingQuestionGoalId = policy?.turn?.pending_question_goal_id || null;
