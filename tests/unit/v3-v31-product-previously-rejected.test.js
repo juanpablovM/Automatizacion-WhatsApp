@@ -200,6 +200,16 @@ describe('v3.1 prompt rule', () => {
     expect(prompt).toContain('un sinónimo (por ejemplo "baldosa táctil") no basta');
     expect(prompt).toContain('Otro producto distinto del catálogo (por ejemplo "Baldosas") sí puede registrarse');
   });
+
+  // Owner request 2026-10-03: after "No quiero baldosas minvu" the bot offered
+  // pastelones and adoquines instead of the other tiles.
+  test('alternatives come first from the same product family, then from other lines', () => {
+    const prompt = systemPrompt('v3.1');
+    expect(prompt).toContain('primero ofrece las alternativas de la misma familia del producto');
+    expect(prompt).toContain('si quita "Baldosa Minvu", ofrece "Baldosas" y sus tipos');
+    expect(prompt).toContain('Solo si no hay otro producto de esa familia, ofrece otras líneas del catálogo');
+    expect(systemPrompt('v3')).not.toContain('misma familia del producto');
+  });
 });
 
 // -----------------------------------------------------------------------------
