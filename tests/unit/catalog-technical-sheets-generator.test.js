@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   buildMigrationSql, buildRollbackSql, validateTechnicalSheetsData, DEFAULT_DATA_PATH, DEFAULT_APPLY_PATH,
-  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor, rollbackPathFor,
+  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor, rollbackPathFor, deltaSteps,
 } from '../../scripts/catalog/technical-sheets.mjs';
-import { splitFixture } from '../support/technical-sheets-split.mjs';
+import { chainFixture, splitFixture } from '../support/technical-sheets-split.mjs';
 
 // -----------------------------------------------------------------------------
 // Task 3c.20: the real technical-sheet data is private (the repository is
@@ -124,10 +124,9 @@ describe('delta steps', () => {
     ['an unknown sku', (data) => { data.deltas[0].skus.push('demo-fantasma'); }, 'unknown sku demo-fantasma'],
     ['a reactivated sku', (data) => { data.deltas[0].skus.push('demo-inactivo'); }, 'only update and create'],
     ['an update without its previous sheet', (data) => { delete data.deltas[0].previous_technical_sheets['demo-existente']; }, 'needs its previous technical_sheet'],
-    ['a previous sheet for a created sku', (data) => { data.deltas[0].previous_technical_sheets['demo-dividido'] = data.deltas[0].previous_technical_sheets['demo-existente']; }, 'only updated skus'],
+    ['a previous sheet for a sku outside the delta', (data) => { data.deltas[0].previous_technical_sheets['demo-nuevo'] = data.deltas[0].previous_technical_sheets['demo-existente']; }, 'only updated skus'],
     ['a previous sheet equal to the new one', (data) => { data.deltas[0].previous_technical_sheets['demo-existente'] = data.items[0].technical_sheet; }, 'equals the new one'],
     ['a malformed previous sheet', (data) => { data.deltas[0].previous_technical_sheets['demo-existente'] = { description: 'x' }; }, 'previous technical_sheet must have'],
-    ['a sku in two deltas', (data) => { data.deltas.push({ ...data.deltas[0], id: '031', name: 'otra', previous_technical_sheets: { ...data.deltas[0].previous_technical_sheets } }); }, 'already in delta 030'],
   ])('rejects %s', (_label, mutate, message) => {
     const data = split();
     mutate(data);
@@ -171,5 +170,81 @@ describe('delta steps', () => {
 
   test('an unknown delta id is an error', () => {
     expect(() => buildDeltaMigrationSql(split(), '099')).toThrow(/no delta 099/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Task 3c.28: deltas apply in ascending id order and a later delta may touch the
+// skus of an earlier one. The sheet a delta writes for a sku is the one the next
+// delta touching it records as previous (the final data sheet otherwise), so an
+// already applied delta's SQL never changes when a later delta is added. A sku
+// created by an earlier delta is only updated by the later ones.
+// -----------------------------------------------------------------------------
+describe('chained delta steps', () => {
+  const split = () => splitFixture(fixture());
+  const chain = () => chainFixture(fixture());
+
+  test('the chain fixture is valid', () => {
+    expect(validateTechnicalSheetsData(chain())).toEqual([]);
+  });
+
+  test('deltaSteps reports each sku role and the sheet the delta writes', () => {
+    const data = chain();
+    expect(deltaSteps(data, '030')).toEqual([
+      { sku: 'demo-existente', role: 'update', technical_sheet: data.deltas[1].previous_technical_sheets['demo-existente'] },
+      { sku: 'demo-dividido', role: 'create', technical_sheet: data.deltas[1].previous_technical_sheets['demo-dividido'] },
+    ]);
+    expect(deltaSteps(data, '031').map((step) => step.role)).toEqual(['update', 'update']);
+  });
+
+  test('a later delta leaves the earlier delta SQL and the 027 rollback byte-identical', () => {
+    expect(buildDeltaMigrationSql(chain(), '030')).toBe(buildDeltaMigrationSql(split(), '030'));
+    expect(buildDeltaRollbackSql(chain(), '030')).toBe(buildDeltaRollbackSql(split(), '030'));
+    expect(buildRollbackSql(chain())).toBe(buildRollbackSql(split()));
+  });
+
+  test('the later delta updates a sku the earlier delta created, and its rollback restores that sheet', () => {
+    const data = chain();
+    const sql = buildDeltaMigrationSql(data, '031');
+    expect(sql).not.toMatch(/\bINSERT\b/);
+    expect(sql).not.toContain('catalog_migration_031');
+    expect(sql).toContain(JSON.stringify(data.items.find((item) => item.sku === 'demo-dividido').technical_sheet).replace(/'/g, "''"));
+    const down = buildDeltaRollbackSql(data, '031');
+    expect(down).not.toMatch(/\bDELETE\b/);
+    for (const sku of ['demo-existente', 'demo-dividido']) {
+      expect(down).toContain(JSON.stringify(data.deltas[1].previous_technical_sheets[sku]).replace(/'/g, "''"));
+    }
+    expect(down).toMatch(/AND ci\.metadata->'technical_sheet' = data\.new_technical_sheet/);
+  });
+
+  test('a delta that records the previous sheet of a create item updates the row the 027 SQL created', () => {
+    const data = chain();
+    const created027 = data.items.find((item) => item.sku === 'demo-nuevo');
+    data.deltas[1].previous_technical_sheets['demo-nuevo'] = structuredClone(created027.technical_sheet);
+    created027.technical_sheet.description = 'Producto Demo Nuevo, descripción corregida.';
+    data.deltas[1].skus.push('demo-nuevo');
+    expect(validateTechnicalSheetsData(data)).toEqual([]);
+    const sql = buildDeltaMigrationSql(data, '031');
+    expect(sql).not.toMatch(/\bINSERT\b/);
+    expect(sql).toContain("'demo-nuevo'");
+    const down = buildDeltaRollbackSql(data, '031');
+    expect(down).not.toMatch(/\bDELETE\b/);
+    expect(down).toContain(JSON.stringify(data.deltas[1].previous_technical_sheets['demo-nuevo']).replace(/'/g, "''"));
+    expect(buildRollbackSql(data)).toBe(buildRollbackSql(split()));
+  });
+
+  test.each([
+    ['a later delta without the previous sheet of a sku an earlier delta created',
+      (data) => { delete data.deltas[1].previous_technical_sheets['demo-dividido']; }, 'demo-dividido needs its previous technical_sheet'],
+    ['deltas out of id order', (data) => { data.deltas.reverse(); }, 'ascending id order'],
+    ['a previous sheet equal to the sheet the delta writes',
+      (data) => { data.deltas[1].previous_technical_sheets['demo-existente'] = data.items[0].technical_sheet; }, 'equals the new one'],
+    ['an earlier delta whose sheet equals the later previous sheet',
+      (data) => { data.deltas[1].previous_technical_sheets['demo-existente'] = data.deltas[0].previous_technical_sheets['demo-existente']; }, '(030): demo-existente: the previous technical_sheet equals the new one'],
+  ])('rejects %s', (_label, mutate, message) => {
+    const data = chain();
+    mutate(data);
+    const errors = validateTechnicalSheetsData(data);
+    expect(errors.some((error) => error.includes(message)), errors.join('\n')).toBe(true);
   });
 });

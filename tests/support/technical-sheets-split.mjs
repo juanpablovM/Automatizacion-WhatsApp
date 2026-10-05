@@ -32,3 +32,23 @@ export const splitFixture = (base) => {
   }];
   return data;
 };
+
+// Task 3c.28: a SYNTHETIC second delta (031) on top of the split, shaped like the
+// private general_specs audit: a general spec that only one variant's sheet states
+// moves into that variant's `other`. It touches the sku the 030 delta created and
+// the one it updated, recording the sheets 030 left as their previous sheets.
+export const chainFixture = (base) => {
+  const data = splitFixture(base);
+  const previous = {};
+  for (const sku of ['demo-existente', 'demo-dividido']) {
+    const sheet = data.items.find((item) => item.sku === sku).technical_sheet;
+    previous[sku] = structuredClone(sheet);
+    const { material, ...rest } = sheet.general_specs;
+    sheet.general_specs = rest;
+    sheet.variants[0].other = { ...sheet.variants[0].other, material };
+  }
+  data.deltas.push({
+    id: '031', name: 'demo_audit', task: '3c.28', skus: ['demo-existente', 'demo-dividido'], previous_technical_sheets: previous,
+  });
+  return data;
+};

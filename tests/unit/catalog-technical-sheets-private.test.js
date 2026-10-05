@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import {
   buildMigrationSql, buildRollbackSql, validateTechnicalSheetsData, rollbackPathFor, DEFAULT_DATA_PATH, DEFAULT_APPLY_PATH,
-  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor,
+  buildDeltaMigrationSql, buildDeltaRollbackSql, deltaPathFor, deltaSteps,
 } from '../../scripts/catalog/technical-sheets.mjs';
 import { livePublicSynonymRows, rows028 } from '../support/catalog-synonym-migrations.mjs';
 
@@ -157,10 +157,14 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
 
   // Task 3c.27: a split moves sheet content between the products of one delta
   // without losing or inventing any variant, unconfirmed entry or source file.
+  // Task 3c.28: a later delta may touch the same skus, so the sheets a delta
+  // writes come from deltaSteps, not from the final data.
+  const deltas = data.deltas || [];
+  const isSplit = (delta) => deltaSteps(data, delta.id).some((step) => step.role === 'create');
   test('every split delta redistributes the previous sheets exactly', () => {
-    for (const delta of data.deltas || []) {
+    for (const delta of deltas.filter(isSplit)) {
       const previous = Object.values(delta.previous_technical_sheets);
-      const now = delta.skus.map((sku) => bySku.get(sku).technical_sheet);
+      const now = deltaSteps(data, delta.id).map((step) => step.technical_sheet);
       const variantKeys = (sheets) => sheets.flatMap((sheet) => sheet.variants.map((variant) => JSON.stringify(variant))).sort();
       expect(variantKeys(now), delta.id).toEqual(variantKeys(previous));
       const unconfirmed = (sheets) => sheets.flatMap((sheet) => Object.entries(sheet.unconfirmed).map((entry) => JSON.stringify(entry))).sort();
@@ -169,6 +173,37 @@ describe.skipIf(!present)('private technical sheets data (local only)', () => {
       expect([...new Set(files(now))], delta.id).toEqual([...new Set(files(previous))]);
       // Each variant lives in exactly one product of the delta.
       expect(new Set(variantKeys(now)).size, delta.id).toBe(variantKeys(now).length);
+    }
+  });
+
+  // Task 3c.28: a delta that creates nothing (the general_specs audit) only moves
+  // facts from general_specs or the description into the variants that state
+  // them: every variant keeps its name, order and fields, its `other` only grows,
+  // source files stay as they were and unconfirmed entries are only added. A
+  // variant field may be emptied only when its value moves into a new
+  // unconfirmed entry (two sheets disagree on the same variant).
+  test('every non-split delta keeps each variant and only adds to its other', () => {
+    for (const delta of deltas.filter((candidate) => !isSplit(candidate))) {
+      for (const { sku, technical_sheet: now } of deltaSteps(data, delta.id)) {
+        const before = delta.previous_technical_sheets[sku];
+        const where = `${delta.id} ${sku}`;
+        for (const [label, values] of Object.entries(before.unconfirmed)) expect(now.unconfirmed[label], `${where} ${label}`).toEqual(values);
+        const added = Object.entries(now.unconfirmed).filter(([label]) => !(label in before.unconfirmed)).flatMap(([, values]) => values);
+        expect(now.source_files, where).toEqual(before.source_files);
+        expect(now.variants.map((variant) => variant.name), where).toEqual(before.variants.map((variant) => variant.name));
+        now.variants.forEach((variant, index) => {
+          const { other, ...fields } = variant;
+          const { other: otherBefore, ...fieldsBefore } = before.variants[index];
+          for (const [key, value] of Object.entries(fieldsBefore)) {
+            if (value !== null && fields[key] === null) {
+              expect(added.some((entry) => entry.startsWith(`${value} `)), `${where} ${variant.name} ${key} -> unconfirmed`).toBe(true);
+            } else {
+              expect(fields[key], `${where} ${variant.name} ${key}`).toEqual(value);
+            }
+          }
+          for (const [key, value] of Object.entries(otherBefore)) expect(other[key], `${where} ${variant.name} ${key}`).toEqual(value);
+        });
+      }
     }
   });
 

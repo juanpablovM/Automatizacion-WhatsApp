@@ -39,10 +39,16 @@
 // applied live ships as its own private step, declared in `deltas[]`:
 //   { id: '030', name: 'baldosas_split', task, skus[], previous_technical_sheets{ sku: sheet } }
 // For each delta the generator also writes db/seeds/private/<id>_catalog_<name>.sql (+ .down.sql).
-// A delta touches only its skus (actions update or create; a sku belongs to one delta at most):
-// it creates its new rows (metadata.catalog_migration_<id> = 'created') and rewrites the sheets
-// that differ. Every updated sku records the sheet it had before, so the delta rollback deletes
-// the rows it created and restores those sheets, only while the delta's sheet is still there.
+// A delta touches only its skus (actions update or create): it creates its new rows
+// (metadata.catalog_migration_<id> = 'created') and rewrites the sheets that differ. Every updated
+// sku records the sheet it had before, so the delta rollback deletes the rows it created and
+// restores those sheets, only while the delta's sheet is still there.
+// Task 3c.28: deltas are listed in ascending id order and a later delta may touch the skus of an
+// earlier one. A delta writes, for each sku, the sheet the next delta touching that sku records as
+// previous (the final data sheet when none does), so an applied delta's SQL never changes when a
+// later one is added. A `create` item is created by the first delta listing it; later deltas update
+// it; a delta that records the previous sheet of a `create` item only updates it (the row the 027
+// SQL created). Apply deltas in id order; roll them back in reverse id order.
 // The 027 rollback also deletes rows a delta created. Apply after 027; roll back before 027:
 //   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/030_catalog_baldosas_split.sql
 //   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/030_catalog_baldosas_split.down.sql
@@ -137,14 +143,29 @@ export const validateTechnicalSheetsData = (data) => {
 const sheetShapeErrors = (sheet, where) => (isObject(sheet) && Object.keys(sheet).sort().join() === SHEET_KEYS.join()
   && Array.isArray(sheet.variants) && sheet.variants.length > 0 ? [] : [`${where}: previous technical_sheet must have exactly ${SHEET_KEYS.join(', ')} and variants`]);
 
+// Task 3c.28: deltas apply in ascending id order and a later delta may touch the skus of an
+// earlier one. The sheet a delta writes for a sku is the one the next delta touching that sku
+// records as previous (the final data sheet when none does), so an applied delta's SQL never
+// changes when a later delta is added. A `create` item is created by the first delta listing it,
+// unless that delta records its previous sheet (the row already exists: the 027 SQL created it);
+// every later delta only updates it.
+const touches = (delta, sku) => isObject(delta) && Array.isArray(delta.skus) && delta.skus.includes(sku);
+const deltaRole = (deltas, index, item) => (item.action === 'create'
+  && !(isObject(deltas[index]?.previous_technical_sheets) && item.sku in deltas[index].previous_technical_sheets)
+  && !deltas.slice(0, index).some((delta) => touches(delta, item.sku)) ? 'create' : 'update');
+const deltaTarget = (deltas, index, item) => {
+  const next = deltas.slice(index + 1).find((delta) => touches(delta, item.sku));
+  return next ? next.previous_technical_sheets?.[item.sku] : item.technical_sheet;
+};
+
 // Task 3c.27: delta steps on top of the already applied 027 data.
 const validateDeltas = (data) => {
   if (!('deltas' in data)) return [];
   if (!Array.isArray(data.deltas)) return ['deltas must be an array'];
   const errors = [];
   const items = new Map((Array.isArray(data.items) ? data.items : []).filter(isObject).map((item) => [item.sku, item]));
-  const deltaOf = new Map();
   const ids = new Set();
+  let lastId = null;
   data.deltas.forEach((delta, index) => {
     const where = `deltas[${index}]${delta?.id ? ` (${delta.id})` : ''}`;
     if (!isObject(delta)) {
@@ -153,8 +174,11 @@ const validateDeltas = (data) => {
     }
     if (typeof delta.id !== 'string' || !/^\d{3}$/.test(delta.id) || Number(delta.id) <= 27 || ids.has(delta.id)) {
       errors.push(`${where}: id must be a unique three-digit number after 027`);
+    } else if (lastId !== null && Number(delta.id) < Number(lastId)) {
+      errors.push(`${where}: deltas must be listed in ascending id order`);
     }
     ids.add(delta.id);
+    if (typeof delta.id === 'string') lastId = delta.id;
     if (typeof delta.name !== 'string' || !/^[a-z0-9_]+$/.test(delta.name)) errors.push(`${where}: name must match [a-z0-9_]+`);
     if (typeof delta.task !== 'string' || delta.task.trim() === '') errors.push(`${where}: task is required`);
     if (!isStringList(delta.skus) || delta.skus.length === 0 || new Set(delta.skus).size !== delta.skus.length) {
@@ -168,16 +192,15 @@ const validateDeltas = (data) => {
         errors.push(`${where}: unknown sku ${sku}`);
         continue;
       }
-      if (deltaOf.has(sku)) errors.push(`${where}: ${sku} is already in delta ${deltaOf.get(sku)}`);
-      deltaOf.set(sku, delta.id);
       if (!['update', 'create'].includes(item.action)) errors.push(`${where}: ${sku}: a delta carries only update and create items`);
-      if (item.action === 'update' && previous) {
+      if (deltaRole(data.deltas, index, item) === 'update' && previous) {
         if (!(sku in previous)) errors.push(`${where}: ${sku} needs its previous technical_sheet`);
-        else if (JSON.stringify(previous[sku]) === JSON.stringify(item.technical_sheet)) errors.push(`${where}: ${sku}: the previous technical_sheet equals the new one`);
+        else if (JSON.stringify(previous[sku]) === JSON.stringify(deltaTarget(data.deltas, index, item))) errors.push(`${where}: ${sku}: the previous technical_sheet equals the new one`);
       }
     }
     for (const [sku, sheet] of Object.entries(previous || {})) {
-      if (!(Array.isArray(delta.skus) && delta.skus.includes(sku) && items.get(sku)?.action === 'update')) {
+      const item = items.get(sku);
+      if (!(touches(delta, sku) && item && ['update', 'create'].includes(item.action) && deltaRole(data.deltas, index, item) === 'update')) {
         errors.push(`${where}: previous_technical_sheets lists only updated skus of this delta (${sku})`);
       }
       errors.push(...sheetShapeErrors(sheet, `${where}.${sku}`));
@@ -284,7 +307,7 @@ WHERE sku = ${literal(item.sku)}
 `);
   }
   for (const delta of data.deltas || []) {
-    const deltaCreated = deltaItems(data, delta).filter((item) => item.action === 'create').map((item) => item.sku);
+    const deltaCreated = deltaItems(data, delta).filter((item) => item.role === 'create').map((item) => item.sku);
     if (deltaCreated.length === 0) continue;
     statements.push(`DELETE FROM catalog_items
 WHERE metadata->>'${markerFor(delta.id)}' = 'created'
@@ -300,7 +323,14 @@ WHERE metadata ? 'technical_sheet'
   return statements.join('\n');
 };
 
-const deltaItems = (data, delta) => delta.skus.map((sku) => data.items.find((item) => item.sku === sku));
+// Each item of a delta with its role there and the sheet this delta writes for it (task 3c.28).
+const deltaItems = (data, delta) => {
+  const index = data.deltas.indexOf(delta);
+  return delta.skus.map((sku) => {
+    const item = data.items.find((candidate) => candidate.sku === sku);
+    return { ...item, role: deltaRole(data.deltas, index, item), technical_sheet: deltaTarget(data.deltas, index, item) };
+  });
+};
 const findDelta = (data, id) => {
   assertValid(data);
   const delta = (data.deltas || []).find((candidate) => candidate.id === id);
@@ -308,11 +338,15 @@ const findDelta = (data, id) => {
   return delta;
 };
 
+// Task 3c.28: what one delta does to each of its skus: { sku, role: 'create' | 'update', technical_sheet }.
+export const deltaSteps = (data, id) => deltaItems(data, findDelta(data, id))
+  .map((item) => ({ sku: item.sku, role: item.role, technical_sheet: item.technical_sheet }));
+
 // Task 3c.27: the private SQL of one delta step (apply after the 027 SQL).
 export const buildDeltaMigrationSql = (data, id) => {
   const delta = findDelta(data, id);
   const items = deltaItems(data, delta);
-  const created = items.filter((item) => item.action === 'create');
+  const created = items.filter((item) => item.role === 'create');
   const statements = [`-- Catalog technical sheets, delta ${delta.id} "${delta.name}" (task ${delta.task}). PRIVATE generated SQL: never commit it.
 -- GENERATED by scripts/catalog/technical-sheets.mjs; apply it after the 027 SQL. Touches only: ${delta.skus.join(', ')}.
 `];
@@ -325,8 +359,8 @@ export const buildDeltaMigrationSql = (data, id) => {
 export const buildDeltaRollbackSql = (data, id) => {
   const delta = findDelta(data, id);
   const items = deltaItems(data, delta);
-  const created = items.filter((item) => item.action === 'create').map((item) => item.sku);
-  const updated = items.filter((item) => item.action === 'update');
+  const created = items.filter((item) => item.role === 'create').map((item) => item.sku);
+  const updated = items.filter((item) => item.role === 'update');
   const statements = [`-- Rollback of the catalog technical sheets delta ${delta.id} "${delta.name}" (task ${delta.task}). PRIVATE generated SQL: never commit it.
 -- GENERATED by scripts/catalog/technical-sheets.mjs. Restores the rows the 027 SQL left (updated_at aside).
 `];
