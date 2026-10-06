@@ -45,6 +45,11 @@
     },
     {
       "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
+      "node": "Execute Technical Sheet Outbound",
+      "targetWorkflow": "WA - Outbound Messages"
+    },
+    {
+      "sourceWorkflow": "WA - Inbound Downstream Dispatcher",
       "node": "Execute Lead Creation",
       "targetWorkflow": "CRM - Lead Creation And Assignment"
     },

@@ -114,7 +114,8 @@ services:
             response.end(JSON.stringify({ count: requests.length, requests }));
             return;
           }
-          if (request.method === 'POST' && request.url.startsWith('/message/sendText/')) {
+          // Task 3c.29: technical-sheet documents go to sendMedia.
+          if (request.method === 'POST' && (request.url.startsWith('/message/sendText/') || request.url.startsWith('/message/sendMedia/'))) {
             const chunks = [];
             request.on('data', (chunk) => chunks.push(chunk));
             request.on('end', () => {

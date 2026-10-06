@@ -851,6 +851,101 @@
           "name": "Postgres CRM App Local"
         }
       }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Technical-sheet documents to send after a delivered v3.1 reply (task 3c.29).\n-- Each send_technical_sheet effect of the decision reserved one document\n-- message (19_persist_v3_technical_sheet_effect.sql) and receipted it in\n-- effect_receipt_refs. They are released only once the turn reply itself was\n-- delivered (execution state 'delivered'), in effect order, so the customer\n-- reads the announcement before the PDF. A reply that failed, is unknown or\n-- was cancelled by human control releases no document. Each row is the input\n-- of one WA - Outbound Messages run, which claims the reserved row by its\n-- delivery key; a replay finds it already sent and sends nothing.\n--\n-- Params: p1 decision_id.\nSELECT\n  message.id AS document_message_id,\n  message.conversation_id,\n  message.lead_id,\n  message.raw_payload->>'number' AS phone_number,\n  message.provider_instance_name AS instance_name,\n  message.idempotency_key AS delivery_key,\n  'document' AS message_type,\n  'technical_sheet' AS response_kind,\n  FALSE AS human_arbitration_required,\n  execution.decision_id\nFROM conversation_turn_executions execution\nJOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id\nCROSS JOIN LATERAL jsonb_array_elements(\n  CASE WHEN jsonb_typeof(execution.effect_receipt_refs) = 'array'\n    THEN execution.effect_receipt_refs ELSE '[]'::JSONB END\n) WITH ORDINALITY receipt(value, position)\nJOIN messages message\n  ON message.id::TEXT = receipt.value->>'document_message_id'\n AND message.idempotency_key = receipt.value->>'delivery_key'\n AND message.conversation_id = execution.conversation_id\n AND message.direction = 'outgoing'\n AND message.sender_type = 'bot'\n AND message.message_type = 'document'\n AND message.deleted_at IS NULL\nWHERE execution.decision_id = $1::TEXT\n  AND execution.state = 'delivered'\n  AND decision.output_payload->>'version' = 'validated_conversation_decision/v3.1'\n  AND receipt.value->>'effect_type' = 'send_technical_sheet'\n  AND receipt.value->>'status' = 'succeeded'\nORDER BY receipt.position;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.decision_id] }}"
+        }
+      },
+      "id": "v3-load-technical-sheet-deliveries",
+      "name": "Load V3 Technical Sheet Deliveries",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1660,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v3-technical-sheet-deliveries-condition",
+              "leftValue": "={{ Boolean($json.document_message_id && $json.delivery_key) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-technical-sheet-deliveries",
+      "name": "V3 Technical Sheet Deliveries?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1860,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "77777777-0000-0000-0000-000000000001",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "50000000-0000-0000-0000-000000000329",
+      "name": "Execute Technical Sheet Outbound",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2060,
+        40
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Task 3c.29: the technical-sheet documents of a delivered v3.1 reply were\n// sent (or there were none). Restore the single reply receipt that\n// `Outbound Lane Complete` expects and record a short summary of each\n// document send: its delivery key, its outcome, and the error of a run that\n// failed (Execute Technical Sheet Outbound continues on error, so a failed\n// document never blocks the turn; its message row keeps the provider outcome\n// for reconciliation).\nlet receipt = {};\nif (typeof $ === 'function') {\n  try { receipt = $('Record V3 Delivery Receipt').first().json || {}; }\n  catch (_error) { /* Direct fixture callers carry no receipt. */ }\n}\nconst technicalSheetDeliveries = items\n  .map((item) => item.json || {})\n  .filter((result) => result.delivery_key || result.idempotency_key || result.error)\n  .map((result) => ({\n    delivery_key: result.delivery_key ?? result.idempotency_key ?? null,\n    delivery_status: result.delivery_status ?? result.outbound_dispatch_status ?? null,\n    error: result.error ? String(result.error.message ?? result.error) : null,\n  }));\nreturn [{ json: { ...receipt, technical_sheet_deliveries: technicalSheetDeliveries } }];\n"
+      },
+      "id": "v3-technical-sheet-lane-complete",
+      "name": "Technical Sheet Lane Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        100
+      ]
     }
   ],
   "connections": {
@@ -1324,7 +1419,7 @@
       "main": [
         [
           {
-            "node": "Outbound Lane Complete",
+            "node": "Load V3 Technical Sheet Deliveries",
             "type": "main",
             "index": 0
           }
@@ -1354,6 +1449,57 @@
         [
           {
             "node": "V3 Delivery Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load V3 Technical Sheet Deliveries": {
+      "main": [
+        [
+          {
+            "node": "V3 Technical Sheet Deliveries?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V3 Technical Sheet Deliveries?": {
+      "main": [
+        [
+          {
+            "node": "Execute Technical Sheet Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Technical Sheet Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Technical Sheet Outbound": {
+      "main": [
+        [
+          {
+            "node": "Technical Sheet Lane Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Technical Sheet Lane Complete": {
+      "main": [
+        [
+          {
+            "node": "Outbound Lane Complete",
             "type": "main",
             "index": 0
           }

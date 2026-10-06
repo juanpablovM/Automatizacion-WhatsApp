@@ -50,7 +50,24 @@ v3_grounding_entries AS (
               WHEN jsonb_typeof(ci.metadata->'technical_sheet') = 'object'
                 THEN jsonb_build_object('technical_sheet', (ci.metadata->'technical_sheet') - 'source_files')
               ELSE '{}'::jsonb
-            END AS entry
+            END
+         -- Task 3c.29: the technical-sheet PDFs of this product (migration 032),
+         -- refs only and never their bytes, only when it has an active one. The
+         -- v3.1 policy builder keeps them only for the products relevant to the
+         -- turn; v3 drops them.
+         || COALESCE((
+              SELECT jsonb_build_object('technical_sheet_files', jsonb_agg(
+                jsonb_build_object(
+                  'ref', 'sheet:' || sheet.sheet_key,
+                  'variant', sheet.variant,
+                  'covers', to_jsonb(sheet.covers_variants)
+                ) ORDER BY sheet.id
+              ))
+              FROM technical_sheet_files sheet
+              WHERE sheet.sku = ci.sku
+                AND sheet.active
+              HAVING COUNT(*) > 0
+            ), '{}'::jsonb) AS entry
   FROM catalog_items ci
   WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL
 ),
@@ -194,6 +211,43 @@ v3_removed_products AS (
       -- new conversation still loads the previous one.
       AND lc.conversation_status_code <> 'closed'
   ) removed
+),
+-- Task 3c.29: technical sheets this conversation already received (sent or
+-- still in flight), so the v3.1 policy marks them sent and the validator never
+-- sends one twice unless the customer asks again. A closed conversation never
+-- carries them, like its removals.
+v3_technical_sheets_sent AS (
+  SELECT jsonb_agg(DISTINCT 'sheet:' || (m.raw_payload#>>'{technical_sheet,sheet_key}')) AS value
+  FROM latest_conversation lc
+  JOIN messages m ON m.conversation_id = lc.conversation_id
+  WHERE m.direction = 'outgoing'
+    AND m.sender_type = 'bot'
+    AND m.message_type = 'document'
+    AND m.deleted_at IS NULL
+    AND NULLIF(m.raw_payload#>>'{technical_sheet,sheet_key}', '') IS NOT NULL
+    AND m.delivery_status IN ('sending', 'sent', 'unknown')
+    AND lc.conversation_status_code <> 'closed'
+),
+-- Task 3c.29: the sheet offered by the latest committed turn, while its
+-- pending question (technical_sheet_offer) is still the open one. Only the
+-- latest committed decision counts: a later turn that asked nothing else
+-- leaves the pending key in place but is no longer the offer being answered.
+v3_technical_sheet_offer AS (
+  SELECT latest.offer_ref AS value
+  FROM latest_conversation lc
+  JOIN LATERAL (
+    SELECT decision.output_payload#>>'{reply,primary_request,item_ref}' AS offer_ref,
+           decision.output_payload#>>'{reply,primary_request,goal_id}' AS goal_id
+    FROM conversation_turn_executions execution
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    WHERE execution.conversation_id = lc.conversation_id
+      AND execution.state_receipt IS NOT NULL
+    ORDER BY execution.id DESC
+    LIMIT 1
+  ) latest ON TRUE
+  WHERE lc.pending_question_key = 'technical_sheet_offer'
+    AND latest.goal_id = 'technical_sheet_offer'
+    AND latest.offer_ref ~ '^sheet:[a-z0-9-]+$'
 ),
 recent_messages AS (
   SELECT COALESCE(
@@ -399,7 +453,11 @@ SELECT
   COALESCE(lcs.state_city, ll.city) AS last_known_city,
   COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement,
   vg.value || CASE WHEN vrp.value IS NOT NULL
-    THEN jsonb_build_object('removed_products', vrp.value) ELSE '{}'::jsonb END AS v3_grounding
+    THEN jsonb_build_object('removed_products', vrp.value) ELSE '{}'::jsonb END
+    || CASE WHEN vtss.value IS NOT NULL
+      THEN jsonb_build_object('technical_sheets_sent', vtss.value) ELSE '{}'::jsonb END
+    || CASE WHEN vtso.value IS NOT NULL
+      THEN jsonb_build_object('technical_sheet_offer_ref', vtso.value) ELSE '{}'::jsonb END AS v3_grounding
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
 LEFT JOIN active_contract_route acr ON TRUE
@@ -414,4 +472,6 @@ LEFT JOIN latest_lead ll ON TRUE
 LEFT JOIN chat_authority ca ON TRUE
 LEFT JOIN follow_up_status fs ON TRUE
 LEFT JOIN v3_grounding vg ON TRUE
-LEFT JOIN v3_removed_products vrp ON TRUE;
+LEFT JOIN v3_removed_products vrp ON TRUE
+LEFT JOIN v3_technical_sheets_sent vtss ON TRUE
+LEFT JOIN v3_technical_sheet_offer vtso ON TRUE;

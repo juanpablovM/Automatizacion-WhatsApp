@@ -627,6 +627,53 @@ const TOP_LEVEL_PROPOSAL_KEYS_V31 = new Set([
 // stays a blocking code there).
 const NON_BLOCKING_V31_CODES = new Set(['catalog_resolution_clarification_required']);
 
+// Task 3c.29 (v3.1 only): technical-sheet PDFs. The policy lists the sheets of
+// the products relevant to the turn on their catalog entries
+// (`technical_sheet_files: [{ref, variant, covers?, sent?, offered?}]`, refs
+// only). A `send_technical_sheet` effect names one of them by `sheet_ref`; an
+// offer is the pending question `technical_sheet_offer` whose item_ref is the
+// offered sheet's ref. Every other effect carries sheet_ref null (or omits it).
+const TECHNICAL_SHEET_OFFER_GOAL_V31 = 'technical_sheet_offer';
+const MAX_TECHNICAL_SHEETS_PER_TURN_V31 = 3;
+const EFFECT_KEYS_V31 = new Set([...EFFECT_KEYS, 'sheet_ref']);
+const technicalSheetFilesV31 = (policy) => {
+  const sheets = new Map();
+  for (const entry of (Array.isArray(policy?.grounding?.catalog) ? policy.grounding.catalog : [])) {
+    if (!isObject(entry) || typeof entry.ref !== 'string' || !Array.isArray(entry.technical_sheet_files)) continue;
+    for (const file of entry.technical_sheet_files) {
+      if (!isObject(file) || typeof file.ref !== 'string' || sheets.has(file.ref)) continue;
+      sheets.set(file.ref, {
+        ref: file.ref,
+        catalog_ref: entry.ref,
+        sku: entry.ref.replace(/^(?:product|service):/, ''),
+        product: entry.value ?? null,
+        variant: typeof file.variant === 'string' ? file.variant : null,
+        sent: file.sent === true,
+        offered: file.offered === true,
+      });
+    }
+  }
+  return sheets;
+};
+const foldSheetTextV31 = (value) => replyTextWithoutWhatsAppFormatting(value)
+  .normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('es').replace(/\s+/g, ' ').trim();
+// The customer asks for a sheet or a document in the current message.
+const requestsTechnicalSheetV31 = (messageText) => /\b(?:fichas?|pdfs?|hojas? tecnicas?|data ?sheets?)\b/
+  .test(foldSheetTextV31(messageText));
+// A short yes to the pending offer ("sí", "dale", "ya, mándala"); a no never is.
+const acceptsTechnicalSheetOfferV31 = (messageText) => {
+  const text = foldSheetTextV31(messageText).replace(/[¡!¿?.,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^(?:no|nop|nah|mejor no|ahora no|despues)\b/.test(text)) return false;
+  return /^(?:si+|sip|dale|ok|okay|oka|ya|bueno|claro|porfa|por favor|perfecto|de acuerdo|obvio|bacan|genial|excelente|me sirve|mandala|mandamela|mandalas|enviala|enviamela|pasala|pasamela)\b/
+    .test(text);
+};
+// A reply line that says a sheet is being sent now (not a question offering it).
+const SHEET_SEND_CLAIM_V31 = /\b(?:te|les?)\s+(?:dejo|adjunto|envio|mando|comparto|paso)\b[^?]{0,40}\bfichas?\b|\b(?:aqui|aca)\s+(?:tienes|esta|va|van)\b[^?]{0,30}\bfichas?\b|\bfichas?\b[^?]{0,40}\b(?:adjunta|enviada|va abajo|abajo)\b/;
+const replyClaimsSheetSendV31 = (replyText) => String(replyText ?? '').split('\n')
+  .filter((line) => !line.includes('?'))
+  .some((line) => SHEET_SEND_CLAIM_V31.test(foldSheetTextV31(line)));
+const technicalSheetNotRequestedInstructionV31 = 'Send a technical sheet only when the current message asks for one (for example "mándame la ficha técnica") or accepts the sheet you offered in the previous turn (the one with offered=true). Otherwise remove this send_technical_sheet effect_request; to offer the sheet, ask in reply_text (for example "¿Te mando la ficha técnica de la *Baldosa 14 Listones*?") with primary_request {"goal_id": "technical_sheet_offer", "item_ref": "<that sheet ref>"} and do not claim it was sent.';
+
 const itemIdFromFactId = (factId) => {
   const match = ITEM_FACT_ID_RE.exec(String(factId || ''));
   return match ? match[1] : null;
@@ -986,6 +1033,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   }
 
   const primaryRequest = proposalObject.primary_request;
+  const technicalSheets = technicalSheetFilesV31(policy);
   let primaryRequestValid = primaryRequest === null;
   if (primaryRequest !== null) {
     const itemRefOk = primaryRequest?.item_ref === null
@@ -993,15 +1041,33 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     const requestGoalValid = typeof primaryRequest?.goal_id === 'string'
       && (primaryRequest.goal_id === FINAL_CONFIRMATION_GOAL
         || ITEM_FIELDS.has(primaryRequest.goal_id)
+        || (primaryRequest.goal_id === TECHNICAL_SHEET_OFFER_GOAL_V31 && technicalSheets.size > 0)
         || (policy?.goals || []).some((goal) => goal.goal_id === primaryRequest.goal_id));
     primaryRequestValid = exactKeys(primaryRequest, PRIMARY_REQUEST_KEYS_V31) && itemRefOk && requestGoalValid;
     if (!primaryRequestValid) errors.push(validationError('primary_request_invalid', 'primary_request'));
+    // Task 3c.29: the offer names exactly one listed sheet that was not sent yet;
+    // its item_ref is that sheet's ref, so the next turn knows what "sí" accepts.
+    if (primaryRequestValid && primaryRequest.goal_id === TECHNICAL_SHEET_OFFER_GOAL_V31) {
+      const offered = technicalSheets.get(primaryRequest.item_ref);
+      if (!offered) {
+        errors.push(validationError(
+          'technical_sheet_offer_invalid', 'primary_request.item_ref', [], [...technicalSheets.keys()],
+          'To offer a technical sheet, primary_request.item_ref must be the exact ref of one listed technical_sheet_files entry (sheet:...) for the product and variant you offer. If no listed sheet fits, offer that a Hormiglass executive confirms the detail instead and use another primary_request.',
+        ));
+      } else if (offered.sent) {
+        errors.push(validationError(
+          'technical_sheet_offer_already_sent', 'primary_request.item_ref', [offered.ref], [],
+          'That technical sheet was already sent in this conversation (sent=true): do not offer it again. Remind the customer it is in the chat, or offer that a Hormiglass executive confirms the detail.',
+        ));
+      }
+    }
     // Task 3c.18 (live 2026-09-28): the model asked item questions (the
     // pandereta clarification, the 3c.17 distributive assignment) with the
     // customer's `name` goal plus an item_ref. Only the item goals (and the
     // line_items equivalent accepted for item clarification below) may be
     // item-scoped; a quote-level goal takes item_ref null.
     if (primaryRequestValid && typeof primaryRequest.item_ref === 'string'
+        && primaryRequest.goal_id !== TECHNICAL_SHEET_OFFER_GOAL_V31
         && !ITEM_SCOPED_REQUEST_GOALS_V31.has(primaryRequest.goal_id)) {
       errors.push(validationError(
         'primary_request_item_ref_invalid', 'primary_request.item_ref', [primaryRequest.goal_id], [null],
@@ -1554,15 +1620,62 @@ const validateV3AiProposalV31 = (policy, proposal) => {
 
   const effects = Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [];
   if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
+  const messageRequestsSheet = requestsTechnicalSheetV31(messageText);
+  const pendingSheetOffer = pendingQuestionGoalId === TECHNICAL_SHEET_OFFER_GOAL_V31
+    ? [...technicalSheets.values()].find((sheet) => sheet.offered) ?? null
+    : null;
+  const offerAccepted = Boolean(pendingSheetOffer) && acceptsTechnicalSheetOfferV31(messageText);
+  const requestedSheetRefs = [];
+  const authorizedSheetRefs = [];
   for (const [index, effect] of effects.entries()) {
     const path = `effect_requests[${index}]`;
-    if (!exactKeys(effect, EFFECT_KEYS) || typeof effect.type !== 'string' || !Array.isArray(effect.reason_observation_ids)) {
+    const sheetRefShapeValid = effect?.type === 'send_technical_sheet'
+      ? typeof effect?.sheet_ref === 'string'
+      : (effect?.sheet_ref === undefined || effect?.sheet_ref === null);
+    if (!exactKeys(effect, EFFECT_KEYS_V31) || typeof effect.type !== 'string' || !Array.isArray(effect.reason_observation_ids)
+        || !sheetRefShapeValid) {
       errors.push(validationError('effect_shape_invalid', path));
       continue;
     }
+    if (effect.type === 'send_technical_sheet') requestedSheetRefs.push(effect.sheet_ref);
     if (!permissions.has(effect.type)) {
       errors.push(validationError('effect_not_permitted', `${path}.type`, [], [...permissions]));
       continue;
+    }
+    // Task 3c.29: a technical sheet goes out only when the customer asks for
+    // it now or accepts the pending offer, once per conversation unless asked
+    // again, and never twice in one turn.
+    if (effect.type === 'send_technical_sheet') {
+      const sheet = technicalSheets.get(effect.sheet_ref);
+      if (!sheet) {
+        errors.push(validationError(
+          'technical_sheet_unknown', `${path}.sheet_ref`, [String(effect.sheet_ref)], [...technicalSheets.keys()],
+          'sheet_ref must be the exact ref of one technical_sheet_files entry listed in the policy grounding. Choose the sheet of the product and variant the customer asks for; if none is listed, do not send a sheet and offer that a Hormiglass executive confirms the detail.',
+        ));
+        continue;
+      }
+      const acceptsThisOffer = offerAccepted && pendingSheetOffer.ref === sheet.ref;
+      if (!messageRequestsSheet && !acceptsThisOffer) {
+        errors.push(validationError(
+          'technical_sheet_not_requested', `${path}.sheet_ref`, [sheet.ref], [], technicalSheetNotRequestedInstructionV31,
+        ));
+        continue;
+      }
+      if (sheet.sent && !messageRequestsSheet) {
+        errors.push(validationError(
+          'technical_sheet_already_sent', `${path}.sheet_ref`, [sheet.ref], [],
+          'This technical sheet was already sent in this conversation (sent=true). Send it again only when the customer explicitly asks for it again; otherwise remove this effect_request and tell the customer the sheet is already in the chat.',
+        ));
+        continue;
+      }
+      if (authorizedSheetRefs.includes(sheet.ref)) {
+        errors.push(validationError(
+          'technical_sheet_duplicate', `${path}.sheet_ref`, [sheet.ref], [],
+          'Send each technical sheet at most once per turn: remove the repeated send_technical_sheet effect_request.',
+        ));
+        continue;
+      }
+      authorizedSheetRefs.push(sheet.ref);
     }
     const unknownObservation = effect.reason_observation_ids.find((id) => !observationsById.has(id));
     if (unknownObservation) {
@@ -1605,6 +1718,33 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         `Add one ${requirement.effect_type} effect_request because its prerequisites and configured trigger are satisfied.`,
       ));
     }
+  }
+
+  // Task 3c.29: the per-turn cap, the announcement, the accepted offer and
+  // the no-unreceipted-claim rule for technical sheets.
+  if (authorizedSheetRefs.length > MAX_TECHNICAL_SHEETS_PER_TURN_V31) {
+    errors.push(validationError(
+      'technical_sheet_limit_exceeded', 'effect_requests', authorizedSheetRefs, [],
+      `Send at most ${MAX_TECHNICAL_SHEETS_PER_TURN_V31} technical sheets per turn: keep the ones the customer asked for most directly and offer the others.`,
+    ));
+  }
+  if (authorizedSheetRefs.length > 0 && !/\bfichas?\b/.test(foldSheetTextV31(proposalObject.reply_text))) {
+    errors.push(validationError(
+      'technical_sheet_announcement_required', 'reply_text', authorizedSheetRefs, [],
+      'The PDF arrives as a separate message right after reply_text: announce it briefly in reply_text, for example "Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇".',
+    ));
+  }
+  if (offerAccepted && !pendingSheetOffer.sent && !authorizedSheetRefs.includes(pendingSheetOffer.ref)) {
+    errors.push(validationError(
+      'technical_sheet_offer_unanswered', 'effect_requests', [pendingSheetOffer.ref], [pendingSheetOffer.ref],
+      `The customer accepted the technical sheet offered in the previous turn: add one effect_request {"type": "send_technical_sheet", "reason_observation_ids": [], "sheet_ref": "${pendingSheetOffer.ref}"} and announce it briefly in reply_text.`,
+    ));
+  }
+  if (requestedSheetRefs.length === 0 && replyClaimsSheetSendV31(proposalObject.reply_text)) {
+    errors.push(validationError(
+      'technical_sheet_send_claim_unauthorized', 'reply_text', [], [],
+      'reply_text says a technical sheet is being sent, but no send_technical_sheet effect_request was made. Either add that effect for a listed sheet the customer asked for, or rewrite reply_text without claiming to send it (you may offer it as a question).',
+    ));
   }
 
   // Composed from v3's address_retry_exhausted/address_retry_handoff_required
@@ -2077,6 +2217,13 @@ const buildV3EffectCommand = (policy, effect, authorizedMutationCount, operation
       && authorizedMutationCount === 0) {
     payload.escalation_reason = 'no_progress_commercial_question_loop';
     payload.pending_question_key = 'address';
+  }
+  // Task 3c.29 (only a v3.1 policy ever authorizes it): the executor reserves
+  // the exact sheet of this product, so the payload names it.
+  if (effect.type === 'send_technical_sheet') {
+    const sheet = technicalSheetFilesV31(policy).get(effect.sheet_ref);
+    if (!sheet) throw new Error('technical_sheet_not_in_policy');
+    payload.technical_sheet = { ref: sheet.ref, sku: sheet.sku, variant: sheet.variant };
   }
   const payloadDigest = digestObject(payload);
   return {

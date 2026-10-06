@@ -26,8 +26,18 @@ const normalizeBody = (value) => {
 const row = items[0]?.json ?? {};
 const instanceName = String(row.instance_name || $env.EVOLUTION_DEFAULT_INSTANCE || '').trim();
 const apiBaseUrl = String($env.EVOLUTION_API_BASE_URL || '').replace(/\/$/, '');
-const url = String(row.outbound_url || (apiBaseUrl && instanceName ? `${apiBaseUrl}/message/sendText/${encodeURIComponent(instanceName)}` : '')).trim();
+// Task 3c.29: a technical-sheet document goes to sendMedia with the body Mark
+// Outbound Sending built (number, mediatype, mimetype, fileName and the base64
+// media). Its bytes are dropped from this node's output so they are not copied
+// into every later item of the execution.
+const isDocument = row.message_type === 'document';
+const endpoint = isDocument ? 'sendMedia' : 'sendText';
+const url = String(row.outbound_url || (apiBaseUrl && instanceName ? `${apiBaseUrl}/message/${endpoint}/${encodeURIComponent(instanceName)}` : '')).trim();
 const body = row.outbound_body || row.raw_payload;
+const withoutMedia = (value) => (isDocument && value && typeof value === 'object'
+  ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'media'))
+  : value);
+const outputRow = isDocument ? { ...row, outbound_body: withoutMedia(row.outbound_body), raw_payload: withoutMedia(row.raw_payload) } : row;
 
 if (row.already_sent === true || row.should_send === false) {
   return [];
@@ -59,7 +69,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       return [
         {
           json: {
-            ...row,
+            ...outputRow,
             statusCode,
             body: normalizeBody(response.body),
             headers: response.headers || {},
@@ -76,7 +86,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       return [
         {
           json: {
-            ...row,
+            ...outputRow,
             statusCode: 0,
             body: { message: error.message },
             headers: {},
@@ -92,4 +102,4 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
   await sleep(retryDelay(attempt));
 }
 
-return [{ json: { ...row, statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];
+return [{ json: { ...outputRow, statusCode: 0, body: { message: lastError?.message || 'HTTP retry exhausted' }, headers: {}, retry_attempts: maxAttempts, retry_exhausted: true, retry_last_error: lastError?.message || null } }];

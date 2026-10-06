@@ -396,6 +396,13 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist V3 Technical Sheet Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/19_persist_v3_technical_sheet_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Prepare V3 Contingency Decision",
     "fixture": "db/queries/n8n/wa-conversation-orchestrator/15_prepare_v3_contingency.sql",
     "type": "n8n-nodes-base.postgres",
@@ -441,6 +448,18 @@ const NODES = [
     "fixture": "db/queries/n8n/wa-inbound-downstream-dispatcher/01_record_v3_delivery_result.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Load V3 Technical Sheet Deliveries",
+    "fixture": "db/queries/n8n/wa-inbound-downstream-dispatcher/02_load_v3_technical_sheet_deliveries.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Technical Sheet Lane Complete",
+    "fixture": "wa-inbound-downstream-dispatcher/technical-sheet-lane-complete.js"
   },
   {
     "workflow": "n8n/workflows/ops-followup-scheduler.json",

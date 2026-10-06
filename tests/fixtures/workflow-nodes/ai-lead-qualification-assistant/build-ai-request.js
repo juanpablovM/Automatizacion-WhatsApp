@@ -508,9 +508,38 @@ if (usesV3Contract) {
   // distributive_assignment_unconfirmed, which demands goal_id "quantity")
   // keeps the first-pass enum; locking every repair to the quote-level list
   // left the item goals unrepresentable and the model answered with "name".
+  // Task 3c.29: when the policy exposes technical-sheet PDFs (and so permits
+  // send_technical_sheet), each effect_request carries sheet_ref (one listed
+  // ref, or null for every other effect) and primary_request may be the
+  // technical_sheet_offer goal whose item_ref is the offered sheet's ref.
+  // Without exposed sheets the v3.1 schema is exactly the previous one.
+  const technicalSheetRefsV31 = uniqueStrings((Array.isArray(turnPolicy.grounding?.catalog) ? turnPolicy.grounding.catalog : [])
+    .flatMap((entry) => (Array.isArray(entry?.technical_sheet_files) ? entry.technical_sheet_files : []))
+    .map((file) => safe(file?.ref))
+    .filter((ref) => /^sheet:[a-z0-9-]+$/.test(ref)));
+  const sendsTechnicalSheetsV31 = allowedEffectTypes.includes('send_technical_sheet') && technicalSheetRefsV31.length > 0;
+  const effectRequestsSchemaV31 = sendsTechnicalSheetsV31
+    ? {
+        type: 'array',
+        items: {
+          ...effectRequestItemSchema,
+          required: [...effectRequestItemSchema.required, 'sheet_ref'],
+          properties: {
+            ...effectRequestItemSchema.properties,
+            sheet_ref: { type: ['string', 'null'], enum: [...technicalSheetRefsV31, null] },
+          },
+        },
+      }
+    : effectRequestsSchema;
+  const primaryRequestItemRefSchemaV31 = sendsTechnicalSheetsV31
+    ? { type: ['string', 'null'], enum: [...itemRefCandidatesV31, ...technicalSheetRefsV31, null] }
+    : nullableItemRefSchemaV31;
   const primaryRequestGoalIdsV31 = repairPrimaryGoalErrors.length > 0
     ? primaryRequestGoalIds
-    : uniqueStrings([...primaryRequestGoalIds, ...ITEM_MUTATION_FIELDS_V31]);
+    : uniqueStrings([
+      ...primaryRequestGoalIds, ...ITEM_MUTATION_FIELDS_V31,
+      ...(sendsTechnicalSheetsV31 ? ['technical_sheet_offer'] : []),
+    ]);
   const v31ResponseSchema = {
     type: 'object',
     additionalProperties: false,
@@ -530,13 +559,13 @@ if (usesV3Contract) {
         required: ['goal_id', 'item_ref'],
         properties: {
           goal_id: { type: 'string', enum: primaryRequestGoalIdsV31 },
-          item_ref: nullableItemRefSchemaV31,
+          item_ref: primaryRequestItemRefSchemaV31,
         },
       },
       catalog_resolutions: catalogResolutionsSchemaV31,
       observations: observationsSchemaV31,
       state_mutations: stateMutationsSchemaV31,
-      effect_requests: effectRequestsSchema,
+      effect_requests: effectRequestsSchemaV31,
     },
   };
   const activeResponseSchema = usesV31Contract ? v31ResponseSchema : v3ResponseSchema;
@@ -751,7 +780,12 @@ if (usesV3Contract) {
   // unconfirmed or missing data to a sales executive, compute units only from
   // the sheet's yield, and never give prices or supplier brands. v3 never
   // receives sheets nor this rule.
-  const V31_TECHNICAL_SHEET_RULE = 'Algunas entradas del grounding traen technical_sheet: es la ficha técnica de ese producto o servicio, y solo viene para los productos de la cotización o los que el cliente nombra en este mensaje. Si el cliente pregunta un dato técnico (medidas, peso, rendimiento por m², resistencia, colores o terminaciones), respóndelo solo si está en la technical_sheet de ese producto e indica a qué variante corresponde; nunca inventes ni estimes un dato, ni lo tomes de otro producto. Si el dato aparece en unconfirmed, no aparece en la ficha, la ficha trae variants_omitted u omitted, o el producto no trae technical_sheet, dilo con naturalidad y ofrece que una ejecutiva de Hormiglass lo confirme. Si el cliente pregunta cuántas unidades necesita, puedes calcularlo solo con el rendimiento (yield) de esa variante en la ficha, mostrando la cuenta y aclarando que es un cálculo referencial que la ejecutiva confirmará; una cantidad que calculas tú no es una cantidad dicha por el cliente, así que no la registres como quantity. Nunca des precios ni menciones marcas de proveedores o fabricantes.';
+  const V31_TECHNICAL_SHEET_RULE = 'Algunas entradas del grounding traen technical_sheet: es la ficha técnica de ese producto o servicio, y solo viene para los productos de la cotización o los que el cliente nombra en este mensaje. Si el cliente pregunta un dato técnico (medidas, peso, rendimiento por m², resistencia, colores o terminaciones), respóndelo solo si está en la technical_sheet de ese producto e indica a qué variante corresponde; nunca inventes ni estimes un dato, ni lo tomes de otro producto. Si el dato aparece en unconfirmed, no aparece en la ficha, la ficha trae variants_omitted u omitted, o el producto no trae technical_sheet, no lo afirmes: si ese producto trae en technical_sheet_files una ficha de esa variante (o una general, con variant null) que no tenga sent=true, ofrécele enviarla con una pregunta, por ejemplo "¿Te mando la ficha técnica de la *Baldosa 14 Listones*?", con primary_request {"goal_id": "technical_sheet_offer", "item_ref": "<ref de esa ficha>"}; si no hay una ficha para enviar, dilo con naturalidad y ofrece que una ejecutiva de Hormiglass lo confirme. Si el cliente pregunta cuántas unidades necesita, puedes calcularlo solo con el rendimiento (yield) de esa variante en la ficha, mostrando la cuenta y aclarando que es un cálculo referencial que la ejecutiva confirmará; una cantidad que calculas tú no es una cantidad dicha por el cliente, así que no la registres como quantity. Nunca des precios ni menciones marcas de proveedores o fabricantes.';
+  // Task 3c.29: the v3.1 grounding lists the technical-sheet PDFs of the
+  // relevant products (technical_sheet_files, refs only); the model sends one
+  // with the send_technical_sheet effect only when asked or when the customer
+  // accepts the offer above. v3 never receives sheets nor this rule.
+  const V31_TECHNICAL_SHEET_FILES_RULE = 'Algunas entradas del grounding traen technical_sheet_files: las fichas técnicas en PDF que puedes enviar por WhatsApp, cada una con su ref (sheet:...), su variant (null es la ficha general del producto, y covers dice qué variantes describe); sent=true indica que ya se envió en esta conversación y offered=true que es la ficha que ofreciste en tu mensaje anterior. Para enviar una ficha usa un effect_request {"type": "send_technical_sheet", "reason_observation_ids": [], "sheet_ref": "<ref>"}, y solo cuando el cliente la pide en este mensaje (por ejemplo "mándame la ficha técnica" o "¿tienes la ficha del bloque?") o acepta ("sí", "dale", "mándala") la ficha ofrecida (offered=true). Elige la ficha de la variante que pide el cliente; si no nombra una variante, envía la ficha general o, si no hay, pregúntale qué variante necesita. Nunca envíes fichas que el cliente no pidió, como máximo tres por mensaje, y no vuelvas a enviar ni a ofrecer una ficha con sent=true salvo que el cliente la pida de nuevo explícitamente. Al enviarla, anúncialo en reply_text en una línea breve, por ejemplo "Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇": el PDF llega en un mensaje aparte justo después. Nunca digas que enviaste o adjuntaste una ficha sin ese effect_request. En los demás effect_requests usa sheet_ref null.';
   // Task 3c.21 (owner rules): "muro" without another product is Cierros de
   // Hormigón (migration 028 adds the synonyms), cierros are quoted only in
   // linear meters plus a height (the v3.1 validator rejects an area quantity
@@ -764,7 +798,7 @@ if (usesV3Contract) {
   // owner's exact sectioned template, with no emojis) and the new-request
   // example (its 😊 is outside the fixed set). v3 keeps all three verbatim.
   const V31_WHATSAPP_FORMAT_RULE = 'Formato de WhatsApp para reply_text: escribe en párrafos cortos separados por una línea en blanco (dos saltos de línea), sin espacios ni saltos de línea al inicio o al final; la pregunta va siempre al final, sola en su propia línea, y en los mensajes normales puedes anteponerle "👉 ". Usa *negrita* con un solo asterisco (*así*) solo para datos clave, como nombres de productos, cantidades y medidas, y para los títulos de sección del resumen. Nunca uses encabezados con #, doble asterisco (**) ni cursivas, salvo que una cursiva sea natural. Por ejemplo, un saludo abre con "¡Hola! 👋 Soy Hormi Atención de *Hormiglass*." y, tras una línea en blanco, hace la primera pregunta en su propia línea.';
-  const V31_EMOJI_RULE = 'Usa emojis con moderación, como máximo tres por mensaje y solo de este conjunto: 👋 👉 ✅ 👍 📋 (👋 al saludar, 👉 antes de la pregunta, ✅ o 👍 al confirmar o agradecer, 📋 al hablar de la cotización). No uses emojis si el cliente está molesto, reclama o pide no ser contactado, ni en ninguna parte del mensaje que pide final_confirmation.';
+  const V31_EMOJI_RULE = 'Usa emojis con moderación, como máximo tres por mensaje y solo de este conjunto: 👋 👉 ✅ 👍 📋 (👋 al saludar, 👉 antes de la pregunta, ✅ o 👍 al confirmar o agradecer, 📋 al hablar de la cotización); además, 👇 solo al anunciar una ficha técnica que envías. No uses emojis si el cliente está molesto, reclama o pide no ser contactado, ni en ninguna parte del mensaje que pide final_confirmation.';
   const V31_SUMMARY_TEMPLATE_RULE = [
     'Cuando pidas final_confirmation, primero reconoce en un párrafo breve lo último que dijo el cliente y luego escribe el resumen con esta estructura, sin emojis en ningún lugar del mensaje: el título *Resumen de tu cotización*; la sección *Productos* con una línea "•" por cada ítem (producto — cantidad y, si existen, sus medidas); luego una sola sección de entrega: *Instalación* (dirección y comuna, terreno, acceso del camión y retiro de escombros), *Despacho* (dirección y comuna, y restricciones de acceso) o *Retiro en fábrica* (siempre Portezuelo 1502, San Bernardo); si hay datos de empresa o de factura, la sección *Datos de facturación*. Separa cada sección con una línea en blanco y termina, sola en su línea y sin "👉", con la pregunta "¿Está todo correcto?". Omite las secciones y las líneas sin datos registrados; nunca inventes datos para completar la estructura. Ejemplo:',
     '¡Perfecto! Quedan 500 metros para cada alambre.',
@@ -814,6 +848,7 @@ if (usesV3Contract) {
       V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
       V31_CATALOG_SYNONYMS_RULE,
       V31_TECHNICAL_SHEET_RULE,
+      V31_TECHNICAL_SHEET_FILES_RULE,
       V31_CIERROS_LINEAR_METERS_RULE,
       V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,

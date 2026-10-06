@@ -126,13 +126,15 @@ const lineItemProductText = (product) => (typeof product === 'string'
 // Priority: line-item products first (item order), then what the message names
 // (catalog order). The byte budget is shared by water-filling: smaller sheets
 // are placed first and each sheet may use an equal share of what is left.
-const selectTechnicalSheets = ({ catalog, rawSheets, messageText, lineItems }) => {
+// The catalog refs relevant to this turn, in priority order: line-item
+// products first (item order), then what the message names (catalog order).
+const relevantCatalogRefs = ({ catalog, messageText, lineItems }) => {
   const productEntries = catalog.filter((entry) => entry?.concept === 'product');
   const mentioned = (text) => (resolvedProductRefsMentioned && String(text ?? '').trim() !== ''
     ? resolvedProductRefsMentioned(productEntries, text)
     : new Set());
   const relevant = [];
-  const addRef = (ref) => { if (rawSheets.has(ref) && !relevant.includes(ref)) relevant.push(ref); };
+  const addRef = (ref) => { if (!relevant.includes(ref)) relevant.push(ref); };
   for (const item of lineItems) {
     for (const ref of mentioned(lineItemProductText(item?.product))) addRef(ref);
   }
@@ -145,13 +147,17 @@ const selectTechnicalSheets = ({ catalog, rawSheets, messageText, lineItems }) =
       if (needle && foldedMessage.includes(` ${needle} `)) addRef(entry.ref);
     }
   }
+  return relevant;
+};
+const selectTechnicalSheets = ({ catalog, rawSheets, messageText, lineItems, maxBytes = TECHNICAL_SHEETS_MAX_BYTES }) => {
+  const relevant = relevantCatalogRefs({ catalog, messageText, lineItems }).filter((ref) => rawSheets.has(ref));
   const candidates = relevant
     .map((ref, priority) => ({ ref, priority, sheet: compactTechnicalSheet(rawSheets.get(ref)) }))
     .filter((candidate) => candidate.sheet !== null)
     .map((candidate) => ({ ...candidate, size: jsonBytes(candidate.sheet) }))
     .sort((left, right) => left.size - right.size || left.priority - right.priority);
   const selected = new Map();
-  let remaining = TECHNICAL_SHEETS_MAX_BYTES;
+  let remaining = maxBytes;
   candidates.forEach((candidate, index) => {
     const fitted = fitTechnicalSheet(candidate.sheet, Math.floor(remaining / (candidates.length - index)));
     if (!fitted) return;
@@ -159,6 +165,55 @@ const selectTechnicalSheets = ({ catalog, rawSheets, messageText, lineItems }) =
     remaining -= jsonBytes(fitted);
   });
   return selected;
+};
+
+// Task 3c.29: technical-sheet PDFs (table technical_sheet_files, private rows)
+// reach v3.1 as refs only: `technical_sheet_files: [{ref, variant, covers?,
+// sent?, offered?}]` on the relevant catalog entries. `covers` (the variants a
+// general sheet describes) is kept only for a general sheet (variant null);
+// `sent` marks a sheet already sent in this conversation and `offered` the one
+// the previous turn offered (pending question technical_sheet_offer), whose
+// entry stays exposed even when the answer ("sí") names nothing. The refs come
+// out of the same byte cap as the sheets: they may use up to
+// TECHNICAL_SHEET_FILES_MAX_BYTES, and the sheets get what is left.
+const TECHNICAL_SHEET_OFFER_GOAL = 'technical_sheet_offer';
+const TECHNICAL_SHEET_FILES_MAX_BYTES = 3072;
+const SHEET_REF = /^sheet:[a-z0-9-]+$/;
+const sanitizeSheetFiles = (value) => (Array.isArray(value) ? value : [])
+  .filter((file) => isPlainObject(file) && typeof file.ref === 'string' && SHEET_REF.test(file.ref)
+    && (file.variant === null || (typeof file.variant === 'string' && file.variant.trim() !== '')))
+  .map((file) => {
+    const covers = Array.isArray(file.covers) ? file.covers.filter((name) => typeof name === 'string' && name.trim() !== '') : [];
+    return { ref: file.ref, variant: file.variant, ...(file.variant === null && covers.length > 0 ? { covers } : {}) };
+  })
+  .filter((file, index, files) => files.findIndex((candidate) => candidate.ref === file.ref) === index);
+const selectTechnicalSheetFiles = ({ catalog, rawFiles, relevantRefs, sentRefs, offerRef }) => {
+  const offerEntryRef = offerRef
+    ? [...rawFiles.keys()].find((ref) => rawFiles.get(ref).some((file) => file.ref === offerRef)) ?? null
+    : null;
+  const ordered = [...(offerEntryRef ? [offerEntryRef] : []), ...relevantRefs]
+    .filter((ref, index, refs) => rawFiles.has(ref) && refs.indexOf(ref) === index);
+  const rank = (file) => (file.ref === offerRef ? 0 : (file.variant === null ? 1 : 2));
+  const selected = new Map();
+  let used = 0;
+  for (const catalogRef of ordered) {
+    const files = rawFiles.get(catalogRef)
+      .map((file, index) => ({ file, index }))
+      .sort((left, right) => rank(left.file) - rank(right.file) || left.index - right.index)
+      .map(({ file }) => ({
+        ...file,
+        ...(sentRefs.has(file.ref) ? { sent: true } : {}),
+        ...(file.ref === offerRef ? { offered: true } : {}),
+      }));
+    const kept = [];
+    for (const file of files) {
+      if (used - (kept.length > 0 ? jsonBytes(kept) : 0) + jsonBytes([...kept, file]) > TECHNICAL_SHEET_FILES_MAX_BYTES) break;
+      used += jsonBytes([...kept, file]) - (kept.length > 0 ? jsonBytes(kept) : 0);
+      kept.push(file);
+    }
+    if (kept.length > 0) selected.set(catalogRef, { files: kept, omitted: files.length - kept.length });
+  }
+  return { selected, used };
 };
 
 const primaryLineItem = (context) => {
@@ -216,10 +271,12 @@ const buildV3PolicyInput = (row, options = {}) => {
   // Task 3c.20: the same holds for the optional `technical_sheet` (private
   // catalog data): it is always removed here and v3.1 re-attaches a compact, capped
   // sheet only to the entries selected for this turn (selectTechnicalSheets).
+  // Task 3c.29: so does `technical_sheet_files` (refs of the sheet PDFs); v3.1
+  // re-attaches them only to the relevant entries (selectTechnicalSheetFiles).
   const catalogEntryForVersion = (entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
-    if (!('synonyms' in entry) && !('technical_sheet' in entry)) return entry;
-    const { synonyms, technical_sheet: _technicalSheet, ...rest } = entry;
+    if (!('synonyms' in entry) && !('technical_sheet' in entry) && !('technical_sheet_files' in entry)) return entry;
+    const { synonyms, technical_sheet: _technicalSheet, technical_sheet_files: _sheetFiles, ...rest } = entry;
     if (version !== 'v3.1' || !Array.isArray(synonyms)) return rest;
     const kept = [...new Set(synonyms.filter((synonym) => typeof synonym === 'string').map((synonym) => synonym.trim()))]
       .filter((synonym) => synonym !== '');
@@ -231,24 +288,60 @@ const buildV3PolicyInput = (row, options = {}) => {
   ].filter((entry) => entry?.concept !== 'commune');
   const versionedCatalog = sourceCatalog.map(catalogEntryForVersion);
   let catalog = versionedCatalog;
+  let technicalSheetFilesExposed = false;
   if (version === 'v3.1') {
+    const turnMessageText = safe(input.text_body ?? input.message_current);
+    const turnLineItems = resolvedReadLineItems ? resolvedReadLineItems(context) : [];
+    const rawFiles = new Map();
+    for (const entry of sourceCatalog) {
+      if (!isPlainObject(entry) || typeof entry.ref !== 'string' || rawFiles.has(entry.ref)) continue;
+      const files = sanitizeSheetFiles(entry.technical_sheet_files);
+      if (files.length > 0) rawFiles.set(entry.ref, files);
+    }
+    const sentRefs = new Set((Array.isArray(explicitGrounding.technical_sheets_sent) ? explicitGrounding.technical_sheets_sent : [])
+      .filter((ref) => typeof ref === 'string' && SHEET_REF.test(ref)));
+    const offerRef = persistedPendingGoal(input.pending_question_key) === TECHNICAL_SHEET_OFFER_GOAL
+      && typeof explicitGrounding.technical_sheet_offer_ref === 'string'
+      && SHEET_REF.test(explicitGrounding.technical_sheet_offer_ref)
+      ? explicitGrounding.technical_sheet_offer_ref
+      : null;
+    const sheetFiles = rawFiles.size > 0
+      ? selectTechnicalSheetFiles({
+        catalog: versionedCatalog,
+        rawFiles,
+        relevantRefs: relevantCatalogRefs({ catalog: versionedCatalog, messageText: turnMessageText, lineItems: turnLineItems }),
+        sentRefs,
+        offerRef,
+      })
+      : { selected: new Map(), used: 0 };
+    technicalSheetFilesExposed = sheetFiles.selected.size > 0;
     const rawSheets = new Map();
     for (const entry of sourceCatalog) {
       if (isPlainObject(entry) && typeof entry.ref === 'string' && isPlainObject(entry.technical_sheet)
         && !rawSheets.has(entry.ref)) rawSheets.set(entry.ref, entry.technical_sheet);
     }
-    if (rawSheets.size > 0) {
-      const selected = selectTechnicalSheets({
-        catalog: versionedCatalog,
-        rawSheets,
-        messageText: safe(input.text_body ?? input.message_current),
-        lineItems: resolvedReadLineItems ? resolvedReadLineItems(context) : [],
-      });
+    if (rawSheets.size > 0 || technicalSheetFilesExposed) {
+      const selected = rawSheets.size > 0
+        ? selectTechnicalSheets({
+          catalog: versionedCatalog,
+          rawSheets,
+          messageText: turnMessageText,
+          lineItems: turnLineItems,
+          maxBytes: TECHNICAL_SHEETS_MAX_BYTES - sheetFiles.used,
+        })
+        : new Map();
       const attached = new Set();
       catalog = versionedCatalog.map((entry) => {
-        if (!isPlainObject(entry) || !selected.has(entry.ref) || attached.has(entry.ref)) return entry;
+        if (!isPlainObject(entry) || attached.has(entry.ref)
+          || (!selected.has(entry.ref) && !sheetFiles.selected.has(entry.ref))) return entry;
         attached.add(entry.ref);
-        return { ...entry, technical_sheet: selected.get(entry.ref) };
+        const files = sheetFiles.selected.get(entry.ref);
+        return {
+          ...entry,
+          ...(selected.has(entry.ref) ? { technical_sheet: selected.get(entry.ref) } : {}),
+          ...(files ? { technical_sheet_files: files.files } : {}),
+          ...(files && files.omitted > 0 ? { technical_sheet_files_omitted: files.omitted } : {}),
+        };
       });
     }
     // Task 3c.26: `Load Conversation State` lists the products the customer
@@ -429,7 +522,12 @@ const buildV3PolicyInput = (row, options = {}) => {
       { rule_id: 'no_unreceipted_quote_progress', kind: 'forbidden_pattern', pattern: '\\b(?:(?:estoy|estamos|seguimos)\\s+(?:procesando|gestionando)\\s+(?:tu|la)\\s+cotizaci[oó]n|(?:tu|la)\\s+cotizaci[oó]n\\s+(?:ya\\s+)?(?:est[aá]|qued[oó])\\s+en\\s+proceso)\\b', flags: 'iu' },
       { rule_id: 'no_unreceipted_delivery_progress', kind: 'forbidden_pattern', pattern: '\\b(?:recibas|recibir[aá]s)\\s+tu\\s+material\\s+pronto\\b', flags: 'iu' },
     ],
-    effect_permissions: [{ type: 'create_lead' }, { type: 'handoff' }],
+    // Task 3c.29: v3.1 may send a technical-sheet PDF only when the policy
+    // exposes at least one; otherwise the permission is absent.
+    effect_permissions: [
+      { type: 'create_lead' }, { type: 'handoff' },
+      ...(technicalSheetFilesExposed ? [{ type: 'send_technical_sheet' }] : []),
+    ],
     effect_requirements: [
       {
         effect_type: 'create_lead',
@@ -437,6 +535,7 @@ const buildV3PolicyInput = (row, options = {}) => {
         trigger: 'explicit_confirmation_when_ready',
       },
       { effect_type: 'handoff', required_goal_ids: [] },
+      ...(technicalSheetFilesExposed ? [{ effect_type: 'send_technical_sheet', required_goal_ids: [] }] : []),
     ],
   };
 };
