@@ -1265,3 +1265,66 @@ Live dry-run (2026-10-03, `crm_whatsapp_app`, one transaction ended with `ROLLBA
 | v3 | v3 prompt equals `GOLDEN_V3_PROMPT`; v3 policy and validators unchanged. |
 | Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the AI assistant workflow; `npm test` → 95 files passed, 23 skipped; 1363 passed, 191 skipped; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; `node scripts/catalog/technical-sheets.mjs --check` up to date (37 items); test stack up, `npm run db:reset:test` (applies 029), `npm run test:integration:postgres` → 23 files, 191/191; stack down. |
 | Rollback boundary | Code: revert the migration pair, generator, tests, prompt rule, regenerated workflow and these docs as one unit. DB: 030 rollback, then 029 rollback. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
+
+## Technical-sheet PDFs on WhatsApp (3c.29)
+
+Owner-approved feature (v3.1 only; v3 prompt, policy and validator unchanged). When the customer asks for a product's technical sheet, the bot sends the PDF; when a technical datum is not in the grounding sheet (or is `unconfirmed`), the bot offers the sheet instead of saying it is not confirmed, and sends it only if the customer accepts. Never unsolicited, never the same file twice in a conversation unless asked again. The PDFs and their product map are private (gitignored); this record gives counts only.
+
+### Storage
+
+- **Public schema, migration 032.** `technical_sheet_files(id, sku, sheet_key, variant, covers_variants, file_name, mime_type, content bytea, sha256, size_bytes, active, created_at, updated_at)`, unique `(sku, sheet_key)`. CHECKs enforce `sha256 = encode(sha256(content),'hex')`, `size_bytes = octet_length(content)`, a `%PDF-` signature, slug sku/sheet_key/file name and a 16 MiB cap. Rollback: `infra/postgres/rollback/032_create_technical_sheet_files.down.sql`.
+- **Why `(sku, sheet_key)` and not `(sku, variant)`.** The private map has a product with two general sheets (both `variant: null`) and documents shared by two products. `sheet_key` is the file stem without the `ficha-` prefix; the model names a sheet `sheet:<sheet_key>`.
+- **Why the database and not a volume.** n8n already reaches Postgres with the Postgres credential; no public URL, no new mount, and the bytes are verified by the table itself. A volume (n8n allows `fs`) would need a mount on the production container and a second deploy channel for private files.
+- **Private load.** `scripts/catalog/technical-sheet-files.mjs` (tracked, no data) validates the map against the files (exists, inside the base dir, PDF signature, unique sheet per product) and writes `db/seeds/private/032_technical_sheet_files.sql` + `.down.sql`. The load upserts by `(sku, sheet_key)` and rewrites a row only when its sha256, variant, covers, file name or active flag changed; a sheet missing from the map is deactivated, never deleted. It never issues BEGIN/COMMIT (apply with `psql -1`). Files over the cap are excluded and reported: one generated sheet of about 49 MB is excluded and must be recompressed. Result: 136 sheets, 37 skus, 187,361,722 bytes.
+
+### Grounding (v3.1)
+
+`01_load_active_context.sql` adds to each catalog entry with an active sheet `technical_sheet_files: [{ref, variant, covers}]` (no bytes), and to `v3_grounding` the refs already sent in this conversation (`technical_sheets_sent`, from bot document messages that are sending/sent/unknown; a closed conversation carries none) and `technical_sheet_offer_ref` (the offered ref, only while the pending question is `technical_sheet_offer` and the latest committed decision is that offer). The v3.1 policy builder keeps the refs only for the relevant products (line items, products the message names, and the offered sheet's product), marks `sent: true` / `offered: true`, keeps `covers` only for a general sheet, and spends at most 3 KB of the existing 6 KB technical-sheet budget on refs (the sheets get the rest; extra refs are dropped with `technical_sheet_files_omitted`). `send_technical_sheet` is permitted (and its requirement listed) only when at least one ref is exposed, so a turn without sheets has the exact previous v3.1 policy and schema. v3 strips the refs and ignores the new grounding keys.
+
+### Contract (v3.1)
+
+- Effect request `{type: 'send_technical_sheet', reason_observation_ids, sheet_ref}`; every other effect carries `sheet_ref: null` (or omits it). The response schema adds `sheet_ref` (enum of the exposed refs plus null) only when sheets are exposed.
+- Offer: `primary_request {goal_id: 'technical_sheet_offer', item_ref: <sheet ref>}`; the goal exists only when sheets are exposed, and the commit stores it as the pending question, so the next turn reads back the offered ref.
+- Validator rules (all repairable, each with an instruction): `technical_sheet_unknown` (ref not exposed); `technical_sheet_not_requested` (the message does not ask for a sheet/PDF and is not a "sí/dale/mándala" to the pending offer of that ref); `technical_sheet_already_sent` (sent=true and not explicitly asked again); `technical_sheet_duplicate` (same ref twice in a turn); `technical_sheet_limit_exceeded` (more than 3); `technical_sheet_announcement_required` (reply_text must mention the ficha); `technical_sheet_offer_unanswered` (offer accepted but not sent); `technical_sheet_send_claim_unauthorized` (a non-question line says a sheet is being sent without any send effect); `technical_sheet_offer_invalid` / `technical_sheet_offer_already_sent` for the offer itself; `effect_shape_invalid` for a sheet_ref on another effect.
+- The effect command payload carries `technical_sheet: {ref, sku, variant}` resolved from the policy, so the executor reserves the exact sheet.
+
+### Execution
+
+1. **Saga.** `V3 Effect Is Create Lead?` false → `V3 Effect Is Technical Sheet?` → `Persist V3 Technical Sheet Effect` (`19_persist_v3_technical_sheet_effect.sql`, same bindings and `alwaysOutputData` as the handoff executor) → `Normalize V3 Effect Receipt` → `Record V3 Effect Result`. SQL 19 reserves one outgoing bot `document` message (`dispatch_phase = 'reserved'`, `idempotency_key = 'v3-technical-sheet:' || operation_key`, `text_body` NULL, raw payload with number, fileName, mimetype, decision version/id and the file id + sha256, never the bytes). A replay returns the same row. An inactive sheet returns `error = technical_sheet_unavailable`, recorded as a failed effect. `11_prepare_v3_effect.sql` admits the type only from a v3.1 decision; `12_record_v3_effect_result.sql` accepts its receipt only when it names the reserved document under its own delivery key.
+2. **After the reply.** The dispatcher's `Record V3 Delivery Receipt` → `Load V3 Technical Sheet Deliveries` (`02_load_v3_technical_sheet_deliveries.sql`: only when the execution is `delivered`, in effect order) → `V3 Technical Sheet Deliveries?` → `Execute Technical Sheet Outbound` (WA - Outbound Messages, one run per document, continue on error) → `Technical Sheet Lane Complete` (restores the reply receipt, summarizes each document) → `Outbound Lane Complete`.
+3. **WA - Outbound Messages.** `Build Outbound Payload` claims a document only by its delivery key (no text). `Mark Outbound Sending` (`05_authorize_outbound_send.sql`) keeps the human-control checks and, for a document, reads the exact active file (id + sha256) and builds `{number, mediatype: 'document', mimetype, fileName, media: <base64 without line breaks>}`; a missing or retired file cancels the row (`technical_sheet_unavailable`, not counted as human control). `Send Evolution Message` posts documents to `/message/sendMedia/{instance}` (Evolution v2.3.7 JSON body, limit 136 MB) once, like text, and drops the base64 from its output. `Normalize Delivery Result` and `Persist Delivery Result` are unchanged: the message row records sent/failed/unknown and the provider id, the audit log records `evolution_outbound_delivery`, and a failed/unknown v3.1 document is quarantined for reconciliation (no automatic retry, consistent with text).
+4. **Echo safety.** No caption and NULL `text_body`: Evolution echoes the document as a fromMe event whose text is the caption; an in-flight bot message is matched to its echo by equal text, so the echo is never taken for a human reply.
+
+### Prompt (v3.1)
+
+`V31_TECHNICAL_SHEET_RULE` now says: when a datum is unconfirmed, missing, truncated or the product has no sheet, do not state it; offer the sheet of that variant (or the general one) if it exists and was not sent, with the `technical_sheet_offer` request; otherwise offer that an executive confirms it. The never-invent, yield-only and never-prices rules are unchanged. New `V31_TECHNICAL_SHEET_FILES_RULE` explains refs, `sent`/`offered`, when to send, the variant choice, the 3-per-message cap, the announcement ("Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇") and `sheet_ref: null` on other effects. `V31_EMOJI_RULE` allows 👇 only to announce a sheet.
+
+### Deploy and rollback (manual, in this order)
+
+1. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/032_create_technical_sheet_files.sql` (the new load query and outbound SQL read this table, so it goes first).
+2. `node scripts/catalog/technical-sheet-files.mjs --check` (or regenerate), then `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f db/seeds/private/032_technical_sheet_files.sql` (private file).
+3. Deploy the workflows with `scripts/dev/sync-n8n-workflows.sh`: `wa-conversation-orchestrator`, `ai-lead-qualification-assistant`, `wa-inbound-downstream-dispatcher`, `wa-outbound-messages` (and the regenerated `ai-prd-shadow-evaluator`, which embeds the shared runtime); `n8n/workflow-links.json` gains the new Execute Workflow link.
+
+Rollback, reverse order: revert the workflows (already reserved, unsent documents simply stay `reserved`); `psql … -f db/seeds/private/032_technical_sheet_files.down.sql`; then `psql … -f infra/postgres/rollback/032_create_technical_sheet_files.down.sql`. To stop offering or sending a single sheet without a deploy, set its `active = FALSE`.
+
+Live dry-run (`crm_whatsapp_app`, one transaction ended with `ROLLBACK`, no commit): migration 032 + private load → 136 rows, 37 skus (all active catalog skus), 187,361,722 bytes, every digest verified by the table; a second load rewrote 0 rows (tuple identity unchanged); the private rollback left 0 rows; after `ROLLBACK` the table does not exist.
+
+### TDD Cycle Evidence
+
+| Task | Test file | Layer | RED | GREEN |
+|---|---|---|---|---|
+| 3c.29 | `tests/unit/technical-sheet-files-loader.test.js` | Unit (synthetic PDFs in a temp dir; private-map case local only) | file failed (script missing) | 19/19 |
+| 3c.29 | `tests/unit/v3-v31-technical-sheet-files.test.js` | Unit (load SQL shape, builder exposure and cap, validator rules, authorizer payload, prompt and schema, v3 unchanged) | 19 failed (no exposure, no rules), then prompt/schema cases written before the rules | 35/35 |
+| 3c.29 | `tests/unit/v3-technical-sheet-delivery.test.js` | Unit (orchestrator and dispatcher wiring, receipt normalizer, outbound build/send/normalize with a mocked Evolution) | file failed (nodes and SQL missing) | 17/17 |
+| 3c.29 | `tests/ops/v3-default-deployment-contract.test.js` | Ops (v3 default contract refuses a disconnected executor or document lane) | new case failed | 8/8 |
+| 3c.29 | `tests/integration/technical-sheet-files.postgres.test.js` | Postgres (load idempotency, retire, integrity CHECKs, rollback) | written before the loader | 6/6 |
+| 3c.29 | `tests/integration/v3-technical-sheet-effect.postgres.test.js` | Postgres (reserve, receipt, commit, release after delivery, claim, authorize with bytes, sent/offer read back, retired sheet, v3 refused) | written before SQL 19/02/05 changes | 4/4 |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Tracked vs private | Tracked: migration 032 and rollback, `scripts/catalog/technical-sheet-files.mjs`, SQL 01/05/11/12/19 and dispatcher 02, runtime/builder/prompt fixtures, outbound and dispatcher fixtures, workflows, workflow links, v3 contract validator, mock Evolution route, tests, these docs. Private (gitignored): the map, the PDFs under `backups/`, `db/seeds/private/032_technical_sheet_files.sql` and `.down.sql`. No sheet content or file name in tracked files. |
+| v3 | v3 prompt, policy, schema and validator unchanged (tests assert digest equality with and without sheet data). |
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the workflows; `npm test` → 98 files passed, 25 skipped; 1445 passed, 202 skipped; `npm run check:parity` passed; `npm run check:sql-references` → 0 errors, 0 warnings; test stack up, `npm run db:reset:test` (26 migrations), `npm run test:integration:postgres` → 25 files, 202/202; stack down. The isolated n8n canary E2E (`npm run test:e2e:v3-canary`) could not run here: it hung resolving the isolated bridge network on this WSL host and was torn down. |
+| Rollback boundary | Code: revert this unit as one. DB: private rollback, then the 032 rollback. No commit, runtime deploy, env change, live send or live SQL apply occurred. |
