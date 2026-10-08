@@ -1348,3 +1348,5 @@ An explicit request ("mándame la ficha") also sends the sheet. The `technical_s
 Evidence: 6 new multi-product cases (3 red first); `npm test` 1463 passed, 207 skipped; Postgres suite 207/207 on a reset test stack, torn down afterwards.
 
 **Known edge.** A service sheet (for example despacho) is matched by product names only, so a service question in a multi-product quote is treated as ambiguous and the bot asks which item is meant.
+
+**Second review pass (2026-10-08).** The Pi session found a remaining variant. When the quote held product A with no sheet and product B with a sheet, a question about A still authorized B's sheet: A was ignored as "a named product with sheets", and the single exposed sheet looked unambiguous. Now any product named in the message binds the sheet. If the named product has no sheet, nothing is sent (`technical_sheet_product_mismatch` with empty `allowed_values`), and the instruction says to offer an executive instead. Evidence: 2 new cases (1 red first); full unit and Postgres suites green.
