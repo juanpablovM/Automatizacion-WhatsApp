@@ -292,7 +292,7 @@ describe('fixed messages — WhatsApp presentation (task 3c.22)', () => {
   test('commercial review pending', () => {
     const out = evaluate('Gracias', { conversation_status_code: 'handed_to_sales', lead_id: 90 });
     expect(out.response_kind).toBe('commercial_review_pending');
-    expect(out.deterministic_reply).toBe('Tu solicitud ya está registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.');
+    expect(out.deterministic_reply).toBe('Tu solicitud sigue registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.');
     expectWhatsAppStyle(out.deterministic_reply);
   });
 

@@ -54,16 +54,18 @@ const SUPPRESSED_REPLY_KIND = 'reply_suppressed';
 
 // A terminal canned line is a statement of fact, not a conversation turn. Sent
 // once it informs; re-sent on every inbound it becomes an auto-answer that a
-// counterpart bot can drive forever — a number whose re-engagement fired every
-// ~50 minutes collected a reply within one second each time and queued 175
-// inbound events in two days. Six hours answers that counterpart exactly once
-// and still greets a real customer who comes back the next morning.
+// counterpart bot can drive forever. Human escalation remains guarded for six
+// hours, while normal commercial review can provide a useful update hourly.
 const TERMINAL_REPLY_COOLDOWN_HOURS = 6;
+const COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS = 1;
 
 // Task 3c.22: fixed customer copy follows the WhatsApp presentation (short
 // paragraphs, *bold* key words, emojis only from 👋 👉 ✅ 👍 📋).
 const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.';
-const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.';
+const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud sigue registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_CORRECTION_PROMPT = 'Claro. ¿Qué dato de tu solicitud quieres corregir?';
+const COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY = 'Gracias. Registré tu corrección para que el equipo comercial la revise junto con tu solicitud.';
+const COMMERCIAL_REVIEW_CORRECTION_KEY = 'commercial_review_correction';
 
 // A sticker or a reaction carries no requirement a human could quote, and the
 // pending-context branch already treats both as passive. Every other
@@ -337,10 +339,10 @@ function evaluateConversationStep(row) {
   const hoursSinceLastOutgoing = Number.isFinite(parsedHoursSinceLastOutgoing)
     ? parsedHoursSinceLastOutgoing
     : null;
-  const wasSentWithinCooldown = (line) => lastOutgoingText.length > 0
+  const wasSentWithinCooldown = (line, cooldownHours) => lastOutgoingText.length > 0
     && lastOutgoingText === compact(line)
     && hoursSinceLastOutgoing !== null
-    && hoursSinceLastOutgoing < TERMINAL_REPLY_COOLDOWN_HOURS;
+    && hoursSinceLastOutgoing < cooldownHours;
 
   // ============================================================
   // RE-ENGAGEMENT DETECTION — INPUT FROM SQL (single source)
@@ -558,6 +560,13 @@ function evaluateConversationStep(row) {
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
   const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
   const wantsNew = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  const hasCommercialRequestReference = /\b(?:cotizacion|solicitud|presupuesto|pedido)\b/.test(normalizedText);
+  const isCommercialStatusInquiry = /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(normalizedText)
+    || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(normalizedText)
+    || (hasCommercialRequestReference
+      && /\b(?:estado|avance|novedades?|respuesta|responden|respondido|cuando|demora|pendiente|revision|revisada|lista|listo|sigue|va|paso|pasa)\b/.test(normalizedText));
+  const wantsCommercialCorrection = /\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b.{0,48}\b(?:solicitud|cotizacion|pedido|datos?|informacion|cantidad|direccion|comuna|producto|servicio|medida)\b/.test(normalizedText)
+    || /\b(?:solicitud|cotizacion|pedido|datos?|informacion)\b.{0,48}\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b/.test(normalizedText);
   // A directive is not an answer. "Iniciar una nueva" restarts the request; it
   // does not name a city, and reading it as one leaves the customer living in a
   // city called "Iniciar Una Nueva". Only whatever survives removing the
@@ -712,7 +721,7 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'escalation_required';
     // loop_detected escalates here as its remedy; without this bound the remedy
     // is what answers the loop forever.
-    if (wasSentWithinCooldown(ESCALATION_ALREADY_REQUIRED_REPLY)) {
+    if (wasSentWithinCooldown(ESCALATION_ALREADY_REQUIRED_REPLY, TERMINAL_REPLY_COOLDOWN_HOURS)) {
       responseKind = SUPPRESSED_REPLY_KIND;
       responseText = '';
       replySuppressionReason = 'terminal_reply_cooldown';
@@ -729,8 +738,9 @@ function evaluateConversationStep(row) {
     && row.conversation_status_code === 'handed_to_sales'
     && row.lead_id
     && !row.human_arbitration_required && !wantsNew(normalizedText)
-    && (humanControlActive || isGreetingOnly
-      || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$|^(?:como va (?:mi|la) cotizacion|hay novedades|que (?:paso|pasa) con (?:mi|la) cotizacion|sigo esperando|alguna novedad)$/.test(normalizedText))) {
+    && (humanControlActive || isGreetingOnly || isCommercialStatusInquiry
+      || wantsCommercialCorrection || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
+      || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(normalizedText))) {
     resetConversationLead = false;
     current.service = row.state_service || stepState.service || lastKnownService || previous.service;
     current.city = row.state_city || stepState.city || lastKnownCity || previous.city;
@@ -740,7 +750,15 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'handed_to_sales';
     shouldCreateLead = false;
     shouldEscalate = false;
-    if (wasSentWithinCooldown(COMMERCIAL_REVIEW_PENDING_REPLY)) {
+    if (row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY) {
+      pendingQuestionKey = null;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY;
+    } else if (wantsCommercialCorrection) {
+      pendingQuestionKey = COMMERCIAL_REVIEW_CORRECTION_KEY;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_CORRECTION_PROMPT;
+    } else if (wasSentWithinCooldown(COMMERCIAL_REVIEW_PENDING_REPLY, COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS)) {
       responseKind = SUPPRESSED_REPLY_KIND;
       responseText = '';
       replySuppressionReason = 'terminal_reply_cooldown';
@@ -969,19 +987,18 @@ function evaluateConversationStep(row) {
   if (shouldCreateLead) shouldEscalate = false;
 
   if (humanControlActive) {
+    resetConversationLead = false;
     shouldCreateLead = false;
     shouldEscalate = false;
     escalationReason = '';
     responseText = '';
     responseKind = 'human_control_suppressed';
-    pendingQuestionKey = resetConversationLead ? null : row.pending_question_key || null;
-    currentStepField = resetConversationLead ? 'service' : stepInfo.field;
-    conversationStatusCode = resetConversationLead
-      ? 'active'
-      : row.conversation_status_code || 'waiting_user';
-    current.service = resetConversationLead ? null : row.state_service || stepState.service || null;
-    current.city = resetConversationLead ? null : row.state_city || stepState.city || null;
-    current.requirement = resetConversationLead ? null : row.state_requirement || stepState.requirement || null;
+    pendingQuestionKey = row.pending_question_key || null;
+    currentStepField = stepInfo.field;
+    conversationStatusCode = row.conversation_status_code || 'waiting_user';
+    current.service = row.state_service || stepState.service || null;
+    current.city = row.state_city || stepState.city || null;
+    current.requirement = row.state_requirement || stepState.requirement || null;
   }
 
   const finalCompletedFields = completedFields();
@@ -1116,7 +1133,10 @@ function evaluateConversationStep(row) {
           reply_suppressed: Boolean(replySuppressionReason),
           reply_suppression_reason: replySuppressionReason,
           suppressed_response_kind: suppressedResponseKind,
-          terminal_reply_cooldown_hours: TERMINAL_REPLY_COOLDOWN_HOURS,
+          terminal_reply_cooldown_hours: responseKind === 'commercial_review_pending'
+            || suppressedResponseKind === 'commercial_review_pending'
+            ? COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS
+            : TERMINAL_REPLY_COOLDOWN_HOURS,
           hours_since_last_outbound: hoursSinceLastOutgoing,
           // Re-engagement structured logging (memoria #679, #686)
           reengagement_stage: isReengagement ? 'detected' : null,
@@ -1136,6 +1156,7 @@ if (typeof module !== 'undefined' && module.exports) {
     runN8nCode,
     SUPPRESSED_REPLY_KIND,
     TERMINAL_REPLY_COOLDOWN_HOURS,
+    COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
     ESCALATION_ALREADY_REQUIRED_REPLY,
     COMMERCIAL_REVIEW_PENDING_REPLY,
   };
