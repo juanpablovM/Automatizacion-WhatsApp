@@ -575,3 +575,33 @@ describe('the files rule binds the sheet to the product asked about', () => {
     expect(filesRule).toContain('si no nombra un producto y en la cotización hay varios con ficha, pregúntale de cuál producto habla antes de enviar');
   });
 });
+
+// Review finding 2026-10-08 (Pi session, second pass): a named product without
+// a sheet must not fall back to the only other sheet in the quote.
+describe('a named product without a sheet never gets another product\'s sheet', () => {
+  const quoteWith = (products) => ({
+    line_items_schema: 'line_items/v1',
+    line_items: products.map((product, index) => ({
+      item_id: `li_demo_${index}`, product, quantity: null, measurements: null, catalog_ref: null, requested_label: null,
+    })),
+  });
+  const policy = v31Policy(baseRow({
+    text_body: '¿Qué resistencia tiene el cemento demo?',
+    qualification_context: quoteWith(['Cemento Demo', 'Producto Demo Bloque']),
+  }));
+
+  test('only the bloque sheet is exposed, and the customer asks about the cemento', () => {
+    const exposed = policy.grounding.catalog.flatMap((entry) => (entry.technical_sheet_files ?? []).map((sheet) => sheet.ref));
+    expect(exposed).toEqual(expect.arrayContaining(['sheet:demo-bloque']));
+    expect(exposed.some((ref) => ref.includes('cemento'))).toBe(false);
+  });
+
+  test('sending the only exposed sheet (another product) is rejected', () => {
+    const validation = validateV3AiProposal(policy, proposalFor(policy, {
+      reply_text: 'Te dejo la ficha técnica 👇', effect_requests: [sendSheet('sheet:demo-bloque')],
+    }));
+    expect(codes(validation)).toEqual(['technical_sheet_product_mismatch']);
+    expect(validation.errors[0].allowed_values).toEqual([]);
+    expect(validation.errors[0].instruction).toMatch(/has no technical sheet/);
+  });
+});

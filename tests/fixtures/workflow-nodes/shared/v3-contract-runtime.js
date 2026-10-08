@@ -1675,15 +1675,19 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         continue;
       }
       if (!acceptsThisOffer) {
-        const namedWithSheets = new Set([...productsNamedInMessage].filter((ref) => productsWithSheets.has(ref)));
-        if (namedWithSheets.size > 0 && !namedWithSheets.has(sheet.catalog_ref)) {
+        // Any named product binds the sheet, even one without sheets: a named
+        // product never falls back to another product's sheet.
+        if (productsNamedInMessage.size > 0 && !productsNamedInMessage.has(sheet.catalog_ref)) {
+          const allowed = sheetRefsFor(productsNamedInMessage);
           errors.push(validationError(
-            'technical_sheet_product_mismatch', `${path}.sheet_ref`, [sheet.ref], sheetRefsFor(namedWithSheets),
-            'Send only the sheet of the product the customer names in this message: choose one of the allowed sheet refs, or remove this send_technical_sheet effect_request.',
+            'technical_sheet_product_mismatch', `${path}.sheet_ref`, [sheet.ref], allowed,
+            allowed.length > 0
+              ? 'Send only the sheet of the product the customer names in this message: choose one of the allowed sheet refs, or remove this send_technical_sheet effect_request.'
+              : 'The product the customer names in this message has no technical sheet: remove this send_technical_sheet effect_request, never send another product\'s sheet, and offer that a Hormiglass executive indicates the detail.',
           ));
           continue;
         }
-        if (namedWithSheets.size === 0 && productsWithSheets.size > 1) {
+        if (productsNamedInMessage.size === 0 && productsWithSheets.size > 1) {
           errors.push(validationError(
             'technical_sheet_product_ambiguous', `${path}.sheet_ref`, [sheet.ref], [],
             'The message names no product and several products in the quote have technical sheets: remove this send_technical_sheet effect_request and ask which product the customer means.',
