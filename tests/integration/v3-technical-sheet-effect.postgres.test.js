@@ -172,8 +172,8 @@ describeIntegration('v3.1 send_technical_sheet effect and document delivery', ()
     VALUES ($1, $2, $3, 'qualification', '{}'::jsonb) RETURNING id, phone_number
   `, [sourceNumberId, phoneNumber, activeStatusId])).rows[0];
 
-  const loadRow = async (event, text = 'sí') => (await client.query(loadSql, [
-    CUSTOMER_PHONE, String(sourceNumberId), 'Cliente Ficha', '', `sheet-load-${event.inboundEventId}`, '',
+  const loadRow = async (event, text = 'sí', phone = CUSTOMER_PHONE) => (await client.query(loadSql, [
+    phone, String(sourceNumberId), 'Cliente Ficha', '', `sheet-load-${event.inboundEventId}`, '',
     'text', text, '{}', '', '', '', '', '', '', '', INSTANCE, String(event.inboundEventId), event.token,
   ])).rows[0];
 
@@ -296,6 +296,97 @@ describeIntegration('v3.1 send_technical_sheet effect and document delivery', ()
     expect(row.pending_question_key).toBe('technical_sheet_offer');
     expect(row.v3_grounding.technical_sheet_offer_ref).toBe(SHEET_REF);
     await client.query("UPDATE inbound_events SET processing_status = 'processed' WHERE id = $1", [next.inboundEventId]);
+  });
+
+  describe('task 3c.30: the answered offer is no longer pending', () => {
+    const deliverReply = async (turn) => {
+      const claim = await client.query('SELECT * FROM claim_outbound_message($1,$2,$3,$4,$5,$6,$7,$8,$9)', [
+        conversation.id, null, 'text', turn.replyText, {}, 'v3_advisor_reply', INSTANCE, turn.deliveryKey, 300,
+      ]);
+      const messageId = claim.rows[0].id;
+      await client.query(persistDeliverySql, [messageId, 'sent', `wamid-${turn.decisionId}`, 'evolution_outbound_delivery', 'sent', '{}', '{}', 'sent', false, null]);
+      const delivered = await client.query(recordDeliverySql, [turn.decisionId, messageId, 'sent', `wamid-${turn.decisionId}`, turn.deliveryKey]);
+      expect(delivered.rows[0]).toMatchObject({ state: 'delivered' });
+    };
+
+    const offerTurn = async () => {
+      const turn = await seedTurn({
+        replyText: '👉 ¿Te mando la ficha técnica del *Producto Demo Ficha*?',
+        primaryRequest: { goal_id: 'technical_sheet_offer', item_ref: SHEET_REF },
+      });
+      const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(committed.rows[0]).toMatchObject({ pending_question_key: 'technical_sheet_offer', current_step: 'technical_sheet_offer' });
+      await deliverReply(turn);
+    };
+
+    const persisted = async () => (await client.query(
+      'SELECT pending_question_key, current_step FROM conversations WHERE id = $1', [conversation.id],
+    )).rows[0];
+
+    test('sending the offered sheet clears the pending offer', async () => {
+      conversation = await newConversation('15550007011');
+      await offerTurn();
+      const command = sheetCommand('accept');
+      const turn = await seedTurn({ effectCommands: [command] });
+      const { claimed, execute } = await executeSheetEffect(turn, command);
+      const receipt = (await execute()).rows[0].v3_effect_receipt;
+      await client.query(recordEffectSql, [
+        command.operation_key, command.payload_digest, claimed.claim_token, 'succeeded',
+        receipt, String(receipt.document_message_id), null,
+      ]);
+      const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(committed.rows[0]).toMatchObject({ pending_question_key: null, current_step: 'service' });
+      expect(await persisted()).toEqual({ pending_question_key: null, current_step: 'service' });
+
+      await deliverReply(turn);
+      const next = await seedEvent('load-after-accept');
+      const row = await loadRow(next, 'mándamela', conversation.phone_number);
+      expect(String(row.conversation_id)).toBe(String(conversation.id));
+      expect(row.pending_question_key).toBeNull();
+      expect(row.v3_grounding.technical_sheet_offer_ref).toBeUndefined();
+      await client.query("UPDATE inbound_events SET processing_status = 'processed' WHERE id = $1", [next.inboundEventId]);
+    });
+
+    test('a turn that answers the offer without sending it (declined) clears it too', async () => {
+      conversation = await newConversation('15550007012');
+      await offerTurn();
+      const turn = await seedTurn({ replyText: 'Perfecto, quedo atento a lo que necesites 🙂' });
+      const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(committed.rows[0]).toMatchObject({ pending_question_key: null, current_step: 'service' });
+      expect(await persisted()).toEqual({ pending_question_key: null, current_step: 'service' });
+    });
+
+    test('a new primary_request in the answering turn wins', async () => {
+      conversation = await newConversation('15550007013');
+      await offerTurn();
+      const command = sheetCommand('accept-and-ask');
+      const turn = await seedTurn({ effectCommands: [command], primaryRequest: { goal_id: 'city' } });
+      const { claimed, execute } = await executeSheetEffect(turn, command);
+      const receipt = (await execute()).rows[0].v3_effect_receipt;
+      await client.query(recordEffectSql, [
+        command.operation_key, command.payload_digest, claimed.claim_token, 'succeeded',
+        receipt, String(receipt.document_message_id), null,
+      ]);
+      await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(await persisted()).toEqual({ pending_question_key: 'city', current_step: 'city' });
+    });
+
+    test('a turn that re-asks the offer keeps it pending', async () => {
+      conversation = await newConversation('15550007014');
+      await offerTurn();
+      await offerTurn();
+      expect(await persisted()).toEqual({ pending_question_key: 'technical_sheet_offer', current_step: 'technical_sheet_offer' });
+    });
+
+    test('a turn without a primary_request leaves any other pending question untouched', async () => {
+      conversation = await newConversation('15550007015');
+      await client.query(
+        "UPDATE conversations SET pending_question_key = 'city', current_step = 'city' WHERE id = $1", [conversation.id],
+      );
+      const turn = await seedTurn({ replyText: 'Claro, te cuento 🙂' });
+      await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+      expect(await persisted()).toEqual({ pending_question_key: 'city', current_step: 'city' });
+    });
   });
 
   test('a retired sheet is never reserved, and a reserved one whose file was retired is cancelled, not sent', async () => {

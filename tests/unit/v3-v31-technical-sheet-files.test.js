@@ -432,3 +432,20 @@ describe('the v3.1 request: prompt rules and response schema for sheets', () => 
     expect(JSON.stringify(plain)).not.toContain('sheet');
   });
 });
+
+describe('task 3c.30: the commit closes an answered technical_sheet_offer', () => {
+  const commitSql = fs.readFileSync('db/queries/n8n/wa-conversation-orchestrator/09_commit_v3_turn.sql', 'utf8');
+  const caseFor = (column) => commitSql.match(new RegExp(`\\n      ${column} = CASE([\\s\\S]*?)\\n      END,`))[1];
+
+  test('a turn without a new primary_request clears the offer and returns to service', () => {
+    for (const [column, closed] of [['pending_question_key', 'NULL'], ['current_step', "'service'"]]) {
+      const body = caseFor(column);
+      const offerBranch = `WHEN conversation.pending_question_key = 'technical_sheet_offer' THEN ${closed}`;
+      expect(body).toContain(offerBranch);
+      // The new primary_request is evaluated first, so a re-asked offer (or
+      // any other question) wins over the closing branch.
+      expect(body.indexOf("{reply,primary_request,goal_id}")).toBeLessThan(body.indexOf(offerBranch));
+      expect(body.trimEnd().endsWith(`ELSE conversation.${column}`)).toBe(true);
+    }
+  });
+});

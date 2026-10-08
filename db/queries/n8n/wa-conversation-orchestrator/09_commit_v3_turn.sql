@@ -86,6 +86,11 @@ WITH execution_lock AS MATERIALIZED (
             WHEN 'final_confirmation' THEN 'confirm'
             ELSE target.output_payload#>>'{reply,primary_request,goal_id}'
           END
+        -- Task 3c.30: a technical-sheet offer is answerable only by the very
+        -- next turn (01_load_active_context reads it from the latest committed
+        -- decision), so a turn that does not re-ask it closes it, whether the
+        -- sheet was sent or declined.
+        WHEN conversation.pending_question_key = 'technical_sheet_offer' THEN 'service'
         ELSE conversation.current_step
       END,
       pending_question_key = CASE
@@ -94,6 +99,7 @@ WITH execution_lock AS MATERIALIZED (
         WHEN target.handoff_effect_succeeded THEN NULL
         WHEN NULLIF(target.output_payload#>>'{reply,primary_request,goal_id}', '') IS NOT NULL
           THEN target.output_payload#>>'{reply,primary_request,goal_id}'
+        WHEN conversation.pending_question_key = 'technical_sheet_offer' THEN NULL
         ELSE conversation.pending_question_key
       END,
       handed_to_sales_at = CASE
