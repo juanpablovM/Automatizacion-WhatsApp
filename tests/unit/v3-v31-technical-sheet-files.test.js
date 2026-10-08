@@ -508,3 +508,70 @@ describe('owner decision 2026-10-07: a technical question gets the sheet directl
     expect(filesRule).toContain('Nunca envíes fichas en un mensaje que no sea una pregunta técnica ni un pedido de ficha');
   });
 });
+
+// Review finding 2026-10-08 (Pi session): with several products in the quote,
+// a technical question about one product authorized the sheet of another. A
+// sheet must belong to a product named in the message; when the message names
+// none, only an unambiguous single product with sheets qualifies.
+describe('a sent sheet must match the product the customer asks about', () => {
+  const quoteWith = (products) => ({
+    line_items_schema: 'line_items/v1',
+    line_items: products.map((product, index) => ({
+      item_id: `li_demo_${index}`, product, quantity: null, measurements: null, catalog_ref: null, requested_label: null,
+    })),
+  });
+  const bothProducts = (text, extra = {}) => v31Policy(baseRow({
+    text_body: text, qualification_context: quoteWith(['Producto Demo Bloque', 'Baldosa Demo']), ...extra,
+  }));
+  const send = (policy, ref) => validateV3AiProposal(policy, proposalFor(policy, {
+    reply_text: 'Te dejo la ficha técnica 👇', effect_requests: [sendSheet(ref)],
+  }));
+
+  test('both products are in the quote, so both sheets are exposed', () => {
+    const exposed = bothProducts('¿Cuánto pesa el bloque demo?').grounding.catalog
+      .flatMap((entry) => (entry.technical_sheet_files ?? []).map((sheet) => sheet.ref));
+    expect(exposed).toEqual(expect.arrayContaining(['sheet:demo-bloque', 'sheet:demo-baldosa-listones']));
+  });
+
+  test('a technical question about one product cannot get the other product\'s sheet', () => {
+    const policy = bothProducts('¿Cuánto pesa el bloque demo?');
+    const validation = send(policy, 'sheet:demo-baldosa-listones');
+    expect(codes(validation)).toEqual(['technical_sheet_product_mismatch']);
+    expect(validation.errors[0].allowed_values).toEqual(expect.arrayContaining(['sheet:demo-bloque', 'sheet:demo-bloque-bloque-demo-2']));
+    expect(validation.errors[0].allowed_values).not.toContain('sheet:demo-baldosa-listones');
+    expect(send(policy, 'sheet:demo-bloque').errors).toEqual([]);
+  });
+
+  test('an explicit request names its product too', () => {
+    const policy = bothProducts('Mándame la ficha técnica del bloque demo');
+    expect(codes(send(policy, 'sheet:demo-baldosa-listones'))).toEqual(['technical_sheet_product_mismatch']);
+    expect(send(policy, 'sheet:demo-bloque').errors).toEqual([]);
+  });
+
+  test('a question naming no product is ambiguous when several quoted products have sheets', () => {
+    const policy = bothProducts('¿Y cuánto pesa?');
+    expect(codes(send(policy, 'sheet:demo-bloque'))).toEqual(['technical_sheet_product_ambiguous']);
+  });
+
+  test('a question naming no product is fine when a single quoted product has sheets', () => {
+    const policy = v31Policy(baseRow({ text_body: '¿Y cuánto pesa?', qualification_context: quoteWith(['Producto Demo Bloque']) }));
+    expect(send(policy, 'sheet:demo-bloque').errors).toEqual([]);
+  });
+
+  test('accepting the offered sheet stays bound to the offer, whatever the quote holds', () => {
+    const policy = bothProducts('Sí, dale', {
+      pending_question_key: 'technical_sheet_offer',
+      v3_grounding: { ...GROUNDING, technical_sheet_offer_ref: 'sheet:demo-baldosa-listones' },
+    });
+    expect(send(policy, 'sheet:demo-baldosa-listones').errors).toEqual([]);
+  });
+});
+
+describe('the files rule binds the sheet to the product asked about', () => {
+  const source = fs.readFileSync('tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js', 'utf8');
+  const filesRule = source.match(/const V31_TECHNICAL_SHEET_FILES_RULE = '([^']*)'/)[1];
+  test('send only the sheet of the product named, and ask which one when unclear', () => {
+    expect(filesRule).toContain('Envía solo la ficha del producto por el que pregunta el cliente en este mensaje');
+    expect(filesRule).toContain('si no nombra un producto y en la cotización hay varios con ficha, pregúntale de cuál producto habla antes de enviar');
+  });
+});

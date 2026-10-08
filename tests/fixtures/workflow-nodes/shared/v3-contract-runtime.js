@@ -1627,6 +1627,13 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
   const messageRequestsSheet = requestsTechnicalSheetV31(messageText);
   const messageAsksTechnicalQuestion = asksTechnicalQuestionV31(messageText);
+  // Review finding 2026-10-08: a sheet sent on a request or a technical
+  // question must belong to a product named in the message; when none is
+  // named, only a single product with exposed sheets is unambiguous.
+  const productsNamedInMessage = productRefsMentionedV31(policy?.grounding?.catalog, messageText);
+  const productsWithSheets = new Set([...technicalSheets.values()].map((sheet) => sheet.catalog_ref));
+  const sheetRefsFor = (catalogRefs) => [...technicalSheets.values()]
+    .filter((sheet) => catalogRefs.has(sheet.catalog_ref)).map((sheet) => sheet.ref);
   const pendingSheetOffer = pendingQuestionGoalId === TECHNICAL_SHEET_OFFER_GOAL_V31
     ? [...technicalSheets.values()].find((sheet) => sheet.offered) ?? null
     : null;
@@ -1666,6 +1673,23 @@ const validateV3AiProposalV31 = (policy, proposal) => {
           'technical_sheet_not_requested', `${path}.sheet_ref`, [sheet.ref], [], technicalSheetNotRequestedInstructionV31,
         ));
         continue;
+      }
+      if (!acceptsThisOffer) {
+        const namedWithSheets = new Set([...productsNamedInMessage].filter((ref) => productsWithSheets.has(ref)));
+        if (namedWithSheets.size > 0 && !namedWithSheets.has(sheet.catalog_ref)) {
+          errors.push(validationError(
+            'technical_sheet_product_mismatch', `${path}.sheet_ref`, [sheet.ref], sheetRefsFor(namedWithSheets),
+            'Send only the sheet of the product the customer names in this message: choose one of the allowed sheet refs, or remove this send_technical_sheet effect_request.',
+          ));
+          continue;
+        }
+        if (namedWithSheets.size === 0 && productsWithSheets.size > 1) {
+          errors.push(validationError(
+            'technical_sheet_product_ambiguous', `${path}.sheet_ref`, [sheet.ref], [],
+            'The message names no product and several products in the quote have technical sheets: remove this send_technical_sheet effect_request and ask which product the customer means.',
+          ));
+          continue;
+        }
       }
       if (sheet.sent && !messageRequestsSheet) {
         errors.push(validationError(
