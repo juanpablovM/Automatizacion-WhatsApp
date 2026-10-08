@@ -47,8 +47,9 @@ A pending commercial request is a normal completed bot flow, not an exceptional 
 
 ## Forecast
 
-- Estimated authored diff: 280–390 lines including generated workflow changes and tests.
-- Planned as two work-unit commits; no chained PR expected unless the actual diff exceeds the review threshold.
+- Estimated authored diff was 280–390 lines including generated workflow changes and tests.
+- Final branch diff is 401 insertions and 50 deletions across 9 files (451 changed lines), so it exceeds the 400-line review threshold.
+- Delivery strategy is intentionally undecided until the user requests delivery. A PR will require one honest slicing pass or an explicit `size:exception`; no push or PR is authorized.
 
 ## Tasks
 
@@ -108,4 +109,4 @@ A pending commercial request is a normal completed bot flow, not an exceptional 
 
 ## Next step
 
-Run the native review preflight for the completed candidate if the user-owned RDD switch is enabled, then report the branch and delivery options without pushing or merging.
+Report the verified branch and the 451-line review-budget overage. If delivery is requested, obtain the user's chain strategy or explicit `size:exception` decision before push or PR creation.
