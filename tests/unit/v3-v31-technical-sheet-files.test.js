@@ -388,9 +388,9 @@ describe('the v3.1 request: prompt rules and response schema for sheets', () => 
   test('the technical-sheet rule offers the sheet before deferring to an executive', () => {
     const lines = systemPrompt(v31Policy(baseRow())).split('\n');
     const rule = lines.find((line) => line.startsWith('Algunas entradas del grounding traen technical_sheet:'));
-    expect(rule).toContain('¿Te mando la ficha técnica de la *Baldosa 14 Listones*?');
+    expect(rule).toContain('Ese detalle viene en la ficha técnica de la *Baldosa 14 Listones*. ¿Te la mando?');
     expect(rule).toContain('"goal_id": "technical_sheet_offer"');
-    expect(rule).toContain('si no hay una ficha para enviar, dilo con naturalidad y ofrece que una ejecutiva de Hormiglass lo confirme');
+    expect(rule).toContain('si no hay una ficha para enviar, ofrece que una ejecutiva de Hormiglass te lo indique');
     expect(rule).toContain('nunca inventes ni estimes');
     expect(rule).toContain('Nunca des precios');
   });
@@ -447,5 +447,21 @@ describe('task 3c.30: the commit closes an answered technical_sheet_offer', () =
       expect(body.indexOf("{reply,primary_request,goal_id}")).toBeLessThan(body.indexOf(offerBranch));
       expect(body.trimEnd().endsWith(`ELSE conversation.${column}`)).toBe(true);
     }
+  });
+});
+
+// Owner feedback 2026-10-07: offering the sheet must not first say the datum is
+// "no confirmado"; the sheet is presented as where that detail lives.
+describe('the sheet offer never talks about unconfirmed data', () => {
+  const source = fs.readFileSync('tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js', 'utf8');
+  const rule = source.match(/const V31_TECHNICAL_SHEET_RULE = '([^']*)'/)[1];
+
+  test('the rule forbids mentioning unconfirmed or missing data when offering the sheet', () => {
+    expect(rule).toContain('nunca digas que el dato no está confirmado, no aparece o no lo tienes');
+    expect(rule).toContain('"Ese detalle viene en la ficha técnica de la *Baldosa 14 Listones*. ¿Te la mando?"');
+  });
+
+  test('without a sheet, the executive confirms it, still without saying it is unconfirmed', () => {
+    expect(rule).toContain('ofrece que una ejecutiva de Hormiglass te lo indique');
   });
 });
