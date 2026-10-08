@@ -1332,3 +1332,19 @@ Live dry-run (`crm_whatsapp_app`, one transaction ended with `ROLLBACK`, no comm
 ## Task 3c.30 — close the technical-sheet offer after it is answered
 
 Live test (2026-10-06): after "Sí, mándamela" the offered sheet was sent, but the conversation kept `pending_question_key = technical_sheet_offer`. `09_commit_v3_turn.sql` now clears that pending offer (and sets `current_step = service`) when the committed turn sets no new `primary_request`, so a sent or declined offer never lingers; a re-asked offer or any other question still wins because the new `primary_request` branch is evaluated first. Evidence: the commit-SQL unit case and `v3-technical-sheet-effect.postgres.test.js` 9/9; `npm test` 1446 passed / 207 skipped; Postgres suite 207/207 on a reset test stack, torn down afterwards. The oversized generated Roma 8 cm gris sheet was recompressed (images only) from 49 MB to 0.2 MB and the private sheet load re-applied after a rolled-back dry run: 137 active sheets.
+
+## Tasks 3c.31 and 3c.32: sending the sheet directly, bound to the product asked about
+
+**Current flow, superseding the offer-first description of 3c.29.** A technical question about a product gets one of two answers:
+- **A specific datum the sheet data states:** answered in text, with no PDF.
+- **Anything else** (the datum is unconfirmed or missing from the sheet, or it is a general question): the sheet is sent directly with a one-line announcement, and a datum the sheet lacks goes to an executive. The bot never says a datum is unconfirmed.
+
+An explicit request ("mándame la ficha") also sends the sheet. The `technical_sheet_offer` question remains only as a fallback, and an accepted offer stays bound to the offered sheet.
+
+**Binding to the product (3c.32).** The Pi session found on 2026-10-08 that, with several products in the quote, a technical question about one product authorized another product's sheet: the validator checked that the message was a technical question and that the sheet was exposed, but not which product the sheet belonged to. The fix:
+- A sheet sent on a request or a technical question must belong to a product named in the message; otherwise `technical_sheet_product_mismatch`.
+- If the message names no product and several quoted products have sheets, the error is `technical_sheet_product_ambiguous` and the bot asks which product.
+
+Evidence: 6 new multi-product cases (3 red first); `npm test` 1463 passed, 207 skipped; Postgres suite 207/207 on a reset test stack, torn down afterwards.
+
+**Known edge.** A service sheet (for example despacho) is matched by product names only, so a service question in a multi-product quote is treated as ambiguous and the bot asks which item is meant.
