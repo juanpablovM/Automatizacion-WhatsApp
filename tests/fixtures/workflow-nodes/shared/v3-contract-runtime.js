@@ -660,6 +660,11 @@ const foldSheetTextV31 = (value) => replyTextWithoutWhatsAppFormatting(value)
 // The customer asks for a sheet or a document in the current message.
 const requestsTechnicalSheetV31 = (messageText) => /\b(?:fichas?|pdfs?|hojas? tecnicas?|data ?sheets?)\b/
   .test(foldSheetTextV31(messageText));
+// Owner decision 2026-10-07: a technical question about a product (measures,
+// weight, yield, strength, concrete grade, colors, finishes, specifications)
+// may get that product's sheet right away, without asking for the sheet.
+const asksTechnicalQuestionV31 = (messageText) => /\b(?:medidas?|miden?|dimensiones?|tamanos?|largo|ancho|altura|espesor|grosor|pesos?|pesan?|kilos?|kg|rendimiento|rinden?|resistencias?|resiste|mpa|grado|compresion|flexion|absorcion|tolerancias?|colou?res?|terminaciones?|acabados?|especificaciones?|caracteristicas?|tecnic[oa]s?|ficha)\b/
+  .test(foldSheetTextV31(messageText));
 // A short yes to the pending offer ("sí", "dale", "ya, mándala"); a no never is.
 const acceptsTechnicalSheetOfferV31 = (messageText) => {
   const text = foldSheetTextV31(messageText).replace(/[¡!¿?.,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -672,7 +677,7 @@ const SHEET_SEND_CLAIM_V31 = /\b(?:te|les?)\s+(?:dejo|adjunto|envio|mando|compar
 const replyClaimsSheetSendV31 = (replyText) => String(replyText ?? '').split('\n')
   .filter((line) => !line.includes('?'))
   .some((line) => SHEET_SEND_CLAIM_V31.test(foldSheetTextV31(line)));
-const technicalSheetNotRequestedInstructionV31 = 'Send a technical sheet only when the current message asks for one (for example "mándame la ficha técnica") or accepts the sheet you offered in the previous turn (the one with offered=true). Otherwise remove this send_technical_sheet effect_request; to offer the sheet, ask in reply_text (for example "¿Te mando la ficha técnica de la *Baldosa 14 Listones*?") with primary_request {"goal_id": "technical_sheet_offer", "item_ref": "<that sheet ref>"} and do not claim it was sent.';
+const technicalSheetNotRequestedInstructionV31 = 'Send a technical sheet only when the current message asks for one (for example "mándame la ficha técnica"), asks a technical question about that product (measures, weight, yield, strength, concrete grade, colors, finishes or specifications), or accepts the sheet you offered in the previous turn (the one with offered=true). Otherwise remove this send_technical_sheet effect_request; to offer the sheet, ask in reply_text (for example "¿Te mando la ficha técnica de la *Baldosa 14 Listones*?") with primary_request {"goal_id": "technical_sheet_offer", "item_ref": "<that sheet ref>"} and do not claim it was sent.';
 
 const itemIdFromFactId = (factId) => {
   const match = ITEM_FACT_ID_RE.exec(String(factId || ''));
@@ -1621,6 +1626,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const effects = Array.isArray(proposalObject.effect_requests) ? proposalObject.effect_requests : [];
   if (!Array.isArray(proposalObject.effect_requests)) errors.push(validationError('effect_requests_invalid', 'effect_requests'));
   const messageRequestsSheet = requestsTechnicalSheetV31(messageText);
+  const messageAsksTechnicalQuestion = asksTechnicalQuestionV31(messageText);
   const pendingSheetOffer = pendingQuestionGoalId === TECHNICAL_SHEET_OFFER_GOAL_V31
     ? [...technicalSheets.values()].find((sheet) => sheet.offered) ?? null
     : null;
@@ -1655,7 +1661,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
         continue;
       }
       const acceptsThisOffer = offerAccepted && pendingSheetOffer.ref === sheet.ref;
-      if (!messageRequestsSheet && !acceptsThisOffer) {
+      if (!messageRequestsSheet && !acceptsThisOffer && !messageAsksTechnicalQuestion) {
         errors.push(validationError(
           'technical_sheet_not_requested', `${path}.sheet_ref`, [sheet.ref], [], technicalSheetNotRequestedInstructionV31,
         ));

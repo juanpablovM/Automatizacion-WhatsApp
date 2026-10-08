@@ -221,11 +221,43 @@ describe('send_technical_sheet validation (v3.1)', () => {
     expect(validateV3AiProposal(policy, proposal).errors).toEqual([]);
   });
 
-  test('an unsolicited sheet is rejected', () => {
-    const policy = v31Policy(baseRow({ text_body: '¿Cuánto pesa el bloque demo?' }));
+  // Owner decision 2026-10-07: a technical question about a product may get its
+  // sheet right away, without the customer asking for the sheet itself.
+  test.each([
+    '¿Cuánto pesa el bloque demo?',
+    '¿Qué medidas tiene el bloque demo?',
+    '¿De qué grado de hormigón es el bloque demo?',
+    '¿Qué características técnicas tiene el bloque demo?',
+    '¿Qué resistencia tiene el bloque demo?',
+  ])('the technical question "%s" may get the sheet without asking for it', (text) => {
+    const policy = v31Policy(baseRow({ text_body: text }));
+    const proposal = proposalFor(policy, {
+      reply_text: 'Te dejo la ficha técnica del *Bloque Demo* 👇',
+      effect_requests: [sendSheet('sheet:demo-bloque')],
+    });
+    expect(validateV3AiProposal(policy, proposal).errors).toEqual([]);
+  });
+
+  test('a sheet for a message that is not a technical question is still rejected', () => {
+    const policy = v31Policy(baseRow({ text_body: 'Hola, quiero cotizar el bloque demo' }));
     const validation = validateV3AiProposal(policy, proposalFor(policy, { effect_requests: [sendSheet('sheet:demo-bloque')] }));
     expect(codes(validation)).toEqual(['technical_sheet_not_requested']);
-    expect(validation.errors[0].instruction).toMatch(/technical_sheet_offer/);
+    expect(validation.errors[0].instruction).toMatch(/technical question/);
+  });
+
+  test('a technical question never resends a sheet already sent in the conversation', () => {
+    const policy = v31Policy(baseRow({
+      text_body: '¿Cuánto pesa el bloque demo?',
+      v3_grounding: { ...GROUNDING, technical_sheets_sent: ['sheet:demo-bloque'] },
+    }));
+    const sent = policy.grounding.catalog.flatMap((entry) => entry.technical_sheet_files ?? [])
+      .find((sheet) => sheet.ref === 'sheet:demo-bloque');
+    expect(sent?.sent).toBe(true);
+    const validation = validateV3AiProposal(policy, proposalFor(policy, {
+      reply_text: 'Te dejo la ficha técnica del *Bloque Demo* 👇',
+      effect_requests: [sendSheet('sheet:demo-bloque')],
+    }));
+    expect(codes(validation)).toEqual(['technical_sheet_already_sent']);
   });
 
   test('a "sí" with no pending offer, or for a sheet other than the offered one, is not a request', () => {
@@ -388,9 +420,9 @@ describe('the v3.1 request: prompt rules and response schema for sheets', () => 
   test('the technical-sheet rule offers the sheet before deferring to an executive', () => {
     const lines = systemPrompt(v31Policy(baseRow())).split('\n');
     const rule = lines.find((line) => line.startsWith('Algunas entradas del grounding traen technical_sheet:'));
-    expect(rule).toContain('Ese detalle viene en la ficha técnica de la *Baldosa 14 Listones*. ¿Te la mando?');
-    expect(rule).toContain('"goal_id": "technical_sheet_offer"');
-    expect(rule).toContain('si no hay una ficha para enviar, ofrece que una ejecutiva de Hormiglass te lo indique');
+    expect(rule).toContain('envíale directamente su ficha técnica con un effect_request send_technical_sheet, sin preguntar si la quiere');
+    expect(rule).toContain('sin preguntar si la quiere');
+    expect(rule).toContain('Si no hay una ficha para enviar, ofrece que una ejecutiva de Hormiglass te lo indique');
     expect(rule).toContain('nunca inventes ni estimes');
     expect(rule).toContain('Nunca des precios');
   });
@@ -402,7 +434,7 @@ describe('the v3.1 request: prompt rules and response schema for sheets', () => 
     const rule = lines[index];
     for (const fragment of [
       '"type": "send_technical_sheet"', 'sent=true', 'offered=true', 'como máximo tres por mensaje',
-      'Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇', 'Nunca envíes fichas que el cliente no pidió',
+      'Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇', 'Nunca envíes fichas en un mensaje que no sea una pregunta técnica ni un pedido de ficha',
       'Nunca digas que enviaste o adjuntaste una ficha sin ese effect_request', 'sheet_ref null',
     ]) expect(rule).toContain(fragment);
   });
@@ -452,16 +484,27 @@ describe('task 3c.30: the commit closes an answered technical_sheet_offer', () =
 
 // Owner feedback 2026-10-07: offering the sheet must not first say the datum is
 // "no confirmado"; the sheet is presented as where that detail lives.
-describe('the sheet offer never talks about unconfirmed data', () => {
+describe('owner decision 2026-10-07: a technical question gets the sheet directly', () => {
   const source = fs.readFileSync('tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js', 'utf8');
   const rule = source.match(/const V31_TECHNICAL_SHEET_RULE = '([^']*)'/)[1];
+  const filesRule = source.match(/const V31_TECHNICAL_SHEET_FILES_RULE = '([^']*)'/)[1];
 
-  test('the rule forbids mentioning unconfirmed or missing data when offering the sheet', () => {
-    expect(rule).toContain('nunca digas que el dato no está confirmado, no aparece o no lo tienes');
-    expect(rule).toContain('"Ese detalle viene en la ficha técnica de la *Baldosa 14 Listones*. ¿Te la mando?"');
+  test('a specific datum the sheet data states is answered without sending the PDF', () => {
+    expect(rule).toContain('si es un dato puntual que puedes responder con la technical_sheet, respóndelo y no envíes el PDF');
   });
 
-  test('without a sheet, the executive confirms it, still without saying it is unconfirmed', () => {
-    expect(rule).toContain('ofrece que una ejecutiva de Hormiglass te lo indique');
+  test('otherwise the sheet goes out directly, without asking, and a datum the sheet lacks goes to an executive', () => {
+    expect(rule).toContain('envíale directamente su ficha técnica con un effect_request send_technical_sheet, sin preguntar si la quiere');
+    expect(rule).toContain('"Te dejo la ficha técnica de la *Baldosa 14 Listones* 👇"');
+    expect(rule).toContain('ese dato puntual te lo indica una ejecutiva de Hormiglass');
+  });
+
+  test('never says the datum is unconfirmed or missing', () => {
+    expect(rule).toContain('Nunca digas que el dato no está confirmado, no aparece o no lo tienes');
+  });
+
+  test('the files rule allows sending on a technical question, still never unsolicited otherwise', () => {
+    expect(filesRule).toContain('hace una pregunta técnica sobre ese producto');
+    expect(filesRule).toContain('Nunca envíes fichas en un mensaje que no sea una pregunta técnica ni un pedido de ficha');
   });
 });
