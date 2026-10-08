@@ -1,3 +1,17 @@
+# Flujo conversacional del bot
+
+## Recontacto después de derivar una cotización
+
+Una solicitud en `handed_to_sales` sigue **pendiente de revisión comercial**; no equivale a una escalación humana. El bot conserva la conversación y el lead existentes mientras no haya propiedad humana activa.
+
+| Mensaje del cliente | Tratamiento |
+|---|---|
+| Consulta por la solicitud pendiente | Informa el estado como máximo una vez por hora. |
+| `modificar solicitud` | Pide el dato y registra el siguiente mensaje en la misma conversación y lead para revisión comercial; no actualiza ClickUp ni crea otro lead. |
+| `nueva cotización` | Inicia una cotización nueva con identidad conversacional nueva. |
+| Conversación en `escalation_required` | Mantiene el aviso de escalación con una cadencia máxima de una respuesta cada seis horas. |
+| Propiedad humana activa | No responde, no crea efectos y tampoco reinicia identidad. |
+
 ```mermaid
 flowchart TD
     %% ============================================================
@@ -19,9 +33,14 @@ flowchart TD
         H --> I{Análisis mensaje}
         I -->|Saludo puro| J[welcome_and_question / recontact_greeting]
         I -->|Pide humano| K[escalation_routing human_requested]
-        I -->|Ya escalado/derivado| L{¿Es 'nueva cotización'?}
-        L -->|Sí| M[Reset → city]
-        L -->|No| N[escalation_already_required]
+        I -->|Pendiente de revisión comercial| L{¿Qué solicita?}
+        L -->|nueva cotización| M[Reset de identidad → city]
+        L -->|modificar solicitud| C1[Pide el dato a corregir]
+        C1 --> C2[Registra el siguiente detalle en la misma conversación y lead]
+        L -->|consulta de estado| N[commercial_review_pending; cooldown 1 h]
+        I -->|Escalación humana requerida| E1{¿Es nueva cotización?}
+        E1 -->|Sí| M
+        E1 -->|No| E2[escalation_already_required; cooldown 6 h]
         I -->|En confirmación final| O{Usuario confirma?}
         O -->|"Sí (sí/ok/dale)"| P[shouldCreateLead=true → handoff_ready]
         O -->|"No (no/incorrecto)"| Q[confirmation_correction_requested]
@@ -76,6 +95,8 @@ flowchart TD
         ABa --> AL
         ABb --> AL
         N --> AL
+        C2 --> AL
+        E2 --> AL
         M --> AL
         J --> AL
         Q --> AL
@@ -118,8 +139,8 @@ flowchart TD
     P -.-> EST_COMPLETE
     T -.-> EST_ESCALATION
     K -.-> EST_ESCALATION
-    L -.-> EST_ESCALATION
-    N -.-> EST_ESCALATION
+    E1 -.-> EST_ESCALATION
+    E2 -.-> EST_ESCALATION
     
     %% Estilos
     classDef entry fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
@@ -165,12 +186,18 @@ sequenceDiagram
         ORQ->>ORQ: recontact_greeting + siguiente falta
     else Pide humano
         ORQ->>ORQ: escalation_routing (human_requested)
-    else Ya escalado/derivado
+    else Pendiente de revisión comercial (handed_to_sales)
         alt "nueva cotización"
-            ORQ->>ORQ: Reset → city
-        else Otro
-            ORQ->>ORQ: escalation_already_required
+            ORQ->>ORQ: Reinicia identidad → city
+        else "modificar solicitud"
+            ORQ->>ORQ: Pide detalle de corrección
+            Cliente->>ORQ: Detalle corregido
+            ORQ->>ORQ: Conserva conversation_id/lead_id y limpia pending key
+        else Consulta de estado
+            ORQ->>ORQ: commercial_review_pending (cooldown 1 h)
         end
+    else Escalación humana requerida
+        ORQ->>ORQ: escalation_already_required (cooldown 6 h)
     else En confirmación final
         alt Usuario confirma (sí/ok/dale)
             ORQ->>ORQ: shouldCreateLead=true → handoff_ready

@@ -117,6 +117,67 @@ integration('commercial review and address retry through persisted PostgreSQL st
     await persistTurn(current);
     expect((await client.query('SELECT lead_id FROM conversations WHERE id = $1', [conversationId])).rows[0].lead_id).toBe(leadId);
   });
+  test('two-step correction persists on the same conversation and lead without creating another lead', async () => {
+    await setHandedToSales();
+    const leadsBefore = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2',
+      [sourceId, phone],
+    )).rows[0].count);
+
+    const request = await turn('Modificar solicitud');
+    expect(request.output).toMatchObject({
+      conversation_id: conversationId,
+      lead_id: leadId,
+      pending_question_key: 'commercial_review_correction',
+      reset_conversation_lead: false,
+      should_create_lead: false,
+      should_escalate: false,
+      response_kind: 'commercial_review_pending',
+      v3_control_only: true,
+    });
+    expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', request.output).opportunity_write).toBe(false);
+    await persistTurn(request);
+
+    const pending = (await client.query(
+      'SELECT id, lead_id, pending_question_key FROM conversations WHERE id = $1',
+      [conversationId],
+    )).rows[0];
+    expect(pending).toMatchObject({
+      id: conversationId,
+      lead_id: leadId,
+      pending_question_key: 'commercial_review_correction',
+    });
+
+    const detail = await turn('Cambiar la cantidad a 120 unidades');
+    expect(detail.row.pending_question_key).toBe('commercial_review_correction');
+    expect(detail.output).toMatchObject({
+      conversation_id: conversationId,
+      lead_id: leadId,
+      pending_question_key: null,
+      reset_conversation_lead: false,
+      should_create_lead: false,
+      should_escalate: false,
+      response_kind: 'commercial_review_pending',
+      v3_control_only: true,
+    });
+    expect(detail.output.response_text).toContain('Registré tu corrección');
+    expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', detail.output).opportunity_write).toBe(false);
+    await persistTurn(detail);
+
+    const persisted = (await client.query(
+      'SELECT id, lead_id, pending_question_key FROM conversations WHERE id = $1',
+      [conversationId],
+    )).rows[0];
+    expect(persisted).toMatchObject({ id: conversationId, lead_id: leadId, pending_question_key: null });
+
+    const leadsAfter = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2',
+      [sourceId, phone],
+    )).rows[0].count);
+    expect(leadsBefore).toBe(1);
+    expect(leadsAfter - leadsBefore).toBe(0);
+    expect(leadsAfter).toBe(1);
+  });
   test('an acquired human lease stays silent without clearing the registered quote', async () => {
     await setHandedToSales();
     await client.query(`INSERT INTO lead_chat_ownerships (lead_id, clickup_task_id, response_due_at)
