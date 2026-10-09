@@ -1350,3 +1350,45 @@ Evidence: 6 new multi-product cases (3 red first); `npm test` 1463 passed, 207 s
 **Known edge.** A service sheet (for example despacho) is matched by product names only, so a service question in a multi-product quote is treated as ambiguous and the bot asks which item is meant.
 
 **Second review pass (2026-10-08).** The Pi session found a remaining variant. When the quote held product A with no sheet and product B with a sheet, a question about A still authorized B's sheet: A was ignored as "a named product with sheets", and the single exposed sheet looked unambiguous. Now any product named in the message binds the sheet. If the named product has no sheet, nothing is sent (`technical_sheet_product_mismatch` with empty `allowed_values`), and the instruction says to offer an executive instead. Evidence: 2 new cases (1 red first); full unit and Postgres suites green.
+
+## Task 3c.33 — QA backlog of conversations 387–393 (MEDIUM and LOW)
+
+All changes are v3.1-only unless noted. v3 prompt, schema and validator stay byte-identical; v3's single-item requirement string is retired with v3 (owner decision: production runs only v3.1).
+
+| Item | Root cause | Change |
+|---|---|---|
+| M1 variant lost (393) | `line_items/v1` had no slot for the chosen variant; the model could only restate it in reply_text. `catalog_ref`/`requested_label` were never written by any authority. | New item field `variant`: concept, `fact:item:<id>:variant`, set/replace authority, v3.1 schema, JS reducer and SQL `apply_v3_state_mutations` (migration 033; never projected flat, key present only once set). Requirement/summary render "Producto (Variante) — cantidad". |
+| M2 format never asked (388/392) | Nothing tied a product's sheet variants to the readiness of `line_items`. | Policy exposes `variant_options` (2+ sheet variants, quoted or named products, outside the sheet byte cap); the validator adds `variant@<item>` to the unresolved create_lead goals and rejects `item_variant_unknown`; prompt rule; repair lock keeps item goals representable. |
+| M3 quantity without unit (390) | The quantity observation accepted `{value: 33, unit: null}` and a bare number resolved the item. | `quantity_unit_required` on a unitless quantity observation; a unitless recorded quantity does not resolve its item (validator and policy goal status); prompt rule. |
+| M4 addition after handoff (390) | The recent `handed_to_sales` branch knew status, thanks and corrections, not additions, so the message fell to the terminal branch and reset the identity. | Addition intents route into the commercial correction flow with pending key `commercial_review_addition` (same conversation and lead, control-only, no lead/effect). |
+| M5 measurement assistance (391) | The legacy rule escalated at once, with internal copy, and the handoff task carried no project data. | The rule asks for an official commune (one retry, then keeps the text as `location_note`) and the street, skipping what is known, then escalates with friendly copy. `02_claim_notification.sql` returns `project_product/commune/address`, shown in the ClickUp handoff description. |
+| M6 summary resent (392) | Nothing distinguished a side question after the summary from a new summary request. | `final_summary_repeated` when the previous assistant message and the reply both carry "Resumen de tu cotización" and no mutation was authorized (exempt when the customer asks for the summary); prompt rule. |
+| L1 internal documents (390/392) | The sheet data names its sources; no rule kept them out of replies. | v3.1 claim rule `no_internal_documents` + prompt rule. |
+| L2 Chiloé as comuna (392) | Commune was free text. | `shared/chile-communes.js` (346 comunas, SUBDERE CUT, accent/case-insensitive, short alias list), concatenated into the policy, validator, shadow and evaluator nodes; `commune_not_recognized` + prompt rule. |
+| L3 single item not itemized | D9 kept the legacy flat string for one item (v3 compatibility). | `composeRequirement` always bullets; ClickUp skips flat Cantidad/Medidas once line items exist. |
+| L4 "Bienvenido" (393) | The v3 welcome line let the model choose the wording. | v3.1 welcome line replaced by "Te damos la bienvenida a *Hormiglass*" (no gendered form). No fixed copy used "Bienvenido". |
+
+### TDD Cycle Evidence
+
+| Test file | RED | GREEN |
+|---|---|---|
+| `tests/unit/v3-line-item-variant.test.js` | 6 failed | 7/7 |
+| `tests/fixtures/workflow-nodes/shared/v3-line-items.cases.js` (2 variant cases, JS + SQL parity) | 2 failed | pass, Postgres parity pass |
+| `tests/unit/v3-v31-qa-backlog-2026-09-30.test.js` | 14 failed | 24/24 |
+| `tests/unit/build-ai-request-v31-qa-2026-09-30.test.js` (+1 repair-lock case in the schema test) | 8 failed | 8/8 |
+| `tests/unit/measurement-visit-location.test.js` | 8 failed | 10/10 |
+| `tests/unit/commercial-review-continuity.test.js` M4 cases | 6 failed | pass |
+| `tests/unit/chile-communes.test.js` | workflow wiring cases failed before sync (the list module itself was written before its unit cases) | 22/22 |
+| `tests/integration/*` (033 rollback, claim projection, addition persistence) | written with the change | 214/214 |
+
+Updated expectations (deliberate behavior changes): single-item requirement strings (L3), the one-item ClickUp case, unitless quantities in older fixtures (M3), the measurement regression in `contact-context-recovery.test.js` (M5), and the v3.1 prompt allowlist (L4).
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Full checks | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the workflows; `npm test` 103 files passed, 25 skipped; 1557 passed, 214 skipped; `npm run check:parity` pass; `npm run check:sql-references` 0 errors, 0 warnings; test stack up, `npm run db:reset:test` (27 migrations), `npm run test:integration:postgres` 25 files, 214/214; stack down. |
+| Deploy notes | Apply `infra/postgres/migrations/033_line_item_variant.sql` before the workflows (safe superset: rows without variants behave as under 025). Then sync n8n workflows (orchestrator, AI assistant, shadow evaluator, ClickUp sync, handoff notification scheduler). Rollback: revert workflows, then `infra/postgres/rollback/033_line_item_variant.down.sql`. |
+| Owner decisions (safe defaults taken) | (1) Commune aliases: Chicureo → Colina, La Dehesa → Lo Barnechea, Reñaca/Viña → Viña del Mar, Santiago Centro → Santiago, plus official alternative spellings; any other locality is asked. (2) Variant required for every product whose sheet lists 2+ variants (Pigmentos, Granos, Bordes de Piscina included). (3) Commercial additions are recorded for human review, not merged into the lead/ClickUp (same limit as corrections). (4) An unrecognized measurement-visit commune is kept as `location_note` after one retry. |
+| Not done | No commit, push, deploy, live SQL apply or WhatsApp send. |
+

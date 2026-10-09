@@ -8,9 +8,14 @@ Una solicitud en `handed_to_sales` sigue **pendiente de revisión comercial**; n
 |---|---|
 | Consulta por la solicitud pendiente | Informa el estado como máximo una vez por hora. |
 | `modificar solicitud` | Pide el dato y registra el siguiente mensaje en la misma conversación y lead para revisión comercial; no actualiza ClickUp ni crea otro lead. |
+| `se me olvidó agregar algo` (u otra adición) | Pregunta qué agregar, o lo registra de inmediato si el mensaje ya lo dice, en la misma conversación y lead para revisión comercial; no reinicia la cotización ni saluda de nuevo. |
 | `nueva cotización` | Inicia una cotización nueva con identidad conversacional nueva. |
 | Conversación en `escalation_required` | Mantiene el aviso de escalación con una cadencia máxima de una respuesta cada seis horas. |
 | Propiedad humana activa | No responde, no crea efectos y tampoco reinicia identidad. |
+
+## Ayuda para medir
+
+Cuando el cliente no tiene la cantidad o pide que Hormiglass mida (por ejemplo "¿Pueden medir ustedes?"), el bot no inventa una cantidad. Primero pide la comuna (validada contra las 346 comunas oficiales) y luego la calle y el número; omite lo que ya conoce. Con ambos datos deriva a una persona del equipo, y la tarea de ClickUp del handoff muestra el producto, la comuna y la dirección.
 
 ```mermaid
 flowchart TD
