@@ -417,6 +417,27 @@ if (deterministic.response_kind === 'commercial_review_pending'
   } }];
 }
 
+// Task 3c.33 (M5): collecting the location for a measurement handoff is a
+// deterministic question; the evaluator already recorded the commune it
+// resolved, and no assistant output may rewrite that turn.
+if (deterministic.response_kind === 'measurement_visit_location' && !deterministic.bot_suppressed) {
+  const visitContext = asObject(deterministic.qualification_context);
+  return [{ json: {
+    ...deterministic, response_text: deterministic.deterministic_reply,
+    should_create_lead: false, should_escalate: false, is_partial: false,
+    qualification_context: visitContext, qualification_context_json: jsonString(visitContext, {}),
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: 'measurement_visit_location',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    metadata_json: JSON.stringify({ ...parseJsonObject(deterministic.metadata_json),
+      pending_question_key: deterministic.pending_question_key || null,
+      commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
+    after_payload_json: JSON.stringify({ ...parseJsonObject(deterministic.after_payload_json),
+      qualification_context: visitContext, pending_question_key: deterministic.pending_question_key || null,
+      should_create_lead: false, should_escalate: false }),
+  } }];
+}
+
 // A pending temporal choice is policy-only. Preserve the saved request for an
 // explicit resume, but do not extract current-turn fields or run commercial gates.
 if (!deterministic.bot_suppressed && (deterministic.pending_question_key === 'previous_context_choice'

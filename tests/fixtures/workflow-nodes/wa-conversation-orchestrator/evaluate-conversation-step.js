@@ -46,6 +46,12 @@ const customerIntent = typeof detectOptOut === 'function'
   ? { detectOptOut, detectLostIntent }
   : require('../shared/customer-opt-out-vocabulary.js');
 
+// Task 3c.33 (L2/M5): the official commune list lives in shared/chile-communes.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const communeRuntime = typeof resolveChileanCommune === 'function'
+  ? { resolveChileanCommune }
+  : require('../shared/chile-communes.js');
+
 // Single silence kind for this node. `Should Send Response` in
 // wa-inbound-downstream-dispatcher.json dispatches only when response_text is
 // non-empty, so this is a sibling of human_control_suppressed: it reaches the
@@ -66,6 +72,18 @@ const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud sigue registrada ✅\n\nEs
 const COMMERCIAL_REVIEW_CORRECTION_PROMPT = 'Claro. ¿Qué dato de tu solicitud quieres corregir?';
 const COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY = 'Gracias. Registré tu corrección para que el equipo comercial la revise junto con tu solicitud.';
 const COMMERCIAL_REVIEW_CORRECTION_KEY = 'commercial_review_correction';
+// Task 3c.33 (M4): "se me olvidó agregar algo" on a registered quote is an
+// addition to that same request, recorded like a correction.
+const COMMERCIAL_REVIEW_ADDITION_KEY = 'commercial_review_addition';
+const COMMERCIAL_REVIEW_ADDITION_PROMPT = 'Claro 👍\n\n¿Qué quieres agregar a tu solicitud?';
+const COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY = 'Gracias. Registré lo que quieres agregar para que el equipo comercial lo revise junto con tu solicitud.';
+// Task 3c.33 (M5): measurement assistance collects the project location
+// (commune, then street and number) before the handoff.
+const MEASUREMENT_VISIT_COMMUNE_KEY = 'measurement_visit_commune';
+const MEASUREMENT_VISIT_COMMUNE_RETRY_KEY = 'measurement_visit_commune_retry';
+const MEASUREMENT_VISIT_ADDRESS_KEY = 'measurement_visit_address';
+const MEASUREMENT_VISIT_KEYS = [MEASUREMENT_VISIT_COMMUNE_KEY, MEASUREMENT_VISIT_COMMUNE_RETRY_KEY, MEASUREMENT_VISIT_ADDRESS_KEY];
+const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
 
 // A sticker or a reaction carries no requirement a human could quote, and the
 // pending-context branch already treats both as passive. Every other
@@ -565,6 +583,13 @@ function evaluateConversationStep(row) {
     || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(normalizedText)
     || (hasCommercialRequestReference
       && /\b(?:estado|avance|novedades?|respuesta|responden|respondido|cuando|demora|pendiente|revision|revisada|lista|listo|sigue|va|paso|pasa)\b/.test(normalizedText));
+  const ADDITION_VERB = '(?:agregar|anadir|sumar|incluir|considerar|poner)';
+  const wantsCommercialAddition = new RegExp(`\\b(?:se me olvido|me olvide|olvide|me falto|falto|me faltaria|faltaria)\\b.{0,40}\\b${ADDITION_VERB}\\b`).test(normalizedText)
+    || new RegExp(`\\b(?:quiero|quisiera|necesito|puedo|podria|podemos|me gustaria)\\s+(?:\\w+\\s+){0,2}${ADDITION_VERB}\\b.{0,40}\\b(?:algo|otra cosa|otro producto|otros productos|mas|cotizacion|solicitud|pedido)\\b`).test(normalizedText);
+  // An addition that already says what to add ("se me olvidó agregar 20
+  // soleras") is recorded at once instead of asking for it.
+  const additionCarriesDetail = /\d/.test(normalizedText)
+    || knownProducts.some((product) => new RegExp(`\\b${product}\\b`).test(normalizedText));
   const wantsCommercialCorrection = /\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b.{0,48}\b(?:solicitud|cotizacion|pedido|datos?|informacion|cantidad|direccion|comuna|producto|servicio|medida)\b/.test(normalizedText)
     || /\b(?:solicitud|cotizacion|pedido|datos?|informacion)\b.{0,48}\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b/.test(normalizedText);
   // A directive is not an answer. "Iniciar una nueva" restarts the request; it
@@ -648,6 +673,11 @@ function evaluateConversationStep(row) {
     && !wantsPrevious(normalizedText)
     && row.conversation_status_code !== 'escalation_required';
   let pendingQuestionKey = row.pending_question_key || null;
+  const persistedQualificationContext = row.qualification_context && typeof row.qualification_context === 'object'
+    ? row.qualification_context
+    : {};
+  // Set only by a rule that records customer data deterministically (M5).
+  let updatedQualificationContext = null;
   const isEscalationAlreadyRequired = row.conversation_status_code === 'escalation_required'
     || stepInfo.field === 'escalation';
   const handleConfirmationRejection = () => {
@@ -740,6 +770,7 @@ function evaluateConversationStep(row) {
     && !row.human_arbitration_required && !wantsNew(normalizedText)
     && (humanControlActive || isGreetingOnly || isCommercialStatusInquiry
       || wantsCommercialCorrection || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
+      || wantsCommercialAddition || row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY
       || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(normalizedText))) {
     resetConversationLead = false;
     current.service = row.state_service || stepState.service || lastKnownService || previous.service;
@@ -754,6 +785,15 @@ function evaluateConversationStep(row) {
       pendingQuestionKey = null;
       responseKind = 'commercial_review_pending';
       responseText = COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY;
+    } else if (row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY
+      || (wantsCommercialAddition && additionCarriesDetail)) {
+      pendingQuestionKey = null;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY;
+    } else if (wantsCommercialAddition) {
+      pendingQuestionKey = COMMERCIAL_REVIEW_ADDITION_KEY;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_ADDITION_PROMPT;
     } else if (wantsCommercialCorrection) {
       pendingQuestionKey = COMMERCIAL_REVIEW_CORRECTION_KEY;
       responseKind = 'commercial_review_pending';
@@ -888,17 +928,58 @@ function evaluateConversationStep(row) {
   // flujo normal y la ejecutiva la categoriza después de la derivación.
 
   // Measurement assistance is human review, never a fabricated quote quantity.
-  else if ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
-    && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
-      || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText))) {
-    shouldEscalate = true;
-    shouldCreateLead = false;
-    escalationReason = 'measurement_assistance_requested';
-    currentStepField = 'escalation';
-    pendingQuestionKey = null;
-    conversationStatusCode = 'escalation_required';
-    responseKind = 'escalation_routing';
-    responseText = 'Te derivaré con una persona del equipo para revisar cómo obtener las medidas, sin asumir una cantidad ni confirmar una visita.';
+  // Task 3c.33 (M5): the person who coordinates the measurement needs the
+  // project location, so the commune (an official comuna) and the street are
+  // collected first; whatever is already known is kept and not asked again.
+  else if (MEASUREMENT_VISIT_KEYS.includes(pendingQuestionKey)
+    || ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
+      && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
+        || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText)))) {
+    resetConversationLead = false;
+    const visitContext = { ...persistedQualificationContext };
+    let reaskCommune = false;
+    if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY || pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_RETRY_KEY) {
+      const commune = communeRuntime.resolveChileanCommune(rawText);
+      if (commune) {
+        visitContext.commune = commune;
+      } else if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY) {
+        reaskCommune = true;
+      } else {
+        visitContext.location_note = rawText;
+      }
+    } else if (pendingQuestionKey === MEASUREMENT_VISIT_ADDRESS_KEY && rawText) {
+      visitContext.address = rawText;
+    }
+    const knownPlace = compact(visitContext.commune) || compact(visitContext.location_note);
+    updatedQualificationContext = visitContext;
+    if (reaskCommune) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_RETRY_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = 'No encuentro *' + rawText.replace(/[*_~]/g, '') + '* como comuna.\n\n👉 ¿En qué comuna de Chile está tu proyecto?';
+    } else if (!knownPlace) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_COMMUNE_QUESTION;
+    } else if (!compact(visitContext.address)) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_ADDRESS_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_KEYS.includes(row.pending_question_key)
+        ? 'Gracias, anoto *' + knownPlace + '*.\n\n👉 ¿Cuál es la calle y el número aproximado?'
+        : '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo en *' + knownPlace + '*, necesito la dirección.\n\n👉 ¿Cuál es la calle y el número aproximado?';
+    } else {
+      shouldEscalate = true;
+      shouldCreateLead = false;
+      escalationReason = 'measurement_assistance_requested';
+      currentStepField = 'escalation';
+      pendingQuestionKey = null;
+      conversationStatusCode = 'escalation_required';
+      responseKind = 'escalation_routing';
+      responseText = '¡Gracias! Te derivaré con una persona de nuestro equipo para coordinar las medidas en *'
+        + compact(visitContext.address) + ', ' + knownPlace + '* 👍\n\nTe escribirá por este mismo WhatsApp.';
+    }
   }
 
   // 8. CONFIRMACIÓN EXPLÍCITA
@@ -1039,7 +1120,7 @@ function evaluateConversationStep(row) {
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', SUPPRESSED_REPLY_KIND].includes(responseKind),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'measurement_visit_location', SUPPRESSED_REPLY_KIND].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
@@ -1081,9 +1162,9 @@ function evaluateConversationStep(row) {
         requirement: current.requirement || null,
         qualification_context: resetConversationLead
           ? {}
-          : row.qualification_context && typeof row.qualification_context === 'object'
-            ? row.qualification_context
-            : {},
+          : updatedQualificationContext && !humanControlActive
+            ? updatedQualificationContext
+            : persistedQualificationContext,
         pending_question_key: pendingQuestionKey,
         recent_messages: resetConversationLead || responseKind === 'previous_context_choice'
           ? []

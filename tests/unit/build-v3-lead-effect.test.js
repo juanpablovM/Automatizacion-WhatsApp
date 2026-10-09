@@ -60,7 +60,7 @@ describe('Build V3 Lead Effect — the v3 decision reaches the lead contract', (
 
     expect(lead.service).toBe('despacho');
     expect(lead.city).toBe('Santiago');
-    expect(lead.requirement).toBe('hormigon H25 20 m3');
+    expect(lead.requirement).toBe('• hormigon H25 — 20 m3'); // Task 3c.33 (L3): itemized
   });
 
   test('translates every modality the policy can authorize', () => {
@@ -182,7 +182,7 @@ describe('Build V3 Lead Effect — the v3 decision reaches the lead contract', (
     expect(lead).toMatchObject({
       service: 'instalacion',
       city: 'Santiago',
-      requirement: 'Bloques de Hormigón 100',
+      requirement: '• Bloques de Hormigón — 100', // Task 3c.33 (L3): itemized
     });
   });
 
@@ -225,7 +225,7 @@ describe('Build V3 Lead Effect — item-aware reducer wiring (design.md D9)', ()
       v3_decision: decision([]),
     }));
 
-    expect(lead.requirement).toBe('Baldosas 10 m2');
+    expect(lead.requirement).toBe('• Baldosas — 10 m2'); // Task 3c.33 (L3): itemized
     expect(lead.city).toBe('Santiago');
     expect(lead.qualification_context.line_items).toHaveLength(1);
   });

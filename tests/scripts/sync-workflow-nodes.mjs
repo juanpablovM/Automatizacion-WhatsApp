@@ -89,7 +89,8 @@ const NODES = [
     "fixture": "wa-conversation-orchestrator/evaluate-conversation-step.js",
     "transform": "n8n-explicit-return",
     "runtimes": [
-      "shared/customer-opt-out-vocabulary.js"
+      "shared/customer-opt-out-vocabulary.js",
+      "shared/chile-communes.js"
     ]
   },
   {
@@ -306,6 +307,7 @@ const NODES = [
     "fixture": "wa-conversation-orchestrator/compile-v3-turn.js",
     "runtimes": [
       "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -335,6 +337,7 @@ const NODES = [
     "fixture": "wa-conversation-orchestrator/validate-and-authorize-v3.js",
     "runtimes": [
       "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
   },
@@ -481,6 +484,7 @@ const NODES = [
     "fixture": "ai-prd-shadow-evaluator/prepare-shadow-evaluation.js",
     "runtimes": [
       "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -492,6 +496,7 @@ const NODES = [
     "fixture": "ai-prd-shadow-evaluator/record-shadow-evaluation.js",
     "runtimes": [
       "shared/v3-rollout-runtime.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
   },

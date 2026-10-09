@@ -76,12 +76,12 @@ const qualificationLabels = {
 };
 const formatQualificationValue = (value) => typeof value === 'boolean' ? (value ? 'Si' : 'No') : safe(value);
 // D9 (design.md): the flat `quantity`/`measurements` mirror the *primary*
-// line item only (design.md D2). Rendering them as if they described the
-// whole quote would mislabel a multi-item quote's other items, so they are
-// skipped once there is more than one item — the requirement line already
-// itemizes every item's own quantity and measurements.
+// line item only (design.md D2). The requirement line itemizes every item's
+// own quantity and measurements, so they are skipped once the quote has line
+// items — task 3c.33 (L3) extends this to a single item, whose requirement is
+// now a bullet line too. A historical flat quote (no line_items) keeps them.
 const lineItems = Array.isArray(qualification.line_items) ? qualification.line_items : [];
-const skippedQualificationKeys = lineItems.length > 1 ? new Set(['quantity', 'measurements']) : new Set();
+const skippedQualificationKeys = lineItems.length > 0 ? new Set(['quantity', 'measurements']) : new Set();
 const qualificationLines = Object.entries(qualificationLabels)
   .filter(([key]) => !skippedQualificationKeys.has(key))
   .filter(([key]) => qualification[key] !== undefined && qualification[key] !== null && qualification[key] !== '')

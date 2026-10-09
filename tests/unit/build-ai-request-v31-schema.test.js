@@ -53,7 +53,19 @@ describe('Build AI Request — v3.1 primary_request goal enum in a repair turn',
     }]);
 
     expect(schema.properties.primary_request.properties.goal_id.enum)
-      .toEqual(['name', 'commune', 'line_items', 'final_confirmation', 'product', 'quantity', 'measurements']);
+      .toEqual(['name', 'commune', 'line_items', 'final_confirmation', 'product', 'quantity', 'measurements', 'variant']);
+  });
+
+  // Task 3c.33 (M2): final_confirmation_not_ready names item goals as
+  // "<field>@<item_ref>"; the lock keeps those item goals representable.
+  test('a lock naming item goals (variant@li_a) offers that item goal', () => {
+    const schema = repairSchemaFor(policy(), [{
+      code: 'final_confirmation_not_ready', path: 'primary_request.goal_id',
+      related_ids: ['variant@li_a', 'quantity@li_b'], allowed_values: ['variant@li_a', 'quantity@li_b'],
+    }]);
+
+    expect(schema.properties.primary_request.properties.goal_id.enum).toEqual(expect.arrayContaining(['variant', 'quantity']));
+    expect(schema.properties.primary_request.properties.goal_id.enum).not.toContain('final_confirmation');
   });
 
   test('a repair that locks primary_request.goal_id keeps exactly the locked goals', () => {

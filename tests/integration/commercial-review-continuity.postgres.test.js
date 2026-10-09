@@ -178,6 +178,28 @@ integration('commercial review and address retry through persisted PostgreSQL st
     expect(leadsAfter - leadsBefore).toBe(0);
     expect(leadsAfter).toBe(1);
   });
+  // Task 3c.33 (M4): "se me olvidó agregar algo" stays on the same quote.
+  test('a forgotten addition persists on the same conversation and lead without another lead', async () => {
+    await setHandedToSales();
+    const request = await turn('Se me olvidó agregar algo a la cotización');
+    expect(request.output).toMatchObject({
+      conversation_id: conversationId, lead_id: leadId, pending_question_key: 'commercial_review_addition',
+      reset_conversation_lead: false, should_create_lead: false, v3_control_only: true,
+    });
+    await persistTurn(request);
+    const detail = await turn('Necesito también palmetas, unos 70 m2');
+    expect(detail.row.pending_question_key).toBe('commercial_review_addition');
+    expect(detail.output).toMatchObject({
+      conversation_id: conversationId, lead_id: leadId, pending_question_key: null,
+      reset_conversation_lead: false, should_create_lead: false,
+    });
+    expect(detail.output.response_text).toContain('Registré lo que quieres agregar');
+    await persistTurn(detail);
+    const leads = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2', [sourceId, phone],
+    )).rows[0].count);
+    expect(leads).toBe(1);
+  });
   test('an acquired human lease stays silent without clearing the registered quote', async () => {
     await setHandedToSales();
     await client.query(`INSERT INTO lead_chat_ownerships (lead_id, clickup_task_id, response_due_at)

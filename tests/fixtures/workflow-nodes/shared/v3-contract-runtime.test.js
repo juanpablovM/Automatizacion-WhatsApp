@@ -283,7 +283,7 @@ describe('item_evidence_span_conflict (3c.7)', () => {
     const validation = validateV3AiProposal(policy, proposalV31(policy, {
       observations: [
         observation({
-          id: 'obs-qty-a', concept: 'quantity', normalized_value: 500,
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: '500 ml',
           evidence_quote: 'aprox 500 ml', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
         }),
         observation({
@@ -311,11 +311,11 @@ describe('item_evidence_span_conflict (3c.7)', () => {
     const validation = validateV3AiProposal(policy, proposalV31(policy, {
       observations: [
         observation({
-          id: 'obs-qty-a', concept: 'quantity', normalized_value: 500,
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: '500 ml',
           evidence_quote: 'aprox 500 ml', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
         }),
         observation({
-          id: 'obs-qty-b', concept: 'quantity', normalized_value: 500,
+          id: 'obs-qty-b', concept: 'quantity', normalized_value: '500 ml',
           evidence_quote: 'aprox 500 ml', evidence_occurrence: 2, item_ref: 'li_b', resolves_goal_ids: [],
         }),
       ],
@@ -339,7 +339,7 @@ describe('item_evidence_span_conflict (3c.7)', () => {
     const validation = validateV3AiProposal(policy, proposalV31(policy, {
       observations: [
         observation({
-          id: 'obs-qty-a', concept: 'quantity', normalized_value: 3,
+          id: 'obs-qty-a', concept: 'quantity', normalized_value: '3 metros',
           evidence_quote: '3 metros', evidence_occurrence: 1, item_ref: 'li_a', resolves_goal_ids: [],
         }),
         observation({
@@ -537,8 +537,9 @@ describe('line_items required goal — effectiveRequiredGoalIds v3.1 (2a.19/2a.2
   test('resolves when every item (1-10) has product and quantity', () => {
     const policy = policyV31For('confirmo', {
       items: [
-        { item_id: 'li_a', product: 'Adoquín', quantity: 10, measurements: null },
-        { item_id: 'li_b', product: 'Pastelón', quantity: 5, measurements: null },
+        // Task 3c.33 (M3): a resolved quantity carries its unit.
+        { item_id: 'li_a', product: 'Adoquín', quantity: '10 m²', measurements: null },
+        { item_id: 'li_b', product: 'Pastelón', quantity: '5 unidades', measurements: null },
       ],
       effectPermissions: [{ type: 'create_lead' }],
       effectRequirements: [{

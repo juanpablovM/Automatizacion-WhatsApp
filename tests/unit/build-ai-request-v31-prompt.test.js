@@ -62,15 +62,18 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     const v31Lines = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n');
 
     const removed = v3Lines.filter((line) => !v31Lines.includes(line));
-    expect(removed).toHaveLength(6);
-    expect(removed[0]).toContain('Excepción: si el mensaje del cliente pide una nueva cotización');
-    expect(removed[1]).toContain('Usa emojis con moderación: como máximo uno por mensaje');
-    expect(removed[2]).toBe('Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.');
+    expect(removed).toHaveLength(7);
+    // Task 3c.33 (L4): the welcome line ("dale la bienvenida") is replaced by
+    // the gender-neutral "Te damos la bienvenida".
+    expect(removed[0]).toContain('dale la bienvenida a Hormiglass');
+    expect(removed[1]).toContain('Excepción: si el mensaje del cliente pide una nueva cotización');
+    expect(removed[2]).toContain('Usa emojis con moderación: como máximo uno por mensaje');
+    expect(removed[3]).toBe('Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.');
     // Task 3c.24: the two lines that required fulfillment for service_scope
     // both contradicted the installation-implies-delivery rule.
-    expect(removed[3]).toBe('Si service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.');
-    expect(removed[4]).toContain('Si service_scope es material o both: fulfillment.');
-    expect(removed[5]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
+    expect(removed[4]).toBe('Si service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.');
+    expect(removed[5]).toContain('Si service_scope es material o both: fulfillment.');
+    expect(removed[6]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
 
     const kept = v3Lines.filter((line) => !removed.includes(line));
     for (const line of kept) {

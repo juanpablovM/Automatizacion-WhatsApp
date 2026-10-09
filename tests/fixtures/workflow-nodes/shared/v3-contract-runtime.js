@@ -19,6 +19,8 @@ const CONCEPT_TO_FIELD = Object.freeze({
   commune: 'commune',
   quantity: 'quantity',
   measurements: 'measurements',
+  // Task 3c.33 (M1): v3.1 only — no v3 policy authorizes a variant mutation.
+  variant: 'variant',
   use_case: 'use_case',
   service_scope: 'service_scope',
   fulfillment: 'fulfillment',
@@ -607,8 +609,10 @@ const addressRetryBoundErrors = (policy, candidateMutations, primaryRequestValid
 // unchanged v3 contract above. Dark in this slice — nothing in production
 // requests `input.version: 'v3.1'` until Slice 2b's switch.
 // ---------------------------------------------------------------------------
-const ITEM_FIELDS = new Set(['product', 'quantity', 'measurements']);
-const ITEM_FACT_ID_RE = /^fact:item:([^:]+):(product|quantity|measurements)$/;
+// Task 3c.33 (M1): `variant` is the technical-sheet variant the customer chose
+// for an item (for example "Solera Zarpa"); it is item-scoped like the others.
+const ITEM_FIELDS = new Set(['product', 'quantity', 'measurements', 'variant']);
+const ITEM_FACT_ID_RE = /^fact:item:([^:]+):(product|quantity|measurements|variant)$/;
 const MAX_LINE_ITEMS = 10;
 const LINE_ITEM_VERSION = 'line_item/v1';
 const FLAT_ITEM_ID = 'li_0';
@@ -690,7 +694,7 @@ const existingLineItemsFromPolicy = (policy) => {
     const match = ITEM_FACT_ID_RE.exec(fact?.fact_id || '');
     if (!match) continue;
     const [, itemId, field] = match;
-    if (!items.has(itemId)) items.set(itemId, { item_id: itemId, product: null, quantity: null, measurements: null });
+    if (!items.has(itemId)) items.set(itemId, { item_id: itemId, product: null, quantity: null, measurements: null, variant: null });
     items.get(itemId)[field] = fact.value;
   }
   return items;
@@ -973,6 +977,54 @@ const primaryRequestGoalInapplicableErrorV31 = (requestedGoal, serviceScope, ful
   );
 };
 
+// Task 3c.33 (M2): the variant names a quoted product's technical sheet lists
+// (`variant_options`, exposed by the v3.1 policy only for products with two
+// or more variants). An empty list means the product needs no variant.
+const foldVariantV31 = (value) => phraseFoldV31(productNameTextV31(value));
+const variantOptionsForV31 = (policy, product) => {
+  const name = productNameTextV31(product);
+  if (!name.trim()) return [];
+  const entry = groundingEntries(policy).find((candidate) => candidate?.concept === 'product'
+    && Array.isArray(candidate.variant_options) && sameGroundedValue(groundingValue(candidate), name));
+  return entry ? entry.variant_options.filter((option) => typeof option === 'string' && option.trim() !== '') : [];
+};
+const variantRequiredInstructionV31 = (unresolvedIds, optionsByRef) => {
+  const refs = unresolvedIds.filter((id) => id.startsWith('variant@')).map((id) => id.slice('variant@'.length));
+  if (refs.length === 0) return null;
+  return refs.map((ref) => `variant@${ref}: the customer has not chosen which variant (format or type) of this product they need, and it changes the quote. Ask which one, naming the options (${(optionsByRef.get(ref) || []).join(', ')}), with primary_request {"goal_id": "variant", "item_ref": "${ref}"}; when they answer, record it with a variant observation and a set mutation on item_ref ${ref}, its normalized_value being one of those options exactly.`).join(' ');
+};
+// Task 3c.33 (M3): a bare number has no unit ("33", 33 or {value: 33, unit:
+// null}); the item could be units, m² or linear meters, so it is asked again.
+const BARE_NUMBER_V31 = /^\s*\d+(?:[.,]\d+)?\s*$/;
+const isUnitlessQuantityV31 = (value) => {
+  if (typeof value === 'number') return true;
+  if (typeof value === 'string') return BARE_NUMBER_V31.test(value);
+  if (isObject(value) && hasResolvedValue(value.value) && BARE_NUMBER_V31.test(String(value.value))) {
+    return !hasResolvedValue(value.unit);
+  }
+  return false;
+};
+const hasResolvedQuantityV31 = (value) => hasResolvedValue(value) && !isUnitlessQuantityV31(value);
+const quantityUnitRequiredInstructionV31 = (itemRef) => `The customer gave a number without a unit, and this product could be quoted in units, m² or linear meters. Do not record it: drop this quantity observation and its state_mutation, and ask which unit the number is in (for example "¿Son 33 unidades o 33 metros lineales?") with primary_request {"goal_id": "quantity", "item_ref": ${itemRef ? `"${itemRef}"` : 'null'}}. Record a quantity only with its unit, and use unit "unidades" only when the customer says units or answers a question that asked for units.`;
+// Task 3c.33 (L2): the official list lives in shared/chile-communes.js, which
+// n8n concatenates ahead of this runtime; Node tests load the sibling file.
+const resolveChileanCommuneV31 = (() => {
+  if (typeof resolveChileanCommune === 'function') return resolveChileanCommune;
+  if (typeof require !== 'function') return null;
+  try {
+    return require('./chile-communes.js').resolveChileanCommune;
+  } catch (_error) {
+    return null;
+  }
+})();
+const communeNotRecognizedInstructionV31 = (value) => `"${value}" is not one of Chile's comunas (it may be a province, a region, a sector or a typo). Do not record it: drop this commune observation and its state_mutation, and ask in which comuna the project or delivery is, kindly (for example "¿En qué comuna de Chiloé sería? Por ejemplo, Castro o Ancud.") with primary_request {"goal_id": "commune", "item_ref": null}.`;
+// Task 3c.33 (M6): the full summary already sent in the previous assistant
+// message is not resent while nothing changes, unless the customer asks for it.
+const SUMMARY_HEADER_V31 = 'resumen de tu cotizacion';
+const asksForSummaryV31 = (messageText) => /\b(?:resumen|repite|repetir|repiteme|de nuevo|otra vez|nuevamente)\b/
+  .test(foldSheetTextV31(messageText));
+const finalSummaryRepeatedInstructionV31 = 'Your previous message already showed the full quote summary and nothing changed in this turn. Do not repeat the summary: answer the customer\'s message briefly and re-ask the confirmation in one short line on its own (for example "¿Confirmas que el resumen que te envié está correcto?"), keeping primary_request {"goal_id": "final_confirmation", "item_ref": null}. Show the summary again only when a value changes or the customer asks for it.';
+
 const validateV3AiProposalV31 = (policy, proposal) => {
   const errors = [];
   const candidateObservations = [];
@@ -1154,6 +1206,22 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     if (observationEntry.concept === 'address') {
       const addressError = addressRequiresStreetDetailsError(policy, observations, observationEntry, path);
       if (addressError) { errors.push(addressError); valid = false; }
+    }
+    // Task 3c.33 (L2): a commune is one of the 346 official comunas.
+    if (valid && observationEntry.concept === 'commune' && resolveChileanCommuneV31
+        && !resolveChileanCommuneV31(String(normalizedComparable(observationEntry.normalized_value) ?? ''))
+        && !resolveChileanCommuneV31(observationEntry.evidence_quote)) {
+      errors.push(validationError(
+        'commune_not_recognized', `${path}.normalized_value`, [observationEntry.id], [],
+        communeNotRecognizedInstructionV31(String(normalizedComparable(observationEntry.normalized_value) ?? observationEntry.evidence_quote)),
+      ));
+    }
+    // Task 3c.33 (M3): an item quantity carries its unit.
+    if (valid && observationEntry.concept === 'quantity' && isUnitlessQuantityV31(observationEntry.normalized_value)) {
+      errors.push(validationError(
+        'quantity_unit_required', `${path}.normalized_value`, [observationEntry.id], [],
+        quantityUnitRequiredInstructionV31(observationEntry.item_ref),
+      ));
     }
     if (valid && occurrence) {
       const startByte = utf8Length(messageText.slice(0, occurrence.index));
@@ -1531,8 +1599,31 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       productPreviouslyRejectedInstructionV31(rejectedEntry.value),
     ));
   }
+  // Task 3c.33 (M1/M2): the chosen variant of each item and the options its
+  // product lists. A variant outside the options is rejected; an item whose
+  // product lists two or more variants needs one before final_confirmation.
+  const variantFor = (ref) => {
+    const observed = candidateObservations.find((entry) => entry.item_ref === ref && entry.concept === 'variant');
+    if (observed) return observed.normalized_value;
+    return existingItems.get(ref)?.variant ?? null;
+  };
+  const variantOptionsByRef = new Map([...touchedItemRefs].map((ref) => [ref, variantOptionsForV31(policy, productFor(ref))]));
+  for (const [index, mutation] of mutations.entries()) {
+    if (mutation?.field !== 'variant' || !['set', 'replace'].includes(mutation?.operation)) continue;
+    const candidate = candidateMutations.find((entry) => entry.field === 'variant' && entry.observation_id === mutation.observation_id);
+    if (!candidate) continue;
+    const options = variantOptionsByRef.get(candidate.item_ref) || [];
+    if (options.length === 0 || options.some((option) => foldVariantV31(option) === foldVariantV31(candidate.projected_value))) continue;
+    errors.push(validationError(
+      'item_variant_unknown', `state_mutations[${index}]`, [mutation.observation_id], options,
+      `The variant must be exactly one of the options the technical sheet lists for this product (${options.join(', ')}). If the customer's answer matches one, use that exact option as normalized_value; if it matches none, drop this variant observation and mutation and ask which option they need with primary_request {"goal_id": "variant", "item_ref": "${candidate.item_ref}"}.`,
+    ));
+  }
   const unresolvedProductRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(productFor(ref))).map((ref) => `product@${ref}`);
-  const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedValue(quantityFor(ref))).map((ref) => `quantity@${ref}`);
+  const unresolvedQuantityRefs = remainingItemRefs.filter((ref) => !hasResolvedQuantityV31(quantityFor(ref))).map((ref) => `quantity@${ref}`);
+  const unresolvedVariantRefs = remainingItemRefs
+    .filter((ref) => (variantOptionsByRef.get(ref) || []).length >= 2 && !hasResolvedValue(variantFor(ref)))
+    .map((ref) => `variant@${ref}`);
   // Items unresolved ONLY because this proposal's own unsupported/ambiguous
   // resolution withholds a product the policy already holds, with evidence
   // that names no catalog product: the repair hint says to drop it.
@@ -1549,7 +1640,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     return itemRefs.length > 0 ? spuriousCatalogResolutionInstructionV31(itemRefs) : null;
   };
   const lineItemsResolved = remainingItemRefs.length >= 1 && remainingItemRefs.length <= MAX_LINE_ITEMS
-    && unresolvedProductRefs.length === 0 && unresolvedQuantityRefs.length === 0;
+    && unresolvedProductRefs.length === 0 && unresolvedQuantityRefs.length === 0 && unresolvedVariantRefs.length === 0;
 
   const permissions = new Set((policy?.effect_authority?.permissions || []).map((permission) => permission.type));
   const requirements = new Map((policy?.effect_authority?.requirements || []).map((requirement) => [requirement.effect_type, requirement]));
@@ -1565,7 +1656,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const createLeadUnresolvedRaw = createLeadRequiredGoalIds.filter((goalId) => goalId !== 'line_items' && !resolvedGoalIds.has(goalId));
   const createLeadUnresolved = (lineItemsResolved || !createLeadRequiredGoalIds.includes('line_items'))
     ? createLeadUnresolvedRaw
-    : [...createLeadUnresolvedRaw, ...unresolvedProductRefs, ...unresolvedQuantityRefs];
+    : [...createLeadUnresolvedRaw, ...unresolvedProductRefs, ...unresolvedQuantityRefs, ...unresolvedVariantRefs];
   const unresolvedPolicyGoalIds = (policy?.goals || [])
     .filter((goal) => goal.status !== 'resolved' && !resolvedGoalIds.has(goal.goal_id))
     .map((goal) => goal.goal_id);
@@ -1586,7 +1677,8 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     const spuriousInstruction = spuriousResolutionInstructionFor(createLeadUnresolved);
     errors.push(validationError(
       'final_confirmation_not_ready', 'primary_request.goal_id', createLeadUnresolved, createLeadUnresolved,
-      ['Ask for one unresolved required goal instead of asking for final confirmation.', spuriousInstruction]
+      ['Ask for one unresolved required goal instead of asking for final confirmation.', spuriousInstruction,
+        variantRequiredInstructionV31(createLeadUnresolved, variantOptionsByRef)]
         .filter(Boolean).join(' '),
     ));
   }
@@ -1784,6 +1876,16 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   // Composed from v3's address_retry_exhausted/address_retry_handoff_required
   // (design.md D11): quote-level only, never inspects item fields.
   errors.push(...addressRetryBoundErrors(policy, candidateMutations, primaryRequestValid, primaryRequest, permissions, candidateEffects));
+
+  // Task 3c.33 (M6, live 2026-09-30: the same summary sent three times in a
+  // row while the customer asked side questions).
+  const lastAssistantMessage = [...(Array.isArray(policy?.history?.messages) ? policy.history.messages : [])]
+    .reverse().find((message) => message?.role === 'assistant');
+  if (foldSheetTextV31(proposalObject.reply_text).includes(SUMMARY_HEADER_V31)
+      && foldSheetTextV31(lastAssistantMessage?.content).includes(SUMMARY_HEADER_V31)
+      && candidateMutations.length === 0 && !asksForSummaryV31(messageText)) {
+    errors.push(validationError('final_summary_repeated', 'reply_text', [], [], finalSummaryRepeatedInstructionV31));
+  }
 
   const blockingErrors = errors.filter((error) => !NON_BLOCKING_V31_CODES.has(error.code));
   const valid = blockingErrors.length === 0;

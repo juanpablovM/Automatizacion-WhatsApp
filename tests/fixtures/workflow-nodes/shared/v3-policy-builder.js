@@ -221,7 +221,20 @@ const primaryLineItem = (context) => {
   return items[0] || {};
 };
 const ITEM_FACT_FIELDS = new Set(['product', 'quantity', 'measurements']);
+// Task 3c.33 (M1): v3.1 items also carry the chosen technical-sheet variant.
+const V31_ITEM_FACT_FIELDS = [...ITEM_FACT_FIELDS, 'variant'];
 const hasFieldValue = (value) => value !== undefined && value !== null && safe(value) !== '';
+// Task 3c.33 (M3): a bare number ("33", or {value: 33, unit: null}) is not a
+// resolved quantity. Mirrors isUnitlessQuantityV31 in v3-contract-runtime.js.
+const hasQuantityWithUnit = (value) => {
+  if (!hasFieldValue(value)) return false;
+  if (typeof value === 'number') return false;
+  if (typeof value === 'string') return !/^\s*\d+(?:[.,]\d+)?\s*$/.test(value);
+  if (isPlainObject(value) && hasFieldValue(value.value) && /^\s*\d+(?:[.,]\d+)?\s*$/.test(String(value.value))) {
+    return hasFieldValue(value.unit);
+  }
+  return true;
+};
 
 const buildV3PolicyInput = (row, options = {}) => {
   // Slice 2a (design.md D1-D5), dark: nothing in production requests
@@ -364,6 +377,31 @@ const buildV3PolicyInput = (row, options = {}) => {
         ? { ...entry, removed_by_customer: true }
         : entry));
     }
+    // Task 3c.33 (M2): a quoted (or named) product whose technical sheet lists
+    // two or more variants exposes their names as `variant_options`, outside
+    // the technical-sheet byte cap, so the customer's choice can be asked and
+    // validated before final_confirmation. A product with one variant or none
+    // carries no key, so its policy is unchanged.
+    const variantRefs = relevantCatalogRefs({
+      catalog: versionedCatalog,
+      messageText: turnMessageText,
+      lineItems: turnLineItems,
+    });
+    const variantOptionsByRef = new Map();
+    for (const entry of sourceCatalog) {
+      if (!isPlainObject(entry) || typeof entry.ref !== 'string' || !variantRefs.includes(entry.ref)
+        || variantOptionsByRef.has(entry.ref) || !isPlainObject(entry.technical_sheet)) continue;
+      const options = [...new Set((Array.isArray(entry.technical_sheet.variants) ? entry.technical_sheet.variants : [])
+        .map((variant) => (isPlainObject(variant) && typeof variant.name === 'string' ? variant.name.trim() : ''))
+        .filter(Boolean))];
+      if (options.length >= 2) variantOptionsByRef.set(entry.ref, options);
+    }
+    if (variantOptionsByRef.size > 0) {
+      catalog = catalog.map((entry) => (isPlainObject(entry) && variantOptionsByRef.has(entry.ref)
+        && !('variant_options' in entry)
+        ? { ...entry, variant_options: variantOptionsByRef.get(entry.ref) }
+        : entry));
+    }
   }
   const grounding = {
     catalog,
@@ -460,7 +498,7 @@ const buildV3PolicyInput = (row, options = {}) => {
   if (version === 'v3.1') {
     const lineItems = resolvedReadLineItems ? resolvedReadLineItems(context) : [];
     for (const item of lineItems) {
-      for (const field of ITEM_FACT_FIELDS) {
+      for (const field of V31_ITEM_FACT_FIELDS) {
         const value = item?.[field];
         if (!hasFieldValue(value)) continue;
         facts.push({
@@ -472,8 +510,16 @@ const buildV3PolicyInput = (row, options = {}) => {
         });
       }
     }
+    // Task 3c.33: an item resolves only with a quantity that carries a unit
+    // (M3) and, when its product lists several variants, a chosen variant (M2).
+    const foldProduct = (value) => String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toLocaleLowerCase('es').replace(/\s+/g, ' ').trim();
+    const needsVariant = (product) => catalog.some((entry) => isPlainObject(entry) && entry.concept === 'product'
+      && Array.isArray(entry.variant_options) && entry.variant_options.length >= 2
+      && foldProduct(entry.value) !== '' && foldProduct(entry.value) === foldProduct(lineItemProductText(product)));
     const lineItemsResolved = lineItems.length >= 1 && lineItems.length <= 10
-      && lineItems.every((item) => hasFieldValue(item?.product) && hasFieldValue(item?.quantity));
+      && lineItems.every((item) => hasFieldValue(item?.product) && hasQuantityWithUnit(item?.quantity)
+        && (!needsVariant(item?.product) || hasFieldValue(item?.variant)));
     requiredGoals.delete('product');
     requiredGoals.delete('quantity');
     requiredGoals.add('line_items');
@@ -483,7 +529,7 @@ const buildV3PolicyInput = (row, options = {}) => {
       importance: 'required_for_effect',
       blocks_effects: ['create_lead'],
     });
-    for (const field of ITEM_FACT_FIELDS) {
+    for (const field of V31_ITEM_FACT_FIELDS) {
       allowedMutations.push({ operation: 'set', concept: field, field });
       allowedMutations.push({ operation: 'replace', concept: field, field });
     }
@@ -521,6 +567,15 @@ const buildV3PolicyInput = (row, options = {}) => {
       { rule_id: 'no_unreceipted_derivation', kind: 'forbidden_pattern', pattern: '\\b(ya|quedo)\\s+derivad[oa]\\b', flags: 'iu' },
       { rule_id: 'no_unreceipted_quote_progress', kind: 'forbidden_pattern', pattern: '\\b(?:(?:estoy|estamos|seguimos)\\s+(?:procesando|gestionando)\\s+(?:tu|la)\\s+cotizaci[oó]n|(?:tu|la)\\s+cotizaci[oó]n\\s+(?:ya\\s+)?(?:est[aá]|qued[oó])\\s+en\\s+proceso)\\b', flags: 'iu' },
       { rule_id: 'no_unreceipted_delivery_progress', kind: 'forbidden_pattern', pattern: '\\b(?:recibas|recibir[aá]s)\\s+tu\\s+material\\s+pronto\\b', flags: 'iu' },
+      // Task 3c.33 (L1, v3.1 only): internal documents are never named to the
+      // customer (live 2026-09-30: "fichas editables", "la ficha disponible").
+      // The customer-facing technical sheet ("ficha técnica") stays allowed.
+      ...(version === 'v3.1' ? [{
+        rule_id: 'no_internal_documents',
+        kind: 'forbidden_pattern',
+        pattern: '\\bfichas?\\s+(?:editables?|disponibles?|internas?)\\b|\\b[\\w-]+\\.(?:pdf|docx?|xlsx?|csv)\\b',
+        flags: 'iu',
+      }] : []),
     ],
     // Task 3c.29: v3.1 may send a technical-sheet PDF only when the policy
     // exposes at least one; otherwise the permission is absent.

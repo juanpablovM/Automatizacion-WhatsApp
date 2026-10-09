@@ -105,7 +105,9 @@ describe('Build ClickUp Payload — skips flat Cantidad/Medidas for a multi-item
     expect(output.clickup_task_payload.description).toContain('Requerimiento: • Cierro de Hormigón — 5 m2, 3 metros de altura');
   });
 
-  test('still shows the flat Cantidad and Medidas labels when there is exactly one item (or no line_items at all)', () => {
+  // Task 3c.33 (L3): a one-item quote is itemized too, so its flat labels go;
+  // a historical flat quote without line_items keeps them.
+  test('skips the flat Cantidad and Medidas labels for exactly one item, and keeps them without line_items', () => {
     const row = singleItemRow();
     row.qualification_context = {
       modality: 'delivery',
@@ -117,7 +119,13 @@ describe('Build ClickUp Payload — skips flat Cantidad/Medidas for a multi-item
     const fixtureSource = fs.readFileSync(FIXTURE_PATH, 'utf8');
     const output = runNode(fixtureSource, row, baseEnv());
 
-    expect(output.clickup_task_payload.description).toContain('Cantidad: 20 m3');
-    expect(output.clickup_task_payload.description).toContain('Medidas: 3 metros de altura');
+    expect(output.clickup_task_payload.description).not.toContain('Cantidad:');
+    expect(output.clickup_task_payload.description).not.toContain('Medidas:');
+
+    const flat = singleItemRow();
+    flat.qualification_context = { modality: 'delivery', quantity: '20 m3', measurements: '3 metros de altura' };
+    const flatOutput = runNode(fixtureSource, flat, baseEnv());
+    expect(flatOutput.clickup_task_payload.description).toContain('Cantidad: 20 m3');
+    expect(flatOutput.clickup_task_payload.description).toContain('Medidas: 3 metros de altura');
   });
 });

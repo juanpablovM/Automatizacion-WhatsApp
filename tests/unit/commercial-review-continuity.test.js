@@ -236,3 +236,57 @@ describe('pickup quantity and contextual address question', () => {
     expect(metadata.previous_commercial_question_retry).toBe(1);
   });
 });
+
+// Task 3c.33 (M4, live 2026-09-30, conversations 389 -> 390): "Se me olvidó
+// agregar algo a la cotización", sent 15 seconds after the handoff, opened a
+// new quote with a welcome greeting. An addition on a recent handed_to_sales
+// quote now stays on the same conversation and lead, through the commercial
+// correction flow.
+describe('commercial review additions (M4)', () => {
+  test.each([
+    'Se me olvido agregar algo a la cotización',
+    'Me faltó agregar algo',
+    'Quiero agregar otro producto a mi solicitud',
+    '¿Puedo sumar algo más al pedido?',
+  ])('an addition request keeps the quote and asks what to add: %s', (text) => {
+    const out = evaluateConversationStep({ ...quote, text_body: text }).json;
+    expect(out.conversation_id).toBe(100);
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.should_create_lead).toBe(false);
+    expect(out.should_escalate).toBe(false);
+    expect(out.v3_control_only).toBe(true);
+    expect(out.response_kind).toBe('commercial_review_pending');
+    expect(out.pending_question_key).toBe('commercial_review_addition');
+    expect(out.deterministic_reply).toMatch(/agregar/);
+    expect(out.deterministic_reply).not.toMatch(/bienvenid/i);
+    const applied = run('wa-conversation-orchestrator/apply-ai-assistance.js', out);
+    expect(applied.response_text).toBe(out.deterministic_reply);
+    expect(applied.conversation_id).toBe(100);
+    expect(applied.lead_id).toBe(200);
+  });
+
+  test('the added detail is recorded on the same quote', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Necesito palmetas de hormigón, unos 70 m2', pending_question_key: 'commercial_review_addition' }).json;
+    expect(out.conversation_id).toBe(100);
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.pending_question_key).toBeNull();
+    expect(out.v3_control_only).toBe(true);
+    expect(out.deterministic_reply).toMatch(/Registré/);
+    expect(out.deterministic_reply).not.toMatch(/clickup|actualiz/i);
+  });
+
+  test('an addition that already names what to add is recorded at once', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Se me olvidó agregar 20 soleras' }).json;
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.pending_question_key).toBeNull();
+    expect(out.deterministic_reply).toMatch(/Registré/);
+  });
+
+  test('an explicit new quotation still starts a new request', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Quiero agregar una nueva cotización' }).json;
+    expect(out.reset_conversation_lead).toBe(true);
+  });
+});

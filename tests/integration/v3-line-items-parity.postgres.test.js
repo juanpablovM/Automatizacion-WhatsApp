@@ -73,6 +73,22 @@ describeIntegration('v3 item-aware state mutation SQL/JS parity', () => {
     expect(replay.rows[0].result).toEqual(reduceV3StateMutations(first.rows[0].result, mutations));
   });
 
+  test('applying the 033 down migration restores the 025 body: a variant lands flat again', async () => {
+    const downgrade = new pg.Client(connection);
+    await downgrade.connect();
+    try {
+      await downgrade.query('BEGIN');
+      await downgrade.query(fs.readFileSync('infra/postgres/rollback/033_line_item_variant.down.sql', 'utf8'));
+      const restored = await applyMutations(downgrade, { city: 'Colina' }, [
+        { operation: 'set', field: 'variant', projected_value: 'Solera Zarpa' },
+      ]);
+      expect(restored.rows[0].result).toEqual({ city: 'Colina', variant: 'Solera Zarpa' });
+    } finally {
+      await downgrade.query('ROLLBACK');
+      await downgrade.end();
+    }
+  });
+
   test('applying the down migration restores the 022 flat-only behavior', async () => {
     const downgrade = new pg.Client(connection);
     await downgrade.connect();
