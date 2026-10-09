@@ -729,6 +729,8 @@ if (usesV3Contract) {
   const V31_SUMMARY_ONCE_RULE = 'Si tu mensaje anterior ya mostró el resumen completo de la cotización y en este turno no cambió ningún dato, no vuelvas a enviar el resumen completo: responde brevemente lo que el cliente pregunta y vuelve a pedir la confirmación en una sola línea al final (por ejemplo "¿Confirmas que el resumen que te envié está correcto?"), con primary_request.goal_id=final_confirmation. Muestra el resumen de nuevo solo si cambió un dato o si el cliente lo pide.';
   const V31_INTERNAL_DOCUMENTS_RULE = 'Nunca menciones documentos internos ni sus nombres de archivo: no hables de "fichas editables", "la ficha disponible", versiones de fichas ni archivos (.pdf, .docx, .xlsx). Responde con el dato o di que una ejecutiva de Hormiglass te lo indica; solo puedes nombrar la ficha técnica del producto cuando la ofreces o la envías.';
   const V31_COMMUNE_RULE = 'commune debe ser una de las 346 comunas de Chile. Si el cliente nombra una provincia, una región, una isla o un sector que no es una comuna (por ejemplo "Chiloé"), no la registres como commune: pregúntale amablemente en qué comuna es el proyecto o la entrega (por ejemplo "¿En qué comuna de Chiloé sería? Por ejemplo, Castro o Ancud."), con primary_request.goal_id=commune.';
+  // Task 3c.34 (owner rule 2026-10-09): the delivery/installation area.
+  const V31_SERVICE_AREA_RULE = 'Hacemos despachos e instalaciones solo en las comunas de la Región Metropolitana y en las comunas de Viña del Mar, Valparaíso, Concepción y Rancagua. El retiro en fábrica (San Bernardo) de material sin instalación se acepta desde cualquier comuna. Si la cotización lleva despacho o instalación y la comuna es una comuna de Chile fuera de esa zona, no sigas con esa cotización: no preguntes dirección, terreno, acceso de camión, retiro de escombros ni restricciones de acceso, no pidas final_confirmation y no pidas create_lead. Díselo con amabilidad, por ejemplo "Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.". Si es solo material, ofrece el retiro: "Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.", y pregunta si quiere retirarlo, con primary_request.goal_id=fulfillment. Si incluye instalación, no ofrezcas retiro (la instalación requiere despacho) y usa primary_request null. Si el cliente elige retirar el material en fábrica, registra fulfillment=pickup y sigue la cotización normalmente.';
   const V31_PANDERETA_EXAMPLE_RULE = 'Ejemplo de catalogación por ítem: si el cliente dice "pandereta" y luego, al aclarar, confirma un producto del grounding (por ejemplo Cierros de Hormigón), usa matched con ese grounding_ref exacto para ese ítem; no asumas otro producto similar del catálogo (por ejemplo Adoquín) sin evidencia explícita del cliente.';
   // Slice 3c follow-up (live A/B round 2, design.md's spec: "the system MUST
   // NOT copy one item's quantity or measurements to another item without
@@ -894,6 +896,7 @@ if (usesV3Contract) {
       V31_SUMMARY_ONCE_RULE,
       V31_INTERNAL_DOCUMENTS_RULE,
       V31_COMMUNE_RULE,
+      V31_SERVICE_AREA_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;

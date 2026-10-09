@@ -13,12 +13,18 @@
 // Barnechea). A province or region that is not itself a comuna (for example
 // "Chiloé") resolves to null.
 //
+// `isServiceAreaCommune(text)` (task 3c.34, owner rule 2026-10-09) says whether
+// that comuna is inside the area where Hormiglass delivers and installs: true
+// or false for a recognized comuna, null when the text names no comuna. The
+// area is SERVICE_AREA, by CUT code: whole regions by their two-digit prefix
+// plus single comunas. Extend it there.
+//
 // Wrapped in one IIFE so only the exported names become top-level identifiers
 // when this file is concatenated ahead of other runtimes in an n8n Code node
 // (tests/scripts/sync-workflow-nodes.mjs).
 // =============================================================================
 
-const { CHILE_COMMUNE_NAMES, resolveChileanCommune } = (() => {
+const { CHILE_COMMUNE_NAMES, resolveChileanCommune, isServiceAreaCommune } = (() => {
   const OFFICIAL = [
     "01101:Iquique", "01107:Alto Hospicio", "01401:Pozo Almonte", "01402:Camiña", "01403:Colchane",
     "01404:Huara", "01405:Pica", "02101:Antofagasta", "02102:Mejillones", "02103:Sierra Gorda",
@@ -93,6 +99,13 @@ const { CHILE_COMMUNE_NAMES, resolveChileanCommune } = (() => {
     "16207:Treguaco", "16301:San Carlos", "16302:Coihueco", "16303:Ñiquén", "16304:San Fabián",
     "16305:San Nicolás",
   ];
+  // Owner rule 2026-10-09: every comuna of the Región Metropolitana (region
+  // 13) plus Viña del Mar (05109), Valparaíso (05101), Concepción (08101) and
+  // Rancagua (06101), the single comunas the catalog's applicable_cities name.
+  const SERVICE_AREA = Object.freeze({
+    region_codes: Object.freeze(['13']),
+    commune_codes: Object.freeze(['05109', '05101', '08101', '06101']),
+  });
   const names = OFFICIAL.map((entry) => entry.slice(entry.indexOf(':') + 1));
   const fold = (value) => String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -128,9 +141,19 @@ const { CHILE_COMMUNE_NAMES, resolveChileanCommune } = (() => {
     }
     return null;
   };
-  return { CHILE_COMMUNE_NAMES: Object.freeze(names), resolveChileanCommune };
+  const codeByName = new Map(OFFICIAL.map((entry) => [entry.slice(entry.indexOf(':') + 1), entry.slice(0, entry.indexOf(':'))]));
+  const isServiceAreaCommune = (value) => {
+    const name = resolveChileanCommune(value);
+    if (!name) return null;
+    const code = codeByName.get(name);
+    return SERVICE_AREA.region_codes.includes(code.slice(0, 2)) || SERVICE_AREA.commune_codes.includes(code);
+  };
+  isServiceAreaCommune.SERVICE_AREA = SERVICE_AREA;
+  return { CHILE_COMMUNE_NAMES: Object.freeze(names), resolveChileanCommune, isServiceAreaCommune };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { CHILE_COMMUNE_NAMES, resolveChileanCommune };
+  module.exports = {
+    CHILE_COMMUNE_NAMES, resolveChileanCommune, isServiceAreaCommune, SERVICE_AREA: isServiceAreaCommune.SERVICE_AREA,
+  };
 }

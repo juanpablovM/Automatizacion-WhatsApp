@@ -1017,6 +1017,50 @@ const resolveChileanCommuneV31 = (() => {
     return null;
   }
 })();
+// Task 3c.34 (owner rule 2026-10-09): Hormiglass delivers and installs only
+// in the Región Metropolitana, Viña del Mar, Valparaíso, Concepción and
+// Rancagua (shared/chile-communes.js
+// SERVICE_AREA); material-only factory pickup is accepted from anywhere.
+const isServiceAreaCommuneV31 = (() => {
+  if (typeof isServiceAreaCommune === 'function') return isServiceAreaCommune;
+  if (typeof require !== 'function') return null;
+  try {
+    return require('./chile-communes.js').isServiceAreaCommune;
+  } catch (_error) {
+    return null;
+  }
+})();
+const SERVICE_AREA_CONTINUATION_GOALS_V31 = new Set([
+  'address', 'terrain', 'truck_access', 'debris_removal', 'access_restrictions', FINAL_CONFIRMATION_GOAL,
+]);
+// The recognized comuna outside the service area that this quote's delivery
+// or installation targets, or null (inside the area, no delivery/installation,
+// or a text that names no comuna: commune_not_recognized handles that).
+const outOfServiceAreaCommuneV31 = (policy, observations, serviceScope, fulfillment) => {
+  if (!isServiceAreaCommuneV31 || !resolveChileanCommuneV31) return null;
+  if (!['installation', 'both'].includes(serviceScope) && fulfillment !== 'delivery') return null;
+  const observed = [...observations].reverse().find((entry) => CONCEPT_TO_FIELD[entry.concept] === 'commune');
+  const candidates = observed
+    ? [normalizedComparable(observed.normalized_value), observed.evidence_quote]
+    : [projectedValueFor(policy, [], 'commune')];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? '');
+    const inArea = isServiceAreaCommuneV31(text);
+    if (inArea === true) return null;
+    if (inArea === false) return resolveChileanCommuneV31(text);
+  }
+  return null;
+};
+const SERVICE_AREA_LIMIT_REPLY_V31 = 'Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.';
+const SERVICE_AREA_PICKUP_REPLY_V31 = 'Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.';
+const serviceAreaUnsupportedInstructionV31 = (commune, includesInstallation) => [
+  `Hormiglass delivers and installs only in the Región Metropolitana and the comunas of Viña del Mar, Valparaíso, Concepción and Rancagua, and ${commune} is outside that area.`,
+  'Do not continue this quote: do not ask for the address, terrain, truck access, debris removal, access restrictions or final confirmation, and do not request create_lead.',
+  `Tell the customer kindly: "${SERVICE_AREA_LIMIT_REPLY_V31}"`,
+  includesInstallation
+    ? 'Installation requires delivery, so it has no pickup alternative: Do not offer factory pickup with installation. Use primary_request null. If the customer later asks for material only, it can be picked up at the factory and the quote continues.'
+    : `Then offer factory pickup: "${SERVICE_AREA_PICKUP_REPLY_V31}", asking whether they want to pick up the material, with primary_request {"goal_id": "fulfillment", "item_ref": null} (or null). If the customer chooses pickup, record fulfillment=pickup and the quote continues normally.`,
+].join(' ');
 const communeNotRecognizedInstructionV31 = (value) => `"${value}" is not one of Chile's comunas (it may be a province, a region, a sector or a typo). Do not record it: drop this commune observation and its state_mutation, and ask in which comuna the project or delivery is, kindly (for example "¿En qué comuna de Chiloé sería? Por ejemplo, Castro o Ancud.") with primary_request {"goal_id": "commune", "item_ref": null}.`;
 // Task 3c.33 (M6): the full summary already sent in the previous assistant
 // message is not resent while nothing changes, unless the customer asks for it.
@@ -1666,8 +1710,24 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   const persistedConflictClarification = isPersistedInstallationConflictClarification(
     policy, candidateObservations, candidateMutations, proposalObject, primaryRequestValid,
   );
+  // Task 3c.34: an out-of-area delivery/installation quote does not continue;
+  // a material-only one may ask fulfillment again to offer factory pickup.
+  const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
+  const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
+  const outOfAreaCommune = outOfServiceAreaCommuneV31(policy, candidateObservations, serviceScope, fulfillment);
+  const outOfAreaIncludesInstallation = ['installation', 'both'].includes(serviceScope);
+  const outOfAreaPickupOffer = Boolean(outOfAreaCommune) && !outOfAreaIncludesInstallation
+    && primaryRequestValid && primaryRequest?.goal_id === 'fulfillment' && primaryRequest.item_ref === null;
+  const serviceAreaError = (path) => validationError(
+    'service_area_unsupported', path, ['commune', outOfAreaIncludesInstallation ? 'service_scope' : 'fulfillment'],
+    outOfAreaIncludesInstallation ? [] : ['fulfillment'],
+    serviceAreaUnsupportedInstructionV31(outOfAreaCommune, outOfAreaIncludesInstallation),
+  );
+  if (outOfAreaCommune && primaryRequestValid && SERVICE_AREA_CONTINUATION_GOALS_V31.has(primaryRequest?.goal_id)) {
+    errors.push(serviceAreaError('primary_request.goal_id'));
+  }
   if (primaryRequestValid && primaryRequest !== null && primaryRequest.item_ref === null
-      && resolvedGoalIds.has(primaryRequest.goal_id) && !persistedConflictClarification) {
+      && resolvedGoalIds.has(primaryRequest.goal_id) && !persistedConflictClarification && !outOfAreaPickupOffer) {
     errors.push(validationError(
       'primary_request_goal_resolved', 'primary_request.goal_id', [primaryRequest.goal_id], allowedNextGoalIds,
       'Remove the request or ask for one of the allowed unresolved goals.',
@@ -1687,8 +1747,6 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   // primary_request_goal_inapplicable (design.md D11): both are quote-level
   // (service_scope/fulfillment are quote-level facts, never item-scoped).
   const requestedGoal = primaryRequestValid ? primaryRequest?.goal_id : null;
-  const serviceScope = projectedValueFor(policy, candidateObservations, 'service_scope');
-  const fulfillment = projectedValueFor(policy, candidateObservations, 'fulfillment');
   const installationDeliveryError = installationRequiresDeliveryError(policy, serviceScope, fulfillment);
   if (installationDeliveryError && !persistedConflictClarification) errors.push(installationDeliveryError);
   const normalizedReplyText = replyTextWithoutWhatsAppFormatting(proposalObject.reply_text)
@@ -1806,6 +1864,10 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     const unknownObservation = effect.reason_observation_ids.find((id) => !observationsById.has(id));
     if (unknownObservation) {
       errors.push(validationError('effect_observation_unknown', `${path}.reason_observation_ids`, [unknownObservation]));
+      continue;
+    }
+    if (effect.type === 'create_lead' && outOfAreaCommune) {
+      errors.push(serviceAreaError(path));
       continue;
     }
     const configuredGoalIds = requirements.get(effect.type)?.required_goal_ids || [];

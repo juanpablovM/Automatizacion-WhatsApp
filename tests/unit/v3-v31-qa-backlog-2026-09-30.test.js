@@ -258,7 +258,12 @@ describe('L2: the commune must be an official Chilean comuna', () => {
     expect(validation.errors[0].instruction).toContain('"goal_id": "commune", "item_ref": null');
   });
 
-  test.each(['Puente alto', 'Ñuñoa', 'Chicureo', 'Castro'])('%s is accepted', (value) => {
+  test.each(['Puente alto', 'Ñuñoa', 'Chicureo'])('%s is accepted', (value) => {
     expect(codes(withCommune(value, value))).toEqual([]);
+  });
+
+  // Task 3c.34: Castro is a comuna, but outside the delivery area.
+  test('Castro is a recognized comuna (outside the delivery area)', () => {
+    expect(codes(withCommune('Castro', 'Castro'))).toEqual(['service_area_unsupported']);
   });
 });

@@ -58,6 +58,12 @@ describe('v3.1 prompt rules (task 3c.33)', () => {
   test('L2: the commune is an official Chilean comuna', () => {
     expect(v31()).toContain('una de las 346 comunas de Chile');
   });
+
+  test('3c.34: deliveries and installations only in the service area', () => {
+    expect(v31()).toContain('Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.');
+    expect(v31()).toContain('Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.');
+    expect(v3()).not.toContain('Región Metropolitana');
+  });
 });
 
 describe('v3.1 schema carries the item variant (task 3c.33, M1)', () => {

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { CHILE_COMMUNE_NAMES, resolveChileanCommune } = require('../fixtures/workflow-nodes/shared/chile-communes.js');
+const { CHILE_COMMUNE_NAMES, resolveChileanCommune, isServiceAreaCommune, SERVICE_AREA } = require('../fixtures/workflow-nodes/shared/chile-communes.js');
 
 // Task 3c.33 (L2, live 2026-09-30 conversation 392: "Chiloe" was accepted as
 // the commune). The official list is public SUBDERE data (CUT codes).
@@ -34,6 +34,30 @@ describe('official Chilean communes', () => {
   });
 });
 
+// Task 3c.34 (owner rule 2026-10-09): deliveries and installations only in the
+// Región Metropolitana (CUT region 13) plus Viña del Mar (05109), Valparaíso
+// (05101), Concepción (08101) and Rancagua (06101).
+describe('service area', () => {
+  test('is derived from CUT codes: region 13 plus four single comunas', () => {
+    expect(SERVICE_AREA).toEqual({ region_codes: ['13'], commune_codes: ['05109', '05101', '08101', '06101'] });
+    const inArea = CHILE_COMMUNE_NAMES.filter((name) => isServiceAreaCommune(name));
+    expect(inArea).toHaveLength(56);
+    expect(inArea).toEqual(expect.arrayContaining(['Santiago', 'Maipú', 'Puente Alto', 'Colina', 'San Bernardo', 'Melipilla', 'Peñaflor', 'Viña del Mar', 'Valparaíso', 'Concepción', 'Rancagua']));
+  });
+
+  test.each(['Maipú', 'puente alto', 'Chicureo', 'La Dehesa', 'Til Til', 'Viña del Mar', 'Reñaca', 'Viña', 'Valparaiso', 'Concepcion', 'Rancagua'])('%s is inside', (text) => {
+    expect(isServiceAreaCommune(text)).toBe(true);
+  });
+
+  test.each(['Concón', 'Quilpué', 'Talcahuano', 'Machalí', 'Talca', 'Castro', 'Temuco', 'San Antonio'])('%s is outside', (text) => {
+    expect(isServiceAreaCommune(text)).toBe(false);
+  });
+
+  test.each(['Chiloé', 'Región Metropolitana', '', null])('%s is not a comuna, so it is unknown', (text) => {
+    expect(isServiceAreaCommune(text)).toBeNull();
+  });
+});
+
 describe('every deployed node that validates communes carries the official list', () => {
   test.each([
     ['n8n/workflows/wa-conversation-orchestrator.json', 'Compile V3 Turn Policy'],
@@ -44,6 +68,6 @@ describe('every deployed node that validates communes carries the official list'
   ])('%s :: %s', (workflowPath, nodeName) => {
     const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
     const source = workflow.nodes.find((node) => node.name === nodeName).parameters.jsCode;
-    expect(source).toContain('const { CHILE_COMMUNE_NAMES, resolveChileanCommune } = (() => {');
+    expect(source).toContain('const { CHILE_COMMUNE_NAMES, resolveChileanCommune, isServiceAreaCommune } = (() => {');
   });
 });
