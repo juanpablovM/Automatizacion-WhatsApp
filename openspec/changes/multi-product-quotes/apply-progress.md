@@ -1392,3 +1392,32 @@ Updated expectations (deliberate behavior changes): single-item requirement stri
 | Owner decisions (safe defaults taken) | (1) Commune aliases: Chicureo → Colina, La Dehesa → Lo Barnechea, Reñaca/Viña → Viña del Mar, Santiago Centro → Santiago, plus official alternative spellings; any other locality is asked. (2) Variant required for every product whose sheet lists 2+ variants (Pigmentos, Granos, Bordes de Piscina included). (3) Commercial additions are recorded for human review, not merged into the lead/ClickUp (same limit as corrections). (4) An unrecognized measurement-visit commune is kept as `location_note` after one retry. |
 | Not done | No commit, push, deploy, live SQL apply or WhatsApp send. |
 
+## Task 3c.34 — Delivery and installation service area (owner rule 2026-10-09)
+
+Owner rule: Hormiglass delivers and installs only in the Región Metropolitana (all its comunas) and in the comunas of Viña del Mar, Valparaíso, Concepción and Rancagua (the single comunas the catalog's `applicable_cities` name; the owner confirmed the list on 2026-10-09). Material-only factory pickup (San Bernardo) is accepted from anywhere. v3.1 only.
+
+| Piece | Change |
+|---|---|
+| Allowed area | `shared/chile-communes.js`: `SERVICE_AREA = { region_codes: ['13'], commune_codes: ['05109', '05101', '08101', '06101'] }`, matched by SUBDERE CUT code (52 RM comunas + 4 = 56). `isServiceAreaCommune(text)` resolves the text (aliases included: Reñaca/Viña, Chicureo, La Dehesa) and returns true/false, or null when it names no comuna. |
+| Validator | `validateV3AiProposalV31`: `outOfServiceAreaCommuneV31` projects service_scope, fulfillment and commune (this proposal's accepted observations over policy facts). When service_scope is installation/both or fulfillment is delivery, and the comuna is recognized and outside the area, a primary_request for address, terrain, truck_access, debris_removal, access_restrictions or final_confirmation, or a create_lead effect, is `service_area_unsupported` (repairable). Material only: allowed_values `['fulfillment']`, and asking the already resolved fulfillment again is exempt from `primary_request_goal_resolved` so the pickup offer can be asked. Installation: allowed_values `[]`, primary_request null, no pickup offer. Switching to pickup in the same or a later turn clears the block. |
+| Instruction | Names the comuna, forbids continuing the quote, gives the copy "Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*." and, for material only, "Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo." with primary_request fulfillment (or null); for installation, "Do not offer factory pickup with installation" and primary_request null. |
+| Prompt | New `V31_SERVICE_AREA_RULE` right after `V31_COMMUNE_RULE` (Spanish, same copy). The v3 prompt is unchanged. |
+| Workflows | `node tests/scripts/sync-workflow-nodes.mjs` regenerated the orchestrator, AI assistant and shadow evaluator nodes. |
+
+### TDD Cycle Evidence
+
+| Test file | RED | GREEN |
+|---|---|---|
+| `tests/unit/v3-v31-service-area-2026-10-09.test.js` (new) | 14 failed | 35/35 |
+| `tests/unit/chile-communes.test.js` service-area cases + node wiring | failed (no export) | 46/46 |
+| `tests/unit/build-ai-request-v31-qa-2026-09-30.test.js` 3c.34 case | failed | pass |
+| `tests/unit/v3-v31-qa-backlog-2026-09-30.test.js` L2 Castro case | — (deliberate update: Castro with delivery is now `service_area_unsupported`) | pass |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Full checks | `npm test` 104 files passed, 25 skipped; 1617 passed, 214 skipped; `npm run check:parity` pass; `npm run check:sql-references` 0 errors, 0 warnings. No SQL changed, so the Postgres suite was not run. |
+| Catalog data (not changed) | `db/seeds/006_catalogo_hormiglass.sql` / `007_…actualizacion.sql` `applicable_cities` are per product and differ from the area: most list Santiago, Valparaiso, Vina del Mar, Concepcion, Rancagua; some omit Rancagua or Concepcion; one service lists Temuco, La Serena and Antofagasta too. They only weigh catalog ranking in `ai-sales-advisor/01_load_commercial_context.sql`; the validator area does not read them. |
+| Not done | No commit, push, deploy, live SQL apply or WhatsApp send. |
+
