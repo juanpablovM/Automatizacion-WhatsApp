@@ -81,3 +81,28 @@ describe('v3.1 request — opener guidance', () => {
     expect(system).not.toContain('opener_guidance');
   });
 });
+
+// Live conversation 459 (2026-10-10): the customer said the cierro was "de 3
+// placas" (its height) and asked "¿qué medidas tienen?". The bot read it as a
+// quantity and deferred to an executive: the cierro sheet has no plate size.
+describe('v3.1 prompt — cierro height given in plates', () => {
+  const { system } = v31([]);
+
+  test('states the cierro plate size and computes the height from the plate count', () => {
+    expect(system).toContain('Un cierro de hormigón se arma apilando placas de 2 m de largo');
+    expect(system).toContain('las placas lisas miden 50 cm o 60 cm de alto');
+    expect(system).toContain('"3 placas" es la altura del cierro, no una cantidad');
+    expect(system).toContain('3 placas de 50 cm son 1,50 m y 3 placas de 60 cm son 1,80 m');
+  });
+
+  test('asks which plate height before recording the height, and keeps plate products as quantities', () => {
+    expect(system).toContain('pregúntale con amabilidad cuál prefiere, como una elección y no como un dato que debería saber');
+    // Live 2026-10-13: given only an example, the model shortened it to
+    // "¿Cuál altura de placa prefieres?"; the owner wants the exact wording.
+    expect(system).toContain('cierra con esta pregunta exacta, sola en su línea: "¿Prefieres placas de 50 cm o de 60 cm?"');
+    expect(system).toContain('nunca la reformules como "¿Cuál altura de placa prefieres?" ni "¿De qué altura son tus placas?"');
+    expect(system).not.toContain('pregúntale si sus placas son de 50 o de 60 cm');
+    expect(system).toContain('registra measurements solo cuando el cliente confirma la altura de la placa o la altura total');
+    expect(system).toContain('Si el producto es una placa (por ejemplo Placas de 50 cm), el número de placas sí es su cantidad');
+  });
+});
