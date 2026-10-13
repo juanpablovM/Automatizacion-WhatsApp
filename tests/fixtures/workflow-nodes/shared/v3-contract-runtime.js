@@ -1051,14 +1051,16 @@ const outOfServiceAreaCommuneV31 = (policy, observations, serviceScope, fulfillm
   }
   return null;
 };
-const SERVICE_AREA_LIMIT_REPLY_V31 = 'Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.';
+// Conversation 444: the "no" carries brief empathy and the real alternative.
+const serviceAreaLimitReplyV31 = (commune) => `Lamentablemente por ahora no alcanzamos a llegar a *${commune}*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.`;
 const SERVICE_AREA_PICKUP_REPLY_V31 = 'Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.';
+const SERVICE_AREA_MATERIAL_ONLY_REPLY_V31 = 'Si te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo.';
 const serviceAreaUnsupportedInstructionV31 = (commune, includesInstallation) => [
   `Hormiglass delivers and installs only in the Región Metropolitana and the comunas of Viña del Mar, Valparaíso, Concepción and Rancagua, and ${commune} is outside that area.`,
   'Do not continue this quote: do not ask for the address, terrain, truck access, debris removal, access restrictions or final confirmation, and do not request create_lead.',
-  `Tell the customer kindly: "${SERVICE_AREA_LIMIT_REPLY_V31}"`,
+  `Tell the customer with brief empathy: "${serviceAreaLimitReplyV31(commune)}"`,
   includesInstallation
-    ? 'Installation requires delivery, so it has no pickup alternative: Do not offer factory pickup with installation. Use primary_request null. If the customer later asks for material only, it can be picked up at the factory and the quote continues.'
+    ? `Installation requires delivery: Do not offer factory pickup with installation. Offer the real alternative as a statement, without a question: "${SERVICE_AREA_MATERIAL_ONLY_REPLY_V31}" Use primary_request null. If the customer accepts the material only, record service_scope=material and fulfillment=pickup and the quote continues.`
     : `Then offer factory pickup: "${SERVICE_AREA_PICKUP_REPLY_V31}", asking whether they want to pick up the material, with primary_request {"goal_id": "fulfillment", "item_ref": null} (or null). If the customer chooses pickup, record fulfillment=pickup and the quote continues normally.`,
 ].join(' ');
 const communeNotRecognizedInstructionV31 = (value) => `"${value}" is not one of Chile's comunas (it may be a province, a region, a sector or a typo). Do not record it: drop this commune observation and its state_mutation, and ask in which comuna the project or delivery is, kindly (for example "¿En qué comuna de Chiloé sería? Por ejemplo, Castro o Ancud.") with primary_request {"goal_id": "commune", "item_ref": null}.`;

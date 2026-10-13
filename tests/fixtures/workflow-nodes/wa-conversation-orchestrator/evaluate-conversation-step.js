@@ -67,16 +67,16 @@ const COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS = 1;
 
 // Task 3c.22: fixed customer copy follows the WhatsApp presentation (short
 // paragraphs, *bold* key words, emojis only from 👋 👉 ✅ 👍 📋).
-const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.';
-const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud sigue registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.';
-const COMMERCIAL_REVIEW_CORRECTION_PROMPT = 'Claro. ¿Qué dato de tu solicitud quieres corregir?';
-const COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY = 'Gracias. Registré tu corrección para que el equipo comercial la revise junto con tu solicitud.';
+const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está en manos de una persona de nuestro equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud está registrada ✅ y nuestro equipo comercial la está revisando.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_CORRECTION_PROMPT = '¡Claro! Cuéntame qué dato de tu solicitud quieres corregir.';
+const COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY = 'Muchas gracias. Tu corrección quedó registrada y el equipo comercial la revisará junto con tu solicitud 👍';
 const COMMERCIAL_REVIEW_CORRECTION_KEY = 'commercial_review_correction';
 // Task 3c.33 (M4): "se me olvidó agregar algo" on a registered quote is an
 // addition to that same request, recorded like a correction.
 const COMMERCIAL_REVIEW_ADDITION_KEY = 'commercial_review_addition';
-const COMMERCIAL_REVIEW_ADDITION_PROMPT = 'Claro 👍\n\n¿Qué quieres agregar a tu solicitud?';
-const COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY = 'Gracias. Registré lo que quieres agregar para que el equipo comercial lo revise junto con tu solicitud.';
+const COMMERCIAL_REVIEW_ADDITION_PROMPT = '¡Claro! 👍\n\nCuéntame qué te gustaría agregar a tu solicitud.';
+const COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY = 'Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍';
 // Task 3c.33 (M5): measurement assistance collects the project location
 // (commune, then street and number) before the handoff.
 const MEASUREMENT_VISIT_COMMUNE_KEY = 'measurement_visit_commune';

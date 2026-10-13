@@ -17,8 +17,11 @@ const { validateV3AiProposal, V3_CONTRACTS } = require('../fixtures/workflow-nod
 // -----------------------------------------------------------------------------
 
 const GROUNDING = Object.freeze({ catalog: [{ ref: 'product:cemento', concept: 'product', value: 'Cemento' }] });
-const LIMIT_REPLY = 'Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.\n\nSi te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.\n\n¿Te acomoda retirarlo?';
-const INSTALLATION_LIMIT_REPLY = 'Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.\n\nLamentablemente no podemos instalar en tu comuna.';
+const LIMIT_REPLY = 'Lamentablemente por ahora no alcanzamos a llegar a *Temuco*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.\n\nSi te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.\n\n¿Te acomoda retirarlo?';
+// Conversation 444: the installation "no" offers the real alternative (the
+// material alone, picked up at the factory) without a pickup-with-installation.
+const INSTALLATION_LIMIT_REPLY = 'Lamentablemente por ahora no alcanzamos a llegar a *Temuco*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.\n\nSi te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo.';
+const LIMIT_INSTRUCTION = (commune) => `Lamentablemente por ahora no alcanzamos a llegar a *${commune}*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.`;
 const ADDRESS_REPLY = 'Anoto la comuna.\n\n¿Cuál es la calle y el número?';
 
 const item = () => ({
@@ -76,9 +79,8 @@ describe('outside the service area a delivery or installation quote does not con
     const [error] = validation.errors;
     expect(error.disposition).toBe('repairable');
     expect(error.path).toBe('primary_request.goal_id');
-    expect(error.instruction).toContain('Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.');
+    expect(error.instruction).toContain(LIMIT_INSTRUCTION(commune));
     expect(error.instruction).toContain('Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.');
-    expect(error.instruction).toContain(commune);
     expect(error.allowed_values).toEqual(['fulfillment']);
   });
 
@@ -86,9 +88,11 @@ describe('outside the service area a delivery or installation quote does not con
     const validation = communeThisTurn(scope, 'Talca');
     expect(codes(validation)).toEqual(['service_area_unsupported']);
     const [error] = validation.errors;
-    expect(error.instruction).toContain('Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.');
+    expect(error.instruction).toContain(LIMIT_INSTRUCTION('Talca'));
     expect(error.instruction).not.toContain('Si te sirve, puedes retirar el material');
-    expect(error.instruction).toContain('Do not offer factory pickup');
+    expect(error.instruction).toContain('Do not offer factory pickup with installation');
+    expect(error.instruction).toContain('Si te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo.');
+    expect(error.instruction).toContain('Use primary_request null');
     expect(error.allowed_values).toEqual([]);
   });
 

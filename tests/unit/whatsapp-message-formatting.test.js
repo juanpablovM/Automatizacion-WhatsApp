@@ -106,6 +106,94 @@ describe('v3.1 prompt — WhatsApp presentation rules (task 3c.22)', () => {
   test('keeps the multi-item "•" rule the harness relies on', () => {
     expect(v31Prompt).toContain('resume con una línea "•" por ítem indicando su cantidad');
   });
+
+  test('the 👉 before the question is optional, never in every message', () => {
+    expect(v31Prompt).toContain('puedes anteponerle "👉 " de vez en cuando, pero no en todos los mensajes');
+    expect(v31Prompt).toContain('👉 opcional antes de la pregunta');
+    expect(v31Prompt).not.toContain('👉 antes de la pregunta,');
+  });
+});
+
+// Live production, conversation 393: nearly every reply opened "Gracias,
+// Felipe. Anoto *190 metros* de soleras y solerillas." — same opener, the
+// customer's name every turn, recorded data echoed every turn and 👉 on every
+// question. Conversation 444: an out-of-area installation got a bare "no".
+// v3.1 asks for a softer, varied voice without longer messages or looser rules.
+describe('v3.1 prompt — conversational tone (conversations 393 and 444)', () => {
+  const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+  const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+  test('varies the opening and never starts consecutive replies with the same word', () => {
+    expect(v31Prompt).toContain('Varía cómo abres cada respuesta');
+    expect(v31Prompt).toContain('no empieces dos respuestas seguidas con la misma palabra');
+    // The opener list moved to opener_guidance: inline examples got copied.
+    expect(v31Prompt).not.toContain('"Muy bien", "Excelente", "Entiendo"');
+    expect(v31Prompt).not.toContain('Varía tus aperturas');
+  });
+
+  test('does not echo data recorded in earlier turns, except in the final summary', () => {
+    expect(v31Prompt).toContain('No vuelvas a enumerar datos que ya quedaron registrados en turnos anteriores');
+    expect(v31Prompt).toContain('menciona un dato solo cuando es nuevo en este turno');
+    expect(v31Prompt).toContain('el resumen de final_confirmation es la excepción');
+    expect(v31Prompt).not.toContain('usando sus propios datos');
+    expect(v31Prompt).toContain('Cada reply_text sigue este ritmo: primero reconoce con calidez lo que el cliente acaba de decir; luego');
+  });
+
+  test('uses the customer name only now and then', () => {
+    expect(v31Prompt).toContain('como máximo una vez cada tres o cuatro respuestas');
+  });
+
+  test('softens a "no" with empathy, the real alternative and, when it applies, a question', () => {
+    expect(v31Prompt).toContain('Cuando la respuesta es un "no"');
+    expect(v31Prompt).toContain('"Lamentablemente…"');
+    expect(v31Prompt).toContain('"Por ahora no alcanzamos a llegar a…"');
+    expect(v31Prompt).toContain('la alternativa real que sí existe');
+    expect(v31Prompt).toContain('Nunca ofrezcas una alternativa que las reglas no permiten');
+  });
+
+  test('keeps the length and question limits and the business rules', () => {
+    expect(v31Prompt).toContain('sigue en una a tres frases y con una sola pregunta');
+    expect(v31Prompt).toContain('El tono nunca relaja las reglas que siguen: no inventes precios, stock, plazos ni descuentos');
+  });
+
+  test('is v3.1 only: the retired v3 prompt keeps its own lines', () => {
+    expect(v3Prompt).toContain('Varía tus aperturas');
+    expect(v3Prompt).not.toContain('Varía cómo abres cada respuesta');
+  });
+});
+
+// Live QA 2026-10-10 after the tone change: 8 of 11 consecutive replies opened
+// with "Perfecto", the full variant list was repeated every turn while the
+// customer answered other things, a first-message complaint still got the
+// welcome, and the welcome was a long fixed boilerplate.
+describe('v3.1 prompt — tone refinements (live QA 2026-10-10)', () => {
+  const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+
+  test('allows replies that open straight with the new content and drops the "Perfecto" seeds', () => {
+    expect(v31Prompt).toContain('muchas veces es mejor ir directo a lo nuevo, sin palabra de apertura');
+    expect(v31Prompt).not.toContain('"Perfecto, con eso avanzamos"');
+    expect(v31Prompt).not.toContain('¡Perfecto! Quedan 500 metros para cada alambre.');
+    expect(v31Prompt).toContain('¡Muy bien! Quedan 500 metros para cada alambre.');
+  });
+
+  // Owner feedback 2026-10-10: "¡Ya!", "Dale" and "Anoto" sound too casual;
+  // the voice must stay kind without losing formality.
+  test('keeps a cordial, professional register without slang openers', () => {
+    expect(v31Prompt).toContain('Mantén un tono cordial y profesional, como un asesor de una empresa seria');
+    expect(v31Prompt).toContain('evita expresiones coloquiales como "Ya", "Dale", "Buenísimo", "Listo", "Anoto", "Consideraré" o "Bacán"');
+    for (const slang of ['"Dale, con eso avanzamos"', '"¡Buenísimo!"', '¡Listo! Quedan', 'te acomoda']) {
+      expect(v31Prompt).not.toContain(slang);
+    }
+  });
+
+  test('does not repeat the full variant list when it was already listed', () => {
+    expect(v31Prompt).toContain('Si ya nombraste todas las opciones de variante en tu mensaje anterior, no repitas la lista completa');
+  });
+
+  test('keeps the welcome short and skips it for a complaint', () => {
+    expect(v31Prompt).toContain('"¡Hola! 👋 Te damos la bienvenida a *Hormiglass*, soy Hormi Atención."');
+    expect(v31Prompt).toContain('Si el primer mensaje del cliente es un reclamo o muestra molestia, no le des la bienvenida');
+  });
 });
 
 describe('v3.1 validator — formatted replies keep every guardrail (task 3c.22)', () => {
@@ -285,14 +373,14 @@ describe('fixed messages — WhatsApp presentation (task 3c.22)', () => {
 
   test('escalation already required', () => {
     const out = evaluate('Hola?', { conversation_status_code: 'escalation_required', escalation_reason: 'human_requested' });
-    expect(out.deterministic_reply).toBe('Tu solicitud ya está derivada a una persona del equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.');
+    expect(out.deterministic_reply).toBe('Tu solicitud ya está en manos de una persona de nuestro equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.');
     expectWhatsAppStyle(out.deterministic_reply);
   });
 
   test('commercial review pending', () => {
     const out = evaluate('Gracias', { conversation_status_code: 'handed_to_sales', lead_id: 90 });
     expect(out.response_kind).toBe('commercial_review_pending');
-    expect(out.deterministic_reply).toBe('Tu solicitud sigue registrada ✅\n\nEstá pendiente de revisión por el equipo comercial.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.');
+    expect(out.deterministic_reply).toBe('Tu solicitud está registrada ✅ y nuestro equipo comercial la está revisando.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.');
     expectWhatsAppStyle(out.deterministic_reply);
   });
 
@@ -371,6 +459,19 @@ describe('fixed messages — WhatsApp presentation (task 3c.22)', () => {
   test('follow-up templates without a contact name greet cleanly', () => {
     expect(followUpModule.fillTemplate(followUpModule.MESSAGES.cotizacion_lead[7], null))
       .toBe('Hola 👋\n\nTe recordamos que tu cotización sigue vigente.\n\n👉 ¿Quieres que la retomemos hoy?');
+  });
+
+  // The day-1 nudge read like a form ("Queríamos retomar la consulta que nos
+  // dejaste. 👉 ¿Sigues necesitando algo?"); it now asks about the project.
+  test('the day-1 follow-up asks warmly about the project', () => {
+    expect(followUpModule.fillTemplate(followUpModule.MESSAGES.lead_sin_respuesta[1], null))
+      .toBe('Hola 👋\n\nQuería saber cómo vas con tu proyecto.\n\n¿Te puedo ayudar a seguir con tu cotización?');
+    const templates = [...allFollowUps(followUpModule.MESSAGES), ...allFollowUps(followUpModule.FALLBACK_MESSAGES)];
+    for (const template of templates) {
+      expect(template).not.toContain('Queríamos retomar');
+      expect(template).not.toContain('¿Sigues necesitando algo?');
+      expect(template).not.toContain('interesado');
+    }
   });
 
   test('the follow-up policy library carries the same templates as the scheduler node', () => {

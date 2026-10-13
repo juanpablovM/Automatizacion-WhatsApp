@@ -1186,7 +1186,7 @@ const selectResponseText = () => {
   // for this turn; advisor guardrails must not overwrite their visible question.
   if (isEscalation) {
     if (deterministic.response_kind === 'escalation_already_required') {
-      return { text: deterministic.deterministic_reply || 'Tu solicitud ya está derivada a una persona del equipo.', kind: 'escalation_already_required' };
+      return { text: deterministic.deterministic_reply || 'Tu solicitud ya está en manos de una persona de nuestro equipo.', kind: 'escalation_already_required' };
     }
     return {
       text: escalationRoutingText(),

@@ -44,7 +44,7 @@ describe('commercial review continuity', () => {
     expect(out.reset_conversation_lead).toBe(false);
     expect(out.should_create_lead).toBe(false);
     expect(out.should_escalate).toBe(false);
-    expect(out.response_text).toContain('pendiente de revisión');
+    expect(out.response_text).toContain('nuestro equipo comercial la está revisando');
     const request = run('ai-lead-qualification-assistant/build-ai-request.js', evaluated);
     expect(request.ai_skipped).toBe(true);
     const opportunity = run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', out);
@@ -93,7 +93,7 @@ describe('commercial review continuity', () => {
     expect(requested.lead_id).toBe(200);
     expect(requested.reset_conversation_lead).toBe(false);
     expect(requested.pending_question_key).toBe('commercial_review_correction');
-    expect(requested.deterministic_reply).toBe('Claro. ¿Qué dato de tu solicitud quieres corregir?');
+    expect(requested.deterministic_reply).toBe('¡Claro! Cuéntame qué dato de tu solicitud quieres corregir.');
     expect(requested.v3_control_only).toBe(true);
     expect(requested.should_create_lead).toBe(false);
     expect(requested.should_escalate).toBe(false);
@@ -111,7 +111,7 @@ describe('commercial review continuity', () => {
     expect(detail.v3_control_only).toBe(true);
     expect(detail.should_create_lead).toBe(false);
     expect(detail.should_escalate).toBe(false);
-    expect(detail.deterministic_reply).toBe('Gracias. Registré tu corrección para que el equipo comercial la revise junto con tu solicitud.');
+    expect(detail.deterministic_reply).toBe('Muchas gracias. Tu corrección quedó registrada y el equipo comercial la revisará junto con tu solicitud 👍');
     expect(detail.deterministic_reply).not.toMatch(/clickup|campo.*actualiz|solicitud.*actualiz/i);
 
     const request = run('ai-lead-qualification-assistant/build-ai-request.js', detail);
@@ -258,7 +258,7 @@ describe('commercial review additions (M4)', () => {
     expect(out.v3_control_only).toBe(true);
     expect(out.response_kind).toBe('commercial_review_pending');
     expect(out.pending_question_key).toBe('commercial_review_addition');
-    expect(out.deterministic_reply).toMatch(/agregar/);
+    expect(out.deterministic_reply).toBe('¡Claro! 👍\n\nCuéntame qué te gustaría agregar a tu solicitud.');
     expect(out.deterministic_reply).not.toMatch(/bienvenid/i);
     const applied = run('wa-conversation-orchestrator/apply-ai-assistance.js', out);
     expect(applied.response_text).toBe(out.deterministic_reply);
@@ -273,7 +273,7 @@ describe('commercial review additions (M4)', () => {
     expect(out.reset_conversation_lead).toBe(false);
     expect(out.pending_question_key).toBeNull();
     expect(out.v3_control_only).toBe(true);
-    expect(out.deterministic_reply).toMatch(/Registré/);
+    expect(out.deterministic_reply).toBe('Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍');
     expect(out.deterministic_reply).not.toMatch(/clickup|actualiz/i);
   });
 
@@ -282,7 +282,7 @@ describe('commercial review additions (M4)', () => {
     expect(out.lead_id).toBe(200);
     expect(out.reset_conversation_lead).toBe(false);
     expect(out.pending_question_key).toBeNull();
-    expect(out.deterministic_reply).toMatch(/Registré/);
+    expect(out.deterministic_reply).toBe('Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍');
   });
 
   test('an explicit new quotation still starts a new request', () => {

@@ -113,7 +113,7 @@ integration('commercial review and address retry through persisted PostgreSQL st
       conversation_status_code: 'handed_to_sales', response_kind: 'commercial_review_pending' });
     expect(current.output.qualification_context).toEqual(context);
     expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', current.output).opportunity_write).toBe(false);
-    expect(current.output.response_text).toContain('pendiente de revisión');
+    expect(current.output.response_text).toContain('nuestro equipo comercial la está revisando');
     await persistTurn(current);
     expect((await client.query('SELECT lead_id FROM conversations WHERE id = $1', [conversationId])).rows[0].lead_id).toBe(leadId);
   });
@@ -160,7 +160,7 @@ integration('commercial review and address retry through persisted PostgreSQL st
       response_kind: 'commercial_review_pending',
       v3_control_only: true,
     });
-    expect(detail.output.response_text).toContain('Registré tu corrección');
+    expect(detail.output.response_text).toContain('Tu corrección quedó registrada');
     expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', detail.output).opportunity_write).toBe(false);
     await persistTurn(detail);
 
@@ -193,7 +193,7 @@ integration('commercial review and address retry through persisted PostgreSQL st
       conversation_id: conversationId, lead_id: leadId, pending_question_key: null,
       reset_conversation_lead: false, should_create_lead: false,
     });
-    expect(detail.output.response_text).toContain('Registré lo que quieres agregar');
+    expect(detail.output.response_text).toContain('Lo que quieres agregar quedó registrado');
     await persistTurn(detail);
     const leads = Number((await client.query(
       'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2', [sourceId, phone],

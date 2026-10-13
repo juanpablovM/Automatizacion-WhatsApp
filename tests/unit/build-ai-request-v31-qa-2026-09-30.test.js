@@ -60,8 +60,13 @@ describe('v3.1 prompt rules (task 3c.33)', () => {
   });
 
   test('3c.34: deliveries and installations only in the service area', () => {
-    expect(v31()).toContain('Por ahora hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.');
+    expect(v31()).toContain('"Lamentablemente por ahora no alcanzamos a llegar a *Temuco*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*."');
     expect(v31()).toContain('Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.');
+    // Conversation 444: an out-of-area installation got a bare "no". Pickup is
+    // never offered with installation, but the material alone can be.
+    expect(v31()).toContain('nunca ofrezcas instalación con retiro');
+    expect(v31()).toContain('"Si te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo."');
+    expect(v31()).toContain('registra service_scope=material y fulfillment=pickup');
     expect(v3()).not.toContain('Región Metropolitana');
   });
 });

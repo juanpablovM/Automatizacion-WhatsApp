@@ -12,17 +12,17 @@
 const MESSAGES = {
   cotizacion_lead: {
     0: 'Hola {{nombre}} 👋\n\nQuedamos a tu disposición por la cotización que consultaste.\n\n👉 ¿Seguimos avanzando?',
-    1: 'Hola {{nombre}} 👋\n\nTe escribimos para saber si quieres seguir avanzando con tu consulta sobre la cotización.',
-    3: 'Hola {{nombre}} 👋\n\nAún no tenemos novedades tuyas. Si ya lo resolviste, avísanos; si no, seguimos a tu disposición.',
+    1: 'Hola {{nombre}} 👋\n\nQuería saber cómo vas con tu proyecto y si quieres seguir avanzando con tu cotización.',
+    3: 'Hola {{nombre}} 👋\n\nAún no tenemos novedades tuyas. Si ya lo resolviste, avísanos; si no, aquí estamos para ayudarte.',
     7: 'Hola {{nombre}} 👋\n\nTe recordamos que tu cotización sigue vigente.\n\n👉 ¿Quieres que la retomemos hoy?',
-    14: 'Hola {{nombre}} 👋\n\nEste es nuestro último recordatorio por este tema. Si sigues necesitando la cotización, escríbenos cuando quieras.',
+    14: 'Hola {{nombre}} 👋\n\nPara no molestarte, este es nuestro último recordatorio. Si necesitas la cotización, escríbenos cuando quieras.',
   },
   lead_sin_respuesta: {
     0: 'Hola {{nombre}} 👋\n\nVimos que nos escribiste antes y nos quedamos con tu consulta.\n\n👉 ¿En qué podemos ayudarte?',
-    1: 'Hola {{nombre}} 👋\n\nQueríamos retomar la consulta que nos dejaste.\n\n👉 ¿Sigues necesitando algo?',
-    3: 'Hola {{nombre}} 👋\n\nTe buscamos por tu consulta anterior. Si ya no te hace falta, avísanos; si sigues interesado, aquí estamos.',
+    1: 'Hola {{nombre}} 👋\n\nQuería saber cómo vas con tu proyecto.\n\n¿Te puedo ayudar a seguir con tu cotización?',
+    3: 'Hola {{nombre}} 👋\n\nSeguimos atentos a tu consulta. Si ya no te hace falta, avísanos; si aún te sirve, aquí estamos para ayudarte.',
     7: 'Hola {{nombre}} 👋\n\nTe volvemos a escribir por tu consulta en *Hormiglass*.\n\n👉 ¿Quieres retomarla?',
-    14: 'Hola {{nombre}} 👋\n\nÚltimo recordatorio por tu consulta en *Hormiglass*. Cuando quieras, seguimos a tu disposición.',
+    14: 'Hola {{nombre}} 👋\n\nPara no molestarte, este es nuestro último recordatorio por tu consulta en *Hormiglass*. Cuando quieras, aquí estamos.',
   },
 };
 
