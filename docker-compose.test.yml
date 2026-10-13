@@ -75,6 +75,9 @@ services:
       AI_PRD_CONTRACT_CANARY_PHONES: ${TEST_AI_PRD_CONTRACT_CANARY_PHONES:-}
       FOLLOW_UP_FIRST_DELAY_HOURS: 24
       OUTBOUND_CLAIM_STALE_SECONDS: 300
+      # The n8n e2e scripts send one message and expect one turn each; a test
+      # that exercises the inbound debounce sets TEST_INBOUND_DEBOUNCE_SECONDS.
+      INBOUND_DEBOUNCE_SECONDS: ${TEST_INBOUND_DEBOUNCE_SECONDS:-0}
     # Reserved 55xxx range; production publishes N8N_PORT (5678) on the host.
     ports:
       - "${TEST_N8N_PORT:-55678}:5678"

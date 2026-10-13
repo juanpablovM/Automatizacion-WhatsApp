@@ -334,8 +334,17 @@ function evaluateConversationStep(row) {
   const messageType = row.message_type || 'unknown';
   const rawText = String(row.text_body || '').trim();
   const normalizedText = normalizeText(rawText);
-  const isGreetingOnly = greetingOnly.includes(normalizedText)
-    || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(normalizedText);
+  // A debounced turn joins the customer's burst with "\n" in arrival order
+  // (inbound debounce, claim SQL). Whole-message matchers see each line too:
+  // a command that acts (human, new request, status inquiry) counts when any
+  // line says it; an answer that closes a question (greeting, confirmation,
+  // rejection, courtesy) counts only when every line says it.
+  const burstLines = rawText.split(/\n+/).map(normalizeText).filter(Boolean);
+  const anyBurstLine = (predicate) => burstLines.length > 1 && burstLines.some(predicate);
+  const everyBurstLine = (predicate) => burstLines.length > 1 && burstLines.every(predicate);
+  const isGreetingOnlyText = (text) => greetingOnly.includes(text)
+    || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(text);
+  const isGreetingOnly = isGreetingOnlyText(normalizedText) || everyBurstLine(isGreetingOnlyText);
   const usefulText = rawText.length > 0 && !isGreetingOnly;
   const textHasIntent = intentKeywords.some((keyword) => normalizedText.includes(keyword));
 
@@ -573,14 +582,23 @@ function evaluateConversationStep(row) {
     return frustrationPatterns.some(p => p.test(normalized));
   };
 
-  const isConfirmation = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
-  const isRejection = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
+  const isConfirmationText = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
+  const isRejectionText = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
+  // Burst-aware only for the turn's own text: other callers keep exact matching.
+  const isConfirmation = (text) => isConfirmationText(text)
+    || (text === normalizedText && everyBurstLine(isConfirmationText));
+  const isRejection = (text) => isRejectionText(text)
+    || (text === normalizedText && everyBurstLine(isRejectionText));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
   const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
-  const wantsNew = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  const isCourtesyOnly = (text) => /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(text);
+  const wantsNewText = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  const wantsNew = (text) => wantsNewText(text) || (text === normalizedText && anyBurstLine(wantsNewText));
   const hasCommercialRequestReference = /\b(?:cotizacion|solicitud|presupuesto|pedido)\b/.test(normalizedText);
-  const isCommercialStatusInquiry = /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(normalizedText)
-    || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(normalizedText)
+  const isAnchoredStatusInquiry = (text) => /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(text)
+    || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(text);
+  const isCommercialStatusInquiry = isAnchoredStatusInquiry(normalizedText)
+    || anyBurstLine(isAnchoredStatusInquiry)
     || (hasCommercialRequestReference
       && /\b(?:estado|avance|novedades?|respuesta|responden|respondido|cuando|demora|pendiente|revision|revisada|lista|listo|sigue|va|paso|pasa)\b/.test(normalizedText));
   const ADDITION_VERB = '(?:agregar|anadir|sumar|incluir|considerar|poner)';
@@ -602,7 +620,8 @@ function evaluateConversationStep(row) {
     .replace(/\b(?:por favor|porfa|quiero|querria|necesito|hacer|empezar|iniciar|comenzar|una|un|la|el|de|del|con)\b/g, ' ')
     .replace(/[^a-z0-9]+/gi, ' ')
     .trim().length === 0;
-  const wantsHuman = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
+  const wantsHumanText = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
+  const wantsHuman = (text) => wantsHumanText(text) || (text === normalizedText && anyBurstLine(wantsHumanText));
   const operationalPatterns = [
     /\b(reclamo|queja|postventa|post venta)\b/,
     /\b(garantia|garantía)\b/,
@@ -771,7 +790,8 @@ function evaluateConversationStep(row) {
     && (humanControlActive || isGreetingOnly || isCommercialStatusInquiry
       || wantsCommercialCorrection || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
       || wantsCommercialAddition || row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY
-      || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(normalizedText))) {
+      || isCourtesyOnly(normalizedText)
+      || everyBurstLine((line) => isCourtesyOnly(line) || isGreetingOnlyText(line)))) {
     resetConversationLead = false;
     current.service = row.state_service || stepState.service || lastKnownService || previous.service;
     current.city = row.state_city || stepState.city || lastKnownCity || previous.city;

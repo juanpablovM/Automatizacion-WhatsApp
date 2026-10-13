@@ -36,12 +36,35 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Normalize Evolution Payload",
-    "fixture": "wa-inbound-entry/normalize-evolution-payload.js"
+    "fixture": "wa-inbound-entry/normalize-evolution-payload.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Persist Durable Inbox",
     "fixture": "db/queries/n8n/inbound-events/01_claim_inbound_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Select Debounced Inbox Events",
+    "fixture": "wa-inbound-entry/select-debounced-inbox-events.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Load Recovery Configuration",
+    "fixture": "wa-inbound-recovery/load-recovery-configuration.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Recover And Claim FIFO Events",
+    "fixture": "db/queries/n8n/inbound-events/02_recover_and_claim_inbound_events.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
   },
