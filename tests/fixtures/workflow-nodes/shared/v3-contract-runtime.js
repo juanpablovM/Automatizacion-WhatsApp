@@ -1801,7 +1801,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   // Live 2026-10-13, owner decision: with several items in the quote, an item
   // question names the product it asks about ("¿Cuántas solerillas
   // necesitas?", not "¿Cuántas unidades necesitas?").
-  if (primaryRequestValid && ['quantity', 'measurements', 'variant'].includes(primaryRequest?.goal_id)
+  if (primaryRequestValid && ['quantity', 'measurements'].includes(primaryRequest?.goal_id)
       && typeof primaryRequest.item_ref === 'string' && remainingItemRefs.length > 1
       && remainingItemRefs.includes(primaryRequest.item_ref)) {
     const product = productFor(primaryRequest.item_ref);
@@ -1819,12 +1819,35 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   // Live conversation 475 (2026-10-13), owner decision: a quoted product with
   // variants to choose from gets its variant question before any other quote
   // detail. A refused out-of-area request is answered first.
+  // The variants are asked in the order the customer named the products: items
+  // already in the quote keep their order (the order they were named in), and
+  // items introduced in this message follow where the message names them.
+  const foldedMessageText = phraseFoldV31(messageText);
+  const mentionIndexFor = (ref) => {
+    if (existingItems.has(ref)) return -1;
+    const quote = candidateObservations.find((entry) => entry.item_ref === ref && entry.concept === 'product')?.evidence_quote;
+    const index = quote ? foldedMessageText.indexOf(phraseFoldV31(quote)) : -1;
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  const orderedVariantRefs = unresolvedVariantRefs
+    .map((id, position) => ({ id, position, mention: mentionIndexFor(id.slice('variant@'.length)) }))
+    .sort((left, right) => left.mention - right.mention || left.position - right.position)
+    .map((entry) => entry.id);
+  const nextVariantRef = orderedVariantRefs[0];
   if (primaryRequestValid && VARIANT_FIRST_HELD_GOALS_V31.has(primaryRequest?.goal_id)
-      && unresolvedVariantRefs.length > 0 && !outOfAreaCommune) {
+      && nextVariantRef && !outOfAreaCommune) {
     errors.push(validationError(
-      'variant_question_first', 'primary_request.goal_id', unresolvedVariantRefs, unresolvedVariantRefs,
+      'variant_question_first', 'primary_request.goal_id', orderedVariantRefs, [nextVariantRef],
       ['Ask which variant the customer needs before any other quote detail; keep the other question for a later turn.',
-        variantRequiredInstructionV31(unresolvedVariantRefs.slice(0, 1), variantOptionsByRef)].join(' '),
+        variantRequiredInstructionV31([nextVariantRef], variantOptionsByRef)].join(' '),
+    ));
+  }
+  if (primaryRequestValid && primaryRequest?.goal_id === 'variant' && nextVariantRef
+      && orderedVariantRefs.includes(`variant@${primaryRequest.item_ref}`) && `variant@${primaryRequest.item_ref}` !== nextVariantRef) {
+    errors.push(validationError(
+      'variant_question_order', 'primary_request.item_ref', [`variant@${primaryRequest.item_ref}`], [nextVariantRef],
+      ['Ask the variants in the order the customer named the products: ask this one first, and the other in a later turn.',
+        variantRequiredInstructionV31([nextVariantRef], variantOptionsByRef)].join(' '),
     ));
   }
   if (primaryRequestValid && primaryRequest?.goal_id === FINAL_CONFIRMATION_GOAL && createLeadUnresolved.length > 0) {

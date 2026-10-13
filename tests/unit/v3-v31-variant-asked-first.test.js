@@ -19,7 +19,7 @@ const GROUNDING = Object.freeze({
       technical_sheet: { variants: [{ name: 'Baldosa Uno' }, { name: 'Baldosa Dos' }] },
     },
     {
-      ref: 'product:soleras', concept: 'product', value: 'Soleras y Solerillas',
+      ref: 'product:soleras', concept: 'product', value: 'Soleras y Solerillas', synonyms: ['solerillas'],
       technical_sheet: { variants: [{ name: 'Solerilla Uno' }, { name: 'Solerilla Dos' }] },
     },
     { ref: 'product:cemento', concept: 'product', value: 'Cemento' },
@@ -72,16 +72,55 @@ describe('a product with variants gets its variant question before any other det
     })).errors).toEqual([]);
   });
 
-  test('with two products without variant, either variant question is fine and other details wait', () => {
+  // Owner decision 2026-10-13: the variants are asked in the order the
+  // customer named the products ("baldosas y solerillas": baldosa first).
+  test('with two products without variant, the first one named is asked first and other details wait', () => {
     const policy = policyFor([item('li_b', 'Baldosas'), item('li_s', 'Soleras y Solerillas')], 'Quiero baldosas y solerillas');
-    for (const [ref, reply] of [['li_b', '¿Qué tipo de baldosa prefieres?'], ['li_s', '¿Qué tipo de solerilla prefieres?']]) {
-      expect(validateV3AiProposal(policy, proposal(policy, {
-        reply_text: reply, primary_request: { goal_id: 'variant', item_ref: ref },
-      })).errors).toEqual([]);
-    }
+    expect(validateV3AiProposal(policy, proposal(policy, {
+      reply_text: '¿Qué tipo de baldosa prefieres?', primary_request: { goal_id: 'variant', item_ref: 'li_b' },
+    })).errors).toEqual([]);
+    const outOfOrder = validateV3AiProposal(policy, proposal(policy, {
+      reply_text: '¿Qué tipo de solerilla prefieres?', primary_request: { goal_id: 'variant', item_ref: 'li_s' },
+    }));
+    expect(codes(outOfOrder)).toEqual(['variant_question_order']);
+    expect(outOfOrder.errors[0].allowed_values).toEqual(['variant@li_b']);
     const validation = validateV3AiProposal(policy, proposal(policy));
     expect(codes(validation)).toEqual(['variant_question_first']);
-    expect(validation.errors[0].allowed_values).toEqual(['variant@li_b', 'variant@li_s']);
+    expect(validation.errors[0].allowed_values).toEqual(['variant@li_b']);
+  });
+
+  test('once the first variant is chosen, the second product is next', () => {
+    const policy = policyFor([item('li_b', 'Baldosas', { variant: 'Baldosa Uno' }), item('li_s', 'Soleras y Solerillas')], 'La baldosa uno');
+    expect(validateV3AiProposal(policy, proposal(policy, {
+      reply_text: '¿Qué tipo de solerilla prefieres?', primary_request: { goal_id: 'variant', item_ref: 'li_s' },
+    })).errors).toEqual([]);
+  });
+
+  test('two products named in this message are ordered by where the message names them', () => {
+    const policy = policyFor([], 'Quiero solerillas y baldosas');
+    const productObservation = (id, itemRef, quote, value, groundingRef) => ({
+      id, concept: 'product', raw_value: quote, normalized_value: value, evidence_quote: quote,
+      evidence_occurrence: 1, grounding_ref: groundingRef, resolves_goal_ids: ['product'], item_ref: itemRef,
+    });
+    const setProduct = (id, itemRef) => ({ operation: 'set', field: 'product', item_ref: itemRef, observation_id: id, replaces_fact_id: null });
+    const matched = (itemRef, groundingRef, quote) => ({
+      status: 'matched', item_ref: itemRef, grounding_ref: groundingRef, evidence_quote: quote, evidence_occurrence: 1,
+    });
+    const withProducts = (overrides) => proposal(policy, {
+      catalog_resolutions: [matched('new:1', 'product:baldosas', 'baldosas'), matched('new:2', 'product:soleras', 'solerillas')],
+      observations: [
+        productObservation('obs_b', 'new:1', 'baldosas', 'Baldosas', 'product:baldosas'),
+        productObservation('obs_s', 'new:2', 'solerillas', 'Soleras y Solerillas', 'product:soleras'),
+      ],
+      state_mutations: [setProduct('obs_b', 'new:1'), setProduct('obs_s', 'new:2')],
+      ...overrides,
+    });
+    expect(codes(validateV3AiProposal(policy, withProducts({
+      reply_text: '¿Qué tipo de baldosa prefieres?', primary_request: { goal_id: 'variant', item_ref: 'new:1' },
+    })))).toEqual(['variant_question_order']);
+    expect(codes(validateV3AiProposal(policy, withProducts({
+      reply_text: '¿Qué tipo de solerilla prefieres?', primary_request: { goal_id: 'variant', item_ref: 'new:2' },
+    })))).toEqual([]);
   });
 
   test('a product without variants, or with its variant already chosen, does not hold other questions', () => {
@@ -111,6 +150,7 @@ describe('a product with variants gets its variant question before any other det
     const source = fs.readFileSync('tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js', 'utf8');
     const rule = source.match(/const V31_VARIANT_RULE = '([^']*)'/)[1];
     expect(rule).toContain('pregúntale cuál necesita apenas lo nombra, antes de cualquier otro dato (cantidad, alcance, comuna, dirección, terreno o acceso)');
+    expect(rule).toContain('pregunta la de uno por mensaje, en el orden en que el cliente los nombró');
   });
 });
 
@@ -145,6 +185,16 @@ describe('an item question names its product when the quote has several', () => 
 
   test('naming the other product is not enough', () => {
     expect(codes(ask(twoItems(), '¿Cuántas baldosas necesitas?'))).toEqual(['item_question_product_unnamed']);
+  });
+
+  // Live 2026-10-13: "¿Cuál necesitas: canto redondo de 50 cm o canto
+  // biselado?" was rejected until the repair budget ran out. A variant
+  // question lists its options, which already identify the product.
+  test('a variant question listing only the options is valid', () => {
+    const policy = policyFor([item('li_b', 'Baldosas'), item('li_s', 'Soleras y Solerillas')], 'Quiero solerillas y baldosas');
+    expect(validateV3AiProposal(policy, proposal(policy, {
+      reply_text: '¿Cuál necesitas: Uno o Dos?', primary_request: { goal_id: 'variant', item_ref: 'li_b' },
+    })).errors).toEqual([]);
   });
 
   test('with a single item the question may omit the product', () => {
