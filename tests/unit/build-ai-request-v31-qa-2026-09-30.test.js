@@ -67,6 +67,11 @@ describe('v3.1 prompt rules (task 3c.33)', () => {
     expect(v31()).toContain('nunca ofrezcas instalación con retiro');
     expect(v31()).toContain('"Si te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo."');
     expect(v31()).toContain('registra service_scope=material y fulfillment=pickup');
+    // Live 2026-10-13: the refused comuna and service are not recorded, and a
+    // different request starts the quote clean.
+    expect(v31()).toContain('la comuna, el servicio, la instalación y el despacho no se guardan');
+    expect(v31()).toContain('registra service_scope y fulfillment con operation set');
+    expect(v31()).toContain('la cotización parte de cero con lo nuevo');
     expect(v3()).not.toContain('Región Metropolitana');
   });
 });

@@ -946,6 +946,8 @@ const itemFactNotReplaceableGuidanceV31 = (factsById, existingItems, mutation) =
   };
 };
 
+const INSTALLATION_ONLY_GOALS_V31 = new Set(['terrain', 'truck_access', 'debris_removal']);
+
 // Required goals reuse the quote-level conditional rules in
 // effectiveRequiredGoalIds, replacing product/quantity with line_items.
 const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) => {
@@ -957,8 +959,14 @@ const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) =>
   // fulfillment (owner rule, 3c.12), so it is never a goal to resolve. A
   // pickup with installation is still rejected by installation_requires_delivery.
   const serviceScope = projectedValueFor(policy, observations, 'service_scope');
-  return serviceScope === 'installation' || serviceScope === 'both'
-    ? required.filter((goalId) => goalId !== 'fulfillment')
+  if (serviceScope === 'installation' || serviceScope === 'both') {
+    return required.filter((goalId) => goalId !== 'fulfillment');
+  }
+  // Live 2026-10-13: a quote switched to material in this turn kept the
+  // installation goals of the policy compiled from the earlier scope. They
+  // depend only on the current service_scope.
+  return serviceScope === 'material'
+    ? required.filter((goalId) => !INSTALLATION_ONLY_GOALS_V31.has(goalId))
     : required;
 };
 
@@ -969,6 +977,13 @@ const effectiveRequiredGoalIdsV31 = (configuredGoalIds, policy, observations) =>
 const primaryRequestGoalInapplicableErrorV31 = (requestedGoal, serviceScope, fulfillment, allowedNextGoalIds) => {
   const sharedError = primaryRequestGoalInapplicableError(requestedGoal, serviceScope, allowedNextGoalIds);
   if (sharedError) return sharedError;
+  if (INSTALLATION_ONLY_GOALS_V31.has(requestedGoal) && serviceScope === 'material') {
+    return validationError(
+      'primary_request_goal_inapplicable', 'primary_request.goal_id', [requestedGoal, 'material'],
+      allowedNextGoalIds.filter((goalId) => !INSTALLATION_ONLY_GOALS_V31.has(goalId)),
+      'The quote is material only, without installation: do not ask about the terrain, truck access or debris removal. Ask for the next allowed goal instead.',
+    );
+  }
   if (!(requestedGoal === 'fulfillment' && serviceScope === 'both' && fulfillment !== 'pickup')) return null;
   return validationError(
     'primary_request_goal_inapplicable', 'primary_request.goal_id', ['fulfillment', 'both'],
@@ -1030,6 +1045,9 @@ const isServiceAreaCommuneV31 = (() => {
     return null;
   }
 })();
+// Quote-level fields a refused out-of-area turn still records: they describe
+// the customer, not the refused service.
+const SERVICE_AREA_KEPT_FIELDS_V31 = new Set(['name']);
 const SERVICE_AREA_CONTINUATION_GOALS_V31 = new Set([
   'address', 'terrain', 'truck_access', 'debris_removal', 'access_restrictions', FINAL_CONFIRMATION_GOAL,
 ]);
@@ -1058,6 +1076,7 @@ const SERVICE_AREA_MATERIAL_ONLY_REPLY_V31 = 'Si te sirve, podemos cotizarte sol
 const serviceAreaUnsupportedInstructionV31 = (commune, includesInstallation) => [
   `Hormiglass delivers and installs only in the Región Metropolitana and the comunas of Viña del Mar, Valparaíso, Concepción and Rancagua, and ${commune} is outside that area.`,
   'Do not continue this quote: do not ask for the address, terrain, truck access, debris removal, access restrictions or final confirmation, and do not request create_lead.',
+  'This turn records only the requested products, their quantities and the customer\'s name; the comuna, the service, the installation and the delivery are not recorded.',
   `Tell the customer with brief empathy: "${serviceAreaLimitReplyV31(commune)}"`,
   includesInstallation
     ? `Installation requires delivery: Do not offer factory pickup with installation. Offer the real alternative as a statement, without a question: "${SERVICE_AREA_MATERIAL_ONLY_REPLY_V31}" Use primary_request null. If the customer accepts the material only, record service_scope=material and fulfillment=pickup and the quote continues.`
@@ -1951,6 +1970,19 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     errors.push(validationError('final_summary_repeated', 'reply_text', [], [], finalSummaryRepeatedInstructionV31));
   }
 
+  // Live 2026-10-13: a refused out-of-area delivery or installation must not
+  // leave its service or destination behind (comuna, service_scope,
+  // fulfillment, legacy service, address and installation details): it would
+  // drive the next turns' goals. The requested items and the customer's name
+  // still commit, so accepting the material with factory pickup continues the
+  // quote with what was already asked.
+  const refusedServiceMutation = (mutation) => Boolean(outOfAreaCommune)
+    && mutation.operation !== 'remove_item'
+    && !ITEM_FIELDS.has(mutation.field)
+    && !SERVICE_AREA_KEPT_FIELDS_V31.has(mutation.field);
+  const authorizedMutations = candidateMutations.filter((mutation) => !refusedServiceMutation(mutation));
+  const refusedMutations = candidateMutations.filter(refusedServiceMutation);
+
   const blockingErrors = errors.filter((error) => !NON_BLOCKING_V31_CODES.has(error.code));
   const valid = blockingErrors.length === 0;
   return {
@@ -1960,9 +1992,9 @@ const validateV3AiProposalV31 = (policy, proposal) => {
     proposal_digest: isObject(proposal) ? digestObject(proposal) : null,
     errors,
     catalog_resolutions: valid ? [...catalogResolutionByRef.values()].map(jsonClone) : [],
-    withheld_mutations: valid ? withheldMutations.map(jsonClone) : [],
+    withheld_mutations: valid ? [...withheldMutations, ...refusedMutations].map(jsonClone) : [],
     accepted_observations: valid ? candidateObservations : [],
-    authorized_mutations: valid ? candidateMutations : [],
+    authorized_mutations: valid ? authorizedMutations : [],
     authorized_effect_requests: valid ? candidateEffects : [],
   };
 };
