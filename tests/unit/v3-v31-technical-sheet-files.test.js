@@ -572,7 +572,7 @@ describe('the files rule binds the sheet to the product asked about', () => {
   const filesRule = source.match(/const V31_TECHNICAL_SHEET_FILES_RULE = '([^']*)'/)[1];
   test('send only the sheet of the product named, and ask which one when unclear', () => {
     expect(filesRule).toContain('Envía solo la ficha del producto por el que pregunta el cliente en este mensaje');
-    expect(filesRule).toContain('si no nombra un producto y en la cotización hay varios con ficha, pregúntale de cuál producto habla antes de enviar');
+    expect(filesRule).toContain('solo si aun así no está claro y en la cotización hay varios con ficha, pregúntale de cuál producto habla antes de enviar');
   });
 });
 

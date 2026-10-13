@@ -652,6 +652,7 @@ const technicalSheetFilesV31 = (policy) => {
         sku: entry.ref.replace(/^(?:product|service):/, ''),
         product: entry.value ?? null,
         variant: typeof file.variant === 'string' ? file.variant : null,
+        covers: Array.isArray(file.covers) ? file.covers.filter((name) => typeof name === 'string') : [],
         sent: file.sent === true,
         offered: file.offered === true,
       });
@@ -667,7 +668,15 @@ const requestsTechnicalSheetV31 = (messageText) => /\b(?:fichas?|pdfs?|hojas? te
 // Owner decision 2026-10-07: a technical question about a product (measures,
 // weight, yield, strength, concrete grade, colors, finishes, specifications)
 // may get that product's sheet right away, without asking for the sheet.
-const asksTechnicalQuestionV31 = (messageText) => /\b(?:medidas?|miden?|dimensiones?|tamanos?|largo|ancho|altura|espesor|grosor|pesos?|pesan?|kilos?|kg|rendimiento|rinden?|resistencias?|resiste|mpa|grado|compresion|flexion|absorcion|tolerancias?|colou?res?|terminaciones?|acabados?|especificaciones?|caracteristicas?|tecnic[oa]s?|ficha)\b/
+// Owner decision 2026-10-13 (conversation 475): so does describing, comparing
+// or asking to see a product ("¿cómo son?", "¿qué diferencia hay?", "quiero
+// verlas", "¿tienes fotos?").
+const asksTechnicalQuestionV31 = (messageText) => /\b(?:como (?:son|es|seria|serian)|diferencias?|diferencian?|compar[a-z]*|ver(?:la|las|lo|los)|(?:quiero|puedo|quisiera|gustaria|podria) ver|fotos?|imagen(?:es)?|medidas?|miden?|dimensiones?|tamanos?|largo|ancho|altura|espesor|grosor|pesos?|pesan?|kilos?|kg|rendimiento|rinden?|resistencias?|resiste|mpa|grado|compresion|flexion|absorcion|tolerancias?|colou?res?|terminaciones?|acabados?|especificaciones?|caracteristicas?|tecnic[oa]s?|ficha)\b/
+  .test(foldSheetTextV31(messageText));
+// Owner decision 2026-10-13: asking to see a product again ("quiero verlas",
+// "¿puedo ver la 14 listones?", "¿tienes fotos?") may resend a sheet already
+// sent; a specific technical question does not.
+const asksToSeeV31 = (messageText) => /\b(?:ver(?:la|las|lo|los)|(?:quiero|puedo|quisiera|gustaria|podria) ver|fotos?|imagen(?:es)?)\b/
   .test(foldSheetTextV31(messageText));
 // A short yes to the pending offer ("sí", "dale", "ya, mándala"); a no never is.
 const acceptsTechnicalSheetOfferV31 = (messageText) => {
@@ -766,6 +775,29 @@ const productRefsMentionedV31 = (entries, text) => {
       && other.end - other.start > span.end - span.start))
     .map((span) => span.ref));
 };
+// Live conversation 475 (2026-10-13): customers name a sheet's variant without
+// its product ("las 14 listones"). A variant is mentioned when its name (or a
+// name it covers) appears in the text, with or without the parenthetical and
+// the leading product word ("Baldosa 14 Listones (Andalucía)" -> "14 listones").
+const sheetVariantPhrasesV31 = (sheet) => [sheet.variant, ...(sheet.covers || [])]
+  .filter((name) => typeof name === 'string')
+  .flatMap((name) => {
+    const core = phraseFoldV31(name.replace(/\([^)]*\)/g, ' '));
+    const withoutProductWord = core.split(' ').slice(1).join(' ');
+    return [core, ...(withoutProductWord.length >= 3 ? [withoutProductWord] : [])];
+  })
+  .filter(Boolean);
+const sheetsWithVariantMentionedV31 = (sheets, text) => {
+  const haystack = ` ${phraseFoldV31(text)} `;
+  return [...sheets.values()].filter((sheet) => sheet.variant !== null
+    && sheetVariantPhrasesV31(sheet).some((phrase) => haystack.includes(` ${phrase} `)));
+};
+// The products a text refers to: by product name or synonym, or by a variant
+// of one of its technical sheets.
+const productRefsReferencedV31 = (entries, sheets, text) => new Set([
+  ...productRefsMentionedV31(entries, text),
+  ...sheetsWithVariantMentionedV31(sheets, text).map((sheet) => sheet.catalog_ref),
+]);
 // Task 3c.21 (owner rule): some products are quoted only in linear meters plus
 // a height, never by area. Data-driven by catalog ref; today only Cierros de
 // Hormigón (placas and postes are sold per unit, so they are not listed).
@@ -1003,6 +1035,18 @@ const variantOptionsForV31 = (policy, product) => {
     && Array.isArray(candidate.variant_options) && sameGroundedValue(groundingValue(candidate), name));
   return entry ? entry.variant_options.filter((option) => typeof option === 'string' && option.trim() !== '') : [];
 };
+// The words of an item's product, variant or label that identify it in a
+// question, singularized ("Soleras y Solerillas" -> solera, solerilla).
+const itemQuestionWordsV31 = (value) => (typeof value === 'string' ? phraseFoldV31(value).split(' ') : [])
+  .filter((word) => word.length >= 4 && !/\d/.test(word))
+  .map((word) => word.replace(/s$/, ''));
+// The quote details a pending variant question goes before (owner decision
+// 2026-10-13); final_confirmation is held by final_confirmation_not_ready.
+const VARIANT_FIRST_HELD_GOALS_V31 = new Set([
+  'quantity', 'measurements', 'service_scope', 'fulfillment', 'modality', 'commune', 'address', 'terrain',
+  'truck_access', 'debris_removal', 'urgency', 'desired_date', 'photos', 'use_case', 'access_restrictions',
+  'reception_contact',
+]);
 const variantRequiredInstructionV31 = (unresolvedIds, optionsByRef) => {
   const refs = unresolvedIds.filter((id) => id.startsWith('variant@')).map((id) => id.slice('variant@'.length));
   if (refs.length === 0) return null;
@@ -1179,7 +1223,7 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       } else if (offered.sent) {
         errors.push(validationError(
           'technical_sheet_offer_already_sent', 'primary_request.item_ref', [offered.ref], [],
-          'That technical sheet was already sent in this conversation (sent=true): do not offer it again. Remind the customer it is in the chat, or offer that a Hormiglass executive confirms the detail.',
+          'That technical sheet was already sent in this conversation (sent=true): do not offer it again. Continue the conversation without mentioning the sheet, or offer that a Hormiglass executive confirms the detail.',
         ));
       }
     }
@@ -1754,6 +1798,35 @@ const validateV3AiProposalV31 = (policy, proposal) => {
       'Remove the request or ask for one of the allowed unresolved goals.',
     ));
   }
+  // Live 2026-10-13, owner decision: with several items in the quote, an item
+  // question names the product it asks about ("¿Cuántas solerillas
+  // necesitas?", not "¿Cuántas unidades necesitas?").
+  if (primaryRequestValid && ['quantity', 'measurements', 'variant'].includes(primaryRequest?.goal_id)
+      && typeof primaryRequest.item_ref === 'string' && remainingItemRefs.length > 1
+      && remainingItemRefs.includes(primaryRequest.item_ref)) {
+    const product = productFor(primaryRequest.item_ref);
+    const itemWords = new Set([product, variantFor(primaryRequest.item_ref), existingItems.get(primaryRequest.item_ref)?.requested_label]
+      .flatMap(itemQuestionWordsV31));
+    const questionLines = String(proposalObject.reply_text ?? '').split('\n').filter((line) => line.includes('?'));
+    const questionWords = questionLines.flatMap(itemQuestionWordsV31);
+    if (itemWords.size > 0 && questionLines.length > 0 && !questionWords.some((word) => itemWords.has(word))) {
+      errors.push(validationError(
+        'item_question_product_unnamed', 'reply_text', [primaryRequest.item_ref], [],
+        `The quote has several products: the question must name the product it asks about (${product}), for example "¿Cuántas ${String(product).toLocaleLowerCase('es')} necesitas?" instead of "¿Cuántas unidades necesitas?".`,
+      ));
+    }
+  }
+  // Live conversation 475 (2026-10-13), owner decision: a quoted product with
+  // variants to choose from gets its variant question before any other quote
+  // detail. A refused out-of-area request is answered first.
+  if (primaryRequestValid && VARIANT_FIRST_HELD_GOALS_V31.has(primaryRequest?.goal_id)
+      && unresolvedVariantRefs.length > 0 && !outOfAreaCommune) {
+    errors.push(validationError(
+      'variant_question_first', 'primary_request.goal_id', unresolvedVariantRefs, unresolvedVariantRefs,
+      ['Ask which variant the customer needs before any other quote detail; keep the other question for a later turn.',
+        variantRequiredInstructionV31(unresolvedVariantRefs.slice(0, 1), variantOptionsByRef)].join(' '),
+    ));
+  }
   if (primaryRequestValid && primaryRequest?.goal_id === FINAL_CONFIRMATION_GOAL && createLeadUnresolved.length > 0) {
     const spuriousInstruction = spuriousResolutionInstructionFor(createLeadUnresolved);
     errors.push(validationError(
@@ -1801,7 +1874,16 @@ const validateV3AiProposalV31 = (policy, proposal) => {
   // Review finding 2026-10-08: a sheet sent on a request or a technical
   // question must belong to a product named in the message; when none is
   // named, only a single product with exposed sheets is unambiguous.
-  const productsNamedInMessage = productRefsMentionedV31(policy?.grounding?.catalog, messageText);
+  // Live conversation 475 (2026-10-13): a variant named in the message names
+  // its product, and a follow-up naming nothing ("quiero verlas") refers to
+  // the products the previous assistant reply talked about.
+  const productsReferencedInMessage = productRefsReferencedV31(policy?.grounding?.catalog, technicalSheets, messageText);
+  const previousAssistantReply = [...(Array.isArray(policy?.history?.messages) ? policy.history.messages : [])]
+    .reverse().find((message) => message?.role === 'assistant')?.content;
+  const productsNamedInMessage = productsReferencedInMessage.size > 0
+    ? productsReferencedInMessage
+    : productRefsReferencedV31(policy?.grounding?.catalog, technicalSheets, previousAssistantReply);
+  const variantsNamedInMessage = sheetsWithVariantMentionedV31(technicalSheets, messageText);
   const productsWithSheets = new Set([...technicalSheets.values()].map((sheet) => sheet.catalog_ref));
   const sheetRefsFor = (catalogRefs) => [...technicalSheets.values()]
     .filter((sheet) => catalogRefs.has(sheet.catalog_ref)).map((sheet) => sheet.ref);
@@ -1858,6 +1940,17 @@ const validateV3AiProposalV31 = (policy, proposal) => {
           ));
           continue;
         }
+        // A variant sheet of a product whose other variants the message names
+        // is not the one asked about.
+        const namedVariantsOfProduct = variantsNamedInMessage.filter((named) => named.catalog_ref === sheet.catalog_ref);
+        if (sheet.variant !== null && namedVariantsOfProduct.length > 0
+            && !namedVariantsOfProduct.some((named) => named.ref === sheet.ref)) {
+          errors.push(validationError(
+            'technical_sheet_variant_mismatch', `${path}.sheet_ref`, [sheet.ref], namedVariantsOfProduct.map((named) => named.ref),
+            'Send only the sheets of the variants the customer names in this message: choose among the allowed sheet refs, or remove this send_technical_sheet effect_request.',
+          ));
+          continue;
+        }
         if (productsNamedInMessage.size === 0 && productsWithSheets.size > 1) {
           errors.push(validationError(
             'technical_sheet_product_ambiguous', `${path}.sheet_ref`, [sheet.ref], [],
@@ -1866,10 +1959,10 @@ const validateV3AiProposalV31 = (policy, proposal) => {
           continue;
         }
       }
-      if (sheet.sent && !messageRequestsSheet) {
+      if (sheet.sent && !messageRequestsSheet && !asksToSeeV31(messageText)) {
         errors.push(validationError(
           'technical_sheet_already_sent', `${path}.sheet_ref`, [sheet.ref], [],
-          'This technical sheet was already sent in this conversation (sent=true). Send it again only when the customer explicitly asks for it again; otherwise remove this effect_request and tell the customer the sheet is already in the chat.',
+          'This technical sheet was already sent in this conversation (sent=true). Send it again only when the customer asks for it again or asks to see it; otherwise remove this effect_request and answer without mentioning the sheet.',
         ));
         continue;
       }
