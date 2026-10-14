@@ -93,6 +93,28 @@ describe('the lead task fits the Cotizaciones WhatsApp list', () => {
     expect(fieldValue(adoquin, 'cf-product-type')).toEqual(['opt-adoquines', 'opt-bloques']);
   });
 
+  // Lead 400 (2026-10-14): "Soleras y Solerillas" with the variant "Solerilla
+  // canto redondo 50 cm" was labeled both Soleras and Solerillas.
+  test('a product naming two labels is narrowed by its chosen variant', () => {
+    const itemWith = (variant) => runNode(leadRow({
+      qualification_context: { line_items: [{ item_id: 'li_0', product: 'Soleras y Solerillas', variant }] },
+    }), hormiglassEnv());
+    expect(fieldValue(itemWith('Solerilla canto redondo 50 cm'), 'cf-product-type')).toEqual(['opt-solerillas']);
+    expect(fieldValue(itemWith('Solera tipo zarpa'), 'cf-product-type')).toEqual(['opt-soleras']);
+    expect(fieldValue(itemWith('Modelo estándar'), 'cf-product-type')).toEqual(['opt-soleras', 'opt-solerillas']);
+    expect(fieldValue(itemWith(null), 'cf-product-type')).toEqual(['opt-soleras', 'opt-solerillas']);
+  });
+
+  test('the variant narrows only its own item', () => {
+    const output = runNode(leadRow({
+      qualification_context: { line_items: [
+        { item_id: 'li_0', product: 'Soleras y Solerillas', variant: 'Solerilla canto redondo 50 cm' },
+        { item_id: 'li_1', product: 'Baldosa Minvu', variant: 'Solera tipo zarpa' },
+      ] },
+    }), hormiglassEnv());
+    expect(fieldValue(output, 'cf-product-type')).toEqual(['opt-baldosas', 'opt-solerillas']);
+  });
+
   test('a product with no matching label leaves the product type empty', () => {
     const output = runNode(leadRow({
       qualification_context: { line_items: [{ item_id: 'li_0', product: 'Alambre de Púas' }] },

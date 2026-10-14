@@ -167,8 +167,19 @@ const pushLabelsField = (fieldId, rawOptions, texts) => {
   const optionIds = matchingOptionIds(rawOptions, texts);
   pushCustomField(fieldId, optionIds.length ? optionIds : null);
 };
+// A product naming two labels ("Soleras y Solerillas") keeps only the ones its
+// chosen variant names ("Solerilla canto redondo" -> "Solerillas"); with no
+// variant, or one naming neither, the item keeps every label it matched.
+const productOptions = $env.CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON;
+const productOptionIds = new Set(lineItems.filter((item) => item && item.product).flatMap((item) => {
+  const byProduct = matchingOptionIds(productOptions, [item.product]);
+  if (byProduct.length < 2) return byProduct;
+  const byVariant = matchingOptionIds(productOptions, [item.variant]).filter((optionId) => byProduct.includes(optionId));
+  return byVariant.length ? byVariant : byProduct;
+}));
 const quotedProducts = lineItems.map((item) => item && item.product).filter(Boolean);
-pushLabelsField($env.CLICKUP_CF_PRODUCT_TYPE_ID, $env.CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON, quotedProducts);
+const productTypeIds = matchingOptionIds(productOptions, quotedProducts).filter((optionId) => productOptionIds.has(optionId));
+pushCustomField($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds.length ? productTypeIds : null);
 pushLabelsField($env.CLICKUP_CF_SERVICE_TYPE_ID, $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON, [safe(row.service)]);
 
 const assigneeId = asInt(row.clickup_user_id);
