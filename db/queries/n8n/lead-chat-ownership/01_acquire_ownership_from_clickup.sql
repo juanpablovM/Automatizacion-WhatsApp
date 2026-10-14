@@ -35,14 +35,16 @@
 --
 -- Params:
 --   p1 clickup_task_id (text), p2 previous_status (text, estado ANTERIOR a la
---   transicion), p3 history_id (text), p4 history_event_at (timestamptz)
+--   transicion), p3 history_id (text), p4 history_event_at (timestamptz),
+--   p5 new_status (text, estado destino; se guarda en leads.clickup_status)
 -- =============================================================================
 WITH input AS (
   SELECT
     NULLIF($1::text, '') AS clickup_task_id,
     NULLIF($2::text, '') AS previous_status,
     NULLIF($3::text, '') AS history_id,
-    NULLIF($4::text, '')::timestamptz AS history_event_at
+    NULLIF($4::text, '')::timestamptz AS history_event_at,
+    NULLIF($5::text, '') AS new_status
 ),
 lead_row AS (
   SELECT l.id
@@ -53,6 +55,25 @@ lead_row AS (
     AND l.deleted_at IS NULL
   ORDER BY l.id DESC
   LIMIT 1
+),
+-- Migration 035: the lead keeps its task's latest status whatever the ownership
+-- outcome, so the bot can tell an open quote from a closed one. Newest event
+-- wins; an event without a timestamp is taken as current.
+lead_status AS (
+  UPDATE leads l
+  SET clickup_status = i.new_status,
+      clickup_status_at = COALESCE(i.history_event_at, NOW()),
+      updated_at = NOW()
+  FROM lead_row lr
+  CROSS JOIN input i
+  WHERE l.id = lr.id
+    AND i.new_status IS NOT NULL
+    AND (
+      l.clickup_status_at IS NULL
+      OR i.history_event_at IS NULL
+      OR i.history_event_at >= l.clickup_status_at
+    )
+  RETURNING l.id
 ),
 latest_customer_message AS (
   SELECT m.id, m.created_at
