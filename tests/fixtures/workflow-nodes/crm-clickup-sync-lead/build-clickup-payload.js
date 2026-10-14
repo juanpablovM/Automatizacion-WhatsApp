@@ -188,6 +188,28 @@ const commentText = [
   fullConversation ? 'Conversación Completa Cliente\n\n' + fullConversation : '',
 ].filter(Boolean).join('\n\n');
 
+// Quote correction (owner decision 2026-10-14): a re-confirmed reopened quote
+// updates its existing task instead of creating another. Only the description,
+// "🔍 Solicitud" and "Tipo de producto" change; status, assignees and every
+// other field stay as the seller left them. The comment names the assigned
+// seller so ClickUp notifies them of the before→after.
+const shouldUpdateClickup = Boolean(row.should_update_clickup) && Boolean(existingClickupTaskId);
+const oneLine = (value) => safe(value).split('\n').map((line) => line.trim()).filter(Boolean).join('; ');
+const correctedFieldIds = new Set([$env.CLICKUP_CF_REQUIREMENT_ID, $env.CLICKUP_CF_PRODUCT_TYPE_ID].filter(configured));
+const correction = shouldUpdateClickup ? {
+  should_update_clickup: true,
+  clickup_correction_operation_key: safe(row.clickup_correction_operation_key),
+  clickup_correction_requirement: row.requirement ?? null,
+  clickup_update_url: `https://api.clickup.com/api/v2/task/${encodeURIComponent(existingClickupTaskId)}`,
+  clickup_update_payload: { description },
+  clickup_update_custom_fields: customFields.filter((field) => correctedFieldIds.has(field.id)),
+  clickup_correction_comment: {
+    comment_text: `✏️ Corrección del cliente: ${oneLine(row.clickup_requirement_before) || 'Sin requerimiento informado'} → ${oneLine(requirement)}`,
+    ...(assigneeId ? { assignee: assigneeId } : {}),
+    notify_all: false,
+  },
+} : {};
+
 return [
   {
     json: {
@@ -203,6 +225,7 @@ return [
       clickup_task_payload: taskPayload,
       comment_text: commentText,
       comment_enabled: Boolean(commentText),
+      ...correction,
     },
   },
 ];

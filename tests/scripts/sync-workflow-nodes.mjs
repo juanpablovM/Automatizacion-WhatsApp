@@ -527,6 +527,16 @@ const NODES = [
     "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
     "node": "Build ClickUp Payload",
     "fixture": "crm-clickup-sync-lead/build-clickup-payload.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Create ClickUp Task",
+    "fixture": "crm-clickup-sync-lead/create-clickup-task.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Normalize ClickUp Result",
+    "fixture": "crm-clickup-sync-lead/normalize-clickup-result.js"
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {
