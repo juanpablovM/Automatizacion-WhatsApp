@@ -181,6 +181,11 @@ const quotedProducts = lineItems.map((item) => item && item.product).filter(Bool
 const productTypeIds = matchingOptionIds(productOptions, quotedProducts).filter((optionId) => productOptionIds.has(optionId));
 pushCustomField($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds.length ? productTypeIds : null);
 pushLabelsField($env.CLICKUP_CF_SERVICE_TYPE_ID, $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON, [safe(row.service)]);
+pushCustomField($env.CLICKUP_CF_CUSTOMER_RUT_ID, safe(qualification.company_rut));
+// The tax document follows the customer's invoice answer; no answer, no label.
+const taxDocumentOptionId = qualification.invoice_required === true ? $env.CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID
+  : qualification.invoice_required === false ? $env.CLICKUP_CF_TAX_DOCUMENT_OPTION_BOLETA_ID : null;
+pushCustomField($env.CLICKUP_CF_TAX_DOCUMENT_ID, configured(taxDocumentOptionId) ? [String(taxDocumentOptionId)] : null);
 
 const assigneeId = asInt(row.clickup_user_id);
 const taskPayload = {

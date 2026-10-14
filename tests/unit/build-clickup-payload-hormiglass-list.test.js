@@ -115,6 +115,36 @@ describe('the lead task fits the Cotizaciones WhatsApp list', () => {
     expect(fieldValue(output, 'cf-product-type')).toEqual(['opt-baldosas', 'opt-solerillas']);
   });
 
+  test('the company RUT fills the customer RUT field, trimmed, only when present', () => {
+    const env = { ...hormiglassEnv(), CLICKUP_CF_CUSTOMER_RUT_ID: 'cf-customer-rut' };
+    const withRut = runNode(leadRow({
+      qualification_context: { ...leadRow().qualification_context, company_rut: ' 76.123.456-7 ' },
+    }), env);
+    expect(fieldValue(withRut, 'cf-customer-rut')).toBe('76.123.456-7');
+    expect(fieldValue(runNode(leadRow(), env), 'cf-customer-rut')).toBeUndefined();
+    expect(fieldValue(runNode(leadRow({
+      qualification_context: { ...leadRow().qualification_context, company_rut: '  ' },
+    }), env), 'cf-customer-rut')).toBeUndefined();
+  });
+
+  test('the invoice choice picks Factura or Boleta, and nothing when unknown', () => {
+    const env = {
+      ...hormiglassEnv(),
+      CLICKUP_CF_TAX_DOCUMENT_ID: 'cf-tax-document',
+      CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID: 'opt-factura',
+      CLICKUP_CF_TAX_DOCUMENT_OPTION_BOLETA_ID: 'opt-boleta',
+    };
+    const withInvoice = (invoiceRequired) => runNode(leadRow({
+      qualification_context: { ...leadRow().qualification_context, invoice_required: invoiceRequired },
+    }), env);
+    expect(fieldValue(withInvoice(true), 'cf-tax-document')).toEqual(['opt-factura']);
+    expect(fieldValue(withInvoice(false), 'cf-tax-document')).toEqual(['opt-boleta']);
+    expect(fieldValue(runNode(leadRow(), env), 'cf-tax-document')).toBeUndefined();
+    expect(fieldValue(runNode(leadRow({
+      qualification_context: { ...leadRow().qualification_context, invoice_required: true },
+    }), { ...env, CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID: '' }), 'cf-tax-document')).toBeUndefined();
+  });
+
   test('a product with no matching label leaves the product type empty', () => {
     const output = runNode(leadRow({
       qualification_context: { line_items: [{ item_id: 'li_0', product: 'Alambre de Púas' }] },
