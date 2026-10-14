@@ -158,7 +158,38 @@ describe('the lead task fits the Cotizaciones WhatsApp list', () => {
       .toEqual(['opt-instalacion']);
     expect(fieldValue(runNode(leadRow({ service: 'despacho' }), hormiglassEnv()), 'cf-service-type'))
       .toEqual(['opt-despacho']);
-    expect(fieldValue(runNode(leadRow({ service: 'retiro' }), hormiglassEnv()), 'cf-service-type')).toBeUndefined();
+    expect(fieldValue(runNode(leadRow({ service: 'retiro' }), hormiglassEnv()), 'cf-service-type')).toEqual(['opt-venta']);
+  });
+
+  // A factory pickup has no city: its task read "Cliente Demo - retiro - Sin Ciudad".
+  test('a pickup without city is named and described as a factory pickup, sold as product', () => {
+    const output = runNode(leadRow({ service: 'retiro', city: null }), hormiglassEnv());
+    expect(output.task_name).toBe('Cliente Demo - retiro en fábrica');
+    expect(output.task_description).toContain('\nCiudad: Retiro en fábrica\n');
+    expect(output.task_description).not.toContain('Sin Ciudad');
+    expect(fieldValue(output, 'cf-service-type')).toEqual(['opt-venta']);
+  });
+
+  test('a quote whose fulfillment is pickup is a pickup too', () => {
+    const qualification_context = { ...leadRow().qualification_context, service_scope: 'material', fulfillment: 'pickup' };
+    const output = runNode(leadRow({ service: '', city: null, qualification_context }), hormiglassEnv());
+    expect(output.task_name).toBe('Cliente Demo - retiro en fábrica');
+    expect(fieldValue(output, 'cf-service-type')).toEqual(['opt-venta']);
+    const byModality = runNode(leadRow({ service: '', city: '', qualification_context: { modality: 'pickup' } }), hormiglassEnv());
+    expect(byModality.task_name).toBe('Cliente Demo - retiro en fábrica');
+  });
+
+  test('a pickup gets no service type when the list has no Venta de Producto label', () => {
+    const env = { ...hormiglassEnv(), CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON: JSON.stringify({ Despacho: 'opt-despacho' }) };
+    expect(fieldValue(runNode(leadRow({ service: 'retiro', city: '' }), env), 'cf-service-type')).toBeUndefined();
+  });
+
+  test('a pickup with a city and a non-pickup without one keep their usual name', () => {
+    expect(runNode(leadRow({ service: 'retiro', city: 'Maipú' }), hormiglassEnv()).task_name).toBe('Cliente Demo - retiro - Maipú');
+    const delivery = runNode(leadRow({ service: 'despacho', city: null }), hormiglassEnv());
+    expect(delivery.task_name).toBe('Cliente Demo - despacho - Sin Ciudad');
+    expect(delivery.task_description).toContain('\nCiudad: Sin Ciudad\n');
+    expect(fieldValue(delivery, 'cf-service-type')).toEqual(['opt-despacho']);
   });
 
   test('unconfigured fields are not sent', () => {

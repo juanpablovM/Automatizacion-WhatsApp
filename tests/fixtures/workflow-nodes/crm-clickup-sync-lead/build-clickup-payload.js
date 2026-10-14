@@ -101,13 +101,19 @@ const advisorLines = [
   ...qualificationLines,
 ].filter(Boolean);
 
-const taskName = `${whatsappName} - ${service} - ${city}`;
+// A factory pickup (same rule as prepare-lead-assignment.js) has no city: its
+// task says so instead of "Sin Ciudad".
+const isPickup = (qualification.service_scope === 'material' && qualification.fulfillment === 'pickup')
+  || qualification.modality === 'pickup'
+  || safe(row.service) === 'retiro';
+const isFactoryPickup = isPickup && !safe(row.city);
+const taskName = isFactoryPickup ? `${whatsappName} - retiro en fábrica` : `${whatsappName} - ${service} - ${city}`;
 const description = [
   'Resumen del lead',
   '',
   `Telefono: ${clickupPhoneNumber || phoneNumber || 'No informado'}`,
   `Canal: ${channel || 'whatsapp'}`,
-  `Ciudad: ${city}`,
+  `Ciudad: ${isFactoryPickup ? 'Retiro en fábrica' : city}`,
   `Servicio: ${service}`,
   `Requerimiento: ${requirement}`,
   sourceNumberId ? `Numero de Ingreso: ${sourceNumberId}` : null,
@@ -163,10 +169,7 @@ const matchingOptionIds = (rawOptions, texts) => {
     })
     .map(([, optionId]) => String(optionId));
 };
-const pushLabelsField = (fieldId, rawOptions, texts) => {
-  const optionIds = matchingOptionIds(rawOptions, texts);
-  pushCustomField(fieldId, optionIds.length ? optionIds : null);
-};
+const pushOptionIds = (fieldId, optionIds) => pushCustomField(fieldId, optionIds.length ? optionIds : null);
 // A product naming two labels ("Soleras y Solerillas") keeps only the ones its
 // chosen variant names ("Solerilla canto redondo" -> "Solerillas"); with no
 // variant, or one naming neither, the item keeps every label it matched.
@@ -179,8 +182,14 @@ const productOptionIds = new Set(lineItems.filter((item) => item && item.product
 }));
 const quotedProducts = lineItems.map((item) => item && item.product).filter(Boolean);
 const productTypeIds = matchingOptionIds(productOptions, quotedProducts).filter((optionId) => productOptionIds.has(optionId));
-pushCustomField($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds.length ? productTypeIds : null);
-pushLabelsField($env.CLICKUP_CF_SERVICE_TYPE_ID, $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON, [safe(row.service)]);
+pushOptionIds($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds);
+// A pickup is a product sale: it also takes the "Venta de Producto" label.
+const serviceOptions = $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON;
+const productSaleIds = isPickup ? Object.entries(asObject(serviceOptions))
+  .filter(([label, optionId]) => wordsOf(label).join(' ') === 'venta de producto' && configured(optionId))
+  .map(([, optionId]) => String(optionId)) : [];
+const serviceTypeIds = [...new Set([...matchingOptionIds(serviceOptions, [safe(row.service)]), ...productSaleIds])];
+pushOptionIds($env.CLICKUP_CF_SERVICE_TYPE_ID, serviceTypeIds);
 pushCustomField($env.CLICKUP_CF_CUSTOMER_RUT_ID, safe(qualification.company_rut));
 // The tax document follows the customer's invoice answer; no answer, no label.
 const taxDocumentOptionId = qualification.invoice_required === true ? $env.CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID
