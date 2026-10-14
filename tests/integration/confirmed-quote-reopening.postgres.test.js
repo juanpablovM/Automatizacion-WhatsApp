@@ -26,6 +26,9 @@ const connection = {
 const orchestratorSql = (name) => fs.readFileSync(`db/queries/n8n/wa-conversation-orchestrator/${name}.sql`, 'utf8');
 const loadSql = orchestratorSql('01_load_active_context');
 const routeSql = orchestratorSql('07_route_v3_turn');
+const persistLeadNode = JSON.parse(fs.readFileSync('n8n/workflows/crm-lead-creation-and-assignment.json', 'utf8'))
+  .nodes.find((node) => node.name === 'Persist Lead And Rotation');
+const persistLeadParams = persistLeadNode.parameters.additionalFields.queryParams.split(',').map((name) => name.trim());
 
 integration('a confirmed quote reopened by a correction', () => {
   const client = new pg.Client(connection);
@@ -114,6 +117,36 @@ integration('a confirmed quote reopened by a correction', () => {
     expect(routed.conversation_id).toBe(conversationId);
     expect(routed.lead_id).toBe(leadId);
     expect(routed.qualification_context).toEqual(context);
+  });
+
+  test('a re-confirmed reopened quote updates the same lead and keeps its seller', async () => {
+    const sellerId = (await client.query(`INSERT INTO sellers (name, clickup_user_id, is_active, sort_order)
+      VALUES ('Catherine', '101', TRUE, 1) RETURNING id`)).rows[0].id;
+    await client.query('UPDATE leads SET assigned_seller_id = $2 WHERE id = $1', [leadId, sellerId]);
+    await client.query("INSERT INTO lead_statuses (code, label, sort_order) VALUES ('qualified_complete', 'Qualified', 2) ON CONFLICT (code) DO NOTHING");
+    const corrected = { ...context, line_items: [{ item_id: 'i1', product: 'Bloques', quantity: '80' }] };
+    const input = {
+      previous_lead_id: '', source_number_id: String(sourceId), external_contact_id: '', whatsapp_name: 'Cliente',
+      phone_number: phone, service: 'despacho', city: 'Maipú', requirement: '• 80 bloques',
+      lead_status_code: 'qualified_complete', is_qualified: 'true', is_partial: 'false',
+      rotation_key: 'whatsapp:default', conversation_id: String(conversationId),
+      qualification_context: JSON.stringify(corrected), test_seller_id: '',
+    };
+    const leadsBefore = Number((await client.query('SELECT COUNT(*) FROM leads')).rows[0].count);
+    const { rows: [persisted] } = await client.query(persistLeadNode.parameters.query, persistLeadParams.map((name) => input[name]));
+    expect(persisted.lead_id).toBe(leadId);
+    expect(persisted.requirement).toBe('• 80 bloques');
+    expect(String(persisted.assigned_seller_id)).toBe(String(sellerId));
+    expect(Number((await client.query('SELECT COUNT(*) FROM leads')).rows[0].count)).toBe(leadsBefore);
+    const { rows: [lead] } = await client.query(
+      'SELECT requirement, qualification_context, clickup_task_id, clickup_synced_requirement FROM leads WHERE id = $1', [leadId],
+    );
+    expect(lead).toEqual({
+      requirement: '• 80 bloques', qualification_context: corrected,
+      // The task still shows 50 until the ClickUp sync applies the correction.
+      clickup_task_id: '86e3qf426', clickup_synced_requirement: '• 50 bloques',
+    });
+    expect((await client.query('SELECT COUNT(*) FROM lead_assignments WHERE lead_id = $1', [leadId])).rows[0].count).toBe('0');
   });
 
   test('without the reopen flag the route still opens a new conversation', async () => {
