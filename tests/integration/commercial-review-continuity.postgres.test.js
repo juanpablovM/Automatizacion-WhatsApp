@@ -75,6 +75,10 @@ integration('commercial review and address retry through persisted PostgreSQL st
       'system', 'waiting_user', $2::jsonb, $3::jsonb)`, [conversationId, output.after_payload_json, output.metadata_json]);
     await client.query("UPDATE inbound_events SET processing_status = 'processed', processing_token = NULL WHERE id = $1", [eventId]);
   };
+  // Quote correction (2026-10-14): while the task is open a correction reopens
+  // the quote instead (confirmed-quote-reopening.postgres.test.js); the legacy
+  // canned correction and addition replies remain for a closed task.
+  const closeClickupTask = () => client.query("UPDATE leads SET clickup_status = 'complete' WHERE id = $1", [leadId]);
   const setHandedToSales = async () => {
     await client.query(`UPDATE conversations SET conversation_status_id = (SELECT id FROM conversation_statuses
       WHERE code = 'handed_to_sales'), current_step = 'complete', pending_question_key = NULL WHERE id = $1`, [conversationId]);
@@ -117,8 +121,9 @@ integration('commercial review and address retry through persisted PostgreSQL st
     await persistTurn(current);
     expect((await client.query('SELECT lead_id FROM conversations WHERE id = $1', [conversationId])).rows[0].lead_id).toBe(leadId);
   });
-  test('two-step correction persists on the same conversation and lead without creating another lead', async () => {
+  test('two-step correction on a closed task persists on the same conversation and lead without creating another lead', async () => {
     await setHandedToSales();
+    await closeClickupTask();
     const leadsBefore = Number((await client.query(
       'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2',
       [sourceId, phone],
@@ -179,8 +184,9 @@ integration('commercial review and address retry through persisted PostgreSQL st
     expect(leadsAfter).toBe(1);
   });
   // Task 3c.33 (M4): "se me olvidó agregar algo" stays on the same quote.
-  test('a forgotten addition persists on the same conversation and lead without another lead', async () => {
+  test('a forgotten addition on a closed task persists on the same conversation and lead without another lead', async () => {
     await setHandedToSales();
+    await closeClickupTask();
     const request = await turn('Se me olvidó agregar algo a la cotización');
     expect(request.output).toMatchObject({
       conversation_id: conversationId, lead_id: leadId, pending_question_key: 'commercial_review_addition',

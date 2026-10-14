@@ -343,7 +343,7 @@ describeIntegration('inbound debounce batching', () => {
     const route = () => client.query(routeSql, [
       leader.inbound_event_id, leader.processing_token, null, sourceNumberId, phone,
       'enforce', 'debounce-rule', 'service', 'text', hola.external_message_id, '1789000000',
-      leader.normalized_payload.text_body, JSON.stringify({ data: { key: { id: hola.external_message_id } } }),
+      leader.normalized_payload.text_body, JSON.stringify({ data: { key: { id: hola.external_message_id } } }), false,
     ]);
     const routed = await route();
     expect(routed.rows[0]).toMatchObject({ claim_valid: true, route_matches: true, state: 'routed' });

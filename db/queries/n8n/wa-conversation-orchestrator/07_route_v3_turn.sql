@@ -24,7 +24,8 @@ WITH input AS MATERIALIZED (
       ELSE ('invalid_external_timestamp:' || BTRIM($11::TEXT))::TIMESTAMPTZ
     END AS external_timestamp,
     NULLIF($12::TEXT, '') AS text_body,
-    COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload
+    COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload,
+    COALESCE($14::BOOLEAN, FALSE) AS reopen_confirmed_quote
 ), valid_claim AS MATERIALIZED (
   SELECT event.id
   FROM inbound_events event
@@ -75,7 +76,14 @@ WITH input AS MATERIALIZED (
       (existing_execution.id IS NULL
         AND input.requested_conversation_id IS NOT NULL
         AND conversation.id = input.requested_conversation_id
-        AND status.code NOT IN ('handed_to_sales', 'closed', 'inactive_timeout'))
+        AND (
+          status.code NOT IN ('handed_to_sales', 'closed', 'inactive_timeout')
+          -- Quote correction: evaluate-conversation-step reopened this
+          -- confirmed quote because its lead's ClickUp task is still open.
+          OR (input.reopen_confirmed_quote
+            AND status.code = 'handed_to_sales'
+            AND conversation.lead_id IS NOT NULL)
+        ))
     )
   ORDER BY
     CASE

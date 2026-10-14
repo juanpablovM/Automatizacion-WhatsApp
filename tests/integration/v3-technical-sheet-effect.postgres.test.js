@@ -140,7 +140,7 @@ describeIntegration('v3.1 send_technical_sheet effect and document delivery', ()
     const routed = await client.query(routeSql, [
       event.inboundEventId, event.token, conversation.id, sourceNumberId, conversation.phone_number,
       'enforce', 'sheet-test-rule', 'service', 'text', `message-${event.inboundEventId}`, null,
-      'mándame la ficha', { source: 'integration-test' },
+      'mándame la ficha', { source: 'integration-test' }, false,
     ]);
     expect(routed.rows[0]).toMatchObject({ route_acquired: true });
     const prepared = await client.query(persistAuthoritySql, [

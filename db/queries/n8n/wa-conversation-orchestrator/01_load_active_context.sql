@@ -269,7 +269,11 @@ recent_messages AS (
       AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
       AND (m.direction = 'incoming' OR (m.direction = 'outgoing' AND m.delivery_status = 'sent'))
       AND lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'
-      AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')
+      -- handed_to_sales too: a correction right after the confirmation reopens
+      -- that quote (evaluate-conversation-step), and the model needs its history
+      -- not to greet the customer again. Every other turn on such a
+      -- conversation is a canned reply or a reset that ignores this list.
+      AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow', 'handed_to_sales')
       AND (lcr.reset_at IS NULL OR m.created_at > lcr.reset_at)
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 8
@@ -294,6 +298,15 @@ last_outgoing_message AS (
     AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
   ORDER BY m.created_at DESC, m.id DESC
   LIMIT 1
+),
+-- Quote correction: the ClickUp task of the latest conversation's own lead.
+-- An open task lets a correction continue the confirmed quote; a closed one
+-- (status in CLICKUP_STATUS_RESOLVED) starts a new quote.
+latest_conversation_task AS (
+  SELECT l.clickup_task_id, l.clickup_status
+  FROM leads l
+  JOIN latest_conversation lc ON lc.lead_id = l.id
+  WHERE l.deleted_at IS NULL
 ),
 latest_lead AS (
   SELECT
@@ -445,6 +458,8 @@ SELECT
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code,
   ca.ownership_id,
   ca.ownership_lead_id,
+  lct.clickup_task_id AS lead_clickup_task_id,
+  lct.clickup_status AS lead_clickup_status,
   COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed,
   ca.response_due_at AS human_response_due_at,
   COALESCE(ca.human_arbitration_required, FALSE) AS human_arbitration_required,
@@ -469,6 +484,7 @@ LEFT JOIN recent_messages rm ON TRUE
 LEFT JOIN last_outgoing_message lom ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
+LEFT JOIN latest_conversation_task lct ON TRUE
 LEFT JOIN chat_authority ca ON TRUE
 LEFT JOIN follow_up_status fs ON TRUE
 LEFT JOIN v3_grounding vg ON TRUE

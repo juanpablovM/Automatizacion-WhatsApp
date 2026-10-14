@@ -91,7 +91,18 @@ const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equi
 // even when it arrives with no caption at all.
 const PASSIVE_ATTACHMENT_TYPES = ['sticker', 'reaction'];
 
-function evaluateConversationStep(row) {
+// Quote correction (owner decision 2026-10-14): a confirmed quote stays open to
+// the customer while its ClickUp task is. Same default resolved list as
+// ops-handoff-clickup-closure/normalize-clickup-closure.js; CLICKUP_STATUS_RESOLVED
+// overrides both.
+const DEFAULT_RESOLVED_CLICKUP_STATUSES = 'complete,completed,closed,done,cerrado,resuelto';
+const isClickupStatusResolved = (status, env) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  return Boolean(normalized) && String((env && env.CLICKUP_STATUS_RESOLVED) || DEFAULT_RESOLVED_CLICKUP_STATUSES)
+    .split(',').map((entry) => entry.trim().toLowerCase()).includes(normalized);
+};
+
+function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env : {})) {
   // row is the input item (items[0]?.json in n8n context)
 
   const baseQuestions = {
@@ -697,6 +708,17 @@ function evaluateConversationStep(row) {
     : {};
   // Set only by a rule that records customer data deterministically (M5).
   let updatedQualificationContext = null;
+  // Reopenable: the latest conversation was handed to sales within the recency
+  // window, its lead has a ClickUp task that is not closed, nobody owns or
+  // arbitrates the chat, and the customer did not ask for a new quote.
+  const confirmedQuoteReopenable = hasExistingConversation && isRecentConversation
+    && row.conversation_status_code === 'handed_to_sales'
+    && Boolean(row.lead_id)
+    && Boolean(String(row.lead_clickup_task_id || '').trim())
+    && !isClickupStatusResolved(row.lead_clickup_status, env)
+    && !row.human_arbitration_required
+    && !wantsNew(normalizedText);
+  let reopenConfirmedQuote = false;
   const isEscalationAlreadyRequired = row.conversation_status_code === 'escalation_required'
     || stepInfo.field === 'escalation';
   const handleConfirmationRejection = () => {
@@ -782,14 +804,17 @@ function evaluateConversationStep(row) {
   }
 
   // A registered recent quote is not a new request merely because the client
-  // greets, thanks us, or asks for an update before commercial review.
+  // greets, thanks us, or asks for an update before commercial review. While
+  // its ClickUp task is open, a correction or an addition goes to the reopened
+  // quote below instead of a canned reply that changes no data.
   else if (hasExistingConversation && isRecentConversation
     && row.conversation_status_code === 'handed_to_sales'
     && row.lead_id
     && !row.human_arbitration_required && !wantsNew(normalizedText)
     && (humanControlActive || isGreetingOnly || isCommercialStatusInquiry
-      || wantsCommercialCorrection || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
-      || wantsCommercialAddition || row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY
+      || (!confirmedQuoteReopenable && (wantsCommercialCorrection
+        || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
+        || wantsCommercialAddition || row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY))
       || isCourtesyOnly(normalizedText)
       || everyBurstLine((line) => isCourtesyOnly(line) || isGreetingOnlyText(line)))) {
     resetConversationLead = false;
@@ -827,6 +852,23 @@ function evaluateConversationStep(row) {
       responseKind = 'commercial_review_pending';
       responseText = COMMERCIAL_REVIEW_PENDING_REPLY;
     }
+  }
+
+  // Quote correction: the customer writes after confirming and the task is
+  // still open. The same conversation, lead, qualification_context and history
+  // go to the v3.1 model, which applies the change, re-summarizes and asks to
+  // confirm again; that confirmation updates the same lead and ClickUp task.
+  else if (confirmedQuoteReopenable && !humanControlActive) {
+    resetConversationLead = false;
+    reopenConfirmedQuote = true;
+    current.service = row.state_service || stepState.service || lastKnownService || previous.service;
+    current.city = row.state_city || stepState.city || lastKnownCity || previous.city;
+    current.requirement = row.state_requirement || stepState.requirement || lastKnownRequirement || previous.requirement;
+    currentStepField = stepInfo.field;
+    pendingQuestionKey = null;
+    conversationStatusCode = 'waiting_user';
+    responseKind = 'confirmed_quote_reopened';
+    responseText = '';
   }
 
   // 4. TERMINAL: una conversación cerrada no puede reaparecer como re-engagement.
@@ -1176,6 +1218,8 @@ function evaluateConversationStep(row) {
         human_response_due_at: row.human_response_due_at || null,
         human_arbitration_required: Boolean(row.human_arbitration_required),
         reset_conversation_lead: resetConversationLead,
+        // Fix V3 Route reuses a handed_to_sales conversation only on this flag.
+        reopen_confirmed_quote: reopenConfirmedQuote,
         previous_lead_id: usedPreviousContext ? row.previous_lead_id || null : null,
         service: current.service || null,
         city: current.city || null,
