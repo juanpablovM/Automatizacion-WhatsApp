@@ -183,6 +183,20 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live production 2026-10-14 (conversation 494): "Son unos 60 m2 para un
+  // estacionamiento" produced a use_case observation with no state_mutation,
+  // although use_case set was authorized, so the lead lost "Uso/proyecto".
+  // This v3.1-only rule records a use the customer states, and never asks it.
+  test('v3.1 records a use the customer states with its mutation, and never asks for it', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('"para un estacionamiento"');
+    expect(v31Prompt).toContain('nunca dejes una observación de use_case sin su mutación');
+    expect(v31Prompt).toContain('nunca preguntes por el uso');
+    expect(v3Prompt).not.toContain('nunca dejes una observación de use_case sin su mutación');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
   // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
   // concertina y de alambre de púas?" the customer answered "500 metros de
   // cada uno" and the model set 500 m only on the concertina item. This
