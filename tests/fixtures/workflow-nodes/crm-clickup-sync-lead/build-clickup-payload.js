@@ -137,6 +137,40 @@ if (configured($env.CLICKUP_CF_CHANNEL_ID) && configured($env.CLICKUP_CF_CHANNEL
   });
 }
 
+// Hormiglass's "Cotizaciones WhatsApp" list (owner decision 2026-10-14). Each
+// field below is opt-in by environment, so a list without it gets nothing new.
+const whatsappDigits = (clickupPhoneNumber || '').replace(/\D/g, '');
+pushCustomField($env.CLICKUP_CF_WHATSAPP_LINK_ID, whatsappDigits ? `https://wa.me/${whatsappDigits}` : null);
+pushCustomField($env.CLICKUP_CF_CONSULTATION_DATE_ID, Date.now());
+if (configured($env.CLICKUP_CF_REFERRAL_ID) && configured($env.CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID)) {
+  customFields.push({ id: $env.CLICKUP_CF_REFERRAL_ID, value: [$env.CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID] });
+}
+
+// A labels field takes option IDs. The options mapping is {label: optionId};
+// a label applies when its first word names something the customer asked for,
+// singular or plural ("Baldosa Minvu" -> "Baldosas", "Adoquín" -> "Adoquines").
+const wordsOf = (value) => safe(value).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .split(/[^a-z0-9]+/).filter(Boolean);
+const sameWord = (left, right) => left === right
+  || `${left}s` === right || `${right}s` === left || `${left}es` === right || `${right}es` === left;
+const matchingOptionIds = (rawOptions, texts) => {
+  const options = asObject(rawOptions);
+  const words = texts.flatMap(wordsOf);
+  return Object.entries(options)
+    .filter(([label, optionId]) => {
+      const [firstWord] = wordsOf(label);
+      return firstWord && configured(optionId) && words.some((word) => sameWord(word, firstWord));
+    })
+    .map(([, optionId]) => String(optionId));
+};
+const pushLabelsField = (fieldId, rawOptions, texts) => {
+  const optionIds = matchingOptionIds(rawOptions, texts);
+  pushCustomField(fieldId, optionIds.length ? optionIds : null);
+};
+const quotedProducts = lineItems.map((item) => item && item.product).filter(Boolean);
+pushLabelsField($env.CLICKUP_CF_PRODUCT_TYPE_ID, $env.CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON, quotedProducts);
+pushLabelsField($env.CLICKUP_CF_SERVICE_TYPE_ID, $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON, [safe(row.service)]);
+
 const assigneeId = asInt(row.clickup_user_id);
 const taskPayload = {
   name: taskName,
@@ -145,6 +179,9 @@ const taskPayload = {
   assignees: assigneeId ? [assigneeId] : [],
   custom_fields: customFields,
 };
+if (configured($env.CLICKUP_LEAD_INITIAL_STATUS)) {
+  taskPayload.status = safe($env.CLICKUP_LEAD_INITIAL_STATUS);
+}
 
 const commentText = [
   advisorLines.length ? 'Resumen Comercial AI\n\n' + advisorLines.join('\n') : '',
