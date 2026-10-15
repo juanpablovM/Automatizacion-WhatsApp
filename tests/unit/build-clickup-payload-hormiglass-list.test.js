@@ -93,6 +93,18 @@ describe('the lead task fits the Cotizaciones WhatsApp list', () => {
     expect(fieldValue(adoquin, 'cf-product-type')).toEqual(['opt-adoquines', 'opt-bloques']);
   });
 
+  // Owner decision 2026-10-14: an "Adoquín corriente" is labeled Adocretos in
+  // ClickUp, although the catalog lists it as a variant of the stone Adoquín.
+  test('an Adoquín corriente is labeled Adocretos', () => {
+    const env = { ...hormiglassEnv(), CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON: JSON.stringify({ ...PRODUCT_OPTIONS, Adocretos: 'opt-adocretos' }) };
+    const itemWith = (variant) => runNode(leadRow({
+      qualification_context: { line_items: [{ item_id: 'li_0', product: 'Adoquín', variant }] },
+    }), env);
+    expect(fieldValue(itemWith('Adoquín corriente'), 'cf-product-type')).toEqual(['opt-adocretos']);
+    expect(fieldValue(itemWith('Adoquín 14 x largo libre'), 'cf-product-type')).toEqual(['opt-adoquines']);
+    expect(fieldValue(itemWith(undefined), 'cf-product-type')).toEqual(['opt-adoquines']);
+  });
+
   // Lead 400 (2026-10-14): "Soleras y Solerillas" with the variant "Solerilla
   // canto redondo 50 cm" was labeled both Soleras and Solerillas.
   test('a product naming two labels is narrowed by its chosen variant', () => {

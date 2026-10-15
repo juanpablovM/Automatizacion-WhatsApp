@@ -173,15 +173,19 @@ const pushOptionIds = (fieldId, optionIds) => pushCustomField(fieldId, optionIds
 // A product naming two labels ("Soleras y Solerillas") keeps only the ones its
 // chosen variant names ("Solerilla canto redondo" -> "Solerillas"); with no
 // variant, or one naming neither, the item keeps every label it matched.
+// Owner decision 2026-10-14: an "Adoquín corriente" (catalogued as a variant of
+// the stone Adoquín) is an adocreto for the sales team.
 const productOptions = $env.CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON;
+const isAdoquinCorriente = (item) => wordsOf(item.variant).join(' ') === 'adoquin corriente';
 const productOptionIds = new Set(lineItems.filter((item) => item && item.product).flatMap((item) => {
+  if (isAdoquinCorriente(item)) return matchingOptionIds(productOptions, ['Adocreto']);
   const byProduct = matchingOptionIds(productOptions, [item.product]);
   if (byProduct.length < 2) return byProduct;
   const byVariant = matchingOptionIds(productOptions, [item.variant]).filter((optionId) => byProduct.includes(optionId));
   return byVariant.length ? byVariant : byProduct;
 }));
-const quotedProducts = lineItems.map((item) => item && item.product).filter(Boolean);
-const productTypeIds = matchingOptionIds(productOptions, quotedProducts).filter((optionId) => productOptionIds.has(optionId));
+const productTypeIds = [...new Set(Object.values(asObject(productOptions)).map(String))]
+  .filter((optionId) => productOptionIds.has(optionId));
 pushOptionIds($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds);
 // A pickup is a product sale: it also takes the "Venta de Producto" label.
 const serviceOptions = $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON;
