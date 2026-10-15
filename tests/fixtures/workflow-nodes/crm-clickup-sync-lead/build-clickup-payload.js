@@ -76,12 +76,12 @@ const qualificationLabels = {
 };
 const formatQualificationValue = (value) => typeof value === 'boolean' ? (value ? 'Si' : 'No') : safe(value);
 // D9 (design.md): the flat `quantity`/`measurements` mirror the *primary*
-// line item only (design.md D2). Rendering them as if they described the
-// whole quote would mislabel a multi-item quote's other items, so they are
-// skipped once there is more than one item — the requirement line already
-// itemizes every item's own quantity and measurements.
+// line item only (design.md D2). The requirement line itemizes every item's
+// own quantity and measurements, so they are skipped once the quote has line
+// items — task 3c.33 (L3) extends this to a single item, whose requirement is
+// now a bullet line too. A historical flat quote (no line_items) keeps them.
 const lineItems = Array.isArray(qualification.line_items) ? qualification.line_items : [];
-const skippedQualificationKeys = lineItems.length > 1 ? new Set(['quantity', 'measurements']) : new Set();
+const skippedQualificationKeys = lineItems.length > 0 ? new Set(['quantity', 'measurements']) : new Set();
 const qualificationLines = Object.entries(qualificationLabels)
   .filter(([key]) => !skippedQualificationKeys.has(key))
   .filter(([key]) => qualification[key] !== undefined && qualification[key] !== null && qualification[key] !== '')
@@ -101,13 +101,19 @@ const advisorLines = [
   ...qualificationLines,
 ].filter(Boolean);
 
-const taskName = `${whatsappName} - ${service} - ${city}`;
+// A factory pickup (same rule as prepare-lead-assignment.js) has no city: its
+// task says so instead of "Sin Ciudad".
+const isPickup = (qualification.service_scope === 'material' && qualification.fulfillment === 'pickup')
+  || qualification.modality === 'pickup'
+  || safe(row.service) === 'retiro';
+const isFactoryPickup = isPickup && !safe(row.city);
+const taskName = isFactoryPickup ? `${whatsappName} - retiro en fábrica` : `${whatsappName} - ${service} - ${city}`;
 const description = [
   'Resumen del lead',
   '',
   `Telefono: ${clickupPhoneNumber || phoneNumber || 'No informado'}`,
   `Canal: ${channel || 'whatsapp'}`,
-  `Ciudad: ${city}`,
+  `Ciudad: ${isFactoryPickup ? 'Retiro en fábrica' : city}`,
   `Servicio: ${service}`,
   `Requerimiento: ${requirement}`,
   sourceNumberId ? `Numero de Ingreso: ${sourceNumberId}` : null,
@@ -137,6 +143,63 @@ if (configured($env.CLICKUP_CF_CHANNEL_ID) && configured($env.CLICKUP_CF_CHANNEL
   });
 }
 
+// Hormiglass's "Cotizaciones WhatsApp" list (owner decision 2026-10-14). Each
+// field below is opt-in by environment, so a list without it gets nothing new.
+const whatsappDigits = (clickupPhoneNumber || '').replace(/\D/g, '');
+pushCustomField($env.CLICKUP_CF_WHATSAPP_LINK_ID, whatsappDigits ? `https://wa.me/${whatsappDigits}` : null);
+pushCustomField($env.CLICKUP_CF_CONSULTATION_DATE_ID, Date.now());
+if (configured($env.CLICKUP_CF_REFERRAL_ID) && configured($env.CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID)) {
+  customFields.push({ id: $env.CLICKUP_CF_REFERRAL_ID, value: [$env.CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID] });
+}
+
+// A labels field takes option IDs. The options mapping is {label: optionId};
+// a label applies when its first word names something the customer asked for,
+// singular or plural ("Baldosa Minvu" -> "Baldosas", "Adoquín" -> "Adoquines").
+const wordsOf = (value) => safe(value).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .split(/[^a-z0-9]+/).filter(Boolean);
+const sameWord = (left, right) => left === right
+  || `${left}s` === right || `${right}s` === left || `${left}es` === right || `${right}es` === left;
+const matchingOptionIds = (rawOptions, texts) => {
+  const options = asObject(rawOptions);
+  const words = texts.flatMap(wordsOf);
+  return Object.entries(options)
+    .filter(([label, optionId]) => {
+      const [firstWord] = wordsOf(label);
+      return firstWord && configured(optionId) && words.some((word) => sameWord(word, firstWord));
+    })
+    .map(([, optionId]) => String(optionId));
+};
+const pushOptionIds = (fieldId, optionIds) => pushCustomField(fieldId, optionIds.length ? optionIds : null);
+// A product naming two labels ("Soleras y Solerillas") keeps only the ones its
+// chosen variant names ("Solerilla canto redondo" -> "Solerillas"); with no
+// variant, or one naming neither, the item keeps every label it matched.
+// Owner decision 2026-10-14: an "Adoquín corriente" (catalogued as a variant of
+// the stone Adoquín) is an adocreto for the sales team.
+const productOptions = $env.CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON;
+const isAdoquinCorriente = (item) => wordsOf(item.variant).join(' ') === 'adoquin corriente';
+const productOptionIds = new Set(lineItems.filter((item) => item && item.product).flatMap((item) => {
+  if (isAdoquinCorriente(item)) return matchingOptionIds(productOptions, ['Adocreto']);
+  const byProduct = matchingOptionIds(productOptions, [item.product]);
+  if (byProduct.length < 2) return byProduct;
+  const byVariant = matchingOptionIds(productOptions, [item.variant]).filter((optionId) => byProduct.includes(optionId));
+  return byVariant.length ? byVariant : byProduct;
+}));
+const productTypeIds = [...new Set(Object.values(asObject(productOptions)).map(String))]
+  .filter((optionId) => productOptionIds.has(optionId));
+pushOptionIds($env.CLICKUP_CF_PRODUCT_TYPE_ID, productTypeIds);
+// A pickup is a product sale: it also takes the "Venta de Producto" label.
+const serviceOptions = $env.CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON;
+const productSaleIds = isPickup ? Object.entries(asObject(serviceOptions))
+  .filter(([label, optionId]) => wordsOf(label).join(' ') === 'venta de producto' && configured(optionId))
+  .map(([, optionId]) => String(optionId)) : [];
+const serviceTypeIds = [...new Set([...matchingOptionIds(serviceOptions, [safe(row.service)]), ...productSaleIds])];
+pushOptionIds($env.CLICKUP_CF_SERVICE_TYPE_ID, serviceTypeIds);
+pushCustomField($env.CLICKUP_CF_CUSTOMER_RUT_ID, safe(qualification.company_rut));
+// The tax document follows the customer's invoice answer; no answer, no label.
+const taxDocumentOptionId = qualification.invoice_required === true ? $env.CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID
+  : qualification.invoice_required === false ? $env.CLICKUP_CF_TAX_DOCUMENT_OPTION_BOLETA_ID : null;
+pushCustomField($env.CLICKUP_CF_TAX_DOCUMENT_ID, configured(taxDocumentOptionId) ? [String(taxDocumentOptionId)] : null);
+
 const assigneeId = asInt(row.clickup_user_id);
 const taskPayload = {
   name: taskName,
@@ -145,11 +208,36 @@ const taskPayload = {
   assignees: assigneeId ? [assigneeId] : [],
   custom_fields: customFields,
 };
+if (configured($env.CLICKUP_LEAD_INITIAL_STATUS)) {
+  taskPayload.status = safe($env.CLICKUP_LEAD_INITIAL_STATUS);
+}
 
 const commentText = [
   advisorLines.length ? 'Resumen Comercial AI\n\n' + advisorLines.join('\n') : '',
   fullConversation ? 'Conversación Completa Cliente\n\n' + fullConversation : '',
 ].filter(Boolean).join('\n\n');
+
+// Quote correction (owner decision 2026-10-14): a re-confirmed reopened quote
+// updates its existing task instead of creating another. Only the description,
+// "🔍 Solicitud" and "Tipo de producto" change; status, assignees and every
+// other field stay as the seller left them. The comment names the assigned
+// seller so ClickUp notifies them of the before→after.
+const shouldUpdateClickup = Boolean(row.should_update_clickup) && Boolean(existingClickupTaskId);
+const oneLine = (value) => safe(value).split('\n').map((line) => line.trim()).filter(Boolean).join('; ');
+const correctedFieldIds = new Set([$env.CLICKUP_CF_REQUIREMENT_ID, $env.CLICKUP_CF_PRODUCT_TYPE_ID].filter(configured));
+const correction = shouldUpdateClickup ? {
+  should_update_clickup: true,
+  clickup_correction_operation_key: safe(row.clickup_correction_operation_key),
+  clickup_correction_requirement: row.requirement ?? null,
+  clickup_update_url: `https://api.clickup.com/api/v2/task/${encodeURIComponent(existingClickupTaskId)}`,
+  clickup_update_payload: { description },
+  clickup_update_custom_fields: customFields.filter((field) => correctedFieldIds.has(field.id)),
+  clickup_correction_comment: {
+    comment_text: `✏️ Corrección del cliente: ${oneLine(row.clickup_requirement_before) || 'Sin requerimiento informado'} → ${oneLine(requirement)}`,
+    ...(assigneeId ? { assignee: assigneeId } : {}),
+    notify_all: false,
+  },
+} : {};
 
 return [
   {
@@ -166,6 +254,7 @@ return [
       clickup_task_payload: taskPayload,
       comment_text: commentText,
       comment_enabled: Boolean(commentText),
+      ...correction,
     },
   },
 ];

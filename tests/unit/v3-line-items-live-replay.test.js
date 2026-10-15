@@ -243,10 +243,16 @@ describe('aggregateRuns — pure aggregation over N runs x transcripts', () => {
 });
 
 describe('checkItemizedFinalConfirmation — one "•" line per item once there is more than one item', () => {
+  const FINAL_CONFIRMATION_REQUEST = { goal_id: 'final_confirmation', item_ref: null };
+  const TWO_ITEMS = { line_items: [{ item_id: 'li_a' }, { item_id: 'li_b' }] };
+
   test('matches when the reply has exactly one bullet per item', () => {
     const result = checkItemizedFinalConfirmation({
-      decision: { reply: { text: '• Cierro de Hormigón — 5 m2, 3 metros de altura\n• Alambre de Púas — 200 ml' } },
-      qualificationContext: { line_items: [{ item_id: 'li_a' }, { item_id: 'li_b' }] },
+      decision: {
+        primary_request: FINAL_CONFIRMATION_REQUEST,
+        reply: { text: '• Cierro de Hormigón — 5 m2, 3 metros de altura\n• Alambre de Púas — 200 ml' },
+      },
+      qualificationContext: TWO_ITEMS,
     });
 
     expect(result).toEqual({ checked: true, itemCount: 2, bulletCount: 2, matches: true });
@@ -254,8 +260,8 @@ describe('checkItemizedFinalConfirmation — one "•" line per item once there 
 
   test('flags a mismatch when an item is missing its bullet line', () => {
     const result = checkItemizedFinalConfirmation({
-      decision: { reply: { text: '• Cierro de Hormigón — 5 m2' } },
-      qualificationContext: { line_items: [{ item_id: 'li_a' }, { item_id: 'li_b' }] },
+      decision: { primary_request: FINAL_CONFIRMATION_REQUEST, reply: { text: '• Cierro de Hormigón — 5 m2' } },
+      qualificationContext: TWO_ITEMS,
     });
 
     expect(result).toEqual({ checked: true, itemCount: 2, bulletCount: 1, matches: false });
@@ -263,12 +269,47 @@ describe('checkItemizedFinalConfirmation — one "•" line per item once there 
 
   test('is not applicable for a single-item (or empty) quote', () => {
     const result = checkItemizedFinalConfirmation({
-      decision: { reply: { text: 'hormigon H25 20 m3' } },
+      decision: { primary_request: FINAL_CONFIRMATION_REQUEST, reply: { text: 'hormigon H25 20 m3' } },
       qualificationContext: { line_items: [{ item_id: 'li_0' }] },
     });
 
     expect(result.checked).toBe(false);
     expect(result.matches).toBe(true);
+  });
+
+  // Live A/B 2026-09-28: the scripted transcripts never reach a real final
+  // confirmation (required goals remain), yet every two-item turn was checked
+  // and reported matches:false — a false negative. A turn that asks for any
+  // other goal is not a final confirmation and must not be checked.
+  test('is not applicable when a multi-item turn asks for a goal other than final_confirmation', () => {
+    const result = checkItemizedFinalConfirmation({
+      decision: { primary_request: { goal_id: 'fulfillment', item_ref: null }, reply: { text: '¿Despacho o retiro?' } },
+      qualificationContext: TWO_ITEMS,
+    });
+
+    expect(result).toEqual({
+      checked: false, reason: 'turn does not ask for final_confirmation', itemCount: 2, bulletCount: 0, matches: true,
+    });
+  });
+
+  test('is not applicable when a multi-item turn asks nothing', () => {
+    const result = checkItemizedFinalConfirmation({
+      decision: { primary_request: null, reply: { text: 'Anotado.' } },
+      qualificationContext: TWO_ITEMS,
+    });
+
+    expect(result.checked).toBe(false);
+    expect(result.reason).toBe('turn does not ask for final_confirmation');
+  });
+
+  test('reads the proposal primary_request when the turn has no authorized decision', () => {
+    const result = checkItemizedFinalConfirmation({
+      decision: null,
+      proposal: { primary_request: FINAL_CONFIRMATION_REQUEST, reply_text: '• Cierro de Hormigón — 5 m2' },
+      qualificationContext: TWO_ITEMS,
+    });
+
+    expect(result).toEqual({ checked: true, itemCount: 2, bulletCount: 1, matches: false });
   });
 });
 
@@ -335,7 +376,9 @@ describe('replay — end-to-end with an injected mock, never a real network call
     expect(report.summary.v3.validationAttempts).toBe(1);
     expect(report.summary['v3.1'].validationAttempts).toBe(1);
     expect(report.summary.v3.validationPassRate).toBe(1);
-    expect(report.finalConfirmations).toEqual([{ name: 'single-turn', checked: false, itemCount: 0, bulletCount: 0, matches: true }]);
+    expect(report.finalConfirmations).toEqual([{
+      name: 'single-turn', checked: false, reason: 'turn does not ask for final_confirmation', itemCount: 0, bulletCount: 0, matches: true,
+    }]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

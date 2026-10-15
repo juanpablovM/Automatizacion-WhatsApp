@@ -45,8 +45,8 @@ VALUES
    'Nuestra planta esta ubicada en la Region Metropolitana. Para atencion presencial y retiro de productos, agendar una visita con tu ejecutiva es recomendable para asegurar disponibilidad y horario. Contactanos para coordinar.',
    ARRAY['direccion', 'planta', 'ubicacion', 'retiro', 'visita'], 4, true),
 
-  ('¿Atienden sábados?',
-   'Nuestro horario de atencion es de lunes a viernes en horario comercial. Los sabados, domingos y festivos no tenemos atencion presencial, pero puedes dejar tu consulta por WhatsApp y te responderemos el siguiente dia habil.',
-   ARRAY['horario', 'sabado', 'finde', 'fin de semana', 'atencion'], 3, true)
+  ('¿Cuál es el horario de atención?',
+   'Atendemos de lunes a martes de 8:00 a 13:00 y de 14:00 a 18:00, de miércoles a viernes de 8:00 a 13:00 y de 14:00 a 17:00, y los sábados de 8:00 a 14:00. Domingos y festivos no atendemos, pero puedes dejar tu consulta por WhatsApp y te responderemos el siguiente día hábil.',
+   ARRAY['horario', 'sabado', 'finde', 'fin de semana', 'atencion', 'sábado', 'domingo', 'festivo', 'hora', 'abren', 'cierran'], 3, true)
 
 ON CONFLICT DO NOTHING;

@@ -25,7 +25,17 @@ const quote = {
 };
 
 describe('commercial review continuity', () => {
-  test.each(['Hola', 'Gracias', '¿Cómo va mi cotización?', '¿Hay novedades?'])('preserves registered quote for a recent neutral message: %s', (text) => {
+  test.each([
+    'Hola',
+    'Gracias',
+    '¿Cómo va mi cotización?',
+    '¿Qué pasó con mi cotización?',
+    '¿Hay novedades?',
+    '¿Todavía no me contactan?',
+    'Quisiera saber el estado de mi solicitud',
+    '¿En qué va el presupuesto?',
+    '¿Cuándo me responden por la cotización?',
+  ])('preserves registered quote for a recent neutral or status message: %s', (text) => {
     const evaluated = evaluateConversationStep({ ...quote, text_body: text }).json;
     const out = run('wa-conversation-orchestrator/apply-ai-assistance.js', evaluated);
     expect(out.conversation_id).toBe(100);
@@ -34,7 +44,7 @@ describe('commercial review continuity', () => {
     expect(out.reset_conversation_lead).toBe(false);
     expect(out.should_create_lead).toBe(false);
     expect(out.should_escalate).toBe(false);
-    expect(out.response_text).toContain('pendiente de revisión');
+    expect(out.response_text).toContain('nuestro equipo comercial la está revisando');
     const request = run('ai-lead-qualification-assistant/build-ai-request.js', evaluated);
     expect(request.ai_skipped).toBe(true);
     const opportunity = run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', out);
@@ -48,24 +58,82 @@ describe('commercial review continuity', () => {
     expect(out.response_kind).not.toBe('commercial_review_pending');
     expect(out.reset_conversation_lead).toBe(true);
   });
-  test('retains silent registered quote while human ownership is active', () => {
-    const out = evaluateConversationStep({ ...quote, bot_suppressed: true }).json;
+  test.each([
+    ['status inquiry', { text_body: '¿Cuál es el estado de mi solicitud?' }],
+    ['modification request', { text_body: 'Quiero modificar mi solicitud' }],
+    ['correction detail', { text_body: 'La cantidad correcta es 120', pending_question_key: 'commercial_review_correction' }],
+    ['explicit new quotation', { text_body: 'Nueva cotización', pending_question_key: 'commercial_review_correction' }],
+    ['explicitly requested new quotation', { text_body: 'Quiero una nueva cotización', pending_question_key: 'commercial_review_correction' }],
+  ])('retains silent registered quote under human ownership for a %s', (_label, extra) => {
+    const out = evaluateConversationStep({ ...quote, ...extra, bot_suppressed: true }).json;
     expect(out.conversation_id).toBe(100);
+    expect(out.lead_id).toBe(200);
     expect(out.qualification_context).toEqual(quote.qualification_context);
     expect(out.reset_conversation_lead).toBe(false);
+    expect(out.should_create_lead).toBe(false);
+    expect(out.should_escalate).toBe(false);
     expect(out.deterministic_reply).toBe('');
     expect(out.response_kind).toBe('human_control_suppressed');
+    const applied = run('wa-conversation-orchestrator/apply-ai-assistance.js', out);
+    expect(applied.response_text).toBe('');
+    expect(applied.conversation_id).toBe(100);
+    expect(applied.lead_id).toBe(200);
+    expect(applied.reset_conversation_lead).toBe(false);
+    expect(applied.should_create_lead).toBe(false);
+    expect(applied.should_escalate).toBe(false);
   });
   test('expired human lease does not create an infinite pending-review acknowledgment', () => {
     const out = evaluateConversationStep({ ...quote, human_arbitration_required: true }).json;
     expect(out.response_kind).not.toBe('commercial_review_pending');
     expect(out.human_arbitration_required).toBe(true);
   });
-  test('explicit new request is allowed and clears the old quote', () => {
-    const out = evaluateConversationStep({ ...quote, text_body: 'Nueva cotización' }).json;
-    expect(out.reset_conversation_lead).toBe(true);
-    expect(out.conversation_id).toBeNull();
-    expect(out.qualification_context).toEqual({});
+  test('explicit modification preserves the quote and records the next detail as a control-only turn', () => {
+    const requested = evaluateConversationStep({ ...quote, text_body: 'Quiero modificar mi solicitud' }).json;
+    expect(requested.conversation_id).toBe(100);
+    expect(requested.lead_id).toBe(200);
+    expect(requested.reset_conversation_lead).toBe(false);
+    expect(requested.pending_question_key).toBe('commercial_review_correction');
+    expect(requested.deterministic_reply).toBe('¡Claro! Cuéntame qué dato de tu solicitud quieres corregir.');
+    expect(requested.v3_control_only).toBe(true);
+    expect(requested.should_create_lead).toBe(false);
+    expect(requested.should_escalate).toBe(false);
+
+    const detail = evaluateConversationStep({
+      ...quote,
+      text_body: 'Quiero cambiar la cantidad a 120 pastelones',
+      pending_question_key: requested.pending_question_key,
+    }).json;
+    expect(detail.conversation_id).toBe(100);
+    expect(detail.lead_id).toBe(200);
+    expect(detail.qualification_context).toEqual(quote.qualification_context);
+    expect(detail.reset_conversation_lead).toBe(false);
+    expect(detail.pending_question_key).toBeNull();
+    expect(detail.v3_control_only).toBe(true);
+    expect(detail.should_create_lead).toBe(false);
+    expect(detail.should_escalate).toBe(false);
+    expect(detail.deterministic_reply).toBe('Muchas gracias. Tu corrección quedó registrada y el equipo comercial la revisará junto con tu solicitud 👍');
+    expect(detail.deterministic_reply).not.toMatch(/clickup|campo.*actualiz|solicitud.*actualiz/i);
+
+    const request = run('ai-lead-qualification-assistant/build-ai-request.js', detail);
+    expect(request.ai_skipped).toBe(true);
+    const applied = run('wa-conversation-orchestrator/apply-ai-assistance.js', detail);
+    expect(applied.response_text).toBe(detail.deterministic_reply);
+    expect(applied.conversation_id).toBe(100);
+    expect(applied.lead_id).toBe(200);
+    expect(applied.reset_conversation_lead).toBe(false);
+    expect(applied.should_create_lead).toBe(false);
+    expect(applied.should_escalate).toBe(false);
+    const opportunity = run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', applied);
+    expect(opportunity.opportunity_write).toBe(false);
+  });
+  test('explicit new request is allowed and clears the old quote, including during correction capture', () => {
+    for (const extra of [{}, { pending_question_key: 'commercial_review_correction' }]) {
+      const out = evaluateConversationStep({ ...quote, ...extra, text_body: 'Nueva cotización' }).json;
+      expect(out.reset_conversation_lead).toBe(true);
+      expect(out.conversation_id).toBeNull();
+      expect(out.qualification_context).toEqual({});
+      expect(out.pending_question_key).toBeNull();
+    }
   });
   test('stale context over thirty days and absent archived conversation do not revive the quote', () => {
     for (const extra of [{ is_recent_conversation: false, is_stale_context: true, is_reengagement: false, elapsed_hours_since_last_inbound: 800 },
@@ -166,5 +234,59 @@ describe('pickup quantity and contextual address question', () => {
     const metadata = JSON.parse(evaluated.metadata_json);
     expect(metadata.previous_commercial_pending_question_key).toBe('address');
     expect(metadata.previous_commercial_question_retry).toBe(1);
+  });
+});
+
+// Task 3c.33 (M4, live 2026-09-30, conversations 389 -> 390): "Se me olvidó
+// agregar algo a la cotización", sent 15 seconds after the handoff, opened a
+// new quote with a welcome greeting. An addition on a recent handed_to_sales
+// quote now stays on the same conversation and lead, through the commercial
+// correction flow.
+describe('commercial review additions (M4)', () => {
+  test.each([
+    'Se me olvido agregar algo a la cotización',
+    'Me faltó agregar algo',
+    'Quiero agregar otro producto a mi solicitud',
+    '¿Puedo sumar algo más al pedido?',
+  ])('an addition request keeps the quote and asks what to add: %s', (text) => {
+    const out = evaluateConversationStep({ ...quote, text_body: text }).json;
+    expect(out.conversation_id).toBe(100);
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.should_create_lead).toBe(false);
+    expect(out.should_escalate).toBe(false);
+    expect(out.v3_control_only).toBe(true);
+    expect(out.response_kind).toBe('commercial_review_pending');
+    expect(out.pending_question_key).toBe('commercial_review_addition');
+    expect(out.deterministic_reply).toBe('¡Claro! 👍\n\nCuéntame qué te gustaría agregar a tu solicitud.');
+    expect(out.deterministic_reply).not.toMatch(/bienvenid/i);
+    const applied = run('wa-conversation-orchestrator/apply-ai-assistance.js', out);
+    expect(applied.response_text).toBe(out.deterministic_reply);
+    expect(applied.conversation_id).toBe(100);
+    expect(applied.lead_id).toBe(200);
+  });
+
+  test('the added detail is recorded on the same quote', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Necesito palmetas de hormigón, unos 70 m2', pending_question_key: 'commercial_review_addition' }).json;
+    expect(out.conversation_id).toBe(100);
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.pending_question_key).toBeNull();
+    expect(out.v3_control_only).toBe(true);
+    expect(out.deterministic_reply).toBe('Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍');
+    expect(out.deterministic_reply).not.toMatch(/clickup|actualiz/i);
+  });
+
+  test('an addition that already names what to add is recorded at once', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Se me olvidó agregar 20 soleras' }).json;
+    expect(out.lead_id).toBe(200);
+    expect(out.reset_conversation_lead).toBe(false);
+    expect(out.pending_question_key).toBeNull();
+    expect(out.deterministic_reply).toBe('Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍');
+  });
+
+  test('an explicit new quotation still starts a new request', () => {
+    const out = evaluateConversationStep({ ...quote, text_body: 'Quiero agregar una nueva cotización' }).json;
+    expect(out.reset_conversation_lead).toBe(true);
   });
 });

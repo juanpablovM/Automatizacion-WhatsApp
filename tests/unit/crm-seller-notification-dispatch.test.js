@@ -59,3 +59,30 @@ describe('Build Seller Notification — renders leads.requirement verbatim (D9)'
     expect(output.notification_payload.comment_text).toContain('Requerimiento: hormigon H25 20 m3');
   });
 });
+
+describe('Build Seller Notification — links straight to the customer WhatsApp chat', () => {
+  test('replaces the ClickUp task link with a wa.me link to the customer', () => {
+    const output = runEmbeddedNode('Build Seller Notification', baseRow(), { CLICKUP_API_TOKEN: 'token-1' });
+
+    const commentText = output.notification_payload.comment_text;
+    expect(commentText).toContain('WhatsApp: https://wa.me/56911112222');
+    expect(commentText).not.toContain('ClickUp:');
+    expect(commentText).not.toContain('https://app.clickup.com/t/ct-1');
+  });
+
+  test('keeps only the digits of a formatted phone number', () => {
+    const output = runEmbeddedNode('Build Seller Notification', baseRow({
+      phone_number: '+56 9 1111-2222',
+    }), { CLICKUP_API_TOKEN: 'token-1' });
+
+    expect(output.notification_payload.comment_text).toContain('WhatsApp: https://wa.me/56911112222');
+  });
+
+  test('omits the WhatsApp line when the lead has no phone number', () => {
+    const output = runEmbeddedNode('Build Seller Notification', baseRow({
+      phone_number: '',
+    }), { CLICKUP_API_TOKEN: 'token-1' });
+
+    expect(output.notification_payload.comment_text).not.toContain('wa.me');
+  });
+});

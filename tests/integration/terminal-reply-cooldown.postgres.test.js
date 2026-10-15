@@ -7,7 +7,9 @@ const require = createRequire(import.meta.url);
 const {
   evaluateConversationStep,
   TERMINAL_REPLY_COOLDOWN_HOURS,
+  COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
   ESCALATION_ALREADY_REQUIRED_REPLY,
+  COMMERCIAL_REVIEW_PENDING_REPLY,
 } = require('../fixtures/workflow-nodes/wa-conversation-orchestrator/evaluate-conversation-step.js');
 
 const integration = process.env.TEST_PG_INTEGRATION === '1' ? describe : describe.skip;
@@ -27,6 +29,7 @@ integration('terminal reply cooldown reads its own sent line back from PostgreSQ
   const phone = `synthetic-cooldown-${process.pid}-${Date.now()}`;
   let sourceId;
   let conversationId;
+  let leadId;
   let eventNumber = 0;
 
   beforeAll(async () => { await client.connect(); });
@@ -36,10 +39,14 @@ integration('terminal reply cooldown reads its own sent line back from PostgreSQ
     await client.query('BEGIN');
     sourceId = (await client.query(`INSERT INTO whatsapp_numbers (display_name, phone_number, phone_number_id)
       VALUES ('Cooldown contract', $1, $1) RETURNING id`, [phone])).rows[0].id;
-    conversationId = (await client.query(`INSERT INTO conversations (source_number_id, phone_number,
+    leadId = (await client.query(`INSERT INTO leads (source_number_id, phone_number, lead_status_id,
+      clickup_task_id, service, city, requirement)
+      SELECT $1, $2, id, $3, 'Pastelones', 'Vitacura', '100 pastelones con despacho'
+      FROM lead_statuses LIMIT 1 RETURNING id`, [sourceId, phone, `task-${phone}`])).rows[0].id;
+    conversationId = (await client.query(`INSERT INTO conversations (source_number_id, phone_number, lead_id,
       conversation_status_id, current_step, qualification_context)
-      SELECT $1, $2, id, 'escalation', '{}'::jsonb
-      FROM conversation_statuses WHERE code = 'escalation_required' RETURNING id`, [sourceId, phone])).rows[0].id;
+      SELECT $1, $2, $3, id, 'escalation', '{}'::jsonb
+      FROM conversation_statuses WHERE code = 'escalation_required' RETURNING id`, [sourceId, phone, leadId])).rows[0].id;
     await client.query(`INSERT INTO inbound_events (instance_name, event_fingerprint, dedupe_key, source_number_id,
       phone_number, processing_status, created_at)
       VALUES ('cooldown-contract', $1, $1, $2, $3, 'processed', NOW() - INTERVAL '50 minutes')`,
@@ -52,6 +59,14 @@ integration('terminal reply cooldown reads its own sent line back from PostgreSQ
       text_body, created_at)
       VALUES ($1, 'outgoing', 'text', 'sent', $2, NOW() - ($3 || ' minutes')::interval)`,
     [conversationId, text, String(minutesAgo)]);
+  };
+
+  const setConversationStatus = async (statusCode) => {
+    await client.query(`UPDATE conversations
+      SET conversation_status_id = (SELECT id FROM conversation_statuses WHERE code = $2),
+        current_step = CASE WHEN $2 = 'handed_to_sales' THEN 'complete' ELSE 'escalation' END,
+        pending_question_key = NULL
+      WHERE id = $1`, [conversationId, statusCode]);
   };
 
   const turn = async (text) => {
@@ -101,12 +116,49 @@ integration('terminal reply cooldown reads its own sent line back from PostgreSQ
     expect(JSON.parse(second.evaluated.metadata_json).reply_suppression_reason).toBe('terminal_reply_cooldown');
   });
 
-  test('the same line older than the cooldown is sent again', async () => {
-    await sendBotLine(ESCALATION_ALREADY_REQUIRED_REPLY, (TERMINAL_REPLY_COOLDOWN_HOURS + 1) * 60);
-    const result = await turn('Hola, seguimos disponibles');
+  test('commercial review is suppressed just inside one hour and answered at one hour', async () => {
+    await setConversationStatus('handed_to_sales');
+    await sendBotLine(COMMERCIAL_REVIEW_PENDING_REPLY, COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS * 60 - 0.5);
 
-    expect(result.evaluated.response_kind).toBe('escalation_already_required');
-    expect(result.dispatched).toBe(true);
+    const inside = await turn('¿En qué va mi solicitud?');
+    expect(inside.evaluated.response_kind).toBe('reply_suppressed');
+    expect(inside.prepared.response_text).toBeNull();
+    expect(inside.dispatched).toBe(false);
+    expect(JSON.parse(inside.evaluated.metadata_json)).toMatchObject({
+      reply_suppression_reason: 'terminal_reply_cooldown',
+      suppressed_response_kind: 'commercial_review_pending',
+      terminal_reply_cooldown_hours: COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
+    });
+
+    await client.query('DELETE FROM messages WHERE conversation_id = $1', [conversationId]);
+    await sendBotLine(COMMERCIAL_REVIEW_PENDING_REPLY, COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS * 60);
+
+    const boundary = await turn('¿En qué va mi solicitud?');
+    expect(boundary.evaluated.response_kind).toBe('commercial_review_pending');
+    expect(boundary.prepared.response_text).toBe(COMMERCIAL_REVIEW_PENDING_REPLY);
+    expect(boundary.dispatched).toBe(true);
+  });
+
+  test('escalation is suppressed just inside six hours and answered at six hours', async () => {
+    await sendBotLine(ESCALATION_ALREADY_REQUIRED_REPLY, TERMINAL_REPLY_COOLDOWN_HOURS * 60 - 0.5);
+
+    const inside = await turn('Hola, seguimos disponibles');
+    expect(inside.evaluated.response_kind).toBe('reply_suppressed');
+    expect(inside.prepared.response_text).toBeNull();
+    expect(inside.dispatched).toBe(false);
+    expect(JSON.parse(inside.evaluated.metadata_json)).toMatchObject({
+      reply_suppression_reason: 'terminal_reply_cooldown',
+      suppressed_response_kind: 'escalation_already_required',
+      terminal_reply_cooldown_hours: TERMINAL_REPLY_COOLDOWN_HOURS,
+    });
+
+    await client.query('DELETE FROM messages WHERE conversation_id = $1', [conversationId]);
+    await sendBotLine(ESCALATION_ALREADY_REQUIRED_REPLY, TERMINAL_REPLY_COOLDOWN_HOURS * 60);
+
+    const boundary = await turn('Hola, seguimos disponibles');
+    expect(boundary.evaluated.response_kind).toBe('escalation_already_required');
+    expect(boundary.prepared.response_text).toBe(ESCALATION_ALREADY_REQUIRED_REPLY);
+    expect(boundary.dispatched).toBe(true);
   });
 
   test('an explicit new request is answered even inside the cooldown', async () => {

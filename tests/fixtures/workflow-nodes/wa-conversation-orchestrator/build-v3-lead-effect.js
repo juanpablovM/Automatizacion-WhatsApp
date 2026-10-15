@@ -63,7 +63,17 @@ const buildV3LeadEffect = (row) => {
   // (SQL), so the facts this effect reads are the same facts the commit step
   // will persist. readLineItems then recovers the item list (dual-read: a
   // historical flat row becomes a single implicit item) for the composer.
-  const reduced = resolvedReduceV3StateMutations(context, mutations);
+  const committed = resolvedReduceV3StateMutations(context, mutations);
+  // Task 3c.24: installation is only offered with delivery (owner rule,
+  // 3c.12), so v3.1 never asks fulfillment once installation is in scope. The
+  // lead still records how the material arrives: delivery, unless the
+  // conversation carries an explicit fulfillment (a pickup there is already
+  // rejected by installation_requires_delivery before any effect runs).
+  const fulfillmentMissing = committed.fulfillment === undefined || committed.fulfillment === null
+    || String(committed.fulfillment).trim() === '';
+  const reduced = ['installation', 'both'].includes(committed.service_scope) && fulfillmentMissing
+    ? { ...committed, fulfillment: 'delivery' }
+    : committed;
   const items = resolvedReadLineItems(reduced);
   // A requirement has to name what is being asked for. Quantity or measures
   // alone are not "suficientemente concreto", and must not overwrite a complete

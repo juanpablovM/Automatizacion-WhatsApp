@@ -103,13 +103,33 @@ pending_human_reply AS (
       )
   ) AS human_reply_pending
 ),
+-- Task 3c.29: a technical-sheet document (reserved by
+-- 19_persist_v3_technical_sheet_effect.sql) is sent only with the exact file it
+-- reserved (id + sha256) and only while that file is active; otherwise it is
+-- cancelled as technical_sheet_unavailable. The bytes are read here, at
+-- authorization time, and never stored in messages. Base64 without line
+-- breaks is what Evolution accepts as media.
+document_media AS (
+  SELECT
+    file.mime_type,
+    file.file_name,
+    translate(encode(file.content, 'base64'), E'\n', '') AS media
+  FROM target t
+  JOIN technical_sheet_files file
+    ON t.message_type = 'document'
+   AND file.id::TEXT = t.raw_payload#>>'{technical_sheet,file_id}'
+   AND file.sha256 = t.raw_payload#>>'{technical_sheet,sha256}'
+   AND file.active
+),
 authority AS (
   SELECT
     oa.bot_suppressed,
     phr.human_reply_pending,
-    (oa.bot_suppressed OR phr.human_reply_pending) AS hold_bot
+    (oa.bot_suppressed OR phr.human_reply_pending) AS hold_bot,
+    (t.message_type = 'document' AND NOT EXISTS (SELECT 1 FROM document_media)) AS document_unavailable
   FROM ownership_authority oa
   CROSS JOIN pending_human_reply phr
+  CROSS JOIN target t
 ),
 authorized AS (
   UPDATE messages m
@@ -122,6 +142,7 @@ authorized AS (
   CROSS JOIN authority a
   WHERE m.id = t.id
     AND a.hold_bot = FALSE
+    AND a.document_unavailable = FALSE
   RETURNING m.*
 ),
 cancelled AS (
@@ -134,21 +155,23 @@ cancelled AS (
     -- una respuesta humana encolada es la carrera que esta consulta evita.
     reconciliation_reason = CASE
       WHEN a.bot_suppressed THEN 'human_control_active'
-      ELSE 'human_reply_pending'
+      WHEN a.human_reply_pending THEN 'human_reply_pending'
+      ELSE 'technical_sheet_unavailable'
     END,
     dispatch_token = NULL,
     updated_at = NOW()
   FROM target t
   CROSS JOIN authority a
   WHERE m.id = t.id
-    AND a.hold_bot = TRUE
+    AND (a.hold_bot = TRUE OR a.document_unavailable = TRUE)
   RETURNING m.*
 ),
 result AS (
   SELECT a.*, TRUE AS should_send, FALSE AS human_control_cancelled
   FROM authorized a
   UNION ALL
-  SELECT c.*, FALSE AS should_send, TRUE AS human_control_cancelled
+  SELECT c.*, FALSE AS should_send,
+         c.reconciliation_reason IN ('human_control_active', 'human_reply_pending') AS human_control_cancelled
   FROM cancelled c
 )
 SELECT
@@ -162,7 +185,16 @@ SELECT
   r.provider_instance_name AS instance_name,
   r.idempotency_key,
   r.raw_payload->>'number' AS phone_number,
-  r.raw_payload AS outbound_body,
+  CASE
+    WHEN r.message_type = 'document' THEN jsonb_build_object(
+      'number', r.raw_payload->>'number',
+      'mediatype', 'document',
+      'mimetype', dm.mime_type,
+      'fileName', dm.file_name,
+      'media', dm.media
+    )
+    ELSE r.raw_payload
+  END AS outbound_body,
   FALSE AS already_sent,
   r.should_send,
   r.external_message_id,
@@ -170,4 +202,5 @@ SELECT
   r.dispatch_token,
   r.dispatch_phase,
   r.human_control_cancelled
-FROM result r;
+FROM result r
+LEFT JOIN document_media dm ON r.should_send;
