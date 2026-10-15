@@ -183,6 +183,20 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live production 2026-10-14: "atienden los sábados? a qué hora?" got "No
+  // tengo confirmado si atendemos los sábados ni el horario". v3.1 never sends
+  // faq_entries to the model, so it states the hours published on hormiglass.cl.
+  test('v3.1 states the published business hours, Saturdays included', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('de lunes a martes de 8:00 a 13:00 y de 14:00 a 18:00');
+    expect(v31Prompt).toContain('de miércoles a viernes de 8:00 a 13:00 y de 14:00 a 17:00');
+    expect(v31Prompt).toContain('los sábados de 8:00 a 14:00');
+    expect(v31Prompt).toContain('Domingos y festivos no atendemos');
+    expect(v3Prompt).not.toContain('los sábados de 8:00 a 14:00');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
   // Live production 2026-10-14 (conversation 494): "Son unos 60 m2 para un
   // estacionamiento" produced a use_case observation with no state_mutation,
   // although use_case set was authorized, so the lead lost "Uso/proyecto".
