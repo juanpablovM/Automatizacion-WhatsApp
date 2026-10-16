@@ -85,6 +85,12 @@ const MEASUREMENT_VISIT_ADDRESS_KEY = 'measurement_visit_address';
 const MEASUREMENT_VISIT_KEYS = [MEASUREMENT_VISIT_COMMUNE_KEY, MEASUREMENT_VISIT_COMMUNE_RETRY_KEY, MEASUREMENT_VISIT_ADDRESS_KEY];
 const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
 
+// Migration 037: the quote follow-up notice (ops-lead-chat-lease-scheduler)
+// ends with "¿Quieres hacer una cotización nueva?" while the seller still owns
+// the chat. A yes starts a new quote at once; the seller keeps the old one.
+const QUOTE_FOLLOWUP_NEW_QUOTE_KIND = 'quote_followup_new_quote';
+const QUOTE_FOLLOWUP_NEW_QUOTE_REPLY = '¡Perfecto! Empecemos una cotización nueva 👍\n\n👉 ¿Qué producto necesitas cotizar?';
+
 // A sticker or a reaction carries no requirement a human could quote, and the
 // pending-context branch already treats both as passive. Every other
 // attachment — an image of the terrain, a plan, a payment receipt — is content
@@ -547,7 +553,9 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   // PostgreSQL already resolved the cross-system ownership before this code
   // runs. While the seller owns the chat we still persist the customer turn,
   // but we must not advance qualification state or emit automated effects.
-  const humanControlActive = Boolean(row.bot_suppressed);
+  // Reassigned once below, only when the customer accepts the new-quote offer
+  // of the quote follow-up notice.
+  let humanControlActive = Boolean(row.bot_suppressed);
 
   const stepState = stepInfo.state || {};
   const current = {
@@ -605,6 +613,18 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   const isCourtesyOnly = (text) => /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(text);
   const wantsNewText = (text) => NEW_REQUEST_DIRECTIVE.test(text);
   const wantsNew = (text) => wantsNewText(text) || (text === normalizedText && anyBurstLine(wantsNewText));
+  // Migration 037: the answer to the quote follow-up offer, read without the
+  // AI. Only a plain yes or an explicit new-quote request accepts it; a yes
+  // with a question ("sí, pero ¿y mi pedido?") is for the seller, and the bot
+  // never answers about the quote it does not know.
+  const QUOTE_OFFER_ACCEPTANCE = /^(?:si|s|ok|okay|dale|bueno|ya|claro|claro que si|si claro|si dale|por favor|si por favor|si porfa|si quiero|quiero|si me gustaria|me gustaria|de acuerdo|perfecto|quiero otra|quiero una|quiero una nueva|si otra|si una nueva|si quiero otra)$/;
+  const acceptsQuoteOfferText = (text) => QUOTE_OFFER_ACCEPTANCE.test(text)
+    || wantsNewText(text)
+    || /\b(?:cotizacion nueva|otra cotizacion|cotizar otra|cotizar algo)\b/.test(text);
+  const acceptsNewQuoteOffer = humanControlActive
+    && Boolean(row.quote_followup_offer_pending)
+    && (acceptsQuoteOfferText(normalizedText) || everyBurstLine(acceptsQuoteOfferText));
+  if (acceptsNewQuoteOffer) humanControlActive = false;
   const hasCommercialRequestReference = /\b(?:cotizacion|solicitud|presupuesto|pedido)\b/.test(normalizedText);
   const isAnchoredStatusInquiry = (text) => /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(text)
     || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(text);
@@ -744,10 +764,28 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   // escalación/terminal → operacional → re-engagement → comercial/IA
   // ============================================================
 
+  // Migration 037: the customer accepted the new-quote offer. A new
+  // conversation starts here; 07_persist_conversation_state.sql releases the
+  // seller's ownership of the old quote (release_quote_followup_ownership) and
+  // leaves its ClickUp task untouched.
+  if (acceptsNewQuoteOffer) {
+    current.service = null;
+    current.city = null;
+    current.requirement = null;
+    resetConversationLead = true;
+    pendingQuestionKey = null;
+    currentStepField = 'service';
+    conversationStatusCode = 'waiting_user';
+    shouldCreateLead = false;
+    shouldEscalate = false;
+    responseKind = QUOTE_FOLLOWUP_NEW_QUOTE_KIND;
+    responseText = QUOTE_FOLLOWUP_NEW_QUOTE_REPLY;
+  }
+
   // 0. CONTENTLESS: a message with no readable text and no attachment cannot
   // trigger any rule below it. The turn is still persisted and audited, but it
   // stays silent and neither advances nor resets the conversation state.
-  if (isContentlessInbound) {
+  else if (isContentlessInbound) {
     resetConversationLead = false;
     currentStepField = stepInfo.field;
     pendingQuestionKey = row.pending_question_key || null;
@@ -1182,7 +1220,7 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'measurement_visit_location', SUPPRESSED_REPLY_KIND].includes(responseKind),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'measurement_visit_location', QUOTE_FOLLOWUP_NEW_QUOTE_KIND, SUPPRESSED_REPLY_KIND].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
@@ -1264,6 +1302,8 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
           message_type: messageType,
           response_kind: responseKind,
           human_control_active: humanControlActive,
+          quote_followup_offer_pending: Boolean(row.quote_followup_offer_pending),
+          release_quote_followup_ownership: acceptsNewQuoteOffer,
           human_response_due_at: row.human_response_due_at || null,
           has_intent: hasIntent,
           used_previous_context: usedPreviousContext,
@@ -1304,5 +1344,7 @@ if (typeof module !== 'undefined' && module.exports) {
     COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
     ESCALATION_ALREADY_REQUIRED_REPLY,
     COMMERCIAL_REVIEW_PENDING_REPLY,
+    QUOTE_FOLLOWUP_NEW_QUOTE_KIND,
+    QUOTE_FOLLOWUP_NEW_QUOTE_REPLY,
   };
 }

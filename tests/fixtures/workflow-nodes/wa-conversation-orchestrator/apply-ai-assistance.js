@@ -395,6 +395,22 @@ if (deterministic.response_kind === 'reply_suppressed') {
   } }];
 }
 
+// Migration 037: the customer accepted the new-quote offer of the quote
+// follow-up notice. The evaluator already reset the conversation and wrote the
+// reply; no assistant output may rewrite it or carry the old quote over.
+if (deterministic.response_kind === 'quote_followup_new_quote' && !deterministic.bot_suppressed) {
+  return [{ json: {
+    ...deterministic, response_text: deterministic.deterministic_reply,
+    should_create_lead: false, should_escalate: false, is_partial: false,
+    qualification_context: {}, qualification_context_json: '{}',
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: 'quote_followup_new_quote',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    metadata_json: JSON.stringify({ ...parseJsonObject(deterministic.metadata_json),
+      pending_question_key: null, commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
+  } }];
+}
+
 // Registered quote acknowledgments must not reopen qualification or duplicate
 // effects, even if a stale assistant result is present in the merged item.
 if (deterministic.response_kind === 'commercial_review_pending'
