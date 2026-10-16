@@ -251,6 +251,30 @@ const NODES = [
     "fixture": "ops-lead-chat-lease-scheduler/finalize-scheduler-branch.js"
   },
   {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Claim Quote Follow-Up Alerts",
+    "fixture": "db/queries/n8n/lead-chat-ownership/11_claim_quote_followup_alerts.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Prepare Quote Follow-Up Notice",
+    "fixture": "ops-lead-chat-lease-scheduler/prepare-quote-followup-notice.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Post Quote Follow-Up Comment",
+    "fixture": "ops-lead-chat-lease-scheduler/post-quote-followup-comment.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Complete Quote Follow-Up Alert",
+    "fixture": "db/queries/n8n/lead-chat-ownership/12_complete_quote_followup_alert.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
     "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
     "node": "Normalize ClickUp Closure",
     "fixture": "ops-handoff-clickup-closure/normalize-clickup-closure.js"

@@ -187,6 +187,105 @@
         540,
         150
       ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 11_claim_quote_followup_alerts.sql — Quote follow-up alerts (batch claim).\n-- -----------------------------------------------------------------------------\n-- Migration 037. A seller owns the chat of a quote that was already sent\n-- (sla_mode 'quote_followup': 'cotización enviada' / 'seguimiento'). The bot\n-- stays silent, but a customer must not wait forever: when the first unanswered\n-- customer message is older than p2 minutes, this claim hands the ownership to\n-- the lease scheduler, which sends one notice to the customer and one ClickUp\n-- comment to the assigned seller. The ownership stays live and the ClickUp\n-- task status is never touched.\n--\n-- Unanswered streak (anti-spam): the customer messages after the anchor\n--   GREATEST(quote_followup_since,          -- older ones predate the quote\n--            last_human_reply_at,           -- the seller answered those\n--            quote_alerted_at + p3 hours)   -- already alerted for those\n-- where the last term only counts while the seller has not replied since the\n-- alert (GREATEST ignores NULLs). So there is at most one alert per streak: it\n-- ends when the seller replies, and a customer who keeps writing after the\n-- notice is alerted again only p3 hours after it. Bot messages never end a\n-- streak.\n--\n-- Claim, not send: the row moves to quote_alert_state 'processing' with a new\n-- token, and 12_complete_quote_followup_alert.sql closes it by token (CAS). A\n-- claim older than p4 seconds is abandoned and reclaimed with a new token; the\n-- outbound idempotency key (ownership + streak message) keeps a reclaim from\n-- sending the notice twice. FOR UPDATE SKIP LOCKED lets concurrent ticks split\n-- the batch. Zero rows is the normal answer.\n--\n-- Params:\n--   p1 batch_size (integer, default 20),\n--   p2 sla_minutes (numeric, default 30 — LEAD_CHAT_QUOTE_SENT_SLA_MINUTES),\n--   p3 realert_hours (numeric, default 24 — LEAD_CHAT_QUOTE_SENT_REALERT_HOURS),\n--   p4 stale_processing_seconds (integer, default 900)\n-- =============================================================================\nWITH input AS (\n  SELECT\n    COALESCE(NULLIF($1::text, '')::integer, 20) AS batch_size,\n    COALESCE(NULLIF($2::text, '')::numeric, 30) AS sla_minutes,\n    COALESCE(NULLIF($3::text, '')::numeric, 24) AS realert_hours,\n    COALESCE(NULLIF($4::text, '')::integer, 900) AS stale_processing_seconds\n),\nowned AS (\n  SELECT\n    o.id,\n    o.lead_id,\n    GREATEST(\n      o.quote_followup_since,\n      o.last_human_reply_at,\n      CASE\n        WHEN o.last_human_reply_at >= o.quote_alerted_at THEN NULL\n        ELSE o.quote_alerted_at + i.realert_hours * INTERVAL '1 hour'\n      END\n    ) AS anchor_at\n  FROM lead_chat_ownerships o\n  CROSS JOIN input i\n  WHERE o.released_at IS NULL\n    AND o.deleted_at IS NULL\n    AND o.sla_mode = 'quote_followup'\n    AND (\n      o.quote_alert_state IS DISTINCT FROM 'processing'\n      OR o.quote_alert_claimed_at < NOW() - i.stale_processing_seconds * INTERVAL '1 second'\n    )\n),\ndue AS (\n  SELECT ow.id, ow.anchor_at, first_message.id AS message_id, first_message.created_at\n  FROM owned ow\n  CROSS JOIN input i\n  CROSS JOIN LATERAL (\n    SELECT m.id, m.created_at\n    FROM messages m\n    JOIN conversations c ON c.id = m.conversation_id\n    WHERE m.deleted_at IS NULL\n      AND m.direction = 'incoming'\n      AND m.sender_type = 'customer'\n      AND (m.lead_id = ow.lead_id OR c.lead_id = ow.lead_id)\n      AND m.created_at > ow.anchor_at\n    ORDER BY m.created_at, m.id\n    LIMIT 1\n  ) first_message\n  WHERE first_message.created_at <= NOW() - i.sla_minutes * INTERVAL '1 minute'\n),\ncandidates AS MATERIALIZED (\n  SELECT o.id, d.anchor_at, d.message_id, d.created_at AS first_message_at\n  FROM lead_chat_ownerships o\n  JOIN due d ON d.id = o.id\n  -- Re-checked under the lock: a status webhook may have released it.\n  WHERE o.released_at IS NULL\n    AND o.sla_mode = 'quote_followup'\n  ORDER BY d.created_at, o.id\n  LIMIT (SELECT batch_size FROM input)\n  FOR UPDATE OF o SKIP LOCKED\n),\nclaimed AS (\n  UPDATE lead_chat_ownerships o\n  SET\n    quote_alert_state = 'processing',\n    quote_alert_claim_token = gen_random_uuid()::text,\n    quote_alert_claimed_at = NOW(),\n    quote_alert_message_id = c.message_id,\n    quote_alert_attempt_count = o.quote_alert_attempt_count + 1,\n    updated_at = NOW()\n  FROM candidates c\n  WHERE o.id = c.id\n  RETURNING o.id, o.lead_id, o.clickup_task_id, o.quote_alert_claim_token,\n            o.quote_alert_message_id, o.quote_alert_attempt_count\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'lead_chat_quote_followup_alert',\n    'lead_chat_ownership',\n    cl.id,\n    'system',\n    'ops-lead-chat-lease-scheduler',\n    'alert_claimed',\n    '{}'::jsonb,\n    jsonb_build_object('quote_alert_state', 'processing'),\n    jsonb_build_object(\n      'lead_id', cl.lead_id,\n      'quote_alert_message_id', cl.quote_alert_message_id,\n      'quote_alert_attempt_count', cl.quote_alert_attempt_count\n    )\n  FROM claimed cl\n  RETURNING 1\n)\nSELECT\n  cl.id AS ownership_id,\n  cl.lead_id,\n  cl.quote_alert_claim_token,\n  cl.quote_alert_message_id,\n  cl.quote_alert_attempt_count,\n  COALESCE(NULLIF(l.clickup_task_id, ''), cl.clickup_task_id) AS clickup_task_id,\n  l.clickup_status,\n  l.whatsapp_name AS lead_name,\n  s.name AS seller_name,\n  s.clickup_user_id AS seller_clickup_user_id,\n  first_conversation.id AS conversation_id,\n  first_conversation.phone_number,\n  wn.instance_name,\n  ca.first_message_at,\n  FLOOR(EXTRACT(EPOCH FROM (NOW() - ca.first_message_at)) / 60)::integer AS waiting_minutes,\n  COALESCE(streak.customer_messages, ARRAY[]::text[]) AS customer_messages\nFROM claimed cl\nJOIN candidates ca ON ca.id = cl.id\nJOIN messages first_message ON first_message.id = cl.quote_alert_message_id\nJOIN conversations first_conversation ON first_conversation.id = first_message.conversation_id\nLEFT JOIN whatsapp_numbers wn ON wn.id = first_conversation.source_number_id\nLEFT JOIN leads l ON l.id = cl.lead_id\nLEFT JOIN sellers s ON s.id = l.assigned_seller_id AND s.deleted_at IS NULL\nLEFT JOIN LATERAL (\n  SELECT ARRAY_AGG(recent.text_body ORDER BY recent.created_at, recent.id) AS customer_messages\n  FROM (\n    SELECT m.id, m.created_at, m.text_body\n    FROM messages m\n    JOIN conversations c ON c.id = m.conversation_id\n    WHERE m.deleted_at IS NULL\n      AND m.direction = 'incoming'\n      AND m.sender_type = 'customer'\n      AND (m.lead_id = cl.lead_id OR c.lead_id = cl.lead_id)\n      AND m.created_at > ca.anchor_at\n      AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL\n    ORDER BY m.created_at DESC, m.id DESC\n    LIMIT 10\n  ) recent\n) streak ON TRUE\nORDER BY cl.id;\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$env.LEAD_CHAT_QUOTE_SENT_BATCH_SIZE || 20, $env.LEAD_CHAT_QUOTE_SENT_SLA_MINUTES || 30, $env.LEAD_CHAT_QUOTE_SENT_REALERT_HOURS || 24, $env.LEAD_CHAT_LEASE_STALE_SECONDS || 900] }}"
+        }
+      },
+      "id": "92000000-0000-0000-0000-000000000011",
+      "name": "Claim Quote Follow-Up Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -500,
+        600
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// =============================================================================\n// OPS - Lead Chat Lease Scheduler — Prepare Quote Follow-Up Notice\n// -----------------------------------------------------------------------------\n// Migration 037 (owner decision 2026-10-16). One claimed row of\n// 11_claim_quote_followup_alerts.sql: a seller owns the chat of a quote that was\n// already sent and the customer has waited the SLA without an answer. This node\n// writes the one notice the customer gets and the ClickUp comment the seller\n// gets; it sends nothing. The next node sends the notice through WA - Outbound\n// Messages (response_kind 'quote_followup_notice', the only bot reply the\n// outbound authority admits in a seller-owned chat while the alert is claimed).\n//\n// The notice never states anything about the quote beyond its status: the\n// quote contents are the seller's and the bot does not know them. It ends with\n// \"¿Quieres hacer una cotización nueva?\"; evaluate-conversation-step.js reads\n// the customer's answer.\n//\n// Business hours (hormiglass.cl, America/Santiago): Mon–Tue 8:00–13:00 and\n// 14:00–18:00; Wed–Fri 8:00–13:00 and 14:00–17:00; Sat 8:00–14:00; Sunday\n// closed. Outside them the notice says when the seller will answer. There is no\n// holiday calendar: a public holiday on a weekday reads as a working day.\n// =============================================================================\n\nconst BUSINESS_TIME_ZONE = 'America/Santiago';\n// Minutes from local midnight, per weekday (0 = Sunday).\nconst BUSINESS_HOURS = {\n  0: [],\n  1: [[480, 780], [840, 1080]],\n  2: [[480, 780], [840, 1080]],\n  3: [[480, 780], [840, 1020]],\n  4: [[480, 780], [840, 1020]],\n  5: [[480, 780], [840, 1020]],\n  6: [[480, 840]],\n};\nconst WEEKDAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];\nconst WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };\nconst COMMENT_MESSAGES_MAX_CHARS = 500;\n\nconst santiagoClock = (date) => {\n  const parts = new Intl.DateTimeFormat('en-US', {\n    timeZone: BUSINESS_TIME_ZONE,\n    weekday: 'short',\n    hour: '2-digit',\n    minute: '2-digit',\n    hourCycle: 'h23',\n  }).formatToParts(date);\n  const part = (type) => parts.find((entry) => entry.type === type)?.value;\n  return {\n    weekday: WEEKDAY_INDEX[part('weekday')],\n    minutes: Number(part('hour')) * 60 + Number(part('minute')),\n  };\n};\n\n// { open: true } inside business hours; otherwise the next opening as a day\n// offset from today (Santiago calendar), its weekday and its local minute.\nconst nextBusinessOpening = (date) => {\n  const { weekday, minutes } = santiagoClock(date);\n  if (BUSINESS_HOURS[weekday].some(([start, end]) => minutes >= start && minutes < end)) {\n    return { open: true };\n  }\n  const laterToday = BUSINESS_HOURS[weekday].find(([start]) => start > minutes);\n  if (laterToday) return { open: false, dayOffset: 0, weekday, minutes: laterToday[0] };\n  for (let dayOffset = 1; dayOffset <= 7; dayOffset += 1) {\n    const day = (weekday + dayOffset) % 7;\n    if (BUSINESS_HOURS[day].length) {\n      return { open: false, dayOffset, weekday: day, minutes: BUSINESS_HOURS[day][0][0] };\n    }\n  }\n  return { open: false, dayOffset: null, weekday: null, minutes: null };\n};\n\nconst clockLabel = (minutes) => `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;\n\n// \"Te va a responder mañana desde las 8:00.\" — empty while open.\nconst closedNotice = (opening, singular = true) => {\n  if (!opening || opening.open || opening.dayOffset === null) return '';\n  const when = opening.dayOffset === 0 ? 'hoy'\n    : opening.dayOffset === 1 ? 'mañana'\n      : `el ${WEEKDAY_NAMES[opening.weekday]}`;\n  return `Te ${singular ? 'va' : 'van'} a responder ${when} desde las ${clockLabel(opening.minutes)}.`;\n};\n\n// sellers.name is a display label (\"Juan Pablo (Pruebas)\"). The customer reads\n// the name without the parenthetical; a long full name keeps the first word.\nconst sellerDisplayName = (name) => {\n  const words = String(name ?? '').replace(/\\([^)]*\\)/g, ' ').trim().split(/\\s+/).filter(Boolean);\n  if (!words.length) return null;\n  return words.length > 2 ? words[0] : words.join(' ');\n};\n\nconst isFollowUpStatus = (status) => /seguimiento/i.test(String(status || ''));\n\nconst noticeText = (row, opening) => {\n  const seller = sellerDisplayName(row.seller_name);\n  const team = 'nuestro equipo comercial';\n  const lead = isFollowUpStatus(row.clickup_status)\n    ? `${seller || 'Nuestro equipo comercial'} está haciendo seguimiento de tu cotización.`\n    : `Tu cotización ya fue enviada por ${seller || team}.`;\n  const notified = seller\n    ? 'Le avisé que escribiste para que te responda por aquí.'\n    : 'Les avisé que escribiste para que te respondan por aquí.';\n  const closed = closedNotice(opening, Boolean(seller));\n  return `${lead} ${notified}${closed ? ` ${closed}` : ''}\\n\\n👉 ¿Quieres hacer una cotización nueva?`;\n};\n\nconst quotedMessages = (messages) => {\n  const joined = (Array.isArray(messages) ? messages : [])\n    .map((text) => String(text ?? '').replace(/\\s+/g, ' ').trim())\n    .filter(Boolean)\n    .join(' / ');\n  return joined.length > COMMENT_MESSAGES_MAX_CHARS\n    ? `${joined.slice(0, COMMENT_MESSAGES_MAX_CHARS)}…`\n    : joined;\n};\n\nconst asAssignee = (value) => {\n  const parsed = Number(String(value ?? '').trim());\n  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;\n};\n\nconst buildQuoteFollowupNotice = (row, { now = new Date() } = {}) => {\n  const opening = nextBusinessOpening(now);\n  const taskId = String(row.clickup_task_id ?? '').trim();\n  const assignee = asAssignee(row.seller_clickup_user_id);\n  const minutes = Math.max(0, Number(row.waiting_minutes) || 0);\n  const quoted = quotedMessages(row.customer_messages);\n  return {\n    ...row,\n    response_text: noticeText(row, opening),\n    response_kind: 'quote_followup_notice',\n    // Stable per streak: a reclaimed alert reuses the same outbound idempotency\n    // key, so the customer never gets the notice twice.\n    message_id: `quote-followup:${row.ownership_id}:${row.quote_alert_message_id}`,\n    business_open: Boolean(opening.open),\n    clickup_comment_url: taskId\n      ? `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}/comment`\n      : null,\n    clickup_comment_body: {\n      comment_text: `⚠️ El cliente escribió hace ${minutes} min y no tuvo respuesta: \"${quoted}\"\\n`\n        + 'Hormi Atención le avisó que le vas a responder por WhatsApp y le ofreció una cotización nueva.',\n      ...(assignee ? { assignee } : {}),\n      notify_all: false,\n    },\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    BUSINESS_HOURS,\n    nextBusinessOpening,\n    closedNotice,\n    sellerDisplayName,\n    buildQuoteFollowupNotice,\n  };\n}\n\nif (typeof $json !== 'undefined') {\n  return { json: buildQuoteFollowupNotice($json ?? {}) };\n}\n"
+      },
+      "id": "92000000-0000-0000-0000-000000000012",
+      "name": "Prepare Quote Follow-Up Notice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "77777777-0000-0000-0000-000000000001",
+          "mode": "list",
+          "cachedResultName": "WA - Outbound Messages"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "92000000-0000-0000-0000-000000000013",
+      "name": "Send Quote Follow-Up Notice",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        20,
+        600
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// OPS - Lead Chat Lease Scheduler — Post Quote Follow-Up Comment\n// -----------------------------------------------------------------------------\n// Migration 037. Runs after \"Send Quote Follow-Up Notice\" (WA - Outbound\n// Messages, one execution per item, paired by index exactly like the\n// follow-up scheduler's \"Normalize Follow-Up Delivery\"). For each alert it:\n//   1. classifies the notice delivery: sent | cancelled | failed | unknown;\n//   2. posts the ClickUp comment to the seller, assigned to them, unless the\n//      notice was cancelled because the seller was answering at that moment;\n//   3. returns the completion input of 12_complete_quote_followup_alert.sql.\n// The comment is one POST, never retried here: a lost comment is recorded in\n// comment_outcome and never re-sends the customer notice. The task status is\n// never read or written.\n// =============================================================================\n\nconst configured = (value) => Boolean(value) && !String(value).includes('__PENDIENTE__');\n\nconst deliveryOutcomeOf = (outbound = {}) => {\n  const status = String(outbound.delivery_status || outbound.outbound_dispatch_status || '').trim();\n  if (status === 'sent' || status === 'already_sent') return 'sent';\n  if (status === 'cancelled' || outbound.human_control_cancelled === true) return 'cancelled';\n  if (status === 'failed' || outbound.error) return 'failed';\n  return 'unknown';\n};\n\nconst postComment = async (origin, httpRequest, env) => {\n  if (!configured(env.CLICKUP_API_TOKEN)) return 'skipped_token_missing';\n  if (!origin.clickup_comment_url) return 'skipped_task_missing';\n  try {\n    const response = await httpRequest({\n      method: 'POST',\n      url: origin.clickup_comment_url,\n      headers: { Authorization: env.CLICKUP_API_TOKEN, 'Content-Type': 'application/json' },\n      body: origin.clickup_comment_body || {},\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n      timeout: 30000,\n    });\n    const statusCode = Number(response?.statusCode || 0);\n    return statusCode >= 200 && statusCode < 300 ? 'posted' : `failed_http_${statusCode}`;\n  } catch (_error) {\n    return 'failed_transport';\n  }\n};\n\nconst finalizeQuoteFollowupAlert = async (origin, outbound, httpRequest, env = {}) => {\n  const result = deliveryOutcomeOf(outbound || {});\n  const errorText = String(outbound?.error?.message || outbound?.message || '').trim();\n  const commentOutcome = result === 'cancelled'\n    ? 'skipped_cancelled'\n    : await postComment(origin, httpRequest, env);\n  return {\n    ownership_id: origin.ownership_id ?? null,\n    quote_alert_claim_token: origin.quote_alert_claim_token ?? null,\n    quote_alert_result: result,\n    quote_alert_error: result === 'sent' ? null : (errorText || `outbound_${result}`),\n    comment_outcome: commentOutcome,\n    outbound_message_id: outbound?.message_id || null,\n  };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { configured, deliveryOutcomeOf, finalizeQuoteFollowupAlert };\n}\n\nif (typeof items !== 'undefined') {\n  let origins = [];\n  try { origins = $('Prepare Quote Follow-Up Notice').all().map((item) => item.json || {}); } catch (_error) { origins = []; }\n  // Sequential on purpose: one ClickUp call at a time per tick.\n  return (async () => {\n    const output = [];\n    for (let index = 0; index < items.length; index += 1) {\n      output.push({ json: await finalizeQuoteFollowupAlert(\n        origins[index] || {},\n        items[index].json || {},\n        helpers.httpRequest.bind(helpers),\n        typeof $env !== 'undefined' ? $env : {},\n      ) });\n    }\n    return output;\n  })();\n}\n"
+      },
+      "id": "92000000-0000-0000-0000-000000000014",
+      "name": "Post Quote Follow-Up Comment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- =============================================================================\n-- 12_complete_quote_followup_alert.sql — Close one quote follow-up alert claim.\n-- -----------------------------------------------------------------------------\n-- Migration 037. CAS on the claim token from 11_claim_quote_followup_alerts.sql:\n-- a worker whose claim was reclaimed gets 'claim_mismatch' and writes nothing.\n-- Every result closes the streak — 'sent', 'failed', 'cancelled' (the seller\n-- was answering at that moment) and 'unknown' alike — because quote_alerted_at\n-- moves the streak anchor: a failed notice is visible here and in audit_logs,\n-- never retried every minute at the customer. Only a 'sent' notice leaves the\n-- new-quote offer pending (01_load_active_context.sql).\n--\n-- The ownership is never released and the ClickUp status is never written.\n--\n-- Always returns exactly one row.\n--\n-- Params:\n--   p1 ownership_id, p2 claim_token, p3 result (sent|failed|cancelled|unknown),\n--   p4 error (nullable), p5 comment_outcome (text, audit only)\n-- =============================================================================\nWITH input AS (\n  SELECT\n    NULLIF($1::text, '')::bigint AS ownership_id,\n    NULLIF($2::text, '') AS claim_token,\n    CASE\n      WHEN NULLIF($3::text, '') IN ('sent', 'failed', 'cancelled', 'unknown') THEN $3::text\n      ELSE 'unknown'\n    END AS result,\n    NULLIF($4::text, '') AS error,\n    NULLIF($5::text, '') AS comment_outcome\n),\ncompleted AS (\n  UPDATE lead_chat_ownerships o\n  SET\n    quote_alert_state = 'completed',\n    quote_alert_claim_token = NULL,\n    quote_alerted_at = NOW(),\n    quote_alert_result = i.result,\n    quote_alert_error = i.error,\n    updated_at = NOW()\n  FROM input i\n  WHERE o.id = i.ownership_id\n    AND i.claim_token IS NOT NULL\n    AND o.quote_alert_claim_token = i.claim_token\n    AND o.quote_alert_state = 'processing'\n  RETURNING o.id, o.lead_id, o.quote_alert_message_id, o.quote_alert_result\n),\naudit_entry AS (\n  INSERT INTO audit_logs (\n    event_name, entity_type, entity_id, actor_type, actor_id,\n    result, before_payload, after_payload, metadata\n  )\n  SELECT\n    'lead_chat_quote_followup_alert',\n    'lead_chat_ownership',\n    c.id,\n    'system',\n    'ops-lead-chat-lease-scheduler',\n    'alert_' || c.quote_alert_result,\n    jsonb_build_object('quote_alert_state', 'processing'),\n    jsonb_build_object('quote_alert_state', 'completed', 'quote_alert_result', c.quote_alert_result),\n    jsonb_build_object(\n      'lead_id', c.lead_id,\n      'quote_alert_message_id', c.quote_alert_message_id,\n      'error', i.error,\n      'comment_outcome', i.comment_outcome\n    )\n  FROM completed c\n  CROSS JOIN input i\n  RETURNING 1\n)\nSELECT\n  c.id AS ownership_id,\n  c.quote_alert_result,\n  'completed' AS outcome\nFROM completed c\n\nUNION ALL\n\nSELECT\n  i.ownership_id,\n  NULL::text,\n  CASE WHEN i.ownership_id IS NULL THEN 'unknown_ownership' ELSE 'claim_mismatch' END\nFROM input i\nWHERE NOT EXISTS (SELECT 1 FROM completed);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.ownership_id, $json.quote_alert_claim_token, $json.quote_alert_result, $json.quote_alert_error, $json.comment_outcome] }}"
+        }
+      },
+      "id": "92000000-0000-0000-0000-000000000015",
+      "name": "Complete Quote Follow-Up Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        540,
+        600
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      }
     }
   ],
   "connections": {
@@ -200,6 +299,11 @@
           },
           {
             "node": "Claim Pending ClickUp Reacquisitions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Claim Quote Follow-Up Alerts",
             "type": "main",
             "index": 0
           }
@@ -216,6 +320,11 @@
           },
           {
             "node": "Claim Pending ClickUp Reacquisitions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Claim Quote Follow-Up Alerts",
             "type": "main",
             "index": 0
           }
@@ -289,6 +398,61 @@
       ]
     },
     "Complete ClickUp Reacquisition": {
+      "main": [
+        [
+          {
+            "node": "Finalize Lease Scheduler Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Quote Follow-Up Alerts": {
+      "main": [
+        [
+          {
+            "node": "Prepare Quote Follow-Up Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Quote Follow-Up Notice": {
+      "main": [
+        [
+          {
+            "node": "Send Quote Follow-Up Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Quote Follow-Up Notice": {
+      "main": [
+        [
+          {
+            "node": "Post Quote Follow-Up Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Quote Follow-Up Comment": {
+      "main": [
+        [
+          {
+            "node": "Complete Quote Follow-Up Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Quote Follow-Up Alert": {
       "main": [
         [
           {
