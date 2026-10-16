@@ -204,7 +204,12 @@ ownership_deadline AS (
   SET
     pending_message_id = im.id,
     pending_message_at = im.created_at,
-    response_due_at = im.created_at + INTERVAL '2 hours',
+    -- Migration 037: a quote follow-up ownership has no deadline; the quote
+    -- follow-up alert answers an unanswered customer instead.
+    response_due_at = CASE
+      WHEN o.sla_mode = 'quote_followup' THEN NULL
+      ELSE im.created_at + INTERVAL '2 hours'
+    END,
     updated_at = NOW()
   FROM incoming_message im
   WHERE o.lead_id = NULLIF($58::text, '')::bigint
@@ -213,7 +218,28 @@ ownership_deadline AS (
     -- Once the SLA expired, a new customer message must not revive the old
     -- human lease and silence the bot again before ClickUp is restored.
     AND (o.response_due_at IS NULL OR o.response_due_at > NOW())
+    AND NOT COALESCE((NULLIF($23::text, '')::jsonb->>'release_quote_followup_ownership')::boolean, FALSE)
   RETURNING o.id, o.response_due_at
+),
+-- Migration 037: the customer accepted the new-quote offer of the quote
+-- follow-up notice. The seller's ownership of the old quote ends here, in the
+-- same transaction that starts the new conversation, so the reply that starts
+-- the new quote is not held by the outbound authority. The old ClickUp task is
+-- left exactly as the seller left it: no restoration is queued.
+quote_followup_release AS (
+  UPDATE lead_chat_ownerships o
+  SET
+    released_at = NOW(),
+    release_reason = 'customer_new_quote',
+    restoration_state = 'not_required',
+    updated_at = NOW()
+  FROM incoming_message im
+  WHERE o.lead_id = NULLIF($58::text, '')::bigint
+    AND o.released_at IS NULL
+    AND o.deleted_at IS NULL
+    AND o.sla_mode = 'quote_followup'
+    AND COALESCE((NULLIF($23::text, '')::jsonb->>'release_quote_followup_ownership')::boolean, FALSE)
+  RETURNING o.id
 ),
 attachment_insert AS (
   INSERT INTO message_attachments (

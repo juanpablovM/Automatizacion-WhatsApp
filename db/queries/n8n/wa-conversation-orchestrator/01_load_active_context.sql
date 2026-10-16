@@ -337,6 +337,10 @@ latest_chat_ownership AS (
     o.response_due_at,
     o.released_at,
     o.release_reason,
+    o.sla_mode,
+    o.quote_alert_result,
+    o.quote_alerted_at,
+    o.last_human_reply_at,
     COALESCE(o.released_at, o.response_due_at) AS effective_release_at
   FROM lead_chat_ownerships o
   JOIN latest_lead ll ON ll.previous_lead_id = o.lead_id
@@ -373,7 +377,29 @@ chat_authority AS (
         AND history_conversation.phone_number = ll.phone_number
         AND history_conversation.source_number_id = ll.previous_source_number_id
         AND m.created_at >= o.effective_release_at
-    ) AS human_arbitration_required
+    ) AS human_arbitration_required,
+    -- Migration 037: the quote follow-up notice asked "¿Quieres hacer una
+    -- cotización nueva?". This turn answers it when the notice was delivered in
+    -- the last 24 hours, the seller has not replied since, and no customer
+    -- message arrived after it yet (this turn's own messages are persisted
+    -- later, by 07_persist_conversation_state.sql).
+    (
+      o.released_at IS NULL
+      AND o.sla_mode = 'quote_followup'
+      AND o.quote_alert_result = 'sent'
+      AND o.quote_alerted_at > NOW() - INTERVAL '24 hours'
+      AND (o.last_human_reply_at IS NULL OR o.last_human_reply_at < o.quote_alerted_at)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM messages m
+        JOIN conversations mc ON mc.id = m.conversation_id
+        WHERE m.deleted_at IS NULL
+          AND m.direction = 'incoming'
+          AND m.sender_type = 'customer'
+          AND (m.lead_id = o.ownership_lead_id OR mc.lead_id = o.ownership_lead_id)
+          AND m.created_at > o.quote_alerted_at
+      )
+    ) AS quote_followup_offer_pending
   FROM latest_chat_ownership o
 ),
 follow_up_status AS (
@@ -463,6 +489,7 @@ SELECT
   COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed,
   ca.response_due_at AS human_response_due_at,
   COALESCE(ca.human_arbitration_required, FALSE) AS human_arbitration_required,
+  COALESCE(ca.quote_followup_offer_pending, FALSE) AS quote_followup_offer_pending,
   COALESCE(fs.pending_count, 0) > 0 AS has_pending_followups,
   COALESCE(lcs.state_service, ll.service) AS last_known_service,
   COALESCE(lcs.state_city, ll.city) AS last_known_city,

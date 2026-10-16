@@ -36,7 +36,16 @@
 -- Params:
 --   p1 clickup_task_id (text), p2 previous_status (text, estado ANTERIOR a la
 --   transicion), p3 history_id (text), p4 history_event_at (timestamptz),
---   p5 new_status (text, estado destino; se guarda en leads.clickup_status)
+--   p5 new_status (text, estado destino; se guarda en leads.clickup_status),
+--   p6 quote_followup_statuses (text, lista separada por comas; por defecto
+--      'cotización enviada,seguimiento' — CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP)
+--
+-- Migration 037: when p5 is one of the p6 statuses the quote was already sent
+-- and the ownership enters sla_mode 'quote_followup': it has no deadline
+-- (response_due_at NULL), so the lease sweep never releases it nor restores the
+-- task. quote_followup_since keeps when it entered that mode. Leaving that mode
+-- for a standard acknowledged status ('en atención') restarts the 2-hour SLA
+-- from the event when a customer message is still unanswered.
 -- =============================================================================
 WITH input AS (
   SELECT
@@ -44,7 +53,14 @@ WITH input AS (
     NULLIF($2::text, '') AS previous_status,
     NULLIF($3::text, '') AS history_id,
     NULLIF($4::text, '')::timestamptz AS history_event_at,
-    NULLIF($5::text, '') AS new_status
+    NULLIF($5::text, '') AS new_status,
+    LOWER(BTRIM(COALESCE(NULLIF($5::text, ''), ''))) = ANY(
+      SELECT LOWER(BTRIM(entry))
+      FROM UNNEST(STRING_TO_ARRAY(
+        COALESCE(NULLIF($6::text, ''), 'cotización enviada,seguimiento'), ','
+      )) AS entry
+      WHERE BTRIM(entry) <> ''
+    ) AS quote_followup
 ),
 lead_row AS (
   SELECT l.id
@@ -125,7 +141,8 @@ acquisition AS (
   INSERT INTO lead_chat_ownerships (
     lead_id, clickup_task_id, previous_clickup_status,
     acquired_at, last_clickup_history_id, last_clickup_event_at,
-    pending_message_id, pending_message_at, response_due_at
+    pending_message_id, pending_message_at, response_due_at,
+    sla_mode, quote_followup_since
   )
   SELECT
     c.lead_id,
@@ -137,10 +154,13 @@ acquisition AS (
     lcm.id,
     lcm.created_at,
     CASE
+      WHEN i.quote_followup THEN NULL
       WHEN lcm.id IS NOT NULL
         THEN COALESCE(i.history_event_at, NOW()) + INTERVAL '2 hours'
       ELSE NULL
-    END
+    END,
+    CASE WHEN i.quote_followup THEN 'quote_followup' ELSE 'standard' END,
+    CASE WHEN i.quote_followup THEN COALESCE(i.history_event_at, NOW()) END
   FROM classified c
   CROSS JOIN input i
   LEFT JOIN latest_customer_message lcm ON TRUE
@@ -154,6 +174,24 @@ acquisition AS (
     ),
     last_clickup_history_id = EXCLUDED.last_clickup_history_id,
     last_clickup_event_at = EXCLUDED.last_clickup_event_at,
+    -- Mode changes only; a redelivered status in the same mode keeps the live
+    -- deadline (standard) or the original start of the quote follow-up.
+    response_due_at = CASE
+      WHEN EXCLUDED.sla_mode = 'quote_followup' THEN NULL
+      WHEN lead_chat_ownerships.sla_mode = 'quote_followup'
+        THEN CASE
+          WHEN lead_chat_ownerships.pending_message_id IS NOT NULL
+            THEN EXCLUDED.last_clickup_event_at + INTERVAL '2 hours'
+          ELSE NULL
+        END
+      ELSE lead_chat_ownerships.response_due_at
+    END,
+    quote_followup_since = CASE
+      WHEN EXCLUDED.sla_mode = 'quote_followup'
+        THEN COALESCE(lead_chat_ownerships.quote_followup_since, EXCLUDED.quote_followup_since)
+      ELSE NULL
+    END,
+    sla_mode = EXCLUDED.sla_mode,
     updated_at = NOW()
   RETURNING id, lead_id, acquired_at, previous_clickup_status
 ),

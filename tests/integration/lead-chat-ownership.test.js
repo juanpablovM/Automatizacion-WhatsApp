@@ -44,7 +44,9 @@ describeIntegration('lead chat ownership: human takeover arbitrated by PostgreSQ
   let sequence = 0;
 
   const acquire = (clickupTaskId, previousStatus, historyId, historyEventAt, newStatus = 'in progress') =>
-    client.query(acquireSql, [clickupTaskId, previousStatus, historyId, historyEventAt, newStatus]);
+    client.query(acquireSql, [
+      clickupTaskId, previousStatus, historyId, historyEventAt, newStatus, 'cotización enviada,seguimiento',
+    ]);
 
   const release = (clickupTaskId, newStatus, historyId, historyEventAt) =>
     client.query(releaseSql, [clickupTaskId, newStatus, historyId, historyEventAt]);

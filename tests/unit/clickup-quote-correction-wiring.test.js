@@ -13,7 +13,14 @@ describe('quote correction wiring', () => {
   test('the acquisition records the task status the transition ended in', () => {
     const acquire = node('ops-handoff-clickup-closure', 'Acquire Lead Chat Ownership');
     expect(acquire.parameters.options.queryReplacement).toContain(
-      "$('Normalize ClickUp Closure').first().json.clickup_history_at, $('Normalize ClickUp Closure').first().json.clickup_new_status]",
+      "$('Normalize ClickUp Closure').first().json.clickup_history_at, $('Normalize ClickUp Closure').first().json.clickup_new_status,",
+    );
+  });
+
+  test('the acquisition receives the configurable quote-sent statuses as its sixth parameter', () => {
+    const acquire = node('ops-handoff-clickup-closure', 'Acquire Lead Chat Ownership');
+    expect(acquire.parameters.options.queryReplacement).toContain(
+      "clickup_new_status, $env.CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP || 'cotización enviada,seguimiento'] }}",
     );
   });
 

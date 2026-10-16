@@ -48,6 +48,16 @@ ownership_authority AS (
     WHERE o.deleted_at IS NULL
       AND o.released_at IS NULL
       AND (o.response_due_at IS NULL OR o.response_due_at > NOW())
+      -- Migration 037: the quote follow-up notice is the one bot message a
+      -- seller-owned chat admits, and only while its alert claim is live and
+      -- the seller has not replied since. Every other reply stays held.
+      AND NOT COALESCE(
+        $3::text = 'quote_followup_notice'
+        AND o.sla_mode = 'quote_followup'
+        AND o.quote_alert_state = 'processing'
+        AND (o.last_human_reply_at IS NULL OR o.last_human_reply_at < o.quote_alert_claimed_at),
+        FALSE
+      )
   ) AS bot_suppressed
 ),
 -- La cola del contacto admite un unico evento en vuelo (indice parcial unico
