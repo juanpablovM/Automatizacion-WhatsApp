@@ -35,10 +35,13 @@ describeIntegration('lead assignment to the test seller', () => {
 
   beforeEach(async () => {
     await client.query('BEGIN');
+    // The CI database is seeded; a bare migrated one is not. Reuse seeded rows.
     await client.query(`INSERT INTO lead_statuses (code, label, sort_order) VALUES
-      ('qualified_complete', 'Qualified', 1), ('assigned', 'Assigned', 2)`);
+      ('qualified_complete', 'Qualified', 1), ('assigned', 'Assigned', 2)
+      ON CONFLICT (code) DO NOTHING`);
     ({ rows: [{ id: conversationStatusId }] } = await client.query(
-      "INSERT INTO conversation_statuses (code, label, sort_order) VALUES ('open', 'Open', 1) RETURNING id",
+      `INSERT INTO conversation_statuses (code, label, sort_order) VALUES ('open', 'Open', 1)
+       ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code RETURNING id`,
     ));
     const { rows } = await client.query(`INSERT INTO sellers (name, clickup_user_id, is_active, sort_order) VALUES
       ('Catherine', '101', TRUE, 1), ('Edith', '102', TRUE, 2), ('Lorena', '103', TRUE, 3),
