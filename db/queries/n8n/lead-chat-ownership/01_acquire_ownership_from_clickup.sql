@@ -38,7 +38,7 @@
 --   transicion), p3 history_id (text), p4 history_event_at (timestamptz),
 --   p5 new_status (text, estado destino; se guarda en leads.clickup_status),
 --   p6 quote_followup_statuses (text, lista separada por comas; por defecto
---      'cotización enviada,seguimiento' — CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP)
+--      'cotización enviada' — CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP)
 --
 -- Migration 037: when p5 is one of the p6 statuses the quote was already sent
 -- and the ownership enters sla_mode 'quote_followup': it has no deadline
@@ -57,7 +57,7 @@ WITH input AS (
     LOWER(BTRIM(COALESCE(NULLIF($5::text, ''), ''))) = ANY(
       SELECT LOWER(BTRIM(entry))
       FROM UNNEST(STRING_TO_ARRAY(
-        COALESCE(NULLIF($6::text, ''), 'cotización enviada,seguimiento'), ','
+        COALESCE(NULLIF($6::text, ''), 'cotización enviada'), ','
       )) AS entry
       WHERE BTRIM(entry) <> ''
     ) AS quote_followup

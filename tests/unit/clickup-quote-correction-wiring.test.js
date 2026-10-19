@@ -20,7 +20,7 @@ describe('quote correction wiring', () => {
   test('the acquisition receives the configurable quote-sent statuses as its sixth parameter', () => {
     const acquire = node('ops-handoff-clickup-closure', 'Acquire Lead Chat Ownership');
     expect(acquire.parameters.options.queryReplacement).toContain(
-      "clickup_new_status, $env.CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP || 'cotización enviada,seguimiento'] }}",
+      "clickup_new_status, $env.CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP || 'cotización enviada'] }}",
     );
   });
 
