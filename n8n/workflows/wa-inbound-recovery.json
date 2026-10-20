@@ -35,7 +35,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{ json: {\n  stale_seconds: Math.max(60, Number($env.INBOUND_PROCESSING_STALE_SECONDS || 600)),\n  batch_size: Math.max(1, Math.min(100, Number($env.INBOUND_RECOVERY_BATCH_SIZE || 20))),\n  max_attempts: Math.max(1, Number($env.INBOUND_MAX_PROCESSING_ATTEMPTS || 5)),\n} }];"
+        "jsCode": "// =============================================================================\n// inbound-debounce-config.js — the single reading of the inbound debounce env.\n// -----------------------------------------------------------------------------\n// INBOUND_DEBOUNCE_SECONDS: how long a contact must stay quiet before their\n// pending messages become one turn (sliding window, default 6, 0 disables,\n// capped at 60). INBOUND_DEBOUNCE_MAX_WAIT_SECONDS: how long a customer who\n// keeps typing can defer that turn (default 30, never below the window, capped\n// at 300). An unreadable value keeps the default rather than disabling.\n// Code nodes get this file prepended through `runtimes` in\n// tests/scripts/sync-workflow-nodes.mjs; Node harnesses require it.\n// =============================================================================\n\nconst DEFAULT_INBOUND_DEBOUNCE_SECONDS = 6;\nconst MAX_INBOUND_DEBOUNCE_SECONDS = 60;\nconst DEFAULT_INBOUND_DEBOUNCE_MAX_WAIT_SECONDS = 30;\nconst MAX_INBOUND_DEBOUNCE_MAX_WAIT_SECONDS = 300;\n\nconst readWholeSeconds = (value, fallback, max) => {\n  const raw = String(value ?? '').trim();\n  if (!/^\\d+$/.test(raw)) return fallback;\n  return Math.min(max, Number(raw));\n};\n\nconst resolveInboundDebounce = (env) => {\n  const source = env || {};\n  const seconds = readWholeSeconds(\n    source.INBOUND_DEBOUNCE_SECONDS,\n    DEFAULT_INBOUND_DEBOUNCE_SECONDS,\n    MAX_INBOUND_DEBOUNCE_SECONDS,\n  );\n  if (seconds === 0) return { seconds: 0, max_wait_seconds: 0 };\n  const maxWait = readWholeSeconds(\n    source.INBOUND_DEBOUNCE_MAX_WAIT_SECONDS,\n    DEFAULT_INBOUND_DEBOUNCE_MAX_WAIT_SECONDS,\n    MAX_INBOUND_DEBOUNCE_MAX_WAIT_SECONDS,\n  );\n  return { seconds, max_wait_seconds: Math.max(seconds, maxWait) };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = { resolveInboundDebounce };\n}\n\n\n// The recovery claim runs from three places: the minute schedule and the\n// dispatcher's \"next inbox event\" claim every settled queue; the entry\n// webhook's debounce waiter scopes the claim to its own contact queue, so one\n// contact's drain never processes another contact's turn in its execution.\nconst input = items[0]?.json ?? {};\nconst debounce = resolveInboundDebounce($env);\nconst scope = String(input.queue_scope_inbound_event_id ?? '').trim();\n\nreturn [{ json: {\n  stale_seconds: Math.max(60, Number($env.INBOUND_PROCESSING_STALE_SECONDS || 600)),\n  batch_size: Math.max(1, Math.min(100, Number($env.INBOUND_RECOVERY_BATCH_SIZE || 20))),\n  max_attempts: Math.max(1, Number($env.INBOUND_MAX_PROCESSING_ATTEMPTS || 5)),\n  debounce_seconds: debounce.seconds,\n  debounce_max_wait_seconds: debounce.max_wait_seconds,\n  queue_scope_inbound_event_id: /^\\d+$/.test(scope) ? scope : null,\n} }];\n"
       },
       "id": "20000000-0000-0000-0000-000000000003",
       "name": "Load Recovery Configuration",
@@ -49,10 +49,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM recover_and_claim_inbound_events($1::integer, $2::integer, $3::integer);",
+        "query": "-- Claims the next turn of every settled contact queue (migration 034). After\n-- the stale/batch/attempt knobs come the debounce window, the max wait and an\n-- optional event id that scopes the claim to that event's queue (the entry\n-- webhook's debounce waiter).\nSELECT *\nFROM recover_and_claim_inbound_events(\n  $1::integer, $2::integer, $3::integer, $4::integer, $5::integer, NULLIF($6::text, '')::bigint\n);\n",
         "options": {
           "queryBatching": "transaction",
-          "queryReplacement": "={{ [$json.stale_seconds, $json.batch_size, $json.max_attempts] }}"
+          "queryReplacement": "={{ [$json.stale_seconds, $json.batch_size, $json.max_attempts, $json.debounce_seconds, $json.debounce_max_wait_seconds, $json.queue_scope_inbound_event_id] }}"
         }
       },
       "id": "20000000-0000-0000-0000-000000000004",

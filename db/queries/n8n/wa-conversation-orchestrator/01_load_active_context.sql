@@ -31,7 +31,43 @@ v3_grounding_entries AS (
                   || COALESCE(NULLIF(ci.sku, ''), ci.id::text),
            'concept', CASE WHEN ci.item_type = 'service' THEN 'service' ELSE 'product' END,
            'value', ci.name
-         ) AS entry
+         )
+         -- Task 3c.19: optional synonyms (migration 026), only when present,
+         -- so an entry without them keeps the exact {ref, concept, value} shape.
+         || CASE
+              WHEN jsonb_typeof(ci.metadata->'synonyms') = 'array' THEN
+                CASE WHEN jsonb_array_length(ci.metadata->'synonyms') > 0
+                  THEN jsonb_build_object('synonyms', ci.metadata->'synonyms')
+                  ELSE '{}'::jsonb
+                END
+              ELSE '{}'::jsonb
+            END
+         -- Task 3c.20: optional technical sheet (private data applied via scripts/catalog/technical-sheets.mjs), only when it
+         -- is an object and never with its source file names. The v3.1 policy
+         -- builder keeps it only for the products relevant to the turn; v3
+         -- drops it.
+         || CASE
+              WHEN jsonb_typeof(ci.metadata->'technical_sheet') = 'object'
+                THEN jsonb_build_object('technical_sheet', (ci.metadata->'technical_sheet') - 'source_files')
+              ELSE '{}'::jsonb
+            END
+         -- Task 3c.29: the technical-sheet PDFs of this product (migration 032),
+         -- refs only and never their bytes, only when it has an active one. The
+         -- v3.1 policy builder keeps them only for the products relevant to the
+         -- turn; v3 drops them.
+         || COALESCE((
+              SELECT jsonb_build_object('technical_sheet_files', jsonb_agg(
+                jsonb_build_object(
+                  'ref', 'sheet:' || sheet.sheet_key,
+                  'variant', sheet.variant,
+                  'covers', to_jsonb(sheet.covers_variants)
+                ) ORDER BY sheet.id
+              ))
+              FROM technical_sheet_files sheet
+              WHERE sheet.sku = ci.sku
+                AND sheet.active
+              HAVING COUNT(*) > 0
+            ), '{}'::jsonb) AS entry
   FROM catalog_items ci
   WHERE ci.is_active AND ci.deleted_at IS NULL AND NULLIF(ci.name, '') IS NOT NULL
 ),
@@ -142,6 +178,77 @@ latest_conversation_reset AS (
     AND al.event_name = 'conversation_state_evaluated'
     AND COALESCE((al.metadata->>'reset_conversation_lead')::boolean, FALSE)
 ),
+-- Task 3c.26: products the customer removed from this conversation's quote.
+-- Evidence is the committed turn ledger only: a remove_item mutation of an
+-- authorized decision whose turn committed (state_receipt), resolved to the
+-- product its item held just before that commit (state_receipt.state_before).
+-- Removals before the latest conversation reset no longer count. The v3.1
+-- policy builder marks the matching catalog entries; v3 ignores the list.
+v3_removed_products AS (
+  SELECT jsonb_agg(removed.product ORDER BY removed.product) AS value
+  FROM (
+    SELECT DISTINCT removed_item.value->>'product' AS product
+    FROM latest_conversation lc
+    JOIN conversation_turn_executions execution
+      ON execution.conversation_id = lc.conversation_id
+     AND execution.state_receipt IS NOT NULL
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    LEFT JOIN latest_conversation_reset lcr ON TRUE
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(decision.output_payload->'state_mutations') = 'array'
+        THEN decision.output_payload->'state_mutations' ELSE '[]'::jsonb END
+    ) mutation(value)
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(execution.state_receipt#>'{state_before,line_items}') = 'array'
+        THEN execution.state_receipt#>'{state_before,line_items}' ELSE '[]'::jsonb END
+    ) removed_item(value)
+    WHERE mutation.value->>'operation' = 'remove_item'
+      AND removed_item.value->>'item_id' = mutation.value->>'item_id'
+      AND jsonb_typeof(removed_item.value->'product') = 'string'
+      AND NULLIF(btrim(removed_item.value->>'product'), '') IS NOT NULL
+      AND (lcr.reset_at IS NULL OR execution.created_at > lcr.reset_at)
+      -- A closed conversation never carries its removals: the first turn of a
+      -- new conversation still loads the previous one.
+      AND lc.conversation_status_code <> 'closed'
+  ) removed
+),
+-- Task 3c.29: technical sheets this conversation already received (sent or
+-- still in flight), so the v3.1 policy marks them sent and the validator never
+-- sends one twice unless the customer asks again. A closed conversation never
+-- carries them, like its removals.
+v3_technical_sheets_sent AS (
+  SELECT jsonb_agg(DISTINCT 'sheet:' || (m.raw_payload#>>'{technical_sheet,sheet_key}')) AS value
+  FROM latest_conversation lc
+  JOIN messages m ON m.conversation_id = lc.conversation_id
+  WHERE m.direction = 'outgoing'
+    AND m.sender_type = 'bot'
+    AND m.message_type = 'document'
+    AND m.deleted_at IS NULL
+    AND NULLIF(m.raw_payload#>>'{technical_sheet,sheet_key}', '') IS NOT NULL
+    AND m.delivery_status IN ('sending', 'sent', 'unknown')
+    AND lc.conversation_status_code <> 'closed'
+),
+-- Task 3c.29: the sheet offered by the latest committed turn, while its
+-- pending question (technical_sheet_offer) is still the open one. Only the
+-- latest committed decision counts: a later turn that asked nothing else
+-- leaves the pending key in place but is no longer the offer being answered.
+v3_technical_sheet_offer AS (
+  SELECT latest.offer_ref AS value
+  FROM latest_conversation lc
+  JOIN LATERAL (
+    SELECT decision.output_payload#>>'{reply,primary_request,item_ref}' AS offer_ref,
+           decision.output_payload#>>'{reply,primary_request,goal_id}' AS goal_id
+    FROM conversation_turn_executions execution
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    WHERE execution.conversation_id = lc.conversation_id
+      AND execution.state_receipt IS NOT NULL
+    ORDER BY execution.id DESC
+    LIMIT 1
+  ) latest ON TRUE
+  WHERE lc.pending_question_key = 'technical_sheet_offer'
+    AND latest.goal_id = 'technical_sheet_offer'
+    AND latest.offer_ref ~ '^sheet:[a-z0-9-]+$'
+),
 recent_messages AS (
   SELECT COALESCE(
     jsonb_agg(
@@ -162,7 +269,11 @@ recent_messages AS (
       AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
       AND (m.direction = 'incoming' OR (m.direction = 'outgoing' AND m.delivery_status = 'sent'))
       AND lpi.last_inbound_at >= NOW() - INTERVAL '48 hours'
-      AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow')
+      -- handed_to_sales too: a correction right after the confirmation reopens
+      -- that quote (evaluate-conversation-step), and the model needs its history
+      -- not to greet the customer again. Every other turn on such a
+      -- conversation is a canned reply or a reset that ignores this list.
+      AND lc.conversation_status_code IN ('active', 'waiting_user', 'out_of_flow', 'handed_to_sales')
       AND (lcr.reset_at IS NULL OR m.created_at > lcr.reset_at)
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 8
@@ -187,6 +298,15 @@ last_outgoing_message AS (
     AND NULLIF(BTRIM(m.text_body), '') IS NOT NULL
   ORDER BY m.created_at DESC, m.id DESC
   LIMIT 1
+),
+-- Quote correction: the ClickUp task of the latest conversation's own lead.
+-- An open task lets a correction continue the confirmed quote; a closed one
+-- (status in CLICKUP_STATUS_RESOLVED) starts a new quote.
+latest_conversation_task AS (
+  SELECT l.clickup_task_id, l.clickup_status
+  FROM leads l
+  JOIN latest_conversation lc ON lc.lead_id = l.id
+  WHERE l.deleted_at IS NULL
 ),
 latest_lead AS (
   SELECT
@@ -217,6 +337,10 @@ latest_chat_ownership AS (
     o.response_due_at,
     o.released_at,
     o.release_reason,
+    o.sla_mode,
+    o.quote_alert_result,
+    o.quote_alerted_at,
+    o.last_human_reply_at,
     COALESCE(o.released_at, o.response_due_at) AS effective_release_at
   FROM lead_chat_ownerships o
   JOIN latest_lead ll ON ll.previous_lead_id = o.lead_id
@@ -253,7 +377,29 @@ chat_authority AS (
         AND history_conversation.phone_number = ll.phone_number
         AND history_conversation.source_number_id = ll.previous_source_number_id
         AND m.created_at >= o.effective_release_at
-    ) AS human_arbitration_required
+    ) AS human_arbitration_required,
+    -- Migration 037: the quote follow-up notice asked "¿Quieres hacer una
+    -- cotización nueva?". This turn answers it when the notice was delivered in
+    -- the last 24 hours, the seller has not replied since, and no customer
+    -- message arrived after it yet (this turn's own messages are persisted
+    -- later, by 07_persist_conversation_state.sql).
+    (
+      o.released_at IS NULL
+      AND o.sla_mode = 'quote_followup'
+      AND o.quote_alert_result = 'sent'
+      AND o.quote_alerted_at > NOW() - INTERVAL '24 hours'
+      AND (o.last_human_reply_at IS NULL OR o.last_human_reply_at < o.quote_alerted_at)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM messages m
+        JOIN conversations mc ON mc.id = m.conversation_id
+        WHERE m.deleted_at IS NULL
+          AND m.direction = 'incoming'
+          AND m.sender_type = 'customer'
+          AND (m.lead_id = o.ownership_lead_id OR mc.lead_id = o.ownership_lead_id)
+          AND m.created_at > o.quote_alerted_at
+      )
+    ) AS quote_followup_offer_pending
   FROM latest_chat_ownership o
 ),
 follow_up_status AS (
@@ -338,14 +484,22 @@ SELECT
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code,
   ca.ownership_id,
   ca.ownership_lead_id,
+  lct.clickup_task_id AS lead_clickup_task_id,
+  lct.clickup_status AS lead_clickup_status,
   COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed,
   ca.response_due_at AS human_response_due_at,
   COALESCE(ca.human_arbitration_required, FALSE) AS human_arbitration_required,
+  COALESCE(ca.quote_followup_offer_pending, FALSE) AS quote_followup_offer_pending,
   COALESCE(fs.pending_count, 0) > 0 AS has_pending_followups,
   COALESCE(lcs.state_service, ll.service) AS last_known_service,
   COALESCE(lcs.state_city, ll.city) AS last_known_city,
   COALESCE(lcs.state_requirement, ll.requirement) AS last_known_requirement,
-  vg.value AS v3_grounding
+  vg.value || CASE WHEN vrp.value IS NOT NULL
+    THEN jsonb_build_object('removed_products', vrp.value) ELSE '{}'::jsonb END
+    || CASE WHEN vtss.value IS NOT NULL
+      THEN jsonb_build_object('technical_sheets_sent', vtss.value) ELSE '{}'::jsonb END
+    || CASE WHEN vtso.value IS NOT NULL
+      THEN jsonb_build_object('technical_sheet_offer_ref', vtso.value) ELSE '{}'::jsonb END AS v3_grounding
 FROM input_payload ip
 JOIN valid_claim vc ON TRUE
 LEFT JOIN active_contract_route acr ON TRUE
@@ -357,6 +511,10 @@ LEFT JOIN recent_messages rm ON TRUE
 LEFT JOIN last_outgoing_message lom ON TRUE
 LEFT JOIN latest_conversation_reset lcr ON TRUE
 LEFT JOIN latest_lead ll ON TRUE
+LEFT JOIN latest_conversation_task lct ON TRUE
 LEFT JOIN chat_authority ca ON TRUE
 LEFT JOIN follow_up_status fs ON TRUE
-LEFT JOIN v3_grounding vg ON TRUE;
+LEFT JOIN v3_grounding vg ON TRUE
+LEFT JOIN v3_removed_products vrp ON TRUE
+LEFT JOIN v3_technical_sheets_sent vtss ON TRUE
+LEFT JOIN v3_technical_sheet_offer vtso ON TRUE;

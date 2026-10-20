@@ -26,7 +26,12 @@ WITH operation_lock AS MATERIALIZED (
     AND execution.state IN ('effects_pending', 'reconciliation_required')
     AND effect.value->>'operation_key' = $2::TEXT
     AND effect.value->>'type' = $3::TEXT
-    AND effect.value->>'type' IN ('create_lead', 'handoff')
+    -- Task 3c.29: send_technical_sheet only ever comes from a v3.1 decision.
+    AND (
+      effect.value->>'type' IN ('create_lead', 'handoff')
+      OR (effect.value->>'type' = 'send_technical_sheet'
+        AND decision.output_payload->>'version' = 'validated_conversation_decision/v3.1')
+    )
     AND effect.value->'payload' = $4::JSONB
     AND effect.value->>'payload_digest' = $5::TEXT
     AND COALESCE((effect.value->>'required_before_reply')::BOOLEAN, FALSE)

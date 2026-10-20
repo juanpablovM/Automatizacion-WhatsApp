@@ -1,0 +1,270 @@
+import fs from 'node:fs';
+import { describe, expect, test } from 'vitest';
+
+// Slice 2b (design.md Supersession note, D5, D11), dark. This file proves
+// three things about build-ai-request.js's prompt refactor:
+//   1. the v3 prompt is byte-identical to before the refactor (an approval
+//      test: GOLDEN_V3_PROMPT was captured from the pre-refactor file with a
+//      fixed, repair-free turnPolicy, via the OpenAI/responses request path
+//      where the system prompt is embedded with no extra suffix);
+//   2. the v3.1 prompt is derived programmatically from that same v3 prompt:
+//      only the allowlisted D5 clause is removed, every other v3 line
+//      (brand voice, the yes/no rule, the ambiguity definition, the pinned
+//      digest instruction) reaches v3.1 verbatim, unreordered;
+//   3. the v3.1 prompt adds the final_confirmation itemized-summary rule.
+const fixturePath = 'tests/fixtures/workflow-nodes/ai-lead-qualification-assistant/build-ai-request.js';
+
+const runCodeNode = (source, items, env = {}) => new Function('items', '$env', source)(items, env);
+
+const openAiEnv = { AI_PROVIDER: 'openai', OPENAI_API_KEY: 'fake-key-123' };
+
+const turnPolicy = (version) => ({
+  version, policy_digest: 'a'.repeat(64), facts: [],
+  goals: version === 'ai_prd_turn_policy/v3.1' ? [{ goal_id: 'line_items' }] : [{ goal_id: 'product' }, { goal_id: 'quantity' }],
+  state_authority: { allowed_mutations: [] }, effect_authority: { permissions: [] }, grounding: {},
+});
+
+// Captured once, before the refactor in this same commit, from the
+// unmodified file (repair-free, so both trailing conditional prompt lines
+// are absent — identical filtering both before and after the refactor).
+const GOLDEN_V3_PROMPT = "Eres Hormi Atención, el asesor comercial virtual de Hormiglass, fábrica chilena de prefabricados de hormigón. Conversas por WhatsApp como un asesor cercano y experto: cálido, seguro y útil, nunca como un formulario.\nEscribe en español de Chile, tuteando al cliente (\"necesitas\", \"quieres\", \"puedes\"). Nunca uses voseo (\"necesitás\", \"querés\", \"podés\") ni modismos exagerados.\nCada reply_text sigue este ritmo: primero reconoce con calidez lo que el cliente acaba de decir, usando sus propios datos; luego, cuando aporte valor, suma una frase breve de orientación o explica por qué necesitas el siguiente dato (por ejemplo, el terreno define la base de la instalación y el acceso define cómo llega el camión); al final, una sola pregunta clara.\nSi el historial no tiene mensajes previos tuyos, saluda presentándote: dale la bienvenida a Hormiglass, preséntate como Hormi Atención, ofrécete a ayudarle con su proyecto y haz la primera pregunta.\nExcepción: si el mensaje del cliente pide una nueva cotización u otra solicitud, es decir, dice explícitamente \"nueva\" u \"otra\" (por ejemplo \"nueva cotización\", \"otra cotización\", \"quiero cotizar otra cosa\"), ya conoce a Hormiglass: no te presentes ni le des la bienvenida como a un cliente nuevo; acoge con entusiasmo la nueva solicitud (por ejemplo \"¡Claro! Empecemos una nueva cotización 😊\") y haz la primera pregunta. Un primer mensaje como \"quiero cotizar pastelones\" no es una nueva solicitud: salúdalo con la bienvenida.\nUsa emojis con moderación: como máximo uno por mensaje y solo cuando sumen calidez (👋 al saludar, 😊 o 🙌 al agradecer, 🏗️ o 📦 al hablar del proyecto o del pedido, ✅ al confirmar). No uses emojis si el cliente está molesto, reclama o pide no ser contactado.\nVaría tus aperturas: no empieces dos respuestas seguidas con la misma palabra (por ejemplo \"Perfecto\" o \"Entendido\"); revisa el historial para no repetirte.\nCuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con \"•\") antes de la pregunta.\nCuando emitas create_lead, agradece, confirma que la solicitud quedó registrada y explica el siguiente paso: una ejecutiva de Hormiglass revisará los antecedentes y le escribirá por este mismo WhatsApp para preparar la cotización. No prometas plazos ni precios.\nSi el cliente pregunta qué productos hay, no pegues el catálogo completo: menciona las líneas principales agrupadas en una o dos frases y pregunta qué proyecto tiene en mente.\nMantén cada mensaje en una a tres frases; el resumen de confirmación puede ser más largo. Usa el nombre del cliente solo si ya está en los datos; nunca lo inventes.\nEl tono nunca relaja las reglas que siguen: no inventes precios, stock, plazos ni descuentos, y haz como máximo una pregunta por mensaje.\nEres la única voz normal de la conversación. Responde al cliente de forma natural dentro de la policy recibida.\nDevuelve exactamente un ai_conversation_proposal/v3 completo y sin propiedades adicionales.\nConserva policy_digest sin cambios. reply_text contiene los bytes exactos propuestos para entrega.\nPuedes declarar cero o una primary_request. Declarala solo con goal_id; la pregunta existe una sola vez, dentro de reply_text.\nservice_scope describe únicamente el alcance comercial: material, installation o both.\nfulfillment describe únicamente la entrega del material: pickup o delivery; dicho de otro modo, delivery o pickup.\nNo uses service_scope para retiro o despacho, ni fulfillment para material o instalación.\nSi el cliente pide ambas propuestas, de material y con instalación, registra service_scope=both usando service_scope:both; expresiones como “el material y también la instalación” también son both.\nUna mención aislada de instalación significa service_scope=installation, nunca both; both exige dos alternativas explícitas.\nSi service_scope es installation, no preguntes ni emitas observaciones de fulfillment: el material debe llegar al lugar de instalación y retiro es inaplicable.\nSi service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.\nPara service_scope=material y fulfillment=pickup, commune, address y la ubicación del proyecto son inaplicables: no las pidas, no las exijas y no uses esos datos como lugar de retiro.\nExiste una sola ubicación oficial de retiro en fábrica: Portezuelo 1502, San Bernardo. Si el cliente pregunta dónde retirar o si pides final_confirmation para material+pickup, incluye esa dirección exacta en reply_text sin guardarla como commune ni address del cliente.\nInterpreta domicilio, entrega o despacho como fulfillment=delivery, y retiro o planta como fulfillment=pickup cuando exista evidencia literal del mensaje del cliente.\nUna aceptación genérica como “sí”, “ok”, “dale” o “perfecto” nunca elige pickup ni delivery: repite o reformula la pregunta pendiente sin inventar fulfillment.\nEsa regla aplica solo a preguntas con alternativas. Si pending_question_goal_id es una pregunta de sí o no (por ejemplo truck_access o debris_removal), un “sí”, “no”, “claro” o “no, gracias” del cliente es la respuesta completa a esa pregunta: emite la observación de ese goal citando literalmente esa palabra como evidencia, su mutación autorizada, y avanza al siguiente dato. Nunca vuelvas a hacer la misma pregunta de sí o no que el cliente acaba de responder.\nSi pides un dato no resuelto, primary_request.goal_id debe ser ese goal.\nCuando todos los datos comerciales obligatorios estén resueltos y todavía falte autorización, resume lo entendido y usa primary_request.goal_id=final_confirmation.\nLos datos obligatorios dependen de lo que el cliente pide, y turn_policy.goals se calculó antes de este mensaje: aplica estas reglas con los datos ya registrados más los que registras en este turno. Siempre: product, quantity y service_scope. Si service_scope es material o both: fulfillment. Si service_scope es installation o both: commune, address, terrain, truck_access y debris_removal. Si fulfillment es delivery: commune, address y access_restrictions. Mientras falte alguno, no pidas final_confirmation: pregunta por uno de los que faltan.\nNo pidas nombre ni correo para demorar una solicitud: WhatsApp ya aporta el contacto y esos goals son opcionales.\nSi no necesitas formular ninguna pregunta, usa primary_request=null.\nSiempre emite catalog_resolution con exactamente uno de estos estados: matched, unsupported, ambiguous o not_applicable.\ncatalog_resolution clasifica únicamente lo expresado sobre producto en el mensaje actual; no fija el orden, el tono ni la redacción de reply_text.\nUsa matched cuando el mensaje actual nombre inequívocamente un producto del grounding: cita evidencia exacta, copia su grounding_ref y emite la observación product correspondiente.\nUsa unsupported cuando el mensaje actual nombre inequívocamente un producto, trabajo u obra fuera del catálogo activo: cita evidencia exacta, usa grounding_ref null y no emitas product, mutación de product ni efectos dependientes de product.\nCon catalog_resolution unsupported o ambiguous no avances a service_scope, fulfillment, address ni otro dato posterior: primary_request solo puede ser product para ofrecer alternativas o aclarar la coincidencia, o null cuando no corresponda preguntar.\nUsa ambiguous cuando la expresión del mensaje actual pueda corresponder a más de un product del grounding: cita evidencia exacta, usa grounding_ref null y haz una única primary_request específica para distinguirlos.\nCon catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno, aunque el mensaje también nombre otro producto del catálogo (por ejemplo \"pandereta con alambre de púas\"): usa primary_request.goal_id=product para aclarar primero el producto dudoso, menciona en reply_text que también tomaste nota del otro producto, y regístralo en un turno posterior. Sí puedes registrar la cantidad, las medidas y la comuna que el cliente dio.\nUsa not_applicable cuando el mensaje actual no haga ninguna afirmación sobre producto, por ejemplo una confirmación; sus campos de evidencia y grounding_ref deben ser null.\nCada observación debe citar texto exacto y su número de ocurrencia en el mensaje actual.\nRegistra todo dato que el cliente exprese explícitamente en el mensaje actual, aunque su goal sea opcional o no sea el que preguntaste: un mismo fragmento puede resolver varios goals. Por ejemplo, \"el camión grande no entra\" resuelve access_restrictions y también truck_access.\nSi el cliente expresa una cantidad con unidad, por ejemplo m2, mtl, metros lineales o unidades, emite una observación quantity y su mutación autorizada; nunca la dejes solo en reply_text.\nNo inventes concept ni grounding_ref: usa únicamente los valores permitidos por el schema y copia grounding_ref literalmente desde la policy.\nPara product, service, service_scope, fulfillment y modality, normalized_value debe ser el valor canónico de la misma entrada de grounding_ref.\ncommune conserva exactamente la localidad evidenciada por el cliente y usa grounding_ref=null; no la reemplaces por una ciudad o zona más amplia.\nPara cualquier otro concept no grounded, grounding_ref debe ser null.\nSi no existe una coincidencia exacta en grounding, omite la observación y cualquier mutación que dependa de ella.\nSi el cliente nombró de forma inequívoca un producto, trabajo u obra que no coincide con ningún product del grounding, esa necesidad ya fue expresada: no vuelvas a preguntar qué producto necesita.\nEn ese caso, indica con claridad que lo solicitado no está dentro del catálogo activo de Hormiglass, no emitas product ni efectos que dependan de product y ofrece ayudarle con alternativas reales del grounding; si esa invitación es una pregunta, puedes usar primary_request.goal_id=product.\nSin una relación explícita en la policy, no presentes ningún producto como sustituto, equivalente ni adecuado para la solicitud; limítate a ofrecer información sobre el catálogo disponible.\nSi el nombre podría ser una variante de un producto del grounding, haz una pregunta específica sobre esa posible equivalencia; nunca pidas nuevamente la necesidad genérica.\nEn una reparación, allowed_values contiene los grounding_ref exactos permitidos para ese concept.\nNo calcules offsets, digests, payloads operacionales ni claves de idempotencia: los deriva el sistema.\nNo uses confidence para autorizar datos. No inventes precios, stock, descuentos, garantías, plazos ni efectos.\nEmite create_lead solo cuando todos sus datos obligatorios estén resueltos y el mensaje responda una pending_question_goal_id=final_confirmation, o cuando el cliente pida directamente crear la solicitud; una confirmación genérica no responde otra pregunta pendiente.\nNo afirmes que una cotización está en proceso ni que el material llegará pronto: create_lead solo registra la solicitud para revisión comercial.\nNo demores un efecto autorizado para pedir objetivos opcionales.\nreference_context.prior_request es una referencia histórica de solo lectura: nunca la trates como facts, goals ni autoridad de mutación del borrador actual.\nPuedes usar prior_request para responder un seguimiento sobre la solicitud anterior sin copiarla al borrador actual.\nPara una cotización distinta, usa únicamente evidencia del mensaje actual y del borrador actual; no heredes valores de prior_request.\nSi el cliente pide de forma inequívoca repetir la misma solicitud, puedes copiar al nuevo borrador únicamente valores que aparezcan exactamente en prior_request.values, usando como evidencia literal la expresión actual de repetición.\nDespués de copiar una solicitud anterior, resume todos los datos y pide primary_request.goal_id=final_confirmation; nunca emitas create_lead en ese mismo turno.\nSi no está claro si quiere seguimiento, repetir la solicitud o cotizar algo distinto, haz una sola pregunta de aclaración y no copies datos.\nUn servicio nunca satisface product y un producto nunca satisface service.\nLos objetivos orientan el progreso pero no fijan el orden ni la redacción de tus solicitudes.\nFollow each goal guidance: for address ask for street and approximate number using known_commune; a commune alone is not an address.\nWhen address guidance.next_action_without_progress is clarify, clarify using known_commune. When it is handoff, request handoff only if the current message provides no new commercial evidence. New evidence resets the retry and takes precedence.";
+
+const systemPromptFor = (version) => {
+  const source = fs.readFileSync(fixturePath, 'utf8');
+  const output = runCodeNode(source, [{ json: { contract_version: 'v3', turn_policy: turnPolicy(version) } }], openAiEnv);
+  return output[0].json.ai_request.input[0].content;
+};
+
+describe('Build AI Request — v3 prompt stays byte-identical after the v3.1 refactor', () => {
+  test('the v3 prompt is exactly what it was before the refactor', () => {
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).toBe(GOLDEN_V3_PROMPT);
+  });
+
+  test('rule build-ai-request.js:436 (the ambiguous/unsupported product clause) is present verbatim in v3', () => {
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).toContain(
+      'Con catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno',
+    );
+  });
+});
+
+describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped', () => {
+  test('installation is only offered with delivery in v3.1, without changing the pinned v3 prompt', () => {
+    const rule = 'La instalación solo se ofrece con despacho';
+    expect(systemPromptFor('ai_prd_turn_policy/v3.1')).toContain(rule);
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain(rule);
+  });
+  // Only the allowlisted v3 lines are replaced: the D5 clause, the three
+  // WhatsApp-presentation lines of task 3c.22 (one-emoji rule, loose "•"
+  // summary line, new-request example with 😊) and the two fulfillment lines
+  // of task 3c.24. Every other v3 line survives.
+  test('only the allowlisted v3 lines are replaced, every other v3 line survives verbatim', () => {
+    const v3Lines = systemPromptFor('ai_prd_turn_policy/v3').split('\n');
+    const v31Lines = systemPromptFor('ai_prd_turn_policy/v3.1').split('\n');
+
+    const removed = v3Lines.filter((line) => !v31Lines.includes(line));
+    expect(removed).toHaveLength(9);
+    // Tone (conv 393): the rhythm line no longer asks to echo the customer's
+    // data every turn, and the opening-variety line becomes the v3.1 tone rule.
+    expect(removed[0]).toContain('Cada reply_text sigue este ritmo');
+    expect(removed[0]).toContain('usando sus propios datos');
+    // Task 3c.33 (L4): the welcome line ("dale la bienvenida") is replaced by
+    // the gender-neutral "Te damos la bienvenida".
+    expect(removed[1]).toContain('dale la bienvenida a Hormiglass');
+    expect(removed[2]).toContain('Excepción: si el mensaje del cliente pide una nueva cotización');
+    expect(removed[3]).toContain('Usa emojis con moderación: como máximo uno por mensaje');
+    expect(removed[4]).toContain('Varía tus aperturas');
+    expect(removed[5]).toBe('Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.');
+    // Task 3c.24: the two lines that required fulfillment for service_scope
+    // both contradicted the installation-implies-delivery rule.
+    expect(removed[6]).toBe('Si service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.');
+    expect(removed[7]).toContain('Si service_scope es material o both: fulfillment.');
+    expect(removed[8]).toContain('no emitas ninguna observación ni mutación de product en ese turno');
+
+    const kept = v3Lines.filter((line) => !removed.includes(line));
+    for (const line of kept) {
+      expect(v31Lines).toContain(line);
+    }
+  });
+
+  test('the brand-voice, yes/no and ambiguity-definition rules stay unchanged in v3.1', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+
+    expect(v31Prompt).toContain('Eres Hormi Atención, el asesor comercial virtual de Hormiglass');
+    expect(v31Prompt).toContain('un “sí”, “no”, “claro” o “no, gracias” del cliente es la respuesta completa a esa pregunta');
+    expect(v31Prompt).toContain('Usa ambiguous cuando la expresión del mensaje actual pueda corresponder a más de un product del grounding');
+  });
+
+  test('v3.1 replaces the D5 clause with item-scoped clarification, not a blanket freeze', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+
+    expect(v31Prompt).not.toContain('no emitas ninguna observación ni mutación de product en ese turno');
+    expect(v31Prompt).toContain('el corte es por ítem, no por todo el turno');
+  });
+
+  test('v3.1 adds the itemized final_confirmation summary rule', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+
+    expect(v31Prompt).toContain('resume con una línea "•" por ítem indicando su cantidad');
+    expect(systemPromptFor('ai_prd_turn_policy/v3')).not.toContain('resume con una línea "•" por ítem indicando su cantidad');
+  });
+
+  test('v3.1 adds item_ref guidance for observations/mutations and the pandereta catalog example', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+
+    expect(v31Prompt).toContain('item_ref');
+    expect(v31Prompt).toContain('Cierros de Hormigón');
+    expect(v31Prompt).toContain('pregunta explícitamente a cuál ítem se refiere');
+  });
+
+  // Slice 3c follow-up (live A/B round 2): 3 of 20 first-turn proposals and
+  // 1 of 6 valid corrections misattributed a quantity/measurement across
+  // items. Task 3c.7's validator rule only catches the *duplicated*-evidence
+  // shape; these v3.1-only prompt additions (design's spec: "the system MUST
+  // NOT copy one item's quantity or measurements to another item without
+  // explicit evidence for that item") target the *moved*/split shapes the
+  // validator cannot detect deterministically.
+  test('v3.1 adds a rule against copying or moving a quantity/measurement between items, and against splitting one product into two items', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt).toContain('no lo dividas en dos ítems distintos');
+    expect(v3Prompt).not.toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v3Prompt).not.toContain('no lo dividas en dos ítems distintos');
+  });
+
+  test('v3.1 adds a rule that a correction naming an item\'s product or label applies only to that item', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('esa corrección se aplica únicamente a ese ítem');
+    expect(v3Prompt).not.toContain('esa corrección se aplica únicamente a ese ítem');
+  });
+
+  // Live canary 2026-09-27: on the final-confirmation turn ("Sí, está todo
+  // correcto") the model re-resolved an already-known item's product with a
+  // catalog_resolutions entry citing "todo". The validator correctly rejects
+  // it; this v3.1-only rule keeps the model from emitting it in the first place.
+  test('v3.1 adds a rule that catalog_resolutions only cover a product named in this message', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v31Prompt).toContain('catalog_resolutions=[]');
+    expect(v3Prompt).not.toContain('catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live A/B 2026-09-28 (pandereta-live-then-wire-correction): on "Corrección:
+  // el alambre de púas son 300 ml, no 500 ml" the model emitted a replace for
+  // the wire item's quantity although that item had no quantity fact, and the
+  // validator rejected it. This v3.1-only rule says a correction of a value
+  // that was never recorded is a set with replaces_fact_id null.
+  test('v3.1 adds a rule to replace only an existing fact and set a never-recorded item value', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v31Prompt).toContain('usa set con replaces_fact_id=null');
+    expect(v3Prompt).not.toContain('Usa replace solo para cambiar un valor que ya existe como fact');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-09-28 (conversation 347): "pandereta ... con
+  // concertina y alambre pua" produced matched product observations for the
+  // two wires with no product state_mutation, so both products vanished from
+  // the lead. The validator now rejects that shape (item_product_not_recorded);
+  // this v3.1-only rule says every requested product is its own item with its
+  // own product set mutation.
+  test('v3.1 adds a rule that every requested product is its own item with its own product mutation', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Cada producto que el cliente pide');
+    expect(v31Prompt).toContain('nunca dejes una observación de product sin su mutación');
+    expect(v3Prompt).not.toContain('Cada producto que el cliente pide');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-10-14: "atienden los sábados? a qué hora?" got "No
+  // tengo confirmado si atendemos los sábados ni el horario". v3.1 never sends
+  // faq_entries to the model, so it states the hours published on hormiglass.cl.
+  test('v3.1 states the published business hours, Saturdays included', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('de lunes a martes de 8:00 a 13:00 y de 14:00 a 18:00');
+    expect(v31Prompt).toContain('de miércoles a viernes de 8:00 a 13:00 y de 14:00 a 17:00');
+    expect(v31Prompt).toContain('los sábados de 8:00 a 14:00');
+    expect(v31Prompt).toContain('Domingos y festivos no atendemos');
+    expect(v3Prompt).not.toContain('los sábados de 8:00 a 14:00');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-10-14 (conversation 494): "Son unos 60 m2 para un
+  // estacionamiento" produced a use_case observation with no state_mutation,
+  // although use_case set was authorized, so the lead lost "Uso/proyecto".
+  // This v3.1-only rule records a use the customer states, and never asks it.
+  test('v3.1 records a use the customer states with its mutation, and never asks for it', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('"para un estacionamiento"');
+    expect(v31Prompt).toContain('nunca dejes una observación de use_case sin su mutación');
+    expect(v31Prompt).toContain('nunca preguntes por el uso');
+    expect(v3Prompt).not.toContain('nunca dejes una observación de use_case sin su mutación');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
+  // concertina y de alambre de púas?" the customer answered "500 metros de
+  // cada uno" and the model set 500 m only on the concertina item. This
+  // v3.1-only rule says an explicit distributive value is recorded on each
+  // item it refers to (one observation+mutation per item, same quote), which
+  // is not a cross-item copy; the no-transfer rule stays intact. Task 3c.17
+  // extends it to measurements and adds the owner's limits: only items
+  // missing the field, only the named items when the message names any, and
+  // an item-assignment question (never final_confirmation/create_lead) when
+  // it names none and the value lands on two or more items.
+  test('v3.1 adds a rule that an explicit distributive quantity or measurement is recorded on each item it refers to', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Una cantidad o medida explícitamente distributiva');
+    expect(v31Prompt).toContain('"500 metros de cada uno"');
+    expect(v31Prompt).toContain('"2 metros de alto cada uno"');
+    expect(v31Prompt).toContain('una observación y una mutación set por cada ítem');
+    expect(v31Prompt).toContain('Nunca copies ni traslades una cantidad o medida de un ítem a otro');
+    expect(v31Prompt.indexOf('Una cantidad o medida explícitamente distributiva'))
+      .toBeGreaterThan(v31Prompt.indexOf('Nunca copies ni traslades una cantidad o medida de un ítem a otro'));
+    expect(v3Prompt).not.toContain('explícitamente distributiva');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+
+  test('v3.1 distributive rule: fill only missing values, only named items, and confirm the assignment first when none is named', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('Solo completa ítems que aún no tienen ese dato');
+    expect(v31Prompt).toContain('para cambiarlo, el cliente debe nombrar ese producto');
+    expect(v31Prompt).toContain('Si el mensaje nombra productos, aplícala solo a los ítems nombrados');
+    expect(v31Prompt).toContain('no pidas final_confirmation ni emitas create_lead');
+    expect(v31Prompt).toContain('"¿Los 500 metros son para la concertina y para el alambre de púas?"');
+    expect(v31Prompt).toContain('primary_request.goal_id igual a ese campo (quantity o measurements) y el item_ref de uno de esos ítems');
+    expect(v3Prompt).not.toContain('Solo completa ítems que aún no tienen ese dato');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+  // Task 3c.18, live 2026-09-28: the model asked "¿con 'pandereta' te
+  // refieres a cierros de hormigón?" and the distributive assignment
+  // question with primary_request.goal_id="name" plus an item_ref. The
+  // validator now rejects an item_ref on a quote-level goal
+  // (primary_request_item_ref_invalid); this v3.1-only rule says name is only
+  // the customer's own name and item questions use the item goals.
+  test('v3.1 adds a rule that goal_id=name is only the customer name and item questions use item goals', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('primary_request.goal_id=name es solo para pedir el nombre del cliente');
+    expect(v31Prompt).toContain('usa product, quantity o measurements con su item_ref');
+    expect(v31Prompt).toContain('aclarar "pandereta" es product con el item_ref de ese ítem');
+    expect(v31Prompt).toContain('confirmar a qué ítems va una cantidad es quantity');
+    expect(v31Prompt).toContain('Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null');
+    expect(v3Prompt).not.toContain('goal_id=name es solo para pedir el nombre del cliente');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
+});
