@@ -1,12 +1,22 @@
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
-const runFixture = (name, row) => {
+// tests/scripts/sync-workflow-nodes.mjs concatenates each fixture's declared
+// `runtimes` ahead of its own source before writing the n8n Code node, so a
+// fixture that depends on a shared runtime (like build-v3-lead-effect.js on
+// shared/v3-line-items.js) never sees that runtime's functions unless this
+// harness composes them the same way.
+const runFixture = (name, row, runtimes = []) => {
   const source = fs.readFileSync(
     `tests/fixtures/workflow-nodes/wa-conversation-orchestrator/${name}.js`,
     'utf8',
   );
-  return new Function('items', source)([{ json: row }])[0].json;
+  const runtimeSources = runtimes.map((runtime) => fs.readFileSync(
+    `tests/fixtures/workflow-nodes/${runtime}`,
+    'utf8',
+  ));
+  const composed = [...runtimeSources, source].join('\n\n');
+  return new Function('items', composed)([{ json: row }])[0].json;
 };
 
 const runEmbeddedNode = (name, row) => {
@@ -25,7 +35,7 @@ describe('v3 canonical effect executors', () => {
       qualification_context: {
         service: 'installation', city: 'Santiago', requirement: '25 square meters',
       },
-    });
+    }, ['shared/v3-line-items.js']);
 
     expect(output).toMatchObject({
       operation_key: 'lead-op-1',

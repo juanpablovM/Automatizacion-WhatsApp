@@ -8,7 +8,9 @@ WITH target AS MATERIALIZED (
     AND event.processing_token = $2::TEXT
     AND execution.state = 'routed'
     AND execution.decision_id IS NULL
-    AND $3::JSONB->>'version' = 'ai_prd_turn_policy/v3'
+    -- Slice 2a (design.md D6), dark: a v3.1 policy can also fall back to
+    -- contingency; system_contingency_decision/v3 itself stays unchanged.
+    AND $3::JSONB->>'version' IN ('ai_prd_turn_policy/v3', 'ai_prd_turn_policy/v3.1')
     AND $4::JSONB->>'version' = 'system_contingency_decision/v3'
     AND $4::JSONB->>'policy_digest' = $3::JSONB->>'policy_digest'
     AND $4::JSONB->'state_mutations' = '[]'::JSONB

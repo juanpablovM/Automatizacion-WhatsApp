@@ -1,5 +1,13 @@
 -- Execute one authorized normal handoff from its exact external-operation
 -- claim. The contingency-only internal_handoff type is intentionally excluded.
+--
+-- Task 3c.25: one open escalation per conversation. When this conversation
+-- already has an open handoff (pending, notified or acknowledged) created in
+-- the last 48 hours, the effect is receipted with that handoff instead of
+-- creating a second one for the same person to pick up. An exact replay of
+-- this operation key always returns its own row first. A resolved handoff, or
+-- an open one older than the 48-hour continuation window, does not count: a
+-- new escalation is created and notified.
 WITH target AS MATERIALIZED (
   SELECT operation.*, execution.decision_id, execution.inbound_event_id,
          conversation.id AS conversation_id, conversation.phone_number,
@@ -16,6 +24,25 @@ WITH target AS MATERIALIZED (
     AND operation.request_payload#>>'{v3,payload_digest}' = $3::TEXT
     AND operation.request_payload#>>'{v3,claim_token}' = $4::TEXT
   FOR UPDATE OF operation, execution, conversation
+), exact_handoff AS MATERIALIZED (
+  SELECT handoff.*
+  FROM handoffs handoff
+  JOIN target ON target.operation_key = handoff.idempotency_key
+  WHERE handoff.deleted_at IS NULL
+), open_handoff AS MATERIALIZED (
+  SELECT existing.*
+  FROM target
+  JOIN LATERAL (
+    SELECT handoff.*
+    FROM handoffs handoff
+    WHERE handoff.conversation_id = target.conversation_id
+      AND handoff.estado IN ('pending', 'notified', 'acknowledged')
+      AND handoff.deleted_at IS NULL
+      AND handoff.created_at >= NOW() - INTERVAL '48 hours'
+    ORDER BY handoff.id
+    LIMIT 1
+  ) existing ON TRUE
+  WHERE NOT EXISTS (SELECT 1 FROM exact_handoff)
 ), inserted AS (
   INSERT INTO handoffs (
     idempotency_key, conversation_id, phone_number, source_number_id,
@@ -34,16 +61,25 @@ WITH target AS MATERIALIZED (
            'effect_payload', target.request_payload->'payload'
          )
   FROM target
+  WHERE NOT EXISTS (SELECT 1 FROM exact_handoff)
+    AND NOT EXISTS (SELECT 1 FROM open_handoff)
   ON CONFLICT (idempotency_key) WHERE deleted_at IS NULL DO NOTHING
   RETURNING *
 ), fixed AS MATERIALIZED (
   SELECT inserted.* FROM inserted
   UNION ALL
+  SELECT exact_handoff.* FROM exact_handoff
+  UNION ALL
+  SELECT open_handoff.* FROM open_handoff
+  UNION ALL
+  -- A concurrent insert of this exact key between the snapshot and the insert.
   SELECT handoff.*
   FROM handoffs handoff
   JOIN target ON target.operation_key = handoff.idempotency_key
   WHERE handoff.deleted_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM inserted)
+    AND NOT EXISTS (SELECT 1 FROM exact_handoff)
+    AND NOT EXISTS (SELECT 1 FROM open_handoff)
 )
 SELECT
   target.operation_key,

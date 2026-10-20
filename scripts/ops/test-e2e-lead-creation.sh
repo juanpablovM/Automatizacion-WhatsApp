@@ -55,7 +55,7 @@ PHONE_NUMBER="$1"
 # The advisor only quotes what the official catalogue carries. This scenario
 # also protects the factory-pickup rule: a private material pickup needs a
 # quantity, but never a client commune or project address.
-TEST_MESSAGE="Quiero cotizar 100 unidades de pastelones, solo material, para retirar en fábrica"
+TEST_MESSAGE="Quiero cotizar 100 unidades de pastelones de 50x50x5, solo material, para retirar en fábrica"
 CONFIRM_MESSAGE="Si, correcto"
 E2E_WAIT_SECONDS=${E2E_WAIT_SECONDS:-240}
 case "$E2E_WAIT_SECONDS" in *[!0-9]*|'') echo "ERROR: E2E_WAIT_SECONDS debe ser un entero positivo" >&2; exit 1 ;; esac

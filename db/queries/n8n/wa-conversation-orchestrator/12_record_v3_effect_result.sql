@@ -41,6 +41,20 @@ WITH target AS MATERIALIZED (
             AND NULLIF($5::JSONB->>'handoff_id', '') IS NOT NULL
             AND NOT ($5::JSONB ? 'id')
           )
+          -- Task 3c.29: a technical sheet is receipted by the exact document
+          -- message it reserved under this operation's own delivery key.
+          OR (
+            target.operation_type = 'send_technical_sheet'
+            AND $5::JSONB->>'delivery_key' = 'v3-technical-sheet:' || target.operation_key
+            AND EXISTS (
+              SELECT 1 FROM messages message
+              WHERE message.id::TEXT = $5::JSONB->>'document_message_id'
+                AND message.idempotency_key = $5::JSONB->>'delivery_key'
+                AND message.direction = 'outgoing'
+                AND message.message_type = 'document'
+                AND message.deleted_at IS NULL
+            )
+          )
         )
       )
     )

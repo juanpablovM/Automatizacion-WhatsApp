@@ -210,6 +210,8 @@ return [
       sender_type_candidate: isFromMe ? 'own_message' : 'customer',
       message_type: attachment.attachment_type ? attachment.attachment_type : 'text',
       text_body: textBody,
+      // The durable inbox claim defers the turn by this window (migration 034).
+      inbound_debounce_seconds: resolveInboundDebounce($env).seconds,
       raw_payload_json: JSON.stringify(body),
       ...attachment,
     },

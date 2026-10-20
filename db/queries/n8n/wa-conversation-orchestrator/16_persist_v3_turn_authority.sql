@@ -25,10 +25,12 @@ WITH request_context AS MATERIALIZED (
     AND execution.conversation_id = $3::BIGINT
     AND execution.state = 'routed'
     AND execution.decision_id IS NULL
-    AND $12::JSONB->>'version' = 'ai_prd_turn_policy/v3'
-    AND $14::JSONB->>'version' = 'conversation_validation_result/v3'
+    -- Slice 2a (design.md D6), dark: a v3.1 turn's policy/validation/decision
+    -- attach through this exact boundary, alongside the unchanged v3 path.
+    AND $12::JSONB->>'version' IN ('ai_prd_turn_policy/v3', 'ai_prd_turn_policy/v3.1')
+    AND $14::JSONB->>'version' IN ('conversation_validation_result/v3', 'conversation_validation_result/v3.1')
     AND COALESCE(($14::JSONB->>'valid')::BOOLEAN, FALSE)
-    AND $15::JSONB->>'version' = 'validated_conversation_decision/v3'
+    AND $15::JSONB->>'version' IN ('validated_conversation_decision/v3', 'validated_conversation_decision/v3.1')
     AND $15::JSONB->>'decision_id' = $11::TEXT
     AND $15::JSONB->>'conversation_id' = execution.conversation_id::TEXT
     AND $15::JSONB->>'turn_id' = execution.inbound_event_id::TEXT

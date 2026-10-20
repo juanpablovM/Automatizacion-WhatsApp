@@ -36,12 +36,35 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Normalize Evolution Payload",
-    "fixture": "wa-inbound-entry/normalize-evolution-payload.js"
+    "fixture": "wa-inbound-entry/normalize-evolution-payload.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Persist Durable Inbox",
     "fixture": "db/queries/n8n/inbound-events/01_claim_inbound_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Select Debounced Inbox Events",
+    "fixture": "wa-inbound-entry/select-debounced-inbox-events.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Load Recovery Configuration",
+    "fixture": "wa-inbound-recovery/load-recovery-configuration.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Recover And Claim FIFO Events",
+    "fixture": "db/queries/n8n/inbound-events/02_recover_and_claim_inbound_events.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
   },
@@ -89,7 +112,8 @@ const NODES = [
     "fixture": "wa-conversation-orchestrator/evaluate-conversation-step.js",
     "transform": "n8n-explicit-return",
     "runtimes": [
-      "shared/customer-opt-out-vocabulary.js"
+      "shared/customer-opt-out-vocabulary.js",
+      "shared/chile-communes.js"
     ]
   },
   {
@@ -227,6 +251,30 @@ const NODES = [
     "fixture": "ops-lead-chat-lease-scheduler/finalize-scheduler-branch.js"
   },
   {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Claim Quote Follow-Up Alerts",
+    "fixture": "db/queries/n8n/lead-chat-ownership/11_claim_quote_followup_alerts.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Prepare Quote Follow-Up Notice",
+    "fixture": "ops-lead-chat-lease-scheduler/prepare-quote-followup-notice.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Post Quote Follow-Up Comment",
+    "fixture": "ops-lead-chat-lease-scheduler/post-quote-followup-comment.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Complete Quote Follow-Up Alert",
+    "fixture": "db/queries/n8n/lead-chat-ownership/12_complete_quote_followup_alert.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
     "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
     "node": "Normalize ClickUp Closure",
     "fixture": "ops-handoff-clickup-closure/normalize-clickup-closure.js"
@@ -305,6 +353,8 @@ const NODES = [
     "node": "Compile V3 Turn Policy",
     "fixture": "wa-conversation-orchestrator/compile-v3-turn.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -318,7 +368,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Build V3 Lead Effect",
-    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js"
+    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js",
+    "runtimes": [
+      "shared/v3-line-items.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
@@ -330,6 +383,8 @@ const NODES = [
     "node": "Validate And Authorize V3",
     "fixture": "wa-conversation-orchestrator/validate-and-authorize-v3.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
   },
@@ -391,6 +446,13 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist V3 Technical Sheet Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/19_persist_v3_technical_sheet_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Prepare V3 Contingency Decision",
     "fixture": "db/queries/n8n/wa-conversation-orchestrator/15_prepare_v3_contingency.sql",
     "type": "n8n-nodes-base.postgres",
@@ -438,6 +500,18 @@ const NODES = [
     "parameter": "query"
   },
   {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Load V3 Technical Sheet Deliveries",
+    "fixture": "db/queries/n8n/wa-inbound-downstream-dispatcher/02_load_v3_technical_sheet_deliveries.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Technical Sheet Lane Complete",
+    "fixture": "wa-inbound-downstream-dispatcher/technical-sheet-lane-complete.js"
+  },
+  {
     "workflow": "n8n/workflows/ops-followup-scheduler.json",
     "node": "Claim Due Follow-Ups",
     "fixture": "db/queries/n8n/follow-up-pipeline/02_claim_due_follow_ups.sql",
@@ -456,6 +530,8 @@ const NODES = [
     "node": "Prepare Shadow Evaluation",
     "fixture": "ai-prd-shadow-evaluator/prepare-shadow-evaluation.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -467,8 +543,24 @@ const NODES = [
     "fixture": "ai-prd-shadow-evaluator/record-shadow-evaluation.js",
     "runtimes": [
       "shared/v3-rollout-runtime.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Build ClickUp Payload",
+    "fixture": "crm-clickup-sync-lead/build-clickup-payload.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Create ClickUp Task",
+    "fixture": "crm-clickup-sync-lead/create-clickup-task.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Normalize ClickUp Result",
+    "fixture": "crm-clickup-sync-lead/normalize-clickup-result.js"
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {
