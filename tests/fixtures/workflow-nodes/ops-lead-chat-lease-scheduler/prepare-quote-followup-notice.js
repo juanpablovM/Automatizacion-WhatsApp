@@ -143,6 +143,15 @@ const buildQuoteFollowupNotice = (row, { now = new Date() } = {}) => {
   };
 };
 
+// n8n's Postgres node answers a claim with zero rows (the normal minute) with
+// one { success: true } item. Only a row the claim took — it carries its
+// ownership and claim token — may reach WA - Outbound Messages.
+const isClaimedAlert = (row) => {
+  const ownershipId = Number(row?.ownership_id);
+  return Number.isSafeInteger(ownershipId) && ownershipId > 0
+    && String(row?.quote_alert_claim_token ?? '').trim() !== '';
+};
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     BUSINESS_HOURS,
@@ -150,9 +159,13 @@ if (typeof module !== 'undefined' && module.exports) {
     closedNotice,
     sellerDisplayName,
     buildQuoteFollowupNotice,
+    isClaimedAlert,
   };
 }
 
-if (typeof $json !== 'undefined') {
-  return { json: buildQuoteFollowupNotice($json ?? {}) };
+if (typeof items !== 'undefined') {
+  return items
+    .map((item) => item.json ?? {})
+    .filter(isClaimedAlert)
+    .map((row) => ({ json: buildQuoteFollowupNotice(row) }));
 }
