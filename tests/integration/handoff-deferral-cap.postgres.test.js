@@ -136,6 +136,31 @@ describeIntegration('a deferral cannot wait forever', () => {
     await client.end();
   });
 
+  // Task 3c.33 (M5): the claim exposes the project product, commune and
+  // address the conversation holds, for the ClickUp handoff description.
+  test('the claim carries the project product, commune and address of the conversation', async () => {
+    await client.query(`UPDATE conversations SET qualification_context = $2::jsonb WHERE id = $1`, [conversationId,
+      JSON.stringify({ commune: 'Puente Alto', address: 'Calle Uno 100',
+        line_items: [{ item_id: 'li_a', product: 'Adoquín' }, { item_id: 'li_b', product: 'Soleras y Solerillas' }] })]);
+    try {
+      const handoffId = await insertHandoff({ ageHours: 0 });
+      await client.query('BEGIN');
+      try {
+        const { rows } = await client.query(claimSql, ['1', '900']);
+        const mine = rows.find((row) => String(row.handoff_id) === String(handoffId));
+        expect(mine).toMatchObject({
+          project_product: 'Adoquín, Soleras y Solerillas',
+          project_commune: 'Puente Alto',
+          project_address: 'Calle Uno 100',
+        });
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    } finally {
+      await client.query(`UPDATE conversations SET qualification_context = '{}'::jsonb WHERE id = $1`, [conversationId]);
+    }
+  });
+
   test('a fresh deferral still waits: the attempt is handed back and it is rescheduled', async () => {
     const handoffId = await insertHandoff({ ageHours: 0 });
 

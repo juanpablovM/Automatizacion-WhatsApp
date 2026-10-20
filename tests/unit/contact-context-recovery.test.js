@@ -176,11 +176,22 @@ describe('contact context recovery — historical transcript regressions', () =>
     expect(applied.service).toBe('Pastelones');
   });
 
+  // Task 3c.33 (M5): the human review now first collects the project location
+  // (commune, then street) and hands off with it; it still never insists on a
+  // quantity nor creates a lead.
   test.each(['no tengo claro aún', 'Pueden venir a medir uds', 'No sé muy bien aún'])('unknown measure routes to existing human review instead of insisting: %s', (text) => {
-    const applied = apply(evaluate(text, { current_step: 'confirm', pending_question_key: 'quantity', qualification_context: { product: 'Adoquines', modality: 'installation' } }), normalize(text));
+    const asked = apply(evaluate(text, { current_step: 'confirm', pending_question_key: 'quantity', qualification_context: { product: 'Adoquines', modality: 'installation' } }), normalize(text));
+    expect(asked.should_escalate).toBe(false);
+    expect(asked.should_create_lead).toBe(false);
+    expect(asked.response_text).toMatch(/persona de nuestro equipo/);
+    expect(asked.response_text).toMatch(/comuna/);
+    expect(asked.response_text).not.toMatch(/cantidad aproximada|confirmas/);
+
+    const applied = apply(evaluate(text, { current_step: 'confirm', pending_question_key: 'quantity',
+      qualification_context: { product: 'Adoquines', modality: 'installation', commune: 'Colina', address: 'Calle Uno 100' } }), normalize(text));
     expect(applied.should_escalate).toBe(true);
     expect(applied.should_create_lead).toBe(false);
-    expect(applied.response_text).toMatch(/persona del equipo/);
+    expect(applied.response_text).toMatch(/persona de nuestro equipo/);
     expect(applied.response_text).not.toMatch(/cantidad aproximada|confirmas/);
   });
 

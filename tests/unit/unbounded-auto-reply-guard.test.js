@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const {
   evaluateConversationStep,
   TERMINAL_REPLY_COOLDOWN_HOURS,
+  COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
   ESCALATION_ALREADY_REQUIRED_REPLY,
   COMMERCIAL_REVIEW_PENDING_REPLY,
 } = require('../fixtures/workflow-nodes/wa-conversation-orchestrator/evaluate-conversation-step.js');
@@ -39,6 +40,7 @@ const turn = (row) => {
 
 const INSIDE_COOLDOWN_HOURS = 0.84; // the counterpart bot re-engages every ~50 minutes
 const AFTER_COOLDOWN_HOURS = TERMINAL_REPLY_COOLDOWN_HOURS + 1;
+const COMMERCIAL_AFTER_COOLDOWN_HOURS = 1;
 
 const escalated = {
   phone_number: 'synthetic-escalated',
@@ -240,11 +242,11 @@ describe('terminal canned reply is sent once, then held for the cooldown', () =>
     expect(result.evaluated.qualification_context).toEqual(reviewPending.qualification_context);
   });
 
-  test('commercial_review_pending answers again after the cooldown', () => {
+  test('commercial_review_pending answers again at the one-hour boundary', () => {
     const result = turn({
       ...reviewPending,
       last_outgoing_text: COMMERCIAL_REVIEW_PENDING_REPLY,
-      elapsed_hours_since_last_outbound: AFTER_COOLDOWN_HOURS,
+      elapsed_hours_since_last_outbound: COMMERCIAL_AFTER_COOLDOWN_HOURS,
     });
 
     expect(result.evaluated.response_kind).toBe('commercial_review_pending');
@@ -263,8 +265,16 @@ describe('terminal canned reply is sent once, then held for the cooldown', () =>
     expect(result.dispatched).toBe(true);
   });
 
-  test('the cooldown is six hours, so a customer returning the next morning is answered', () => {
+  test('commercial review uses one hour while escalation keeps six hours', () => {
+    expect(COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS).toBe(1);
     expect(TERMINAL_REPLY_COOLDOWN_HOURS).toBe(6);
+
+    const stillInsideEscalationCooldown = turn({
+      ...escalated,
+      last_outgoing_text: ESCALATION_ALREADY_REQUIRED_REPLY,
+      elapsed_hours_since_last_outbound: 5.9,
+    });
+    expect(stillInsideEscalationCooldown.dispatched).toBe(false);
 
     const nextMorning = turn({
       ...escalated,

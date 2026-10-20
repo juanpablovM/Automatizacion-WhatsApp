@@ -43,8 +43,10 @@ describeIntegration('lead chat ownership: human takeover arbitrated by PostgreSQ
   let activeStatusId;
   let sequence = 0;
 
-  const acquire = (clickupTaskId, previousStatus, historyId, historyEventAt) =>
-    client.query(acquireSql, [clickupTaskId, previousStatus, historyId, historyEventAt]);
+  const acquire = (clickupTaskId, previousStatus, historyId, historyEventAt, newStatus = 'in progress') =>
+    client.query(acquireSql, [
+      clickupTaskId, previousStatus, historyId, historyEventAt, newStatus, 'cotización enviada',
+    ]);
 
   const release = (clickupTaskId, newStatus, historyId, historyEventAt) =>
     client.query(releaseSql, [clickupTaskId, newStatus, historyId, historyEventAt]);
@@ -315,6 +317,39 @@ describeIntegration('lead chat ownership: human takeover arbitrated by PostgreSQ
     expect(ownership.released_at).toBeNull();
     expect(ownership.restoration_state).toBe('not_required');
     expect(ownership.last_clickup_history_id).toBe('hist-acquire-1');
+  });
+
+  // Migration 035: the lead keeps its task's latest status, so the bot can
+  // tell an open quote (continue it) from a closed one (start a new one).
+  const leadClickupStatus = async (leadId) => (await client.query(
+    'SELECT clickup_status, clickup_status_at FROM leads WHERE id = $1', [leadId],
+  )).rows[0];
+
+  test('every ClickUp status transition is recorded on the lead, newest event first', async () => {
+    const lead = await seedLead();
+    const acquiredAt = new Date(Date.now() - 60_000);
+    await acquire(lead.clickupTaskId, 'to do', 'hist-status-1', acquiredAt.toISOString(), 'in progress');
+    expect((await leadClickupStatus(lead.leadId)).clickup_status).toBe('in progress');
+
+    const closedAt = new Date();
+    await release(lead.clickupTaskId, 'cerrada', 'hist-status-2', closedAt.toISOString());
+    const closed = await leadClickupStatus(lead.leadId);
+    expect(closed.clickup_status).toBe('cerrada');
+    expect(closed.clickup_status_at.toISOString()).toBe(closedAt.toISOString());
+
+    // A late delivery of an older transition never reopens the task.
+    await acquire(
+      lead.clickupTaskId, 'to do', 'hist-status-0',
+      new Date(Date.now() - 120_000).toISOString(), 'in progress',
+    );
+    expect((await leadClickupStatus(lead.leadId)).clickup_status).toBe('cerrada');
+  });
+
+  test('a release without an active ownership still records the new status', async () => {
+    const lead = await seedLead();
+    const { rows } = await release(lead.clickupTaskId, 'cotizado', 'hist-status-3', new Date().toISOString());
+    expect(rows[0].outcome).toBe('no_active_ownership');
+    expect((await leadClickupStatus(lead.leadId)).clickup_status).toBe('cotizado');
   });
 
   test('a duplicate ClickUp history id is already_applied and does not re-acquire', async () => {

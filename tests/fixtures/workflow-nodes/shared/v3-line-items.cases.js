@@ -116,6 +116,45 @@ const LINE_ITEM_REDUCER_CASES = [
     },
   },
   {
+    // Task 3c.33 (M1): the chosen variant is an item field, never a flat one.
+    name: 'stores a variant on its item without projecting it to the flat fields',
+    context: {
+      product: 'Soleras y Solerillas',
+      quantity: '190 metros',
+      measurements: null,
+      line_items: [primaryItem({ product: 'Soleras y Solerillas', quantity: '190 metros' })],
+      line_items_projection: { product: 'Soleras y Solerillas', quantity: '190 metros', measurements: null },
+      line_items_schema: 'line_items/v1',
+    },
+    mutations: [
+      { operation: 'set', field: 'variant', item_id: 'li_0', observation_id: 'obs-variant', replaces_fact_id: null, projected_value: 'Solera Zarpa' },
+    ],
+    expectedContext: {
+      product: 'Soleras y Solerillas',
+      quantity: '190 metros',
+      measurements: null,
+      line_items: [primaryItem({ product: 'Soleras y Solerillas', quantity: '190 metros', variant: 'Solera Zarpa' })],
+      line_items_projection: { product: 'Soleras y Solerillas', quantity: '190 metros', measurements: null },
+      line_items_schema: 'line_items/v1',
+    },
+  },
+  {
+    name: 'a variant on a new item creates that item',
+    context: {},
+    mutations: [
+      { operation: 'set', field: 'product', item_id: 'li_new', observation_id: 'obs-product', replaces_fact_id: null, projected_value: 'Pastelones' },
+      { operation: 'set', field: 'variant', item_id: 'li_new', observation_id: 'obs-variant', replaces_fact_id: null, projected_value: 'Formato Dos' },
+    ],
+    expectedContext: {
+      product: 'Pastelones',
+      quantity: null,
+      measurements: null,
+      line_items: [primaryItem({ item_id: 'li_new', product: 'Pastelones', variant: 'Formato Dos' })],
+      line_items_projection: { product: 'Pastelones', quantity: null, measurements: null },
+      line_items_schema: 'line_items/v1',
+    },
+  },
+  {
     name: 'reconciles a legacy writer that wrote flat fields after an item model existed (D3)',
     context: {
       product: 'New By Legacy Writer',

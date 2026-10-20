@@ -5,6 +5,15 @@ WITH valid_claim AS (
     AND ie.processing_status = 'processing'
     AND ie.processing_token = NULLIF($56::text, '')
 ),
+-- Inbound debounce (migration 034): every event this turn answers, the leader
+-- included. Empty when the turn answers a single event. The turn's text (the
+-- text_body parameter) is the batch joined with "\n"; each message keeps its
+-- own row and text.
+inbound_batch_members AS (
+  SELECT member.id, member.received_at, member.raw_payload, member.normalized_payload
+  FROM inbound_events member
+  JOIN valid_claim vc ON member.batch_leader_event_id = vc.id
+),
 updated_existing_conversation AS (
   UPDATE conversations c
   SET
@@ -138,18 +147,69 @@ incoming_message AS (
       ELSE NULL
     END,
     NULL,
-    NULLIF($9::text, ''),
+    CASE
+      WHEN EXISTS (SELECT 1 FROM inbound_batch_members) THEN (
+        SELECT NULLIF(leader.normalized_payload->>'text_body', '')
+        FROM inbound_batch_members leader
+        WHERE leader.id = NULLIF($55::text, '')::bigint
+      )
+      ELSE NULLIF($9::text, '')
+    END,
     COALESCE(NULLIF($10::text, '')::jsonb, '{}'::jsonb),
     NULLIF($55::text, '')::bigint
   FROM resolved_conversation rc
   RETURNING id, conversation_id, created_at
+),
+-- Produced from the leader's inserted row, so the followers are always written
+-- after it and the ids keep arrival order.
+batched_incoming_messages AS (
+  INSERT INTO messages (
+    conversation_id,
+    lead_id,
+    direction,
+    sender_type,
+    message_type,
+    external_message_id,
+    external_timestamp,
+    delivery_status,
+    text_body,
+    raw_payload,
+    inbound_event_id
+  )
+  SELECT
+    im.conversation_id,
+    rc.lead_id,
+    'incoming',
+    'customer',
+    COALESCE(NULLIF(member.normalized_payload->>'message_type', ''), 'unknown'),
+    NULLIF(member.normalized_payload->>'external_message_id', ''),
+    CASE
+      WHEN COALESCE(member.normalized_payload->>'external_timestamp', '') ~ '^[0-9]+(?:\.\d+)?$'
+        THEN to_timestamp((member.normalized_payload->>'external_timestamp')::double precision)
+      ELSE NULL
+    END,
+    NULL,
+    NULLIF(member.normalized_payload->>'text_body', ''),
+    member.raw_payload,
+    member.id
+  FROM incoming_message im
+  JOIN resolved_conversation rc ON rc.id = im.conversation_id
+  JOIN inbound_batch_members member ON member.id <> NULLIF($55::text, '')::bigint
+  ORDER BY member.received_at, member.id
+  ON CONFLICT DO NOTHING
+  RETURNING id
 ),
 ownership_deadline AS (
   UPDATE lead_chat_ownerships o
   SET
     pending_message_id = im.id,
     pending_message_at = im.created_at,
-    response_due_at = im.created_at + INTERVAL '2 hours',
+    -- Migration 037: a quote follow-up ownership has no deadline; the quote
+    -- follow-up alert answers an unanswered customer instead.
+    response_due_at = CASE
+      WHEN o.sla_mode = 'quote_followup' THEN NULL
+      ELSE im.created_at + INTERVAL '2 hours'
+    END,
     updated_at = NOW()
   FROM incoming_message im
   WHERE o.lead_id = NULLIF($58::text, '')::bigint
@@ -158,7 +218,28 @@ ownership_deadline AS (
     -- Once the SLA expired, a new customer message must not revive the old
     -- human lease and silence the bot again before ClickUp is restored.
     AND (o.response_due_at IS NULL OR o.response_due_at > NOW())
+    AND NOT COALESCE((NULLIF($23::text, '')::jsonb->>'release_quote_followup_ownership')::boolean, FALSE)
   RETURNING o.id, o.response_due_at
+),
+-- Migration 037: the customer accepted the new-quote offer of the quote
+-- follow-up notice. The seller's ownership of the old quote ends here, in the
+-- same transaction that starts the new conversation, so the reply that starts
+-- the new quote is not held by the outbound authority. The old ClickUp task is
+-- left exactly as the seller left it: no restoration is queued.
+quote_followup_release AS (
+  UPDATE lead_chat_ownerships o
+  SET
+    released_at = NOW(),
+    release_reason = 'customer_new_quote',
+    restoration_state = 'not_required',
+    updated_at = NOW()
+  FROM incoming_message im
+  WHERE o.lead_id = NULLIF($58::text, '')::bigint
+    AND o.released_at IS NULL
+    AND o.deleted_at IS NULL
+    AND o.sla_mode = 'quote_followup'
+    AND COALESCE((NULLIF($23::text, '')::jsonb->>'release_quote_followup_ownership')::boolean, FALSE)
+  RETURNING o.id
 ),
 attachment_insert AS (
   INSERT INTO message_attachments (

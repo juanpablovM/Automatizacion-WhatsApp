@@ -23,7 +23,16 @@ WITH execution_lock AS MATERIALIZED (
            SELECT 1 FROM jsonb_array_elements(COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)) command(value)
            WHERE command.value->>'type' = 'handoff'
              AND command.value#>>'{payload,escalation_reason}' = 'no_progress_commercial_question_loop'
-         ) AS bounded_handoff_succeeded
+         ) AS bounded_handoff_succeeded,
+         -- Task 3c.25: any authorized handoff that succeeded hands the
+         -- conversation to a person, so the qualification flow stops here.
+         EXISTS (
+           SELECT 1 FROM jsonb_array_elements(COALESCE(execution.effect_receipt_refs, '[]'::JSONB)) receipt(value)
+           WHERE receipt.value->>'effect_type' = 'handoff' AND receipt.value->>'status' = 'succeeded'
+         ) AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(COALESCE(decision.output_payload->'effect_commands', '[]'::JSONB)) command(value)
+           WHERE command.value->>'type' = 'handoff'
+         ) AS handoff_effect_succeeded
   FROM conversation_turn_executions execution
   JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
   JOIN inbound_events event ON event.id = execution.inbound_event_id
@@ -58,6 +67,10 @@ WITH execution_lock AS MATERIALIZED (
           SELECT status.id FROM conversation_statuses status
           WHERE status.code = 'handed_to_sales'
         )
+        WHEN target.handoff_effect_succeeded THEN (
+          SELECT status.id FROM conversation_statuses status
+          WHERE status.code = 'escalation_required'
+        )
         WHEN NULLIF(target.output_payload#>>'{reply,primary_request,goal_id}', '') IS NOT NULL THEN (
           SELECT status.id FROM conversation_statuses status
           WHERE status.code = 'waiting_user'
@@ -67,18 +80,26 @@ WITH execution_lock AS MATERIALIZED (
       current_step = CASE
         WHEN target.bounded_handoff_succeeded THEN 'escalation'
         WHEN target.lead_effect_succeeded THEN 'complete'
+        WHEN target.handoff_effect_succeeded THEN 'escalation'
         WHEN NULLIF(target.output_payload#>>'{reply,primary_request,goal_id}', '') IS NOT NULL
           THEN CASE target.output_payload#>>'{reply,primary_request,goal_id}'
             WHEN 'final_confirmation' THEN 'confirm'
             ELSE target.output_payload#>>'{reply,primary_request,goal_id}'
           END
+        -- Task 3c.30: a technical-sheet offer is answerable only by the very
+        -- next turn (01_load_active_context reads it from the latest committed
+        -- decision), so a turn that does not re-ask it closes it, whether the
+        -- sheet was sent or declined.
+        WHEN conversation.pending_question_key = 'technical_sheet_offer' THEN 'service'
         ELSE conversation.current_step
       END,
       pending_question_key = CASE
         WHEN target.bounded_handoff_succeeded THEN NULL
         WHEN target.lead_effect_succeeded THEN NULL
+        WHEN target.handoff_effect_succeeded THEN NULL
         WHEN NULLIF(target.output_payload#>>'{reply,primary_request,goal_id}', '') IS NOT NULL
           THEN target.output_payload#>>'{reply,primary_request,goal_id}'
+        WHEN conversation.pending_question_key = 'technical_sheet_offer' THEN NULL
         ELSE conversation.pending_question_key
       END,
       handed_to_sales_at = CASE
@@ -96,6 +117,29 @@ WITH execution_lock AS MATERIALIZED (
             conversation.conversation_status_id AS conversation_status_id_after,
             conversation.current_step AS current_step_after,
             conversation.pending_question_key AS pending_question_key_after
+), handoff_follow_ups_cancelled AS (
+  -- Task 3c.25: a person now owns the conversation, so the automated
+  -- "¿Sigues necesitando algo?" cadence stops. Rows already being sent keep
+  -- their own delivery outcome; escalation_required also makes every later
+  -- schedule or claim ineligible (follow_up_is_eligible).
+  UPDATE follow_ups follow_up
+  SET estado = 'cancelled',
+      result = COALESCE(follow_up.result, 'responded'),
+      claim_token = NULL,
+      claimed_at = NULL,
+      next_retry_at = NULL,
+      metadata = follow_up.metadata || jsonb_build_object(
+        'cancel_reason', 'v3_handoff',
+        'decision_id', target.decision_id
+      ),
+      updated_at = NOW()
+  FROM target
+  JOIN mutated ON mutated.execution_id = target.id
+  WHERE target.handoff_effect_succeeded
+    AND follow_up.conversation_id = target.conversation_id
+    AND follow_up.deleted_at IS NULL
+    AND follow_up.estado IN ('pending', 'error')
+  RETURNING follow_up.id
 ), outbox AS (
   INSERT INTO messages (
     conversation_id, lead_id, direction, sender_type, message_type, delivery_status,
