@@ -1,4 +1,4 @@
--- Compatibility wrapper for explicit opt-out. $1 conversation_id, $2 source_text, $3 source_message_id
+-- Compatibility wrapper for explicit opt-out. p1 conversation_id, p2 source_text, p3 source_message_id
 WITH preference AS (
   INSERT INTO follow_up_preferences (conversation_id, opted_out, opted_out_at, source_text, source_message_id)
   VALUES ($1::bigint, TRUE, NOW(), NULLIF($2::text, ''), NULLIF($3::text, '')::bigint)

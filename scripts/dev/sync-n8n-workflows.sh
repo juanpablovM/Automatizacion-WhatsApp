@@ -30,7 +30,8 @@ Opciones:
                 mensaje real y crea lead, asignacion y tarea de ClickUp.
   --verify-remote  Exporta y verifica el runtime, o verifica un export sin mutarlo.
   --snapshot DIR   Exporta un snapshot completo para rollback.
-  --rollback DIR   Restaura y verifica un snapshot; deja Entry/Recovery pausados.
+  --rollback DIR   Restaura y verifica un snapshot; si verifica, reactiva lo que el
+                   snapshot tenia activo. Si no verifica, deja Entry/Recovery pausados.
   --mapping-only  Valida/aplica solamente el mapping seguro de la instancia.
 EOF
 }
@@ -70,7 +71,9 @@ manifest_link_exists() {
     "$LINK_MANIFEST" >/dev/null
 }
 
-validate_local() {
+# Subshell body: POSIX EXIT traps are global even inside functions, so the
+# cleanup trap below must not replace the deploy rollback trap of the caller.
+validate_local() (
   require_command jq
   require_command node
 
@@ -181,7 +184,7 @@ validate_local() {
   rm -f "$tmp_names"
   trap - EXIT
   echo "Preflight local OK"
-}
+)
 
 compose_cmd() {
   docker compose --env-file "$PROJECT_ROOT/.env" "$@"
@@ -425,7 +428,10 @@ SELECT COALESCE(json_agg(json_build_object(
 SQL
 }
 
-verify_remote_export() {
+# Subshell body for the same reason as validate_local: sync_workflows calls this
+# while its rollback trap is armed, and replacing that trap disarmed the
+# rollback of a failed deploy (fixed in August, reintroduced, fixed again).
+verify_remote_export() (
   remote_json="$1"
   require_paused="${2:-no}"
   candidate_dir="${3:-}"
@@ -492,7 +498,7 @@ verify_remote_export() {
   rm -f "$ids_json"
   trap - EXIT
   echo "Verificacion remota OK"
-}
+)
 
 assert_workflows_active() {
   state="$1"
@@ -541,22 +547,61 @@ snapshot_runtime_workflows() {
 restore_runtime_workflows() {
   snapshot_dir="$1"
   created_json="${2:-}"
-  echo "Restaurando snapshot runtime; los callers permaneceran pausados..." >&2
+  echo "Restaurando snapshot runtime; los callers quedan pausados hasta verificarlo..." >&2
   set_callers_active false
   copy_and_import "$snapshot_dir" "rollback"
   cleanup_bootstrap_workflows "$snapshot_dir" "$created_json"
   compose_cmd restart "$N8N_SERVICE" >/dev/null
   restored_json=$(mktemp)
   export_remote_definitions "$restored_json"
-  find "$snapshot_dir" -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
+  # The deploy trap calls this as "restore_runtime_workflows ... || true", which
+  # disables set -e for the whole function: every failure must return explicitly,
+  # or a mismatched restore would be reported as verified and reactivated.
+  if ! find "$snapshot_dir" -maxdepth 1 -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
     name=$(workflow_name_from_file "$snapshot_file")
     [ "$(jq -r --arg name "$name" '[.[] | select(.name == $name)] | length' "$restored_json")" -eq 1 ] || { echo "ERROR: rollback ambiguo para '$name'" >&2; exit 1; }
     expected=$(jq -cS "$WORKFLOW_LOGIC_JQ" "$snapshot_file")
     actual=$(jq -cS --arg name "$name" "[.[] | select(.name == \$name)][0] | $WORKFLOW_LOGIC_JQ" "$restored_json")
     [ "$actual" = "$expected" ] || { echo "ERROR: rollback remoto no coincide para '$name'" >&2; exit 1; }
-  done
+  done; then
+    rm -f "$restored_json"
+    echo "ERROR: rollback no verificado; trafico pausado y sin reactivar" >&2
+    return 1
+  fi
   rm -f "$restored_json"
-  echo "Rollback remoto verificado; trafico pausado" >&2
+  echo "Rollback remoto verificado" >&2
+  reactivate_snapshot_workflows "$snapshot_dir"
+}
+
+# A snapshot is the runtime that was live before the deploy, active flags
+# included. Restoring its definitions but leaving the callers paused still left
+# customers without replies, so the verified rollback brings back exactly the
+# workflows the snapshot had active.
+reactivate_snapshot_workflows() {
+  snapshot_dir="$1"
+  active_names=$(mktemp)
+  find "$snapshot_dir" -maxdepth 1 -type f -name '*.json' | sort | while IFS= read -r snapshot_file; do
+    if [ "$(jq -r '.active // false' "$snapshot_file")" = true ]; then
+      workflow_name_from_file "$snapshot_file"
+    fi
+  done > "$active_names"
+  set --
+  entry_active=no
+  while IFS= read -r workflow_name; do
+    [ -n "$workflow_name" ] || continue
+    set -- "$@" "$workflow_name"
+    [ "$workflow_name" != 'WA - Inbound Entry' ] || entry_active=yes
+  done < "$active_names"
+  rm -f "$active_names"
+  if [ "$#" -eq 0 ]; then
+    echo "Rollback: el snapshot no tenia workflows activos; nada que reactivar" >&2
+    return 0
+  fi
+  set_named_workflows_active true "$@" || { echo "ERROR: rollback no pudo reactivar los workflows del snapshot" >&2; return 1; }
+  if [ "$entry_active" = yes ]; then
+    verify_webhook_ready || { echo "ERROR: rollback reactivo Entry pero sus webhooks no quedaron disponibles" >&2; return 1; }
+  fi
+  echo "Rollback: workflows activos del snapshot reactivados ($#)" >&2
 }
 
 verify_remote() {

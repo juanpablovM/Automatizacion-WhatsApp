@@ -1,6 +1,6 @@
 -- Schedule one cadence step. Positional parameters are required by n8n Postgres v2.
--- $1 conversation_id, $2 opportunity_id, $3 phone_number, $4 source_number_id,
--- $5 motivo, $6 step_dia, $7 scheduled_at, $8 cycle_key
+-- p1 conversation_id, p2 opportunity_id, p3 phone_number, p4 source_number_id,
+-- p5 motivo, p6 step_dia, p7 scheduled_at, p8 cycle_key
 WITH input AS (
   SELECT $1::bigint conversation_id, NULLIF($2::text, '')::bigint opportunity_id,
     $3::text phone_number, NULLIF($4::text, '')::bigint source_number_id,

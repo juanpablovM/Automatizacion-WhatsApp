@@ -110,7 +110,11 @@ nombre y `scripts/dev/sync-n8n-workflows.sh` aplica este gate:
 6. activacion definitiva, reverificacion remota y readiness del webhook.
 
 Ante un fallo, el snapshot completo se restaura y verifica con el trafico pausado.
-La reanudacion requiere redeploy verificado y acceptance E2E exitoso.
+Solo si la restauracion queda verificada se reactivan exactamente los workflows
+que el snapshot tenia activos (la version que estaba en produccion antes del
+deploy) y se verifican los webhooks de Entry. Si la restauracion no se puede
+verificar, el trafico queda pausado y el error queda a la vista: la
+reanudacion requiere entonces intervencion manual o un redeploy verificado.
 
 ## Decisiones tecnicas implementadas en esta fase
 
@@ -134,6 +138,16 @@ La reanudacion requiere redeploy verificado y acceptance E2E exitoso.
 - la configuracion operativa de AI directa vive en `docs/ai-api-directa-configuracion.md`
 - el diseno funcional y tecnico del asesor comercial AI vive en `docs/asesor-comercial-ai.md`
 - la exposicion publica de webhooks no se implementa todavia; antes de abrir trafico real deben quedar cerrados proxy, HTTPS, firewall y secreto del webhook
+
+## Catalog technical sheets (private data)
+
+The owner's product technical sheets are private and never committed (the repository is public). They reach `catalog_items.metadata.technical_sheet` through private SQL:
+
+- Data: `db/seeds/private/technical_sheets.json` (gitignored; obtain it from the owner). Shape and rules are documented in the header of `scripts/catalog/technical-sheets.mjs`; the generator rejects price-like data.
+- Generate: `node scripts/catalog/technical-sheets.mjs` writes `db/seeds/private/027_catalog_technical_sheets.sql` and `.down.sql` (gitignored); `--check` fails if they are missing or stale.
+- Apply once, after checking the target rows: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.sql`. It is idempotent and keyed by sku; it is not under `infra/postgres/migrations/`, so no database applies it automatically.
+- Roll back: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.down.sql` restores the prior rows exactly (updated_at aside).
+- Runtime: `Load Conversation State` forwards the sheet without `source_files`; the v3.1 policy builder keeps a compact sheet only for the products in the quote and those named in the current message, capped at 6144 bytes; v3 never carries it.
 
 ## Autenticacion de n8n
 

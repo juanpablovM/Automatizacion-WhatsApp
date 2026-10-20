@@ -4,6 +4,11 @@ import { evaluateConversationStep } from '../fixtures/workflow-nodes/wa-conversa
 
 const root = 'tests/fixtures/workflow-nodes/';
 const run = (path, row, env = {}) => new Function('items', '$env', fs.readFileSync(root + path, 'utf8'))([{ json: row }], env)[0].json;
+// The follow-up policy node is composed with a shared runtime, so it runs from
+// the synced workflow rather than from the bare fixture.
+const followUpNode = JSON.parse(fs.readFileSync('n8n/workflows/wa-inbound-downstream-dispatcher.json', 'utf8'))
+  .nodes.find((node) => node.name === 'Ensure Follow-Up Cancellation').parameters.jsCode;
+const runFollowUpNode = (row, env = {}) => new Function('items', '$env', followUpNode)([{ json: row }], env)[0].json;
 const context = { product: 'Cierro', commune: 'Chicureo', quantity: '20 unidades', modality: 'material' };
 const base = {
   phone_number: 'test-passive-context', source_number_id: 1, conversation_id: 51, target_conversation_id: 51,
@@ -24,7 +29,7 @@ const process = (text, extra = {}) => {
   });
   return { evaluated, ai, applied, prepared };
 };
-const followup = (row, env = {}) => run('wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js', { ...row, inbound_event_id: 101, message_id: 201, inbound_created_at: '2026-09-13T00:30:00Z' }, env);
+const followup = (row, env = {}) => runFollowUpNode({ ...row, inbound_event_id: 101, message_id: 201, inbound_created_at: '2026-09-13T00:30:00Z' }, env);
 
 const assertPending = ({ applied, prepared, ai }) => {
   expect(ai.ai_request).toBeNull();
@@ -119,7 +124,7 @@ describe('pending context choice — postponement and passive messages', () => {
   });
 
   test('missing persisted event identity cannot promise a queued reminder', () => {
-    const policy = run('wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js', process('Mañana').prepared);
+    const policy = runFollowUpNode(process('Mañana').prepared);
     expect(policy.follow_up_should_schedule).toBe(false);
     expect(policy.follow_up_scheduled_at).toBeNull();
   });

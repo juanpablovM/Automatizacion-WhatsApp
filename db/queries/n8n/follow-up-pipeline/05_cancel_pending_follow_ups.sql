@@ -1,9 +1,9 @@
 -- Apply one persisted inbound to the follow-up policy atomically.
--- $1 target_conversation_id, $2 action, $3 cancel_reason, $4 source_text,
--- $5 source_message_id, $6 should_schedule, $7 phone_number,
--- $8 source_number_id, $9 cycle_key, $10 motivo, $11 scheduled_at,
--- $12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),
--- $13 inbound_event_id, $14 first_delay_hours, $15 window_start, $16 window_end.
+-- p1 target_conversation_id, p2 action, p3 cancel_reason, p4 source_text,
+-- p5 source_message_id, p6 should_schedule, p7 phone_number,
+-- p8 source_number_id, p9 cycle_key, p10 motivo, p11 scheduled_at,
+-- p12 idempotency_key (`follow-up-policy:{conversation}:{inbound identity}`),
+-- p13 inbound_event_id, p14 first_delay_hours, p15 window_start, p16 window_end.
 WITH raw_input AS (
   SELECT
     $1::bigint conversation_id,

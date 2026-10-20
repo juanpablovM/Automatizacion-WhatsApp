@@ -1,6 +1,6 @@
 -- Complete a claimed media download.
--- $1 media_id, $2 claim_token, $3 outcome, $4 sha256, $5 bytes_length,
--- $6 storage_path, $7 storage_token, $8 error, $9 http_status.
+-- p1 media_id, p2 claim_token, p3 outcome, p4 sha256, p5 bytes_length,
+-- p6 storage_path, p7 storage_token, p8 error, p9 http_status.
 WITH authorized AS MATERIALIZED (
   SELECT *
   FROM media_attachments

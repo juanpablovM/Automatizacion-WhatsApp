@@ -75,6 +75,10 @@ integration('commercial review and address retry through persisted PostgreSQL st
       'system', 'waiting_user', $2::jsonb, $3::jsonb)`, [conversationId, output.after_payload_json, output.metadata_json]);
     await client.query("UPDATE inbound_events SET processing_status = 'processed', processing_token = NULL WHERE id = $1", [eventId]);
   };
+  // Quote correction (2026-10-14): while the task is open a correction reopens
+  // the quote instead (confirmed-quote-reopening.postgres.test.js); the legacy
+  // canned correction and addition replies remain for a closed task.
+  const closeClickupTask = () => client.query("UPDATE leads SET clickup_status = 'complete' WHERE id = $1", [leadId]);
   const setHandedToSales = async () => {
     await client.query(`UPDATE conversations SET conversation_status_id = (SELECT id FROM conversation_statuses
       WHERE code = 'handed_to_sales'), current_step = 'complete', pending_question_key = NULL WHERE id = $1`, [conversationId]);
@@ -113,9 +117,94 @@ integration('commercial review and address retry through persisted PostgreSQL st
       conversation_status_code: 'handed_to_sales', response_kind: 'commercial_review_pending' });
     expect(current.output.qualification_context).toEqual(context);
     expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', current.output).opportunity_write).toBe(false);
-    expect(current.output.response_text).toContain('pendiente de revisión');
+    expect(current.output.response_text).toContain('nuestro equipo comercial la está revisando');
     await persistTurn(current);
     expect((await client.query('SELECT lead_id FROM conversations WHERE id = $1', [conversationId])).rows[0].lead_id).toBe(leadId);
+  });
+  test('two-step correction on a closed task persists on the same conversation and lead without creating another lead', async () => {
+    await setHandedToSales();
+    await closeClickupTask();
+    const leadsBefore = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2',
+      [sourceId, phone],
+    )).rows[0].count);
+
+    const request = await turn('Modificar solicitud');
+    expect(request.output).toMatchObject({
+      conversation_id: conversationId,
+      lead_id: leadId,
+      pending_question_key: 'commercial_review_correction',
+      reset_conversation_lead: false,
+      should_create_lead: false,
+      should_escalate: false,
+      response_kind: 'commercial_review_pending',
+      v3_control_only: true,
+    });
+    expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', request.output).opportunity_write).toBe(false);
+    await persistTurn(request);
+
+    const pending = (await client.query(
+      'SELECT id, lead_id, pending_question_key FROM conversations WHERE id = $1',
+      [conversationId],
+    )).rows[0];
+    expect(pending).toMatchObject({
+      id: conversationId,
+      lead_id: leadId,
+      pending_question_key: 'commercial_review_correction',
+    });
+
+    const detail = await turn('Cambiar la cantidad a 120 unidades');
+    expect(detail.row.pending_question_key).toBe('commercial_review_correction');
+    expect(detail.output).toMatchObject({
+      conversation_id: conversationId,
+      lead_id: leadId,
+      pending_question_key: null,
+      reset_conversation_lead: false,
+      should_create_lead: false,
+      should_escalate: false,
+      response_kind: 'commercial_review_pending',
+      v3_control_only: true,
+    });
+    expect(detail.output.response_text).toContain('Tu corrección quedó registrada');
+    expect(run('wa-inbound-downstream-dispatcher/ensure-early-opportunity.js', detail.output).opportunity_write).toBe(false);
+    await persistTurn(detail);
+
+    const persisted = (await client.query(
+      'SELECT id, lead_id, pending_question_key FROM conversations WHERE id = $1',
+      [conversationId],
+    )).rows[0];
+    expect(persisted).toMatchObject({ id: conversationId, lead_id: leadId, pending_question_key: null });
+
+    const leadsAfter = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2',
+      [sourceId, phone],
+    )).rows[0].count);
+    expect(leadsBefore).toBe(1);
+    expect(leadsAfter - leadsBefore).toBe(0);
+    expect(leadsAfter).toBe(1);
+  });
+  // Task 3c.33 (M4): "se me olvidó agregar algo" stays on the same quote.
+  test('a forgotten addition on a closed task persists on the same conversation and lead without another lead', async () => {
+    await setHandedToSales();
+    await closeClickupTask();
+    const request = await turn('Se me olvidó agregar algo a la cotización');
+    expect(request.output).toMatchObject({
+      conversation_id: conversationId, lead_id: leadId, pending_question_key: 'commercial_review_addition',
+      reset_conversation_lead: false, should_create_lead: false, v3_control_only: true,
+    });
+    await persistTurn(request);
+    const detail = await turn('Necesito también palmetas, unos 70 m2');
+    expect(detail.row.pending_question_key).toBe('commercial_review_addition');
+    expect(detail.output).toMatchObject({
+      conversation_id: conversationId, lead_id: leadId, pending_question_key: null,
+      reset_conversation_lead: false, should_create_lead: false,
+    });
+    expect(detail.output.response_text).toContain('Lo que quieres agregar quedó registrado');
+    await persistTurn(detail);
+    const leads = Number((await client.query(
+      'SELECT COUNT(*) AS count FROM leads WHERE source_number_id = $1 AND phone_number = $2', [sourceId, phone],
+    )).rows[0].count);
+    expect(leads).toBe(1);
   });
   test('an acquired human lease stays silent without clearing the registered quote', async () => {
     await setHandedToSales();

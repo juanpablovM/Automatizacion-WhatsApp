@@ -40,6 +40,18 @@ const MEASURE_UNITS = [
 const MEASURE_EVIDENCE_RE = new RegExp('\\b\\d+(?:\\s*\\d{3})*\\s*(?:' + MEASURE_UNITS.join('|') + ')\\b');
 const hasMeasureEvidence = (normalized) => MEASURE_EVIDENCE_RE.test(normalized);
 
+// Opt-out and lost-intent phrasing lives in shared/customer-opt-out-vocabulary.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const customerIntent = typeof detectOptOut === 'function'
+  ? { detectOptOut, detectLostIntent }
+  : require('../shared/customer-opt-out-vocabulary.js');
+
+// Task 3c.33 (L2/M5): the official commune list lives in shared/chile-communes.js.
+// In n8n that file is prepended to this node; under Node it is required.
+const communeRuntime = typeof resolveChileanCommune === 'function'
+  ? { resolveChileanCommune }
+  : require('../shared/chile-communes.js');
+
 // Single silence kind for this node. `Should Send Response` in
 // wa-inbound-downstream-dispatcher.json dispatches only when response_text is
 // non-empty, so this is a sibling of human_control_suppressed: it reaches the
@@ -48,14 +60,36 @@ const SUPPRESSED_REPLY_KIND = 'reply_suppressed';
 
 // A terminal canned line is a statement of fact, not a conversation turn. Sent
 // once it informs; re-sent on every inbound it becomes an auto-answer that a
-// counterpart bot can drive forever — a number whose re-engagement fired every
-// ~50 minutes collected a reply within one second each time and queued 175
-// inbound events in two days. Six hours answers that counterpart exactly once
-// and still greets a real customer who comes back the next morning.
+// counterpart bot can drive forever. Human escalation remains guarded for six
+// hours, while normal commercial review can provide a useful update hourly.
 const TERMINAL_REPLY_COOLDOWN_HOURS = 6;
+const COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS = 1;
 
-const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está derivada a una persona del equipo. Si necesitas una cotización distinta, escribe "nueva cotización".';
-const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada y pendiente de revisión por el equipo comercial.';
+// Task 3c.22: fixed customer copy follows the WhatsApp presentation (short
+// paragraphs, *bold* key words, emojis only from 👋 👉 ✅ 👍 📋).
+const ESCALATION_ALREADY_REQUIRED_REPLY = 'Tu solicitud ya está en manos de una persona de nuestro equipo 👍\n\nSi necesitas una cotización distinta, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud está registrada ✅ y nuestro equipo comercial la está revisando.\n\nSi necesitas corregir algo, escribe *modificar solicitud*. Si quieres empezar otra, escribe *nueva cotización*.';
+const COMMERCIAL_REVIEW_CORRECTION_PROMPT = '¡Claro! Cuéntame qué dato de tu solicitud quieres corregir.';
+const COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY = 'Muchas gracias. Tu corrección quedó registrada y el equipo comercial la revisará junto con tu solicitud 👍';
+const COMMERCIAL_REVIEW_CORRECTION_KEY = 'commercial_review_correction';
+// Task 3c.33 (M4): "se me olvidó agregar algo" on a registered quote is an
+// addition to that same request, recorded like a correction.
+const COMMERCIAL_REVIEW_ADDITION_KEY = 'commercial_review_addition';
+const COMMERCIAL_REVIEW_ADDITION_PROMPT = '¡Claro! 👍\n\nCuéntame qué te gustaría agregar a tu solicitud.';
+const COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY = 'Muchas gracias. Lo que quieres agregar quedó registrado y el equipo comercial lo revisará junto con tu solicitud 👍';
+// Task 3c.33 (M5): measurement assistance collects the project location
+// (commune, then street and number) before the handoff.
+const MEASUREMENT_VISIT_COMMUNE_KEY = 'measurement_visit_commune';
+const MEASUREMENT_VISIT_COMMUNE_RETRY_KEY = 'measurement_visit_commune_retry';
+const MEASUREMENT_VISIT_ADDRESS_KEY = 'measurement_visit_address';
+const MEASUREMENT_VISIT_KEYS = [MEASUREMENT_VISIT_COMMUNE_KEY, MEASUREMENT_VISIT_COMMUNE_RETRY_KEY, MEASUREMENT_VISIT_ADDRESS_KEY];
+const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
+
+// Migration 037: the quote follow-up notice (ops-lead-chat-lease-scheduler)
+// ends with "¿Quieres hacer una cotización nueva?" while the seller still owns
+// the chat. A yes starts a new quote at once; the seller keeps the old one.
+const QUOTE_FOLLOWUP_NEW_QUOTE_KIND = 'quote_followup_new_quote';
+const QUOTE_FOLLOWUP_NEW_QUOTE_REPLY = '¡Perfecto! Empecemos una cotización nueva 👍\n\n👉 ¿Qué producto necesitas cotizar?';
 
 // A sticker or a reaction carries no requirement a human could quote, and the
 // pending-context branch already treats both as passive. Every other
@@ -63,7 +97,18 @@ const COMMERCIAL_REVIEW_PENDING_REPLY = 'Tu solicitud ya está registrada y pend
 // even when it arrives with no caption at all.
 const PASSIVE_ATTACHMENT_TYPES = ['sticker', 'reaction'];
 
-function evaluateConversationStep(row) {
+// Quote correction (owner decision 2026-10-14): a confirmed quote stays open to
+// the customer while its ClickUp task is. Same default resolved list as
+// ops-handoff-clickup-closure/normalize-clickup-closure.js; CLICKUP_STATUS_RESOLVED
+// overrides both.
+const DEFAULT_RESOLVED_CLICKUP_STATUSES = 'complete,completed,closed,done,cerrado,resuelto';
+const isClickupStatusResolved = (status, env) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  return Boolean(normalized) && String((env && env.CLICKUP_STATUS_RESOLVED) || DEFAULT_RESOLVED_CLICKUP_STATUSES)
+    .split(',').map((entry) => entry.trim().toLowerCase()).includes(normalized);
+};
+
+function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env : {})) {
   // row is the input item (items[0]?.json in n8n context)
 
   const baseQuestions = {
@@ -306,8 +351,17 @@ function evaluateConversationStep(row) {
   const messageType = row.message_type || 'unknown';
   const rawText = String(row.text_body || '').trim();
   const normalizedText = normalizeText(rawText);
-  const isGreetingOnly = greetingOnly.includes(normalizedText)
-    || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(normalizedText);
+  // A debounced turn joins the customer's burst with "\n" in arrival order
+  // (inbound debounce, claim SQL). Whole-message matchers see each line too:
+  // a command that acts (human, new request, status inquiry) counts when any
+  // line says it; an answer that closes a question (greeting, confirmation,
+  // rejection, courtesy) counts only when every line says it.
+  const burstLines = rawText.split(/\n+/).map(normalizeText).filter(Boolean);
+  const anyBurstLine = (predicate) => burstLines.length > 1 && burstLines.some(predicate);
+  const everyBurstLine = (predicate) => burstLines.length > 1 && burstLines.every(predicate);
+  const isGreetingOnlyText = (text) => greetingOnly.includes(text)
+    || /^(?:hola+|holi|buenas)(?: que tal| como estas| como estan)?$/.test(text);
+  const isGreetingOnly = isGreetingOnlyText(normalizedText) || everyBurstLine(isGreetingOnlyText);
   const usefulText = rawText.length > 0 && !isGreetingOnly;
   const textHasIntent = intentKeywords.some((keyword) => normalizedText.includes(keyword));
 
@@ -329,10 +383,10 @@ function evaluateConversationStep(row) {
   const hoursSinceLastOutgoing = Number.isFinite(parsedHoursSinceLastOutgoing)
     ? parsedHoursSinceLastOutgoing
     : null;
-  const wasSentWithinCooldown = (line) => lastOutgoingText.length > 0
+  const wasSentWithinCooldown = (line, cooldownHours) => lastOutgoingText.length > 0
     && lastOutgoingText === compact(line)
     && hoursSinceLastOutgoing !== null
-    && hoursSinceLastOutgoing < TERMINAL_REPLY_COOLDOWN_HOURS;
+    && hoursSinceLastOutgoing < cooldownHours;
 
   // ============================================================
   // RE-ENGAGEMENT DETECTION — INPUT FROM SQL (single source)
@@ -499,7 +553,9 @@ function evaluateConversationStep(row) {
   // PostgreSQL already resolved the cross-system ownership before this code
   // runs. While the seller owns the chat we still persist the customer turn,
   // but we must not advance qualification state or emit automated effects.
-  const humanControlActive = Boolean(row.bot_suppressed);
+  // Reassigned once below, only when the customer accepts the new-quote offer
+  // of the quote follow-up notice.
+  let humanControlActive = Boolean(row.bot_suppressed);
 
   const stepState = stepInfo.state || {};
   const current = {
@@ -535,30 +591,9 @@ function evaluateConversationStep(row) {
     /\b(ayuda|no entiendo nada|que hay que hacer)\b/i,
     /\b(quejarme|reclamo|queja|problema contigo)\b/i,
   ];
-  // Opt-out / lost intent detection (memoria #686)
-  const OPT_OUT_PATTERNS = [
-    /no me escribas mas/i,
-    /escribas mas/i,
-    /baja.*(de la lista|pas|mensajes|programa)/i,
-    /\bstop\b/i,
-    /no quiero (mas )?(mensajes|publicidad|informacion|seguir recibiendo)/i,
-    /dej(?:a|en) de escribirme/i,
-    /no me envies mas mensajes/i,
-    /darme de baja/i,
-    /quitarme de la lista/i,
-    /no me molestes/i,
-  ];
-
-  const LOST_PATTERNS = [
-    /ya no (me interesa|necesito|quiero)/i,
-    /lo pense y no (voy a|quiero)/i,
-    /estoy con (otra|la competencia)/i,
-    /no voy a (comprar|avanzar)/i,
-    /cerremos el tema/i,
-  ];
-
-  const detectOptOut = (text) => OPT_OUT_PATTERNS.some(p => p.test(String(text || '').trim()));
-  const detectLostIntent = (text) => LOST_PATTERNS.some(p => p.test(String(text || '').trim()));
+  // Opt-out / lost intent detection (memoria #686): shared vocabulary, see customerIntent.
+  const isOptOut = customerIntent.detectOptOut(normalizedText);
+  const isLostIntent = customerIntent.detectLostIntent(normalizedText);
 
   const detectFrustration = (text) => {
     if (!text) return false;
@@ -566,11 +601,58 @@ function evaluateConversationStep(row) {
     return frustrationPatterns.some(p => p.test(normalized));
   };
 
-  const isConfirmation = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
-  const isRejection = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
+  const isConfirmationText = (text) => /^(si|s|ok|okay|dale|correcto|correcta|confirmo|esta correcto|asi es|si esta correcto|si por favor|si correcto|si correcta|de acuerdo)$/.test(normalizeText(text));
+  const isRejectionText = (text) => /^(no|nop|incorrecto|incorrecta|no esta correcto|no es correcto|quiero cambiar|cambiar|modificar|corregir)$/.test(normalizeText(text));
+  // Burst-aware only for the turn's own text: other callers keep exact matching.
+  const isConfirmation = (text) => isConfirmationText(text)
+    || (text === normalizedText && everyBurstLine(isConfirmationText));
+  const isRejection = (text) => isRejectionText(text)
+    || (text === normalizedText && everyBurstLine(isRejectionText));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
-  const wantsNew = (text) => /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/.test(text);
-  const wantsHuman = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
+  const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
+  const isCourtesyOnly = (text) => /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(text);
+  const wantsNewText = (text) => NEW_REQUEST_DIRECTIVE.test(text);
+  const wantsNew = (text) => wantsNewText(text) || (text === normalizedText && anyBurstLine(wantsNewText));
+  // Migration 037: the answer to the quote follow-up offer, read without the
+  // AI. Only a plain yes or an explicit new-quote request accepts it; a yes
+  // with a question ("sí, pero ¿y mi pedido?") is for the seller, and the bot
+  // never answers about the quote it does not know.
+  const QUOTE_OFFER_ACCEPTANCE = /^(?:si|s|ok|okay|dale|bueno|ya|claro|claro que si|si claro|si dale|por favor|si por favor|si porfa|si quiero|quiero|si me gustaria|me gustaria|de acuerdo|perfecto|quiero otra|quiero una|quiero una nueva|si otra|si una nueva|si quiero otra)$/;
+  const acceptsQuoteOfferText = (text) => QUOTE_OFFER_ACCEPTANCE.test(text)
+    || wantsNewText(text)
+    || /\b(?:cotizacion nueva|otra cotizacion|cotizar otra|cotizar algo)\b/.test(text);
+  const acceptsNewQuoteOffer = humanControlActive
+    && Boolean(row.quote_followup_offer_pending)
+    && (acceptsQuoteOfferText(normalizedText) || everyBurstLine(acceptsQuoteOfferText));
+  if (acceptsNewQuoteOffer) humanControlActive = false;
+  const hasCommercialRequestReference = /\b(?:cotizacion|solicitud|presupuesto|pedido)\b/.test(normalizedText);
+  const isAnchoredStatusInquiry = (text) => /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(text)
+    || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(text);
+  const isCommercialStatusInquiry = isAnchoredStatusInquiry(normalizedText)
+    || anyBurstLine(isAnchoredStatusInquiry)
+    || (hasCommercialRequestReference
+      && /\b(?:estado|avance|novedades?|respuesta|responden|respondido|cuando|demora|pendiente|revision|revisada|lista|listo|sigue|va|paso|pasa)\b/.test(normalizedText));
+  const ADDITION_VERB = '(?:agregar|anadir|sumar|incluir|considerar|poner)';
+  const wantsCommercialAddition = new RegExp(`\\b(?:se me olvido|me olvide|olvide|me falto|falto|me faltaria|faltaria)\\b.{0,40}\\b${ADDITION_VERB}\\b`).test(normalizedText)
+    || new RegExp(`\\b(?:quiero|quisiera|necesito|puedo|podria|podemos|me gustaria)\\s+(?:\\w+\\s+){0,2}${ADDITION_VERB}\\b.{0,40}\\b(?:algo|otra cosa|otro producto|otros productos|mas|cotizacion|solicitud|pedido)\\b`).test(normalizedText);
+  // An addition that already says what to add ("se me olvidó agregar 20
+  // soleras") is recorded at once instead of asking for it.
+  const additionCarriesDetail = /\d/.test(normalizedText)
+    || knownProducts.some((product) => new RegExp(`\\b${product}\\b`).test(normalizedText));
+  const wantsCommercialCorrection = /\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b.{0,48}\b(?:solicitud|cotizacion|pedido|datos?|informacion|cantidad|direccion|comuna|producto|servicio|medida)\b/.test(normalizedText)
+    || /\b(?:solicitud|cotizacion|pedido|datos?|informacion)\b.{0,48}\b(?:modificar|corregir|rectificar|actualizar|cambiar)\b/.test(normalizedText);
+  // A directive is not an answer. "Iniciar una nueva" restarts the request; it
+  // does not name a city, and reading it as one leaves the customer living in a
+  // city called "Iniciar Una Nueva". Only whatever survives removing the
+  // directive can still carry data — "nueva cotización de pastelones en Viña"
+  // still names a product and a city.
+  const carriesOnlyNewRequestDirective = (text) => String(text || '')
+    .replace(NEW_REQUEST_DIRECTIVE, ' ')
+    .replace(/\b(?:por favor|porfa|quiero|querria|necesito|hacer|empezar|iniciar|comenzar|una|un|la|el|de|del|con)\b/g, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim().length === 0;
+  const wantsHumanText = (text) => /\b(hablar|contactar|comunicarme)\b.*\b(persona|humano|humana|ejecutiva|ejecutivo|asesor|operador)\b|\b(atencion humana|persona real)\b|^(?:una?\s+)?(?:ejecutiva|ejecutivo|asesor|asesora|humano|humana|operador)(?:\s+por\s+favor)?$/.test(text);
+  const wantsHuman = (text) => wantsHumanText(text) || (text === normalizedText && anyBurstLine(wantsHumanText));
   const operationalPatterns = [
     /\b(reclamo|queja|postventa|post venta)\b/,
     /\b(garantia|garantía)\b/,
@@ -641,6 +723,22 @@ function evaluateConversationStep(row) {
     && !wantsPrevious(normalizedText)
     && row.conversation_status_code !== 'escalation_required';
   let pendingQuestionKey = row.pending_question_key || null;
+  const persistedQualificationContext = row.qualification_context && typeof row.qualification_context === 'object'
+    ? row.qualification_context
+    : {};
+  // Set only by a rule that records customer data deterministically (M5).
+  let updatedQualificationContext = null;
+  // Reopenable: the latest conversation was handed to sales within the recency
+  // window, its lead has a ClickUp task that is not closed, nobody owns or
+  // arbitrates the chat, and the customer did not ask for a new quote.
+  const confirmedQuoteReopenable = hasExistingConversation && isRecentConversation
+    && row.conversation_status_code === 'handed_to_sales'
+    && Boolean(row.lead_id)
+    && Boolean(String(row.lead_clickup_task_id || '').trim())
+    && !isClickupStatusResolved(row.lead_clickup_status, env)
+    && !row.human_arbitration_required
+    && !wantsNew(normalizedText);
+  let reopenConfirmedQuote = false;
   const isEscalationAlreadyRequired = row.conversation_status_code === 'escalation_required'
     || stepInfo.field === 'escalation';
   const handleConfirmationRejection = () => {
@@ -666,10 +764,28 @@ function evaluateConversationStep(row) {
   // escalación/terminal → operacional → re-engagement → comercial/IA
   // ============================================================
 
+  // Migration 037: the customer accepted the new-quote offer. A new
+  // conversation starts here; 07_persist_conversation_state.sql releases the
+  // seller's ownership of the old quote (release_quote_followup_ownership) and
+  // leaves its ClickUp task untouched.
+  if (acceptsNewQuoteOffer) {
+    current.service = null;
+    current.city = null;
+    current.requirement = null;
+    resetConversationLead = true;
+    pendingQuestionKey = null;
+    currentStepField = 'service';
+    conversationStatusCode = 'waiting_user';
+    shouldCreateLead = false;
+    shouldEscalate = false;
+    responseKind = QUOTE_FOLLOWUP_NEW_QUOTE_KIND;
+    responseText = QUOTE_FOLLOWUP_NEW_QUOTE_REPLY;
+  }
+
   // 0. CONTENTLESS: a message with no readable text and no attachment cannot
   // trigger any rule below it. The turn is still persisted and audited, but it
   // stays silent and neither advances nor resets the conversation state.
-  if (isContentlessInbound) {
+  else if (isContentlessInbound) {
     resetConversationLead = false;
     currentStepField = stepInfo.field;
     pendingQuestionKey = row.pending_question_key || null;
@@ -680,16 +796,16 @@ function evaluateConversationStep(row) {
   }
 
   // 1. OPT-OUT / abandono: siempre gana, incluso si el mensaje también pide retomar.
-  else if (detectOptOut(normalizedText) || detectLostIntent(normalizedText)) {
+  else if (isOptOut || isLostIntent) {
     shouldEscalate = true;
     shouldCreateLead = false;
-    escalationReason = detectOptOut(normalizedText) ? 'opt_out' : 'abandoned';
+    escalationReason = isOptOut ? 'opt_out' : 'abandoned';
     currentStepField = 'escalation';
     pendingQuestionKey = null;
     responseKind = 'escalation_routing';
-    responseText = detectOptOut(normalizedText)
+    responseText = isOptOut
       ? 'Entendido. No te escribiremos más.'
-      : 'Entendido. Cerramos tu solicitud. Si necesitas algo más, aquí estaremos.';
+      : 'Entendido, cerramos tu solicitud.\n\nSi necesitas algo más, aquí estaremos.';
     conversationStatusCode = 'closed';
   }
 
@@ -714,7 +830,7 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'escalation_required';
     // loop_detected escalates here as its remedy; without this bound the remedy
     // is what answers the loop forever.
-    if (wasSentWithinCooldown(ESCALATION_ALREADY_REQUIRED_REPLY)) {
+    if (wasSentWithinCooldown(ESCALATION_ALREADY_REQUIRED_REPLY, TERMINAL_REPLY_COOLDOWN_HOURS)) {
       responseKind = SUPPRESSED_REPLY_KIND;
       responseText = '';
       replySuppressionReason = 'terminal_reply_cooldown';
@@ -726,13 +842,19 @@ function evaluateConversationStep(row) {
   }
 
   // A registered recent quote is not a new request merely because the client
-  // greets, thanks us, or asks for an update before commercial review.
+  // greets, thanks us, or asks for an update before commercial review. While
+  // its ClickUp task is open, a correction or an addition goes to the reopened
+  // quote below instead of a canned reply that changes no data.
   else if (hasExistingConversation && isRecentConversation
     && row.conversation_status_code === 'handed_to_sales'
     && row.lead_id
     && !row.human_arbitration_required && !wantsNew(normalizedText)
-    && (humanControlActive || isGreetingOnly
-      || /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$|^(?:como va (?:mi|la) cotizacion|hay novedades|que (?:paso|pasa) con (?:mi|la) cotizacion|sigo esperando|alguna novedad)$/.test(normalizedText))) {
+    && (humanControlActive || isGreetingOnly || isCommercialStatusInquiry
+      || (!confirmedQuoteReopenable && (wantsCommercialCorrection
+        || row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY
+        || wantsCommercialAddition || row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY))
+      || isCourtesyOnly(normalizedText)
+      || everyBurstLine((line) => isCourtesyOnly(line) || isGreetingOnlyText(line)))) {
     resetConversationLead = false;
     current.service = row.state_service || stepState.service || lastKnownService || previous.service;
     current.city = row.state_city || stepState.city || lastKnownCity || previous.city;
@@ -742,7 +864,24 @@ function evaluateConversationStep(row) {
     conversationStatusCode = 'handed_to_sales';
     shouldCreateLead = false;
     shouldEscalate = false;
-    if (wasSentWithinCooldown(COMMERCIAL_REVIEW_PENDING_REPLY)) {
+    if (row.pending_question_key === COMMERCIAL_REVIEW_CORRECTION_KEY) {
+      pendingQuestionKey = null;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_CORRECTION_RECORDED_REPLY;
+    } else if (row.pending_question_key === COMMERCIAL_REVIEW_ADDITION_KEY
+      || (wantsCommercialAddition && additionCarriesDetail)) {
+      pendingQuestionKey = null;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_ADDITION_RECORDED_REPLY;
+    } else if (wantsCommercialAddition) {
+      pendingQuestionKey = COMMERCIAL_REVIEW_ADDITION_KEY;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_ADDITION_PROMPT;
+    } else if (wantsCommercialCorrection) {
+      pendingQuestionKey = COMMERCIAL_REVIEW_CORRECTION_KEY;
+      responseKind = 'commercial_review_pending';
+      responseText = COMMERCIAL_REVIEW_CORRECTION_PROMPT;
+    } else if (wasSentWithinCooldown(COMMERCIAL_REVIEW_PENDING_REPLY, COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS)) {
       responseKind = SUPPRESSED_REPLY_KIND;
       responseText = '';
       replySuppressionReason = 'terminal_reply_cooldown';
@@ -753,6 +892,23 @@ function evaluateConversationStep(row) {
     }
   }
 
+  // Quote correction: the customer writes after confirming and the task is
+  // still open. The same conversation, lead, qualification_context and history
+  // go to the v3.1 model, which applies the change, re-summarizes and asks to
+  // confirm again; that confirmation updates the same lead and ClickUp task.
+  else if (confirmedQuoteReopenable && !humanControlActive) {
+    resetConversationLead = false;
+    reopenConfirmedQuote = true;
+    current.service = row.state_service || stepState.service || lastKnownService || previous.service;
+    current.city = row.state_city || stepState.city || lastKnownCity || previous.city;
+    current.requirement = row.state_requirement || stepState.requirement || lastKnownRequirement || previous.requirement;
+    currentStepField = stepInfo.field;
+    pendingQuestionKey = null;
+    conversationStatusCode = 'waiting_user';
+    responseKind = 'confirmed_quote_reopened';
+    responseText = '';
+  }
+
   // 4. TERMINAL: una conversación cerrada no puede reaparecer como re-engagement.
   else if (isTerminalConversation) {
     current.service = null;
@@ -761,7 +917,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = isGreetingOnly
@@ -786,7 +942,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     currentStepField = nextMissingField();
     responseKind = 'new_request_started';
     responseText = currentStepField === 'confirm' ? confirmationText() : nextQuestionForMissingField(currentStepField, current, 0, actionIntent);
@@ -825,10 +981,10 @@ function evaluateConversationStep(row) {
     const courtesy = /^(?:muchas )?gracias(?: por (?:todo|la ayuda|tu ayuda|su ayuda))?$|^(?:chao|chau|hasta luego|adios|hasta manana|nos vemos)$/.test(normalizedText);
     const passiveNonText = ['reaction', 'sticker'].includes(messageType) || !normalizedText;
     responseText = passiveNonText ? ''
-      : tomorrowPostponement ? 'De acuerdo, dejamos la conversación pendiente para mañana. Cuando retomes, seguimos con tu solicitud.'
-      : unsupportedPostponement ? 'De acuerdo, lo dejamos pendiente. Cuando quieras retomar, seguimos con tu solicitud.'
-      : courtesy ? 'Gracias. Aquí estaremos cuando quieras retomar.'
-      : '¡Hola de nuevo! ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?';
+      : tomorrowPostponement ? 'De acuerdo, dejamos la conversación pendiente para mañana 👍\n\nCuando retomes, seguimos con tu solicitud.'
+      : unsupportedPostponement ? 'De acuerdo, lo dejamos pendiente 👍\n\nCuando quieras retomar, seguimos con tu solicitud.'
+      : courtesy ? '¡Gracias! 👋\n\nAquí estaremos cuando quieras retomar.'
+      : '¡Hola de nuevo! 👋\n\n👉 ¿Prefieres continuar con la solicitud anterior o iniciar una nueva?';
   }
 
   // 6. NUEVA SOLICITUD: handoff ya hecho O firstInteraction + quiere nueva
@@ -839,7 +995,7 @@ function evaluateConversationStep(row) {
     resetConversationLead = true;
     pendingQuestionKey = null;
     currentStepField = 'city';
-    applyDetectedFields();
+    if (!carriesOnlyNewRequestDirective(normalizedText)) applyDetectedFields();
     const freshMissing = nextMissingField();
     currentStepField = freshMissing;
     responseKind = isGreetingOnly ? 'recontact_greeting' : 'new_request_started';
@@ -872,17 +1028,58 @@ function evaluateConversationStep(row) {
   // flujo normal y la ejecutiva la categoriza después de la derivación.
 
   // Measurement assistance is human review, never a fabricated quote quantity.
-  else if ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
-    && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
-      || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText))) {
-    shouldEscalate = true;
-    shouldCreateLead = false;
-    escalationReason = 'measurement_assistance_requested';
-    currentStepField = 'escalation';
-    pendingQuestionKey = null;
-    conversationStatusCode = 'escalation_required';
-    responseKind = 'escalation_routing';
-    responseText = 'Te derivaré con una persona del equipo para revisar cómo obtener las medidas, sin asumir una cantidad ni confirmar una visita.';
+  // Task 3c.33 (M5): the person who coordinates the measurement needs the
+  // project location, so the commune (an official comuna) and the street are
+  // collected first; whatever is already known is kept and not asked again.
+  else if (MEASUREMENT_VISIT_KEYS.includes(pendingQuestionKey)
+    || ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
+      && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
+        || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText)))) {
+    resetConversationLead = false;
+    const visitContext = { ...persistedQualificationContext };
+    let reaskCommune = false;
+    if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY || pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_RETRY_KEY) {
+      const commune = communeRuntime.resolveChileanCommune(rawText);
+      if (commune) {
+        visitContext.commune = commune;
+      } else if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY) {
+        reaskCommune = true;
+      } else {
+        visitContext.location_note = rawText;
+      }
+    } else if (pendingQuestionKey === MEASUREMENT_VISIT_ADDRESS_KEY && rawText) {
+      visitContext.address = rawText;
+    }
+    const knownPlace = compact(visitContext.commune) || compact(visitContext.location_note);
+    updatedQualificationContext = visitContext;
+    if (reaskCommune) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_RETRY_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = 'No encuentro *' + rawText.replace(/[*_~]/g, '') + '* como comuna.\n\n👉 ¿En qué comuna de Chile está tu proyecto?';
+    } else if (!knownPlace) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_COMMUNE_QUESTION;
+    } else if (!compact(visitContext.address)) {
+      currentStepField = stepInfo.field;
+      pendingQuestionKey = MEASUREMENT_VISIT_ADDRESS_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_KEYS.includes(row.pending_question_key)
+        ? 'Gracias, anoto *' + knownPlace + '*.\n\n👉 ¿Cuál es la calle y el número aproximado?'
+        : '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo en *' + knownPlace + '*, necesito la dirección.\n\n👉 ¿Cuál es la calle y el número aproximado?';
+    } else {
+      shouldEscalate = true;
+      shouldCreateLead = false;
+      escalationReason = 'measurement_assistance_requested';
+      currentStepField = 'escalation';
+      pendingQuestionKey = null;
+      conversationStatusCode = 'escalation_required';
+      responseKind = 'escalation_routing';
+      responseText = '¡Gracias! Te derivaré con una persona de nuestro equipo para coordinar las medidas en *'
+        + compact(visitContext.address) + ', ' + knownPlace + '* 👍\n\nTe escribirá por este mismo WhatsApp.';
+    }
   }
 
   // 8. CONFIRMACIÓN EXPLÍCITA
@@ -971,19 +1168,18 @@ function evaluateConversationStep(row) {
   if (shouldCreateLead) shouldEscalate = false;
 
   if (humanControlActive) {
+    resetConversationLead = false;
     shouldCreateLead = false;
     shouldEscalate = false;
     escalationReason = '';
     responseText = '';
     responseKind = 'human_control_suppressed';
-    pendingQuestionKey = resetConversationLead ? null : row.pending_question_key || null;
-    currentStepField = resetConversationLead ? 'service' : stepInfo.field;
-    conversationStatusCode = resetConversationLead
-      ? 'active'
-      : row.conversation_status_code || 'waiting_user';
-    current.service = resetConversationLead ? null : row.state_service || stepState.service || null;
-    current.city = resetConversationLead ? null : row.state_city || stepState.city || null;
-    current.requirement = resetConversationLead ? null : row.state_requirement || stepState.requirement || null;
+    pendingQuestionKey = row.pending_question_key || null;
+    currentStepField = stepInfo.field;
+    conversationStatusCode = row.conversation_status_code || 'waiting_user';
+    current.service = row.state_service || stepState.service || null;
+    current.city = row.state_city || stepState.city || null;
+    current.requirement = row.state_requirement || stepState.requirement || null;
   }
 
   const finalCompletedFields = completedFields();
@@ -1024,7 +1220,7 @@ function evaluateConversationStep(row) {
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', SUPPRESSED_REPLY_KIND].includes(responseKind),
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'measurement_visit_location', QUOTE_FOLLOWUP_NEW_QUOTE_KIND, SUPPRESSED_REPLY_KIND].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
@@ -1060,15 +1256,17 @@ function evaluateConversationStep(row) {
         human_response_due_at: row.human_response_due_at || null,
         human_arbitration_required: Boolean(row.human_arbitration_required),
         reset_conversation_lead: resetConversationLead,
+        // Fix V3 Route reuses a handed_to_sales conversation only on this flag.
+        reopen_confirmed_quote: reopenConfirmedQuote,
         previous_lead_id: usedPreviousContext ? row.previous_lead_id || null : null,
         service: current.service || null,
         city: current.city || null,
         requirement: current.requirement || null,
         qualification_context: resetConversationLead
           ? {}
-          : row.qualification_context && typeof row.qualification_context === 'object'
-            ? row.qualification_context
-            : {},
+          : updatedQualificationContext && !humanControlActive
+            ? updatedQualificationContext
+            : persistedQualificationContext,
         pending_question_key: pendingQuestionKey,
         recent_messages: resetConversationLead || responseKind === 'previous_context_choice'
           ? []
@@ -1104,6 +1302,8 @@ function evaluateConversationStep(row) {
           message_type: messageType,
           response_kind: responseKind,
           human_control_active: humanControlActive,
+          quote_followup_offer_pending: Boolean(row.quote_followup_offer_pending),
+          release_quote_followup_ownership: acceptsNewQuoteOffer,
           human_response_due_at: row.human_response_due_at || null,
           has_intent: hasIntent,
           used_previous_context: usedPreviousContext,
@@ -1118,7 +1318,10 @@ function evaluateConversationStep(row) {
           reply_suppressed: Boolean(replySuppressionReason),
           reply_suppression_reason: replySuppressionReason,
           suppressed_response_kind: suppressedResponseKind,
-          terminal_reply_cooldown_hours: TERMINAL_REPLY_COOLDOWN_HOURS,
+          terminal_reply_cooldown_hours: responseKind === 'commercial_review_pending'
+            || suppressedResponseKind === 'commercial_review_pending'
+            ? COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS
+            : TERMINAL_REPLY_COOLDOWN_HOURS,
           hours_since_last_outbound: hoursSinceLastOutgoing,
           // Re-engagement structured logging (memoria #679, #686)
           reengagement_stage: isReengagement ? 'detected' : null,
@@ -1138,7 +1341,10 @@ if (typeof module !== 'undefined' && module.exports) {
     runN8nCode,
     SUPPRESSED_REPLY_KIND,
     TERMINAL_REPLY_COOLDOWN_HOURS,
+    COMMERCIAL_REVIEW_PENDING_COOLDOWN_HOURS,
     ESCALATION_ALREADY_REQUIRED_REPLY,
     COMMERCIAL_REVIEW_PENDING_REPLY,
+    QUOTE_FOLLOWUP_NEW_QUOTE_KIND,
+    QUOTE_FOLLOWUP_NEW_QUOTE_REPLY,
   };
 }

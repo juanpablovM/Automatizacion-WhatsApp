@@ -102,6 +102,29 @@ describe('project default v3 deployment contract', () => {
     expect(() => validateV3WorkflowContract(receiptDirectory)).toThrow(/connected downstream delivery receipt/);
   });
 
+  // Task 3c.29: the technical-sheet executor and the post-delivery document
+  // lane are part of the v3 default: a disconnected executor or a reply
+  // receipt that no longer reaches the outbound completion is refused.
+  test('rejects a disconnected technical-sheet executor or document lane', () => {
+    const executorDirectory = copyWorkflows();
+    mutate(executorDirectory, orchestratorFile, (workflow) => {
+      workflow.connections['V3 Effect Is Create Lead?'].main[1] = [{ node: 'Persist V3 Handoff Effect', type: 'main', index: 0 }];
+    });
+    expect(() => validateV3WorkflowContract(executorDirectory)).toThrow(/requires connection: V3 Effect Is Create Lead\?\[1\] -> V3 Effect Is Technical Sheet\?/);
+
+    const bindingDirectory = copyWorkflows();
+    mutate(bindingDirectory, orchestratorFile, (workflow) => {
+      delete workflow.nodes.find((node) => node.name === 'Persist V3 Technical Sheet Effect').alwaysOutputData;
+    });
+    expect(() => validateV3WorkflowContract(bindingDirectory)).toThrow(/visible exact technical-sheet binding failures/);
+
+    const laneDirectory = copyWorkflows();
+    mutate(laneDirectory, 'wa-inbound-downstream-dispatcher.json', (workflow) => {
+      workflow.connections['Technical Sheet Lane Complete'].main[0] = [];
+    });
+    expect(() => validateV3WorkflowContract(laneDirectory)).toThrow(/technical-sheet document lane/);
+  });
+
   test('rejects removed durable dispatch wiring and lost post-receipt claim context', () => {
     const durableDirectory = copyWorkflows();
     mutate(durableDirectory, orchestratorFile, (workflow) => {

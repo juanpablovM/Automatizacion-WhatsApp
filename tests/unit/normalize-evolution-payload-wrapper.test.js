@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
 const fixturePath = 'tests/fixtures/workflow-nodes/wa-inbound-entry/normalize-evolution-payload.js';
-const source = fs.readFileSync(fixturePath, 'utf8');
+// The node ships with its runtimes prepended (tests/scripts/sync-workflow-nodes.mjs).
+const source = [
+  fs.readFileSync('tests/fixtures/workflow-nodes/shared/inbound-debounce-config.js', 'utf8'),
+  fs.readFileSync(fixturePath, 'utf8'),
+].join('\n\n');
 
 const run = (body, env = { EVOLUTION_WEBHOOK_SECRET: 'secret' }, headers = {}) =>
   new Function('items', '$env', source)([
@@ -51,5 +55,56 @@ describe('Normalize Evolution Payload — own-message evidence', () => {
     expect(output.should_process).toBe(false);
     expect(output.security_rejected).toBe(true);
     expect(output.normalized_event).toBe('SECURITY_REJECTED');
+  });
+});
+
+describe('Normalize Evolution Payload — blocked counterparts', () => {
+  const withBlocklist = (value) => ({
+    EVOLUTION_WEBHOOK_SECRET: 'secret',
+    INBOUND_BLOCKED_PHONES: value,
+  });
+
+  test('drops a message from a blocked number and says so', () => {
+    const output = run(
+      message({ remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist('56988599744'),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+    expect(output.normalized_event).toBe('MESSAGES_UPSERT');
+    expect(output.phone_number).toBe('56988599744');
+  });
+
+  test('matches a blocked number however the list spells it', () => {
+    const output = run(
+      message({ remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist(' +56 9 8859-9744 , 56911112222 '),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+  });
+
+  test('drops our own outgoing message to a blocked number too', () => {
+    const output = run(
+      message({ fromMe: true, remoteJid: '56988599744@s.whatsapp.net' }),
+      withBlocklist('56988599744'),
+    );
+
+    expect(output.should_process).toBe(false);
+    expect(output.event_type).toBe('blocked_number');
+  });
+
+  test('leaves every other number processable', () => {
+    const output = run(message(), withBlocklist('56988599744'));
+
+    expect(output.should_process).toBe(true);
+  });
+
+  test('blocks nobody when the list is unset, empty or only separators', () => {
+    expect(run(message()).should_process).toBe(true);
+    expect(run(message(), withBlocklist('')).should_process).toBe(true);
+    expect(run(message(), withBlocklist('  ,  ')).should_process).toBe(true);
   });
 });

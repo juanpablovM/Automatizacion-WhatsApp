@@ -1,4 +1,4 @@
--- Claim due media downloads. $1 batch size, $2 stale seconds.
+-- Claim due media downloads. p1 batch size, p2 stale seconds.
 WITH stale AS (
   UPDATE media_attachments
   SET download_state = CASE

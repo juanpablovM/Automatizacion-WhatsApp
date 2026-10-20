@@ -3,7 +3,8 @@
 WITH execution_lock AS MATERIALIZED (
   SELECT pg_advisory_xact_lock(hashtextextended('v3-contingency:' || $1::TEXT, 0))
 ), target AS MATERIALIZED (
-  SELECT execution.*, decision.output_payload, event.processing_token,
+  SELECT execution.*, decision.output_payload, decision.validation_errors,
+         event.processing_token,
          event.received_at AS turn_received_at,
          conversation.qualification_context, conversation.phone_number,
          conversation.source_number_id, conversation.lead_id,
@@ -210,7 +211,11 @@ WITH execution_lock AS MATERIALIZED (
            'decision_id', target.decision_id,
            'handoff_receipt', handoff_receipt.value,
            'delivery_message_id', fixed_message.id,
-           'commercial_state_preserved', TRUE
+           'commercial_state_preserved', TRUE,
+           -- Read back from the immutable contingency decision, so the audit
+           -- trail keeps the cause without a new workflow input.
+           'recovery_reason', target.handoff_command#>>'{payload,recovery_reason}',
+           'validation_error_codes', target.validation_errors - 'v3_recovery_contingency'
          )
   FROM target
   CROSS JOIN handoff_receipt

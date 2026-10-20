@@ -3,7 +3,7 @@
 -- -----------------------------------------------------------------------------
 -- Cada mensaje entrante del cliente sobre un chat con propiedad viva abre (o
 -- reabre) el plazo del vendedor: el mensaje pasa a ser el pendiente y el plazo
--- queda en `message.created_at + $4 horas`. Un mensaje mas nuevo REEMPLAZA al
+-- queda en `message.created_at + p4 horas`. Un mensaje mas nuevo REEMPLAZA al
 -- anterior y arranca su propia ventana completa, porque el SLA se mide contra
 -- lo ultimo que el cliente pregunto, no contra lo primero.
 --
@@ -22,11 +22,16 @@
 -- migracion 018 sobre el estado YA aplicado, no sobre el previo: es la
 -- respuesta que el dispatcher necesita para decidir si Gemini contesta.
 --
+-- Migration 037: an ownership in sla_mode 'quote_followup' has no deadline.
+-- The message still becomes the pending one, but response_due_at stays NULL
+-- and the bot stays silent until the ClickUp status changes; the quote
+-- follow-up alert (11_claim_quote_followup_alerts.sql) answers the wait.
+--
 -- Devuelve siempre exactamente una fila.
 --
 -- Params:
---   $1 lead_id (bigint), $2 message_id (bigint),
---   $3 message_created_at (timestamptz), $4 window_hours (numeric; el llamador
+--   p1 lead_id (bigint), p2 message_id (bigint),
+--   p3 message_created_at (timestamptz), p4 window_hours (numeric; el llamador
 --   pasa 2)
 -- =============================================================================
 WITH input AS (
@@ -40,7 +45,7 @@ WITH input AS (
 -- entrar a la vez y sin el bloqueo el plazo resultante depende de cual escriba
 -- ultimo, no de cual mensaje es mas nuevo.
 active AS MATERIALIZED (
-  SELECT o.id, o.response_due_at, o.pending_message_id
+  SELECT o.id, o.response_due_at, o.pending_message_id, o.sla_mode
   FROM lead_chat_ownerships o
   CROSS JOIN input i
   WHERE o.lead_id = i.lead_id
@@ -64,7 +69,10 @@ applied AS (
   SET
     pending_message_id = i.message_id,
     pending_message_at = i.message_created_at,
-    response_due_at = i.message_created_at + (i.window_hours || ' hours')::interval,
+    response_due_at = CASE
+      WHEN o.sla_mode = 'quote_followup' THEN NULL
+      ELSE i.message_created_at + (i.window_hours || ' hours')::interval
+    END,
     updated_at = NOW()
   FROM classified c
   CROSS JOIN input i
@@ -75,10 +83,10 @@ applied AS (
 SELECT
   c.ownership_id,
   (
-    COALESCE(a.response_due_at, c.before_due_at) IS NULL
-    OR COALESCE(a.response_due_at, c.before_due_at) > NOW()
+    CASE WHEN a.id IS NOT NULL THEN a.response_due_at ELSE c.before_due_at END IS NULL
+    OR CASE WHEN a.id IS NOT NULL THEN a.response_due_at ELSE c.before_due_at END > NOW()
   ) AS bot_suppressed,
-  COALESCE(a.response_due_at, c.before_due_at) AS response_due_at,
+  CASE WHEN a.id IS NOT NULL THEN a.response_due_at ELSE c.before_due_at END AS response_due_at,
   c.outcome
 FROM classified c
 LEFT JOIN applied a ON a.id = c.ownership_id

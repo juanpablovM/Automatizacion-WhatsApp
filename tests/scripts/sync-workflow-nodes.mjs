@@ -36,12 +36,35 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Normalize Evolution Payload",
-    "fixture": "wa-inbound-entry/normalize-evolution-payload.js"
+    "fixture": "wa-inbound-entry/normalize-evolution-payload.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-inbound-entry.json",
     "node": "Persist Durable Inbox",
     "fixture": "db/queries/n8n/inbound-events/01_claim_inbound_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-entry.json",
+    "node": "Select Debounced Inbox Events",
+    "fixture": "wa-inbound-entry/select-debounced-inbox-events.js"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Load Recovery Configuration",
+    "fixture": "wa-inbound-recovery/load-recovery-configuration.js",
+    "runtimes": [
+      "shared/inbound-debounce-config.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-recovery.json",
+    "node": "Recover And Claim FIFO Events",
+    "fixture": "db/queries/n8n/inbound-events/02_recover_and_claim_inbound_events.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
   },
@@ -87,7 +110,11 @@ const NODES = [
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Evaluate Conversation Step",
     "fixture": "wa-conversation-orchestrator/evaluate-conversation-step.js",
-    "transform": "n8n-explicit-return"
+    "transform": "n8n-explicit-return",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js",
+      "shared/chile-communes.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
@@ -98,6 +125,11 @@ const NODES = [
     "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
     "node": "Build AI Request",
     "fixture": "ai-lead-qualification-assistant/build-ai-request.js"
+  },
+  {
+    "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
+    "node": "Call AI Provider",
+    "fixture": "ai-lead-qualification-assistant/call-ai-provider.js"
   },
   {
     "workflow": "n8n/workflows/ai-lead-qualification-assistant.json",
@@ -141,7 +173,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
     "node": "Ensure Escalation Handoff",
-    "fixture": "wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js"
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-escalation-handoff.js",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/ops-handoff-notification-scheduler.json",
@@ -216,6 +251,30 @@ const NODES = [
     "fixture": "ops-lead-chat-lease-scheduler/finalize-scheduler-branch.js"
   },
   {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Claim Quote Follow-Up Alerts",
+    "fixture": "db/queries/n8n/lead-chat-ownership/11_claim_quote_followup_alerts.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Prepare Quote Follow-Up Notice",
+    "fixture": "ops-lead-chat-lease-scheduler/prepare-quote-followup-notice.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Post Quote Follow-Up Comment",
+    "fixture": "ops-lead-chat-lease-scheduler/post-quote-followup-comment.js"
+  },
+  {
+    "workflow": "n8n/workflows/ops-lead-chat-lease-scheduler.json",
+    "node": "Complete Quote Follow-Up Alert",
+    "fixture": "db/queries/n8n/lead-chat-ownership/12_complete_quote_followup_alert.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
     "workflow": "n8n/workflows/ops-handoff-clickup-closure.json",
     "node": "Normalize ClickUp Closure",
     "fixture": "ops-handoff-clickup-closure/normalize-clickup-closure.js"
@@ -261,7 +320,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
     "node": "Ensure Follow-Up Cancellation",
-    "fixture": "wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js"
+    "fixture": "wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js",
+    "runtimes": [
+      "shared/customer-opt-out-vocabulary.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/ops-followup-scheduler.json",
@@ -291,6 +353,8 @@ const NODES = [
     "node": "Compile V3 Turn Policy",
     "fixture": "wa-conversation-orchestrator/compile-v3-turn.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -304,7 +368,10 @@ const NODES = [
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Build V3 Lead Effect",
-    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js"
+    "fixture": "wa-conversation-orchestrator/build-v3-lead-effect.js",
+    "runtimes": [
+      "shared/v3-line-items.js"
+    ]
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
@@ -316,6 +383,8 @@ const NODES = [
     "node": "Validate And Authorize V3",
     "fixture": "wa-conversation-orchestrator/validate-and-authorize-v3.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
   },
@@ -377,6 +446,13 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
+    "node": "Persist V3 Technical Sheet Effect",
+    "fixture": "db/queries/n8n/wa-conversation-orchestrator/19_persist_v3_technical_sheet_effect.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-conversation-orchestrator.json",
     "node": "Prepare V3 Contingency Decision",
     "fixture": "db/queries/n8n/wa-conversation-orchestrator/15_prepare_v3_contingency.sql",
     "type": "n8n-nodes-base.postgres",
@@ -424,6 +500,18 @@ const NODES = [
     "parameter": "query"
   },
   {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Load V3 Technical Sheet Deliveries",
+    "fixture": "db/queries/n8n/wa-inbound-downstream-dispatcher/02_load_v3_technical_sheet_deliveries.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/wa-inbound-downstream-dispatcher.json",
+    "node": "Technical Sheet Lane Complete",
+    "fixture": "wa-inbound-downstream-dispatcher/technical-sheet-lane-complete.js"
+  },
+  {
     "workflow": "n8n/workflows/ops-followup-scheduler.json",
     "node": "Claim Due Follow-Ups",
     "fixture": "db/queries/n8n/follow-up-pipeline/02_claim_due_follow_ups.sql",
@@ -442,6 +530,8 @@ const NODES = [
     "node": "Prepare Shadow Evaluation",
     "fixture": "ai-prd-shadow-evaluator/prepare-shadow-evaluation.js",
     "runtimes": [
+      "shared/v3-line-items.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js",
       "shared/v3-rollout-runtime.js",
       "shared/v3-policy-builder.js"
@@ -453,8 +543,24 @@ const NODES = [
     "fixture": "ai-prd-shadow-evaluator/record-shadow-evaluation.js",
     "runtimes": [
       "shared/v3-rollout-runtime.js",
+      "shared/chile-communes.js",
       "shared/v3-contract-runtime.js"
     ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Build ClickUp Payload",
+    "fixture": "crm-clickup-sync-lead/build-clickup-payload.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Create ClickUp Task",
+    "fixture": "crm-clickup-sync-lead/create-clickup-task.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
+    "node": "Normalize ClickUp Result",
+    "fixture": "crm-clickup-sync-lead/normalize-clickup-result.js"
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {
@@ -539,6 +645,8 @@ const validateV3SagaLibrary = () => {
     'buildV3RepairRequest',
     'buildV3ContingencyDecision',
     'planV3Recovery',
+    'buildV3ContingencyDiagnostic',
+    'resolveV3ProviderOutcome',
     'releaseV3Contingency',
     'reconcileV3Operation',
   ]) {
@@ -547,7 +655,7 @@ const validateV3SagaLibrary = () => {
       process.exitCode = 1;
     }
   }
-  const adapter = `${runtime}\n\nconst mergedInput = items[0]?.json ?? {};\nconst rejectedProposal = mergedInput.ai_proposal ?? mergedInput.ai_proposal_2 ?? mergedInput.ai_proposal_1 ?? null;\nconst input = canonicalizeMergedTurnItem(mergedInput);\nconst policy = input.v3_policy || input.turn_policy;\nconst v3Recovery = planV3Recovery({\n  policy,\n  validation: input.v3_validation ?? null,\n  repairAttempt: Number(input.v3_repair_attempt || 0),\n  providerOutcome: input.v3_provider_outcome || 'accepted',\n  preTurnState: input.qualification_context || {},\n  expectedSnapshotDigest: input.expected_snapshot_digest || null,\n  proposal: rejectedProposal,\n});\nreturn [{ json: {\n  ...input,\n  v3_recovery: v3Recovery,\n  v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),\n  ai_repair_request: v3Recovery.repair_request || null,\n  turn_policy: v3Recovery.repair_request?.policy || policy,\n  v3_policy: v3Recovery.repair_request?.policy || policy,\n  v3_recovery_decision: v3Recovery.decision || null,\n  decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,\n  delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,\n} }];\n`;
+  const adapter = `${runtime}\n\nconst mergedInput = items[0]?.json ?? {};\nconst rejectedProposal = mergedInput.ai_proposal ?? mergedInput.ai_proposal_2 ?? mergedInput.ai_proposal_1 ?? null;\nconst input = canonicalizeMergedTurnItem(mergedInput);\nconst policy = input.v3_policy || input.turn_policy;\nconst providerOutcome = resolveV3ProviderOutcome(mergedInput, input);\nconst v3Recovery = planV3Recovery({\n  policy,\n  validation: input.v3_validation ?? null,\n  repairAttempt: Number(input.v3_repair_attempt || 0),\n  providerOutcome,\n  preTurnState: input.qualification_context || {},\n  expectedSnapshotDigest: input.expected_snapshot_digest || null,\n  proposal: rejectedProposal,\n});\nreturn [{ json: {\n  ...input,\n  v3_recovery: v3Recovery,\n  v3_provider_outcome: providerOutcome,\n  v3_repair_attempt: v3Recovery.action === 'repair' ? 1 : Number(input.v3_repair_attempt || 0),\n  ai_repair_request: v3Recovery.repair_request || null,\n  turn_policy: v3Recovery.repair_request?.policy || policy,\n  v3_policy: v3Recovery.repair_request?.policy || policy,\n  v3_recovery_decision: v3Recovery.decision || null,\n  v3_contingency_diagnostic: v3Recovery.action === 'contingency'\n    ? buildV3ContingencyDiagnostic({\n      validation: input.v3_validation ?? null,\n      providerOutcome,\n      repairAttempt: Number(input.v3_repair_attempt || 0),\n      mergedInput,\n    })\n    : null,\n  decision_id: v3Recovery.decision?.decision_id || input.decision_id || null,\n  delivery_key: v3Recovery.decision?.reply?.delivery_key || input.delivery_key || null,\n} }];\n`;
   const fixturePath = path.join(fixturesRoot, V3_SAGA_FIXTURE);
   const actual = fs.existsSync(fixturePath) ? fs.readFileSync(fixturePath, 'utf8') : '';
   checkedCount += 1;

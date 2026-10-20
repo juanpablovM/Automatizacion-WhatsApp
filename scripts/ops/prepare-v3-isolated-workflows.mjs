@@ -8,8 +8,12 @@ const replacements = [
   ['https://app.clickup.com', 'http://mock-clickup:8083'],
   ['https://generativelanguage.googleapis.com/v1beta/openai', 'http://mock-ai:8081'],
   ['https://generativelanguage.googleapis.com', 'http://mock-ai:8081'],
+  ['https://api.openai.com/v1', 'http://mock-ai:8081'],
 ];
-const allowedOrigins = new Set(['http://mock-clickup:8083', 'http://mock-ai:8081', 'http://mock-evolution:8080']);
+// Display-only links rendered for humans (never requested by a node) may keep
+// their real origin; every origin a node can call must be a local mock.
+const displayOnlyOrigins = ['https://wa.me'];
+const allowedOrigins = new Set(['http://mock-clickup:8083', 'http://mock-ai:8081', 'http://mock-evolution:8080', ...displayOnlyOrigins]);
 const visit = (value) => {
   if (Array.isArray(value)) return value.map(visit);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));

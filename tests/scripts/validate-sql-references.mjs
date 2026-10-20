@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findCommentPlaceholders } from './sql-comment-placeholders.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -70,6 +71,38 @@ function extractSqlReferences(workflow) {
     }
   }
   return refs;
+}
+
+// Positional placeholders must never be documented inside SQL comments: the
+// n8n Postgres node substitutes $N on the query text through pg-promise, so a
+// value carrying a newline escapes the comment and becomes executable SQL.
+// Document parameters as pN instead.
+function validateCommentPlaceholders(sqlFiles) {
+  let offenders = 0;
+
+  for (const wfFile of fs.readdirSync(workflowsDir).filter(f => f.endsWith('.json'))) {
+    const workflow = JSON.parse(fs.readFileSync(path.join(workflowsDir, wfFile), 'utf8'));
+    for (const node of workflow.nodes) {
+      if (node.type !== 'n8n-nodes-base.postgres') continue;
+      if (typeof node.parameters?.query !== 'string') continue;
+      if (!node.parameters?.options?.queryReplacement) continue;
+      for (const finding of findCommentPlaceholders(node.parameters.query)) {
+        logError(`Workflow "${wfFile}" node "${node.name}" documents ${finding.token} inside a comment (line ${finding.line}); use p${finding.token.slice(1)} instead`);
+        offenders++;
+      }
+    }
+  }
+
+  for (const [sqlRel, sqlAbs] of sqlFiles) {
+    for (const finding of findCommentPlaceholders(fs.readFileSync(sqlAbs, 'utf8'))) {
+      logError(`Canonical SQL "${sqlRel}" documents ${finding.token} inside a comment (line ${finding.line}); use p${finding.token.slice(1)} instead`);
+      offenders++;
+    }
+  }
+
+  if (offenders === 0) {
+    logInfo('No positional placeholders are documented inside SQL comments');
+  }
 }
 
 // Check if a SQL file exists
@@ -140,6 +173,8 @@ function validateSqlReferences() {
 
   logInfo(`${referencedSql.size} SQL files are explicitly referenced or embedded byte-for-byte`);
   logInfo(`${sqlFiles.size - referencedSql.size} SQL files are library/query assets and are outside this parity gate`);
+
+  validateCommentPlaceholders(sqlFiles);
 
   // Summary
   console.log(`\n--- SQL Reference Validation Summary ---`);

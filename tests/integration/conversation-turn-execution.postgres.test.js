@@ -164,6 +164,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     externalTimestamp,
     textBody,
     { source: 'integration-test' },
+    false,
   ]);
 
   const seedTurn = async ({
@@ -252,7 +253,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     };
     const prepared = contingency
       ? await client.query(prepareContingencySql, [
-          event.inboundEventId, event.token, policy, outputPayload,
+          event.inboundEventId, event.token, policy, outputPayload, null,
         ])
       : await client.query(persistAuthoritySql, [
           event.inboundEventId,
@@ -781,10 +782,23 @@ describeIntegration('v3 conversation turn execution saga', () => {
       'SELECT qualification_context FROM conversations WHERE id = $1',
       [conversation.id],
     );
+    // 025_item_aware_v3_state_mutations.sql is a deliberate superset of 022:
+    // a batch that touches an item field (`quantity` here) now also
+    // maintains the item-aware `line_items[]` model and its flat projection
+    // mirror (design.md D1-D3). `quantity` itself, and every other
+    // quote-level fact, stays exactly where it was.
     expect(state.rows[0].qualification_context).toEqual({
       name: 'Pedro',
       city: 'Santiago',
       quantity: '25 unidades',
+      product: null,
+      measurements: null,
+      line_items: [{
+        item_id: 'li_0', product: null, quantity: '25 unidades', measurements: null,
+        catalog_ref: null, requested_label: null,
+      }],
+      line_items_projection: { product: null, quantity: '25 unidades', measurements: null },
+      line_items_schema: 'line_items/v1',
     });
   });
 
@@ -815,7 +829,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
         event.inboundEventId, event.token, conversation.id, sourceNumberId,
         conversation.phone_number, 'enforce', 'serial', 'service', 'text',
         `message-${event.inboundEventId}`, null, 'Necesito una cotización',
-        { source: 'integration-test' },
+        { source: 'integration-test' }, false,
       ];
       const [a, b] = await Promise.all([
         client.query(routeSql, routeValues(first)),
@@ -1023,6 +1037,155 @@ describeIntegration('v3 conversation turn execution saga', () => {
       v3_persisted_current_step: 'escalation', v3_persisted_pending_question_key: null });
     const stored = await client.query('SELECT motivo, escalation_reason FROM handoffs WHERE id=$1', [handoff.rows[0].handoff_id]);
     expect(stored.rows[0]).toEqual({ motivo: 'no_progress_commercial_question_loop', escalation_reason: 'no_progress_commercial_question_loop' });
+  });
+
+  // Task 3c.25: live conversations 390 and 393 (2026-09-30) emitted an
+  // authorized v3 handoff, but the commit only closed the flow for the bounded
+  // address handoff: the conversation stayed waiting_user with a stale
+  // pending_question_key, the day-1 follow-up was sent next day, and the next
+  // turn created a second handoff for the same open escalation.
+  const runV3HandoffEffect = async (turn, effect) => {
+    const claimed = await client.query(prepareEffectSql, [turn.decisionId, effect.operation_key,
+      effect.type, effect.payload, effect.payload_digest]);
+    const handoff = await client.query(persistHandoffEffectSql, [effect.operation_key,
+      turn.decisionId, effect.payload_digest, claimed.rows[0].claim_token]);
+    await client.query(recordEffectSql, [effect.operation_key, effect.payload_digest,
+      claimed.rows[0].claim_token, 'succeeded', handoff.rows[0].v3_effect_receipt,
+      handoff.rows[0].handoff_id, null]);
+    return { claimed, handoff };
+  };
+  const v3HandoffEffect = (label) => ({
+    type: 'handoff',
+    operation_key: `v3-handoff-${label}-${sequence + 1}`,
+    payload: { conversation_id: 'pending', turn_id: 'pending', reason_observation_ids: [] },
+    payload_digest: `v3-handoff-payload-${label}-${sequence + 1}`,
+    required_before_reply: true,
+  });
+  const seedFollowUp = async (conversation, stepDia, estado, cycle) => {
+    const { rows } = await client.query(`
+      INSERT INTO follow_ups (
+        idempotency_key, cycle_key, conversation_id, phone_number, source_number_id,
+        motivo, step_dia, scheduled_at, estado
+      ) VALUES ($1, $2, $3, $4, $5, 'lead_sin_respuesta', $6, NOW() + INTERVAL '1 day', $7)
+      RETURNING id
+    `, [`${conversation.id}:${cycle}:${stepDia}`, cycle, conversation.id, conversation.phone_number,
+      sourceNumberId, stepDia, estado]);
+    return rows[0].id;
+  };
+
+  test('a receipted v3 handoff closes the flow: escalation, no pending question, follow-ups cancelled', async () => {
+    const effect = v3HandoffEffect('closes-flow');
+    const turn = await seedTurn({
+      effectCommands: [effect],
+      stateMutations: [],
+      replyText: 'Una ejecutiva confirmará las medidas y te escribirá por aquí.',
+      primaryRequest: { goal_id: 'measurements', item_ref: null },
+    });
+    const pendingFollowUp = await seedFollowUp(turn.conversation, 1, 'pending', 'inbound:event:a');
+    const erroredFollowUp = await seedFollowUp(turn.conversation, 3, 'error', 'inbound:event:a');
+    const sentFollowUp = await seedFollowUp(turn.conversation, 1, 'sent', 'inbound:event:b');
+    const otherConversation = await seedConversation();
+    const foreignFollowUp = await seedFollowUp(otherConversation, 1, 'pending', 'inbound:event:c');
+
+    await runV3HandoffEffect(turn, effect);
+    const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    expect(committed.rows[0]).toMatchObject({
+      state: 'delivery_pending',
+      v3_persisted_conversation_status_code: 'escalation_required',
+      v3_persisted_current_step: 'escalation',
+      v3_persisted_pending_question_key: null,
+    });
+
+    const followUps = await client.query(
+      'SELECT id, estado, metadata FROM follow_ups WHERE id = ANY($1::bigint[]) ORDER BY id',
+      [[pendingFollowUp, erroredFollowUp, sentFollowUp, foreignFollowUp]],
+    );
+    const byId = Object.fromEntries(followUps.rows.map((row) => [row.id, row]));
+    expect(byId[pendingFollowUp].estado).toBe('cancelled');
+    expect(byId[pendingFollowUp].metadata).toMatchObject({ cancel_reason: 'v3_handoff', decision_id: turn.decisionId });
+    expect(byId[erroredFollowUp].estado).toBe('cancelled');
+    expect(byId[sentFollowUp].estado).toBe('sent');
+    expect(byId[foreignFollowUp].estado).toBe('pending');
+
+    // A replayed commit keeps the closure and touches nothing else.
+    const replay = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    expect(replay.rows[0]).toMatchObject({ replayed: true, v3_persisted_conversation_status_code: 'escalation_required' });
+
+    // A new day-1 follow-up for this conversation is no longer eligible.
+    const eligible = await client.query(
+      "SELECT follow_up_is_eligible($1, 'lead_sin_respuesta', $2, $3) AS eligible",
+      [turn.conversationId, turn.conversation.phone_number, sourceNumberId],
+    );
+    expect(eligible.rows[0].eligible).toBe(false);
+  });
+
+  test('a v3 turn without a handoff keeps its pending question and follow-ups', async () => {
+    const turn = await seedTurn({ stateMutations: [], primaryRequest: { goal_id: 'measurements', item_ref: null } });
+    const pendingFollowUp = await seedFollowUp(turn.conversation, 1, 'pending', 'inbound:event:keep');
+    const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    expect(committed.rows[0]).toMatchObject({
+      v3_persisted_conversation_status_code: 'waiting_user',
+      v3_persisted_pending_question_key: 'measurements',
+    });
+    const followUp = await client.query('SELECT estado FROM follow_ups WHERE id = $1', [pendingFollowUp]);
+    expect(followUp.rows[0].estado).toBe('pending');
+  });
+
+  test('a v3 handoff reuses the conversation\'s open handoff instead of creating a second one', async () => {
+    const effect = v3HandoffEffect('reuse-open');
+    const turn = await seedTurn({ effectCommands: [effect], stateMutations: [] });
+    const open = await client.query(`
+      INSERT INTO handoffs (
+        idempotency_key, conversation_id, phone_number, source_number_id, motivo, area, area_label,
+        prioridad, responsable, estado, trigger, escalation_reason, escalation_area, intent
+      ) VALUES ($1, $2, $3, $4, 'v3_authorized_handoff', 'sales', 'Ventas', 'alta', 'Equipo Ventas',
+        'notified', 'v3_effect', 'v3_authorized_handoff', 'sales', 'v3_handoff')
+      RETURNING id
+    `, [`earlier-open-${turn.decisionId}`, turn.conversationId, turn.conversation.phone_number, sourceNumberId]);
+
+    const claimed = await client.query(prepareEffectSql, [turn.decisionId, effect.operation_key,
+      effect.type, effect.payload, effect.payload_digest]);
+    const execute = () => client.query(persistHandoffEffectSql, [effect.operation_key,
+      turn.decisionId, effect.payload_digest, claimed.rows[0].claim_token]);
+    const handoff = await execute();
+    expect(handoff.rows[0].handoff_id).toBe(open.rows[0].id);
+    expect(handoff.rows[0].v3_effect_receipt).toMatchObject({ effect_type: 'handoff', status: 'succeeded' });
+    expect(String(handoff.rows[0].v3_effect_receipt.handoff_id)).toBe(open.rows[0].id);
+    const replay = await execute();
+    expect(replay.rows[0].handoff_id).toBe(open.rows[0].id);
+    await client.query(recordEffectSql, [effect.operation_key, effect.payload_digest,
+      claimed.rows[0].claim_token, 'succeeded', handoff.rows[0].v3_effect_receipt,
+      handoff.rows[0].handoff_id, null]);
+
+    const count = await client.query(
+      'SELECT COUNT(*)::int AS count FROM handoffs WHERE conversation_id = $1 AND deleted_at IS NULL',
+      [turn.conversationId],
+    );
+    expect(count.rows[0].count).toBe(1);
+
+    const committed = await client.query(commitSql, [turn.decisionId, turn.token, turn.snapshotDigest]);
+    expect(committed.rows[0].v3_persisted_conversation_status_code).toBe('escalation_required');
+  });
+
+  test.each([
+    ['resolved', "estado = 'resolved', resolved_at = NOW()"],
+    ['older than 48 hours', "created_at = NOW() - INTERVAL '3 days'"],
+  ])('a v3 handoff opens a new handoff when the earlier one is %s', async (_label, change) => {
+    const effect = v3HandoffEffect(`new-${_label.replace(/\s+/g, '-')}`);
+    const turn = await seedTurn({ effectCommands: [effect], stateMutations: [] });
+    const earlier = await client.query(`
+      INSERT INTO handoffs (
+        idempotency_key, conversation_id, phone_number, source_number_id, motivo, area, area_label,
+        prioridad, responsable, estado
+      ) VALUES ($1, $2, $3, $4, 'v3_authorized_handoff', 'sales', 'Ventas', 'alta', 'Equipo Ventas', 'notified')
+      RETURNING id
+    `, [`earlier-${turn.decisionId}`, turn.conversationId, turn.conversation.phone_number, sourceNumberId]);
+    await client.query(`UPDATE handoffs SET ${change} WHERE id = $1`, [earlier.rows[0].id]);
+
+    const { handoff } = await runV3HandoffEffect(turn, effect);
+    expect(handoff.rows[0].handoff_id).not.toBe(earlier.rows[0].id);
+    const created = await client.query('SELECT idempotency_key FROM handoffs WHERE id = $1', [handoff.rows[0].handoff_id]);
+    expect(created.rows[0].idempotency_key).toBe(effect.operation_key);
   });
 
   test('executes one canonical handoff effect and records its handoff_id receipt once', async () => {
@@ -1388,6 +1551,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
       event.token,
       policy,
       terminalRecovery.decision,
+      null,
     ]);
     expect(prepared.rows[0]).toMatchObject({
       state: 'prepared',
@@ -1462,13 +1626,202 @@ describeIntegration('v3 conversation turn execution saga', () => {
       routeRuleId: 'generated-contingency',
     });
     const prepared = await client.query(prepareContingencySql, [
-      event.inboundEventId, event.token, policy, decision,
+      event.inboundEventId, event.token, policy, decision, null,
     ]);
     expect(prepared.rows[0].decision_matches).toBe(true);
     expect(prepared.rows[0].state).toBe('prepared');
     const committed = await client.query(contingencySql, [decisionId, event.token]);
     expect(committed.rows[0].handoff_receipt.operation_key).toBe(operationKey);
     expect(committed.rows[0].text_body).toBe(decision.reply.text);
+  });
+
+  // n8n prunes executions after about two days, so the application database is
+  // the only durable place that can say why a turn fell back to contingency.
+  const seedContingencyTurn = async ({ providerOutcome = 'accepted', validation = null } = {}) => {
+    const conversation = await seedConversation({ city: 'Santiago', service: 'installation' });
+    const event = await seedEvent(conversation.id, `diagnostic-contingency-${sequence}`);
+    await routeEarly({
+      event,
+      conversationId: conversation.id,
+      phoneNumber: conversation.phone_number,
+      routeRuleId: 'diagnostic-contingency',
+    });
+    const policy = {
+      version: 'ai_prd_turn_policy/v3', policy_digest: `policy-diagnostic-${sequence}`,
+      turn: { id: `turn-diagnostic-${sequence}` },
+    };
+    const recovery = planV3Recovery({
+      policy,
+      validation,
+      repairAttempt: providerOutcome === 'outage' ? 0 : 1,
+      providerOutcome,
+      preTurnState: conversation.qualification_context,
+      expectedSnapshotDigest: `snapshot-diagnostic-${sequence}`,
+    });
+    expect(recovery.action).toBe('contingency');
+    return { conversation, event, policy, decision: recovery.decision };
+  };
+  const persistedDiagnostic = async (inboundEventId) => (await client.query(`
+    SELECT execution.id AS execution_id, execution.last_error, decision.validation_errors,
+      (SELECT COUNT(*)::int FROM advisor_decisions other
+        WHERE other.conversation_id = execution.conversation_id
+          AND other.decision_type = 'v3_system_contingency') AS contingency_decisions
+    FROM conversation_turn_executions execution
+    JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
+    WHERE execution.inbound_event_id = $1
+  `, [inboundEventId])).rows[0];
+  const committedAudits = async (executionId) => (await client.query(`
+    SELECT metadata FROM audit_logs
+    WHERE entity_type = 'conversation_turn_execution' AND entity_id = $1
+      AND event_name = 'v3_contingency_committed'
+  `, [executionId])).rows;
+
+  test('persists the validation codes of an exhausted repair for later diagnosis', async () => {
+    const turn = await seedContingencyTurn({
+      validation: {
+        version: 'conversation_validation_result/v3',
+        valid: false,
+        errors: [{ code: 'policy_digest_mismatch', path: 'policy_digest' }],
+      },
+    });
+    const diagnostic = {
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+      ai_fallback_reason: 'invalid_json',
+      ai_status_code: 200,
+      repair_attempt: 1,
+    };
+    const prepared = await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision, diagnostic,
+    ]);
+    expect(prepared.rows[0]).toMatchObject({ state: 'prepared', replayed: false, decision_matches: true });
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual([
+      'v3_recovery_contingency', 'policy_digest_mismatch', 'reply_claim_ungrounded',
+    ]);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+      ai_fallback_reason: 'invalid_json',
+      ai_status_code: 200,
+      repair_attempt: 1,
+    });
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const audits = await committedAudits(persisted.execution_id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata).toMatchObject({
+      decision_id: turn.decision.decision_id,
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: ['policy_digest_mismatch', 'reply_claim_ungrounded'],
+    });
+  });
+
+  test('persists the provider signal of an outage with no validation codes', async () => {
+    const turn = await seedContingencyTurn({ providerOutcome: 'outage' });
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      { validation_error_codes: [], ai_fallback_reason: 'provider_error', ai_status_code: 503, repair_attempt: 0 },
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual(['v3_recovery_contingency']);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'provider_outage',
+      validation_error_codes: [],
+      ai_fallback_reason: 'provider_error',
+      ai_status_code: 503,
+      repair_attempt: 0,
+    });
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const audits = await committedAudits(persisted.execution_id);
+    expect(audits[0].metadata).toMatchObject({
+      recovery_reason: 'provider_outage',
+      validation_error_codes: [],
+    });
+  });
+
+  test('replaying a diagnosed contingency neither duplicates nor rewrites its record', async () => {
+    const turn = await seedContingencyTurn();
+    const args = [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      { validation_error_codes: ['policy_digest_mismatch'], ai_fallback_reason: null, ai_status_code: null, repair_attempt: 1 },
+    ];
+    await client.query(prepareContingencySql, args);
+    const before = await persistedDiagnostic(turn.event.inboundEventId);
+
+    const replayedPrepare = await client.query(prepareContingencySql, [
+      ...args.slice(0, 4),
+      { validation_error_codes: ['something_else'], ai_fallback_reason: 'provider_error', ai_status_code: 500, repair_attempt: 0 },
+    ]);
+    expect(replayedPrepare.rows[0]).toMatchObject({ replayed: true, decision_matches: true });
+    const afterPrepare = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(afterPrepare).toEqual(before);
+    expect(afterPrepare.contingency_decisions).toBe(1);
+
+    await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    const replayedCommit = await client.query(contingencySql, [turn.decision.decision_id, turn.event.token]);
+    expect(replayedCommit.rows[0].replayed).toBe(true);
+    const audits = await committedAudits(before.execution_id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata.validation_error_codes).toEqual(['policy_digest_mismatch']);
+    expect((await persistedDiagnostic(turn.event.inboundEventId)).validation_errors)
+      .toEqual(before.validation_errors);
+  });
+
+  test('refuses to persist customer text or a raw proposal as a diagnostic', async () => {
+    const turn = await seedContingencyTurn();
+    const customerText = 'Hola, soy Ana, mi dirección es Av. Siempre Viva 742';
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision,
+      {
+        validation_error_codes: [
+          customerText, { nested: customerText }, 'x'.repeat(65), 'reply_claim_ungrounded',
+          ...Array.from({ length: 30 }, (_, index) => `code_${index}`),
+        ],
+        ai_fallback_reason: customerText,
+        ai_status_code: customerText,
+        repair_attempt: customerText,
+        ai_proposal: { reply: { text: customerText } },
+        message_text: customerText,
+      },
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    const serialized = JSON.stringify([persisted.last_error, persisted.validation_errors]);
+    expect(serialized).not.toContain('Ana');
+    expect(serialized).not.toContain('Siempre Viva');
+    expect(Object.keys(persisted.last_error).sort()).toEqual([
+      'ai_fallback_reason', 'ai_status_code', 'code', 'recovery_reason',
+      'repair_attempt', 'validation_error_codes',
+    ]);
+    expect(persisted.last_error.validation_error_codes).toHaveLength(20);
+    expect(persisted.last_error.validation_error_codes[0]).toBe('reply_claim_ungrounded');
+    expect(persisted.validation_errors).toHaveLength(21);
+    expect(persisted.last_error).toMatchObject({
+      ai_fallback_reason: null, ai_status_code: null, repair_attempt: null,
+    });
+  });
+
+  test('a contingency prepared without a diagnostic keeps the legacy shape with nulls', async () => {
+    const turn = await seedContingencyTurn();
+    await client.query(prepareContingencySql, [
+      turn.event.inboundEventId, turn.event.token, turn.policy, turn.decision, null,
+    ]);
+
+    const persisted = await persistedDiagnostic(turn.event.inboundEventId);
+    expect(persisted.validation_errors).toEqual(['v3_recovery_contingency']);
+    expect(persisted.last_error).toEqual({
+      code: 'v3_contingency_selected',
+      recovery_reason: 'repair_exhausted',
+      validation_error_codes: [],
+      ai_fallback_reason: null,
+      ai_status_code: null,
+      repair_attempt: null,
+    });
   });
 
   test('stores one delivery receipt through the legal terminal transition', async () => {

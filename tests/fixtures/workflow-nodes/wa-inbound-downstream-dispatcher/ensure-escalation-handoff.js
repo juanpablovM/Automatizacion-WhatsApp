@@ -96,11 +96,18 @@ const INTENT_TO_MOTIVE = {
   reengagement_detected: 'reengagement', // PRECEDENCIA 5
 };
 
+// Opt-out phrasing lives in shared/customer-opt-out-vocabulary.js. In n8n that
+// file is prepended to this node; under Node it is required.
+const customerIntent = typeof detectOptOut === 'function'
+  ? { detectOptOut }
+  : require('../shared/customer-opt-out-vocabulary.js');
+
 // Motivo por señales de texto del reason de escalamiento (PRD #22 triggers).
 // Ordenado por PRECEDENCIA (primero = mayor precedencia)
 const REASON_TO_MOTIVE = [
   // PRECEDENCIA 1: opt-out/abandono
-  ['opt_out', /no me escribas|escribas mas|dame de baja|baja.*(pas|mensajes|programa)|\bstop\b|no quiero.*mensajes|dej.*escribirme|no me envies|darme de baja|quitarme|no me molestes|opt.?out/i],
+  // Customer phrasing is matched by customerIntent.detectOptOut in motiveFromReason.
+  ['opt_out', /opt.?out/i],
   ['abandoned', /ya no (me )?(interesa|necesito|quiero)|lo pense|estoy con (la )?(otra|competencia)|no voy a (comprar|avanzar)|cerremos/i],
 
   // PRECEDENCIA 2: humano
@@ -138,6 +145,7 @@ const normalizeReason = (value) => String(value ?? '').trim().replace(/\s+/g, ' 
 const motiveFromReason = (reason) => {
   const text = normalizeReason(reason);
   if (!text) return null;
+  if (customerIntent.detectOptOut(text)) return 'opt_out';
   for (const [motive, pattern] of REASON_TO_MOTIVE) {
     if (pattern.test(text)) return motive;
   }
@@ -236,14 +244,31 @@ const routeEscalation = (row) => {
   if (row.escalation_reason === 'loop_detected') candidateMotives.add('loop');
 
   // 6. From opt-out/abandoned detection
-  const optOutPatterns = [/no me escribas|escribas mas|dame de baja|baja.*(pas|mensajes|programa)|\bstop\b|no quiero.*mensajes|dej.*escribirme|no me envies|darme de baja|quitarme|no me molestes|opt.?out/i];
   const abandonedPatterns = [/ya no (interesa|necesito|quiero)|lo pense|estoy con (otra|competencia)|no voy a (comprar|avanzar)|cerremos/i];
-  if (optOutPatterns.some(p => p.test(normalizedText))) candidateMotives.add('opt_out');
+  if (customerIntent.detectOptOut(customerText)) candidateMotives.add('opt_out');
   if (abandonedPatterns.some(p => p.test(normalizedText))) candidateMotives.add('abandoned');
 
   // Resolve to highest precedence motive
   const allCandidates = Array.from(candidateMotives);
   const resolvedMotive = resolvePrecedence(allCandidates);
+
+  // An opt-out closes the conversation and stops the cadence on its own. Nobody
+  // on the team has to act on it, and a handoff for it only sat pending forever
+  // and blocked resetting the number. It still outranks every other motive, so
+  // it is reported as resolved but not escalated, which also keeps the closure
+  // gate from waiting on a handoff that will never exist.
+  if (resolvedMotive === 'opt_out') {
+    return {
+      escalated: false,
+      write: false,
+      motivo: resolvedMotive,
+      routing: null,
+      idempotency_key: null,
+      trigger: rawReason || null,
+      precedence_level: PRECEDENCE_ORDER.indexOf(resolvedMotive) + 1,
+      all_candidate_motives: allCandidates,
+    };
+  }
 
   const routing = HANDOFF_ROUTING[resolvedMotive] || AREA_FALLBACK[area] || DEFAULT_ROUTING;
   const trigger = rawReason || (intent ? `intent:${intent}` : routing.area);

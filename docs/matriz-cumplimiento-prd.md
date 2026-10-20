@@ -465,6 +465,11 @@ de las Unidades 1-9.
 
 ```
 Evolution webhook → WA Inbound Entry (normalize + claim `claim_inbound_event`)
+  → debounce (migración 034, `INBOUND_DEBOUNCE_SECONDS`, default 6, 0 = desactivado):
+       el mensaje del cliente queda en cola; tras la ventana sin mensajes nuevos
+       (Wait + WA Inbound Recovery acotado a la cola del contacto) los textos
+       pendientes se unen con "\n" y forman UN turno (un líder + seguidores,
+       cada mensaje conserva su fila en `messages`)
   → WA Conversation Orchestrator (paso deterministico + AI `ai-lead-qualification`)
   → persiste conversación (estado, auditoría, adjuntos)
   → WA Inbound Downstream Dispatcher

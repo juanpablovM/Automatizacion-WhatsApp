@@ -77,4 +77,25 @@ describe('Build AI Request — real n8n Code node wrapper', () => {
     expect(prompt).toContain('Portezuelo 1502, San Bernardo');
     expect(prompt).toContain('commune, address y la ubicación del proyecto son inaplicables');
   });
+
+  // The model had to echo a 64-char digest by hand. It mis-copied it on both the
+  // first attempt and the repair of a live acceptance turn, so the turn fell to
+  // contingency. Structured output can pin the value: the model cannot emit any
+  // other string, and the validator's equality check keeps its meaning.
+  test('v3 response schema pins policy_digest to this turn on both providers', () => {
+    const source = fs.readFileSync(fixturePath, 'utf8');
+    const digest = 'b'.repeat(64);
+    const turnPolicy = {
+      version: 'ai_prd_turn_policy/v3', policy_digest: digest, facts: [], goals: [],
+      state_authority: { allowed_mutations: [] }, effect_authority: { permissions: [] }, grounding: {},
+    };
+    const input = [{ json: { contract_version: 'v3', turn_policy: turnPolicy } }];
+
+    const chat = runCodeNode(source, input, { AI_DIRECT_API_KEY: 'fake-key-123', AI_DIRECT_API_MODEL: 'test-model' })[0].json;
+    expect(chat.response_schema.properties.policy_digest).toEqual({ type: 'string', enum: [digest] });
+    expect(chat.ai_request.response_format.json_schema.schema.properties.policy_digest.enum).toEqual([digest]);
+
+    const responses = runCodeNode(source, input, { AI_PROVIDER: 'openai', OPENAI_API_KEY: 'fake-key-123' })[0].json;
+    expect(responses.ai_request.text.format.schema.properties.policy_digest.enum).toEqual([digest]);
+  });
 });

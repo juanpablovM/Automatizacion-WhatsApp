@@ -1,5 +1,5 @@
 -- Claim pending handoffs through external_operations.
--- $1 batch size, $2 stale processing seconds.
+-- p1 batch size, p2 stale processing seconds.
 WITH stale AS (
   UPDATE external_operations eo
   SET status = 'unknown',
@@ -94,7 +94,21 @@ SELECT
   cl.attempt_count,
   cl.claim_token,
   cl.reconciliation_required,
-  COALESCE(cl.request_payload->>'no_effect_authorization_consumed', 'false') = 'true' AS no_effect_authorization_consumed
+  COALESCE(cl.request_payload->>'no_effect_authorization_consumed', 'false') = 'true' AS no_effect_authorization_consumed,
+  -- Task 3c.33 (M5): the project location and product the conversation holds,
+  -- for the ClickUp handoff description. Read only; NULL when unknown.
+  NULLIF(BTRIM(COALESCE(
+    (SELECT string_agg(item.value->>'product', ', ' ORDER BY item.ordinality)
+     FROM jsonb_array_elements(
+       CASE WHEN jsonb_typeof(c.qualification_context->'line_items') = 'array'
+         THEN c.qualification_context->'line_items' ELSE '[]'::jsonb END
+     ) WITH ORDINALITY AS item(value, ordinality)
+     WHERE NULLIF(BTRIM(item.value->>'product'), '') IS NOT NULL),
+    c.qualification_context->>'product'
+  )), '') AS project_product,
+  NULLIF(BTRIM(COALESCE(c.qualification_context->>'commune', c.qualification_context->>'location_note')), '') AS project_commune,
+  NULLIF(BTRIM(c.qualification_context->>'address'), '') AS project_address
 FROM claimed cl
 JOIN handoffs h ON h.id = cl.entity_id
+LEFT JOIN conversations c ON c.id = h.conversation_id
 ORDER BY h.id;

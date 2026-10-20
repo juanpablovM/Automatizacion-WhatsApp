@@ -22,7 +22,7 @@
 -- viene a resolver.
 --
 -- Params:
---   $1 clickup_task_id (text), $2 estado ('acknowledged' | 'resolved')
+--   p1 clickup_task_id (text), p2 estado ('acknowledged' | 'resolved')
 -- =============================================================================
 WITH input AS (
   SELECT

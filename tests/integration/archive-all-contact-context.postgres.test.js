@@ -205,7 +205,7 @@ integration('global contact context archive in PostgreSQL', () => {
       last_known_service: null, last_known_city: null, bot_suppressed: false,
       qualification_context: {}, recent_messages: [] });
     const acquire = fs.readFileSync('db/queries/n8n/lead-chat-ownership/01_acquire_ownership_from_clickup.sql', 'utf8');
-    expect((await client.query(acquire, ['old-task', 'new', 'late-history', new Date().toISOString()])).rows[0].outcome).toBe('unknown_task');
+    expect((await client.query(acquire, ['old-task', 'new', 'late-history', new Date().toISOString(), 'en atención', ''])).rows[0].outcome).toBe('unknown_task');
     expect((await client.query('SELECT COUNT(*)::integer count FROM external_operations')).rows[0].count).toBe(3);
   });
 });

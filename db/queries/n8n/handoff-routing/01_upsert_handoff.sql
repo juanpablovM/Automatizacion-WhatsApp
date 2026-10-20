@@ -9,8 +9,14 @@
 -- El estado del handoff (pending/notified/acknowledged/resolved) nunca se
 -- degrada en un upsert posterior.
 --
+-- Task 3c.25: `escalation_already_required` es el recordatorio de una
+-- escalacion que ya existe. Si la conversacion tiene un handoff abierto
+-- (pending/notified/acknowledged) con otra clave, se reutiliza ese handoff
+-- (outcome 'reused_open') en vez de abrir un segundo. Cualquier otro motivo
+-- sigue abriendo su propio handoff.
+--
 -- Params:
--- Params posicionales n8n Postgres v2: $1..$15 (ver queryReplacement del workflow).
+-- Params posicionales n8n Postgres v2: p1..p15 (ver queryReplacement del workflow).
 -- =============================================================================
 WITH input_payload AS (
   SELECT
@@ -36,6 +42,19 @@ existing AS MATERIALIZED (
   JOIN handoffs h ON h.idempotency_key = ip.idempotency_key
   WHERE h.deleted_at IS NULL
 ),
+open_escalation AS MATERIALIZED (
+  SELECT h.id, h.estado
+  FROM input_payload ip
+  JOIN handoffs h ON h.conversation_id = ip.conversation_id
+  WHERE ip.should_write
+    AND ip.trigger = 'escalation_already_required'
+    AND h.idempotency_key <> ip.idempotency_key
+    AND h.estado IN ('pending', 'notified', 'acknowledged')
+    AND h.deleted_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM existing)
+  ORDER BY h.id
+  LIMIT 1
+),
 written AS (
   INSERT INTO handoffs (
     idempotency_key, conversation_id, phone_number, source_number_id,
@@ -49,6 +68,7 @@ written AS (
     ip.intent, 'pending'
   FROM input_payload ip
   WHERE ip.should_write
+    AND NOT EXISTS (SELECT 1 FROM open_escalation)
   ON CONFLICT (idempotency_key) WHERE deleted_at IS NULL
   DO UPDATE SET
     motivo = EXCLUDED.motivo,
@@ -66,10 +86,11 @@ written AS (
 write_outcome AS (
   SELECT
     ip.conversation_id,
-    COALESCE(w.id, e.id) AS handoff_id,
-    COALESCE(w.estado, e.estado) AS handoff_estado,
+    COALESCE(w.id, e.id, o.id) AS handoff_id,
+    COALESCE(w.estado, e.estado, o.estado) AS handoff_estado,
     CASE
       WHEN NOT ip.should_write THEN 'skipped'
+      WHEN o.id IS NOT NULL THEN 'reused_open'
       WHEN e.id IS NULL THEN 'created'
       WHEN w.id IS NOT NULL AND w.estado = 'pending' THEN 'duplicate_skipped'
       ELSE 'updated'
@@ -77,6 +98,7 @@ write_outcome AS (
   FROM input_payload ip
   LEFT JOIN existing e ON TRUE
   LEFT JOIN written w ON TRUE
+  LEFT JOIN open_escalation o ON TRUE
 ),
 audit_entry AS (
   INSERT INTO audit_logs (

@@ -12,6 +12,10 @@ const fixturePath = path.resolve(
   __dirname,
   'fixtures/workflow-nodes/wa-inbound-downstream-dispatcher/ensure-follow-up-cancellation.js',
 );
+const dispatcherWorkflowPath = path.resolve(
+  __dirname,
+  '../n8n/workflows/wa-inbound-downstream-dispatcher.json',
+);
 const sqlPath = path.resolve(
   __dirname,
   '../db/queries/n8n/follow-up-pipeline/05_cancel_pending_follow_ups.sql',
@@ -88,7 +92,9 @@ test('builds one policy identity per target conversation and persisted inbound',
 });
 
 test('the n8n Code-node entrypoint evaluates every item without ambient row state', () => {
-  const source = fs.readFileSync(fixturePath, 'utf8');
+  // Run the synced node: the fixture composed with its shared runtimes.
+  const source = JSON.parse(fs.readFileSync(dispatcherWorkflowPath, 'utf8'))
+    .nodes.find((node) => node.name === 'Ensure Follow-Up Cancellation').parameters.jsCode;
   const executeCodeNode = new Function('items', '$env', source);
   const output = executeCodeNode([
     {
