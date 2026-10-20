@@ -29,6 +29,13 @@ describe('quote follow-up alert lane wiring', () => {
     expect(next('Claim Quote Follow-Up Alerts')).toEqual(['Prepare Quote Follow-Up Notice']);
   });
 
+  test('compose passes every claim setting to n8n with the same defaults', () => {
+    const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+    expect(compose).toContain('LEAD_CHAT_QUOTE_SENT_BATCH_SIZE: ${LEAD_CHAT_QUOTE_SENT_BATCH_SIZE:-20}');
+    expect(compose).toContain('LEAD_CHAT_QUOTE_SENT_SLA_MINUTES: ${LEAD_CHAT_QUOTE_SENT_SLA_MINUTES:-30}');
+    expect(compose).toContain('LEAD_CHAT_QUOTE_SENT_REALERT_HOURS: ${LEAD_CHAT_QUOTE_SENT_REALERT_HOURS:-24}');
+  });
+
   test('the notice is sent through the outbound rail, one execution per alert', () => {
     expect(node('Prepare Quote Follow-Up Notice').parameters).toMatchObject({
       mode: 'runOnceForEachItem', jsCode: fixture('prepare-quote-followup-notice.js'),
