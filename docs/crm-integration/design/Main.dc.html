@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Ventana de la venta con chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#b4540c}a:hover{color:#8a3f08}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#55555c;font-weight:500}
+.field{display:flex;align-items:center;gap:10px;min-height:32px}
+.field>span:first-child{width:110px;flex-shrink:0;color:#55555c;font-size:12.5px}
+.select{flex:1;display:flex;align-items:center;justify-content:space-between;border:1px solid #e3e3e7;border-radius:6px;background:#fff;padding:6px 10px;font-size:12.5px;color:#1c1c1f;min-width:0}
+.row{display:flex;align-items:center;justify-content:space-between;border:1px solid #e6e6e9;border-radius:8px;padding:12px 14px;background:#fff;font-size:13px;font-weight:500;color:#1c1c1f}
+.tab{border:0;background:transparent;font:inherit;font-size:12.5px;color:#55555c;padding:6px 10px;border-radius:6px;cursor:pointer}
+.bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.45;color:#1c1c1f}
+.time{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;color:#6b6b74}
+</style>
+</helmet>
+<div style="font-family: 'Geist', system-ui, sans-serif; color: #1c1c1f; background: #7d7d82; height: 900px; box-sizing: border-box; padding: 24px; display: flex">
+<div style="flex: 1; min-width: 0; background: #ffffff; border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.25); display: flex; flex-wrap: wrap; gap: 20px; padding: 20px; box-sizing: border-box; overflow: hidden">
+
+<!-- Opportunity side -->
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c4600f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1"/></svg>
+<a href="#" style="font-weight: 600; color: #1c1c1f">Sociedad Constructora SPA</a>
+<span style="color: #9a9aa2">/</span>
+<span class="mono" style="color: #55555c">OP-2026-6056</span>
+</div>
+<div style="display: flex; gap: 8px">
+<button style="font: inherit; font-size: 12.5px; font-weight: 600; color: #b4540c; background: #fdf1e6; border: 1px solid #f3cfae; border-radius: 6px; padding: 6px 10px">Producción y entregas</button>
+<button style="font: inherit; font-size: 12.5px; font-weight: 600; color: #c0362c; background: #fdeceb; border: 1px solid #f5c8c4; border-radius: 6px; padding: 6px 10px">Eliminar</button>
+</div>
+</div>
+<h1 style="margin: 0 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -0.01em">Liceo las Condes</h1>
+
+<div style="border: 1px solid #e6e6e9; border-radius: 10px; background: #fafafa; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between"><span class="lbl">Resumen de la oportunidad</span><span style="font-size: 12px; color: #6b6b74">Datos principales</span></div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px">
+<div class="field"><span>Estado</span><div class="select">Nueva Oportunidad<span style="color:#9a9aa2">⌄</span></div></div>
+<div class="field"><span>Vendedor</span><div class="select"><span>Jesus <span style="color:#6b6b74">· por turno</span></span><span style="color:#9a9aa2">⌄</span></div></div>
+<div class="field"><span>Origen</span><div class="select"><span style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:#1f8a52"></span>WhatsApp</span><span style="color:#9a9aa2">⌄</span></div></div>
+<div class="field"><span>Prioridad</span><div class="select"><span style="color:#c0362c">Urgente</span><span style="color:#9a9aa2">⌄</span></div></div>
+<div class="field"><span>Requerimiento</span><div class="select">Instalación<span style="color:#9a9aa2">⌄</span></div></div>
+<div class="field"><span>Tipo de venta</span><div class="select">Instalación<span style="color:#9a9aa2">⌄</span></div></div>
+</div>
+</div>
+
+<div style="border: 1px solid #f3cfae; border-radius: 10px; background: #fffaf5; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c4600f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg>
+Datos capturados por el asistente
+</span>
+<span class="time">Creado automáticamente · 1 oct 09:17</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; font-size: 12.5px">
+<div><div style="color:#6b6b74">Comuna</div><div style="font-weight:500">Las Condes</div></div>
+<div><div style="color:#6b6b74">Modalidad</div><div style="font-weight:500">Con instalación</div></div>
+<div><div style="color:#6b6b74">Fecha requerida</div><div style="font-weight:500">Antes de noviembre</div></div>
+</div>
+<div style="border: 1px solid #efe3d8; border-radius: 8px; background: #fff; overflow: hidden; font-size: 12.5px">
+<div style="display: grid; grid-template-columns: 1fr 100px; padding: 7px 12px; background: #fbf6f1; color: #6b6b74" class="mono"><span>PRODUCTO</span><span style="text-align:right">CANTIDAD</span></div>
+<div style="display: grid; grid-template-columns: 1fr 100px; padding: 8px 12px; border-top: 1px solid #f3ece5"><span>Baldosa táctil MINVU · alerta</span><span class="mono" style="text-align:right">60 m²</span></div>
+<div style="display: grid; grid-template-columns: 1fr 100px; padding: 8px 12px; border-top: 1px solid #f3ece5"><span>Baldosa táctil MINVU · avance</span><span class="mono" style="text-align:right">120 m²</span></div>
+</div>
+</div>
+
+<div class="row"><span>Información del cliente</span><span style="font-size:12px;font-weight:600;color:#b4540c;border:1px solid #f3cfae;background:#fdf1e6;border-radius:6px;padding:4px 8px">Editar ficha del cliente</span></div>
+<div class="row"><span>Área Comercial &amp; Ventas</span><span style="color:#9a9aa2">⌄</span></div>
+<div class="row"><span>Producción y Logística</span><span style="color:#9a9aa2">⌄</span></div>
+<div class="row"><span>Archivos adjuntos</span><span style="color:#9a9aa2">⌄</span></div>
+<div class="row"><span>Cierre y traspaso a operación</span><span class="mono" style="font-size:11.5px;color:#1f8a52;background:#e7f5ed;border-radius:10px;padding:2px 8px">0/6 completos</span></div>
+</div>
+
+<!-- Activity panel with WhatsApp tab -->
+<div style="flex: 1 1 440px; max-width: 500px; min-width: 0; border: 1px solid #e6e6e9; border-radius: 10px; background: #fafafa; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 4px 16px">
+<div style="display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid #e6e6e9; border-radius: 8px; background: #fff">
+<button class="tab" style="display:flex;align-items:center;gap:6px"><span class="lbl" style="color:#3a3a40;font-weight:600">Actividad</span><span class="mono" style="font-size:11px;border:1px solid #e3e3e7;border-radius:10px;padding:0 6px">18</span></button>
+<button class="tab" style="background:#c4600f;color:#fff;font-weight:600;display:flex;align-items:center;gap:6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>WhatsApp<span class="mono" style="background:#fff;color:#c4600f;border-radius:8px;padding:0 6px;font-size:10.5px">1</span></button>
+</div>
+<button aria-label="Cerrar" style="border:0;background:transparent;color:#6b6b74;font-size:16px;cursor:pointer">×</button>
+</div>
+
+<!-- chat header -->
+<div style="margin: 12px 12px 0; background: #fff; border: 1px solid #e6e6e9; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 10px">
+<div style="width: 34px; height: 34px; border-radius: 50%; background: #fdf1e6; color: #b4540c; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12.5px">MR</div>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13.5px; font-weight: 600">Mauricio Rojas</div>
+<div class="mono" style="font-size: 11.5px; color: #6b6b74">+56 9 8765 4321</div>
+</div>
+<span style="font-size: 11.5px; font-weight: 600; color: #b4540c; background: #fdf1e6; border: 1px solid #f3cfae; border-radius: 12px; padding: 3px 9px; display: flex; align-items: center; gap: 6px"><span style="width:6px;height:6px;border-radius:50%;background:#e5781f"></span>Esperando vendedor · 8 min</span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px">
+<button style="flex: 1; font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: #c4600f; border: 0; border-radius: 7px; padding: 10px 12px; min-height: 40px; cursor: pointer">Tomar conversación</button>
+</div>
+<div style="font-size: 11.5px; color: #6b6b74">Al tomarla, el asistente se pausa por 60 min y respondes tú.</div>
+</div>
+
+<!-- messages -->
+<div style="flex: 1; min-height: 0; overflow: hidden; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; justify-content: flex-end">
+<div style="align-self: center" class="time">1 OCT</div>
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px">
+<div class="bubble" style="background:#fff;border:1px solid #e6e6e9;border-bottom-left-radius:4px">Hola, necesito cotizar baldosas podotáctiles para un liceo en Las Condes.</div>
+<span class="time">09:12</span>
+</div>
+<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+<span style="font-size:11px;color:#55555c;display:flex;align-items:center;gap:5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#55555c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4"/></svg>Asistente</span>
+<div class="bubble" style="background:#efeff2;border-bottom-right-radius:4px">¡Hola! ¿Las necesitas con instalación o solo el material?</div>
+<span class="time">09:12</span>
+</div>
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px">
+<div class="bubble" style="background:#fff;border:1px solid #e6e6e9;border-bottom-left-radius:4px">Con instalación. 60 m² de alerta y 120 m² de avance, antes de noviembre.</div>
+<span class="time">09:15</span>
+</div>
+<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+<span style="font-size:11px;color:#55555c;display:flex;align-items:center;gap:5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#55555c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4"/></svg>Asistente</span>
+<div class="bubble" style="background:#efeff2;border-bottom-right-radius:4px">Perfecto, Mauricio. Te derivo con un ejecutivo de ventas para la cotización formal.</div>
+<span class="time">09:17</span>
+</div>
+<div style="align-self: stretch; display: flex; align-items: center; gap: 8px; border: 1px dashed #f0c49c; background: #fffaf5; border-radius: 8px; padding: 8px 10px; font-size: 12px; color: #55555c">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c4600f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+<span style="flex:1">Derivado a Ventas · asignado a <b style="color:#1c1c1f">Jesus</b> por turno</span>
+<span class="time">09:17</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; color: #b4540c; font-size: 11px; font-weight: 600"><span style="flex:1;height:1px;background:#f3cfae"></span>1 MENSAJE NUEVO<span style="flex:1;height:1px;background:#f3cfae"></span></div>
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px">
+<div class="bubble" style="background:#fff;border:1px solid #e6e6e9;border-bottom-left-radius:4px">Ok, quedo atento. ¿Me pueden mandar también la ficha técnica?</div>
+<span class="time">09:25</span>
+</div>
+</div>
+
+<!-- composer (locked while the assistant is in charge) -->
+<div style="margin: 0 12px 12px; border: 1px solid #e6e6e9; border-radius: 10px; background: #f3f3f5; padding: 10px 12px; display: flex; align-items: center; gap: 10px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b6b74" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+<span style="flex: 1; font-size: 12.5px; color: #55555c">Toma la conversación para responder al cliente.</span>
+<button aria-label="Enviar" disabled style="width: 32px; height: 32px; border: 0; border-radius: 7px; background: #e3e3e7; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg></button>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

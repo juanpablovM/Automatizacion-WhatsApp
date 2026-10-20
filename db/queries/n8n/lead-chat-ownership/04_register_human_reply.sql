@@ -16,6 +16,12 @@
 --   p1 lead_id, p2 message_id, p3 replied_at,
 --   p4 inbound_event_id (nullable), p5 processing_token (nullable),
 --   p6 clickup_acquisition_status (default 'in progress')
+--
+-- Migration 037: an ownership released because the customer accepted the
+-- new-quote offer ('customer_new_quote') left its task in the quote-sent status
+-- on purpose. A later seller reply takes the chat back in the same
+-- 'quote_followup' mode and queues no ClickUp reacquisition: the seller's own
+-- status stays untouched.
 -- =============================================================================
 WITH input AS (
   SELECT
@@ -57,6 +63,7 @@ classified AS (
     p.clickup_task_id,
     p.previous_clickup_status,
     p.released_at,
+    p.release_reason,
     p.response_due_at,
     CASE
       WHEN p.released_at IS NULL
@@ -135,11 +142,13 @@ updated_active AS (
 inserted_reacquisition AS (
   INSERT INTO lead_chat_ownerships (
     lead_id, clickup_task_id, previous_clickup_status, acquired_at,
-    last_human_message_id, last_human_reply_at
+    last_human_message_id, last_human_reply_at, sla_mode, quote_followup_since
   )
   SELECT
     c.lead_id, c.clickup_task_id, c.previous_clickup_status, i.replied_at,
-    i.message_id, i.replied_at
+    i.message_id, i.replied_at,
+    CASE WHEN c.release_reason = 'customer_new_quote' THEN 'quote_followup' ELSE 'standard' END,
+    CASE WHEN c.release_reason = 'customer_new_quote' THEN i.replied_at END
   FROM classified c
   CROSS JOIN input i
   WHERE c.outcome = 'late_reply_reacquired'
@@ -182,6 +191,7 @@ reacquire_operation AS (
   CROSS JOIN input i
   JOIN classified c ON c.lead_id = a.lead_id
   WHERE c.outcome = 'late_reply_reacquired'
+    AND c.release_reason IS DISTINCT FROM 'customer_new_quote'
   ON CONFLICT (operation_key) DO NOTHING
   RETURNING id, operation_key
 ),
@@ -225,7 +235,8 @@ audit_entry AS (
       'last_human_message_id', a.last_human_message_id
     ),
     jsonb_build_object(
-      'clickup_reacquire_required', c.outcome = 'late_reply_reacquired',
+      'clickup_reacquire_required', c.outcome = 'late_reply_reacquired'
+        AND c.release_reason IS DISTINCT FROM 'customer_new_quote',
       'clickup_reacquire_operation_key', (
         SELECT operation_key FROM reacquire_operation LIMIT 1
       ),
@@ -243,7 +254,8 @@ SELECT
   a.last_human_message_id,
   a.last_human_reply_at,
   c.outcome,
-  (c.outcome = 'late_reply_reacquired') AS clickup_reacquire_required,
+  (c.outcome = 'late_reply_reacquired'
+    AND c.release_reason IS DISTINCT FROM 'customer_new_quote') AS clickup_reacquire_required,
   (SELECT operation_key FROM reacquire_operation LIMIT 1) AS clickup_reacquire_operation_key,
   i.inbound_event_id,
   TRUE AS own_message_handled

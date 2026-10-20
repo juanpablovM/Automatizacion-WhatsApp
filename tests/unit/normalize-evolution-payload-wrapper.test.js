@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
 const fixturePath = 'tests/fixtures/workflow-nodes/wa-inbound-entry/normalize-evolution-payload.js';
-const source = fs.readFileSync(fixturePath, 'utf8');
+// The node ships with its runtimes prepended (tests/scripts/sync-workflow-nodes.mjs).
+const source = [
+  fs.readFileSync('tests/fixtures/workflow-nodes/shared/inbound-debounce-config.js', 'utf8'),
+  fs.readFileSync(fixturePath, 'utf8'),
+].join('\n\n');
 
 const run = (body, env = { EVOLUTION_WEBHOOK_SECRET: 'secret' }, headers = {}) =>
   new Function('items', '$env', source)([

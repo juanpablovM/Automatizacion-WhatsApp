@@ -300,8 +300,9 @@ describe('v3 canary E2E binding contract', () => {
     const sellerWorkflow = prepareIsolatedV3Workflow(JSON.parse(source(path.join(repositoryRoot, 'n8n/workflows/crm-seller-notification-dispatch.json'))));
     const sellerBuilder = sellerWorkflow.nodes.find((node) => node.name === 'Build Seller Notification');
     const sellerResult = new Function('items', '$env', sellerBuilder.parameters.jsCode)([{ json: {
-      lead_id: 1, clickup_task_id: 'synthetic-task', clickup_user_id: '7001',
+      lead_id: 1, clickup_task_id: 'synthetic-task', clickup_user_id: '7001', phone_number: '15550001111',
     } }], env);
+    expect(sellerResult[0].json.notification_payload.comment_text).toContain('WhatsApp: https://wa.me/15550001111');
     expect(sellerResult[0].json.notification_url).toBe('http://mock-clickup:8083/api/v2/task/synthetic-task/comment');
     expect(() => prepareIsolatedV3Workflow({ nodes: [{ parameters: { jsCode: "fetch('https://unknown-provider.example/send')" } }] })).toThrow(/refuses external embedded URL/);
     for (const file of fs.readdirSync(path.join(repositoryRoot, 'n8n/workflows')).filter((name) => name.endsWith('.json'))) {

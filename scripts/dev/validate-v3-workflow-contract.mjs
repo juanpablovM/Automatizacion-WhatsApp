@@ -8,7 +8,8 @@ const requiredNodes = [
   'Compile V3 Turn Policy', 'Use V3 Contract?', 'Validate And Authorize V3',
   'V3 Proposal Valid?', 'Build V3 Repair', 'Persist V3 Turn Authority',
   'Prepare V3 Execution', 'Prepare V3 Effects', 'V3 Has Pending Effect?',
-  'Execute V3 Lead Effect', 'Persist V3 Handoff Effect', 'Normalize V3 Effect Receipt',
+  'Execute V3 Lead Effect', 'Persist V3 Handoff Effect', 'Persist V3 Technical Sheet Effect',
+  'Normalize V3 Effect Receipt',
   'Commit V3 State And Outbox', 'Commit V3 Contingency', 'Prepare V3 Saga Result',
   'Persist V3 Dispatch?', 'Persist V3 Durable Dispatch', 'Return Conversation Output',
 ];
@@ -26,7 +27,10 @@ const requiredEdges = [
   ['V3 Proposal Valid?', 0, 'Persist V3 Turn Authority'],
   ['V3 Proposal Valid?', 1, 'Build V3 Repair'],
   ['V3 Has Pending Effect?', 1, 'Commit V3 State And Outbox'],
-  ['V3 Effect Is Create Lead?', 1, 'Persist V3 Handoff Effect'],
+  ['V3 Effect Is Create Lead?', 1, 'V3 Effect Is Technical Sheet?'],
+  ['V3 Effect Is Technical Sheet?', 0, 'Persist V3 Technical Sheet Effect'],
+  ['V3 Effect Is Technical Sheet?', 1, 'Persist V3 Handoff Effect'],
+  ['Persist V3 Technical Sheet Effect', 0, 'Normalize V3 Effect Receipt'],
   ['Persist V3 Handoff Effect', 0, 'Normalize V3 Effect Receipt'],
   ['Prepare V3 Saga Result', 0, 'Prepare Conversation Output'],
   ['Prepare Conversation Output', 0, 'Persist V3 Dispatch?'],
@@ -79,6 +83,13 @@ export function validateV3WorkflowContract(workflowDirectory) {
       || persistHandoffNode.alwaysOutputData !== true) {
     throw new Error('v3 default requires visible exact normal-handoff binding failures');
   }
+  // Task 3c.29: same visible-failure binding for the technical-sheet executor.
+  const persistSheetNode = workflow.nodes.find((node) => node.name === 'Persist V3 Technical Sheet Effect');
+  if (persistSheetNode.parameters?.additionalFields?.queryParams
+        !== 'operation_key,decision_id,effect_payload_digest,claim_token'
+      || persistSheetNode.alwaysOutputData !== true) {
+    throw new Error('v3 default requires visible exact technical-sheet binding failures');
+  }
   const durableNode = workflow.nodes.find((node) => node.name === 'Persist V3 Durable Dispatch');
   const canonicalDurableSql = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),
     '../../db/queries/n8n/wa-conversation-orchestrator/18_persist_v3_durable_dispatch.sql'), 'utf8');
@@ -100,6 +111,21 @@ export function validateV3WorkflowContract(workflowDirectory) {
   }
   if (!dispatcher.connections?.['V3 Delivery Result?']?.main?.[0]?.some((edge) => edge.node === 'Record V3 Delivery Receipt')) {
     throw new Error('v3 default requires connected downstream delivery receipt');
+  }
+  // Task 3c.29: technical-sheet documents go out after the reply receipt, and
+  // that lane must still end in the outbound completion.
+  const laneEdges = [
+    ['Record V3 Delivery Receipt', 0, 'Load V3 Technical Sheet Deliveries'],
+    ['Load V3 Technical Sheet Deliveries', 0, 'V3 Technical Sheet Deliveries?'],
+    ['V3 Technical Sheet Deliveries?', 0, 'Execute Technical Sheet Outbound'],
+    ['V3 Technical Sheet Deliveries?', 1, 'Technical Sheet Lane Complete'],
+    ['Execute Technical Sheet Outbound', 0, 'Technical Sheet Lane Complete'],
+    ['Technical Sheet Lane Complete', 0, 'Outbound Lane Complete'],
+  ];
+  for (const [from, branch, to] of laneEdges) {
+    if (!dispatcher.connections?.[from]?.main?.[branch]?.some((edge) => edge.node === to)) {
+      throw new Error(`v3 default requires the technical-sheet document lane: ${from}[${branch}] -> ${to}`);
+    }
   }
 }
 

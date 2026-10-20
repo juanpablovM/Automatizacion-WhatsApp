@@ -71,8 +71,8 @@ function buildV3ContingencyDecision({ policy, reason, expectedSnapshotDigest }) 
     recovery_reason: String(reason || 'terminal_v3_failure'),
   };
   const replyText = reason === 'no_progress_commercial_question_loop'
-    ? 'No quiero hacerte repetir lo mismo. Registré el caso para revisión por una persona del equipo.'
-    : 'No pude completar la gestión automática. Derivé el caso al equipo para revisión.';
+    ? 'No quiero hacerte repetir lo mismo.\n\nRegistré el caso para revisión por una persona del equipo.'
+    : 'No pude completar la gestión automática.\n\nDerivé el caso al equipo para revisión.';
   const decision = {
     version: 'system_contingency_decision/v3',
     decision_id: decisionId,

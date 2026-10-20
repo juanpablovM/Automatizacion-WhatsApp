@@ -27,6 +27,7 @@ backups/
 # Datos operativos privados
 db/seeds/*_real.sql
 db/seeds/private/
+fichas_tecnicas/
 
 # n8n
 .n8n/
