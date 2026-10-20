@@ -38,7 +38,7 @@ describe('quote follow-up alert lane wiring', () => {
 
   test('the notice is sent through the outbound rail, one execution per alert', () => {
     expect(node('Prepare Quote Follow-Up Notice').parameters).toMatchObject({
-      mode: 'runOnceForEachItem', jsCode: fixture('prepare-quote-followup-notice.js'),
+      mode: 'runOnceForAllItems', jsCode: fixture('prepare-quote-followup-notice.js'),
     });
     expect(next('Prepare Quote Follow-Up Notice')).toEqual(['Send Quote Follow-Up Notice']);
     const send = node('Send Quote Follow-Up Notice');
@@ -68,13 +68,37 @@ describe('quote follow-up alert lane wiring', () => {
 });
 
 describe('quote follow-up code nodes as n8n runs them', () => {
-  test('the prepare node returns one item for its $json', () => {
-    const out = new Function('$json', fixture('prepare-quote-followup-notice.js'))({
-      ownership_id: 1, quote_alert_message_id: 2, clickup_task_id: 't', clickup_status: 'cotización enviada',
-      seller_name: 'Juan Pablo (Pruebas)', waiting_minutes: 31, customer_messages: ['hola'],
-    });
-    expect(out.json.response_kind).toBe('quote_followup_notice');
-    expect(out.json.response_text).toContain('Juan Pablo');
+  const runPrepare = (rows) => new Function('items', fixture('prepare-quote-followup-notice.js'))(
+    rows.map((json) => ({ json })),
+  );
+  const claimedRow = (overrides = {}) => ({
+    ownership_id: 1, quote_alert_claim_token: 'tok-1', quote_alert_message_id: 2, conversation_id: 9,
+    clickup_task_id: 't', clickup_status: 'cotización enviada', seller_name: 'Juan Pablo (Pruebas)',
+    waiting_minutes: 31, customer_messages: ['hola'], ...overrides,
+  });
+
+  test('the prepare node returns one notice per claimed alert', () => {
+    const out = runPrepare([claimedRow()]);
+    expect(out).toHaveLength(1);
+    expect(out[0].json.response_kind).toBe('quote_followup_notice');
+    expect(out[0].json.response_text).toContain('Juan Pablo');
+  });
+
+  // n8n's Postgres node answers a claim with zero rows with one { success: true }
+  // item. Production sent it to WA - Outbound Messages every minute
+  // ("requiere conversation_id") until the prepare node dropped it.
+  test('an empty claim reaches nothing downstream', () => {
+    expect(runPrepare([{ success: true }])).toEqual([]);
+  });
+
+  test('only rows the claim actually took become notices', () => {
+    const out = runPrepare([
+      claimedRow({ ownership_id: 1, quote_alert_claim_token: 'a' }),
+      { success: true },
+      claimedRow({ ownership_id: 2, quote_alert_claim_token: '' }),
+      claimedRow({ ownership_id: 3, quote_alert_claim_token: 'c' }),
+    ]);
+    expect(out.map((item) => item.json.ownership_id)).toEqual([1, 3]);
   });
 
   test('the comment node pairs each outbound result with its prepared alert', async () => {
