@@ -11,7 +11,11 @@ JOIN advisor_decisions decision ON decision.id = execution.advisor_decision_id
 JOIN inbound_events event ON event.id = execution.inbound_event_id
 WHERE execution.inbound_event_id = $1::BIGINT
   AND execution.decision_id = decision.output_payload->>'decision_id'
-  AND decision.output_payload->>'version' = 'validated_conversation_decision/v3'
+  -- Slice 2a (design.md D6), dark: v3.1 decisions accept the same read
+  -- boundary as v3; the artifact version is the only thing that differs.
+  AND decision.output_payload->>'version' IN (
+    'validated_conversation_decision/v3', 'validated_conversation_decision/v3.1'
+  )
   AND execution.state IN (
     'effects_pending', 'reconciliation_required', 'ready_to_commit',
     'delivery_pending', 'delivered'
