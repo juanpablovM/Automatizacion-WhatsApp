@@ -197,6 +197,21 @@ describe('Build AI Request — the v3.1 prompt is derived from v3, not retyped',
     expect(v3Prompt).not.toContain('los sábados de 8:00 a 14:00');
     expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
   });
+  // Live test 2026-10-20 (s13): "¿Qué formas de pago aceptan?" was escalated to
+  // an executive, and warranty and invoice questions got no answer. v3.1 never
+  // sends faq_entries to the model, so it states the owner-validated answers.
+  test('v3.1 answers payment methods, warranty and invoicing', () => {
+    const v31Prompt = systemPromptFor('ai_prd_turn_policy/v3.1');
+    const v3Prompt = systemPromptFor('ai_prd_turn_policy/v3');
+
+    expect(v31Prompt).toContain('transferencia bancaria, tarjetas de débito, tarjetas de crédito y efectivo');
+    expect(v31Prompt).toContain('Orden de Compra según condiciones');
+    expect(v31Prompt).toContain('12 meses contra defectos de fabricación');
+    expect(v31Prompt).toContain('No cubre mal uso, instalación incorrecta ni desgaste natural');
+    expect(v31Prompt).toContain('RUT, razón social, giro y dirección');
+    expect(v3Prompt).not.toContain('12 meses contra defectos de fabricación');
+    expect(v3Prompt).toBe(GOLDEN_V3_PROMPT);
+  });
   // Live production 2026-10-14 (conversation 494): "Son unos 60 m2 para un
   // estacionamiento" produced a use_case observation with no state_mutation,
   // although use_case set was authorized, so the lead lost "Uso/proyecto".
