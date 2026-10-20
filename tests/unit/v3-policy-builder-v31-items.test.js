@@ -69,10 +69,11 @@ describe('buildV3PolicyInput — v3.1 item facts/goals/authority gate (2a.21/2a.
   test('version: v3.1 marks line_items resolved only when every item has product and quantity', () => {
     const resolvedInput = buildV3PolicyInput(row({
       qualification_context: {
-        line_items: [{ item_id: 'li_a', product: 'Adoquín', quantity: 10, measurements: null, catalog_ref: null, requested_label: null }],
-        line_items_projection: { product: 'Adoquín', quantity: 10, measurements: null },
+        // Task 3c.33 (M3): a resolved quantity carries its unit.
+        line_items: [{ item_id: 'li_a', product: 'Adoquín', quantity: '10 m²', measurements: null, catalog_ref: null, requested_label: null }],
+        line_items_projection: { product: 'Adoquín', quantity: '10 m²', measurements: null },
         line_items_schema: 'line_items/v1',
-        product: 'Adoquín', quantity: 10, measurements: null,
+        product: 'Adoquín', quantity: '10 m²', measurements: null,
       },
     }), { version: 'v3.1' });
     const unresolvedInput = buildV3PolicyInput(row({

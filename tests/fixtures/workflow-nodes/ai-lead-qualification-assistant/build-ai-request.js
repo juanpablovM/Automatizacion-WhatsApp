@@ -363,9 +363,13 @@ if (usesV3Contract) {
   // slots under the 10-item cap (line_items_limit_exceeded), so the full
   // candidate set is still closed and known ahead of the call.
   // ---------------------------------------------------------------------
-  const ITEM_FACT_ID_RE_V31 = /^fact:item:([^:]+):(product|quantity|measurements)$/;
+  // Task 3c.33 (M1): v3.1 items also carry the chosen technical-sheet
+  // `variant` (ungrounded free text, validated against variant_options).
+  const ITEM_FACT_ID_RE_V31 = /^fact:item:([^:]+):(product|quantity|measurements|variant)$/;
   const MAX_LINE_ITEMS_V31 = 10;
-  const ITEM_MUTATION_FIELDS_V31 = new Set(['product', 'quantity', 'measurements']);
+  const ITEM_MUTATION_FIELDS_V31 = new Set(['product', 'quantity', 'measurements', 'variant']);
+  const observationConceptsV31 = [...observationConcepts, 'variant'];
+  const ungroundedAllowedConceptsV31 = observationConceptsV31.filter((concept) => !groundedConcepts.has(concept));
   const policyFactsV31 = Array.isArray(turnPolicy.facts) ? turnPolicy.facts : [];
   const existingLineItemIdsV31 = uniqueStrings(policyFactsV31
     .map((fact) => ITEM_FACT_ID_RE_V31.exec(safe(fact?.fact_id)))
@@ -407,9 +411,9 @@ if (usesV3Contract) {
       groundingRef: { type: 'string', enum: uniqueStrings(entries.map((entry) => entry.ref)) },
     }));
   }
-  if (ungroundedAllowedConcepts.length > 0) {
+  if (ungroundedAllowedConceptsV31.length > 0) {
     observationVariantsV31.push(observationSchemaV31({
-      concept: { type: 'string', enum: ungroundedAllowedConcepts },
+      concept: { type: 'string', enum: ungroundedAllowedConceptsV31 },
       normalizedValue: normalizedValueSchema,
       groundingRef: { type: 'null' },
     }));
@@ -437,7 +441,7 @@ if (usesV3Contract) {
       }));
       continue;
     }
-    if (!['set', 'replace'].includes(entry.operation) || !observationConcepts.includes(entry.concept)
+    if (!['set', 'replace'].includes(entry.operation) || !observationConceptsV31.includes(entry.concept)
       || typeof entry.field !== 'string' || entry.field.length === 0) continue;
     if (ITEM_MUTATION_FIELDS_V31.has(entry.field)) {
       if (entry.operation === 'set') {
@@ -497,6 +501,57 @@ if (usesV3Contract) {
       ],
     },
   };
+  // design.md's validator rules table pins `catalog_resolution_clarification_required`
+  // to a literal `primary_request={goal_id:'product', item_ref}` (and
+  // `item_target_required`'s repair instruction reuses `goal_id:<field>` for
+  // quantity/measurements too), but `primaryRequestGoalIds` above only ever
+  // contains real policy goal ids plus `final_confirmation` — it never
+  // contains an item concept name. Locked to `primaryRequestGoalIds` only when
+  // the repair locks primary_request.goal_id, so that lock is never widened.
+  // Task 3c.18 (live 2026-09-28): a repair without that lock (for example
+  // distributive_assignment_unconfirmed, which demands goal_id "quantity")
+  // keeps the first-pass enum; locking every repair to the quote-level list
+  // left the item goals unrepresentable and the model answered with "name".
+  // Task 3c.29: when the policy exposes technical-sheet PDFs (and so permits
+  // send_technical_sheet), each effect_request carries sheet_ref (one listed
+  // ref, or null for every other effect) and primary_request may be the
+  // technical_sheet_offer goal whose item_ref is the offered sheet's ref.
+  // Without exposed sheets the v3.1 schema is exactly the previous one.
+  const technicalSheetRefsV31 = uniqueStrings((Array.isArray(turnPolicy.grounding?.catalog) ? turnPolicy.grounding.catalog : [])
+    .flatMap((entry) => (Array.isArray(entry?.technical_sheet_files) ? entry.technical_sheet_files : []))
+    .map((file) => safe(file?.ref))
+    .filter((ref) => /^sheet:[a-z0-9-]+$/.test(ref)));
+  const sendsTechnicalSheetsV31 = allowedEffectTypes.includes('send_technical_sheet') && technicalSheetRefsV31.length > 0;
+  const effectRequestsSchemaV31 = sendsTechnicalSheetsV31
+    ? {
+        type: 'array',
+        items: {
+          ...effectRequestItemSchema,
+          required: [...effectRequestItemSchema.required, 'sheet_ref'],
+          properties: {
+            ...effectRequestItemSchema.properties,
+            sheet_ref: { type: ['string', 'null'], enum: [...technicalSheetRefsV31, null] },
+          },
+        },
+      }
+    : effectRequestsSchema;
+  const primaryRequestItemRefSchemaV31 = sendsTechnicalSheetsV31
+    ? { type: ['string', 'null'], enum: [...itemRefCandidatesV31, ...technicalSheetRefsV31, null] }
+    : nullableItemRefSchemaV31;
+  // Task 3c.33 (M2): a lock may name item goals as "<field>@<item_ref>"
+  // (final_confirmation_not_ready with variant@li_x); keep those item goals.
+  const lockedItemGoalIdsV31 = uniqueStrings(repairPrimaryGoalErrors
+    .flatMap((error) => (Array.isArray(error.allowed_values) ? error.allowed_values : []))
+    .map((value) => /^([a-z_]+)@/.exec(String(value))?.[1])
+    .filter((goalId) => ITEM_MUTATION_FIELDS_V31.has(goalId)));
+  const primaryRequestGoalIdsV31 = repairPrimaryGoalErrors.length > 0
+    ? (lockedItemGoalIdsV31.length > 0
+      ? uniqueStrings([...repairAllowedPrimaryGoalIds, ...lockedItemGoalIdsV31])
+      : primaryRequestGoalIds)
+    : uniqueStrings([
+      ...primaryRequestGoalIds, ...ITEM_MUTATION_FIELDS_V31,
+      ...(sendsTechnicalSheetsV31 ? ['technical_sheet_offer'] : []),
+    ]);
   const v31ResponseSchema = {
     type: 'object',
     additionalProperties: false,
@@ -515,14 +570,14 @@ if (usesV3Contract) {
         additionalProperties: false,
         required: ['goal_id', 'item_ref'],
         properties: {
-          goal_id: { type: 'string', enum: primaryRequestGoalIds },
-          item_ref: nullableItemRefSchemaV31,
+          goal_id: { type: 'string', enum: primaryRequestGoalIdsV31 },
+          item_ref: primaryRequestItemRefSchemaV31,
         },
       },
       catalog_resolutions: catalogResolutionsSchemaV31,
       observations: observationsSchemaV31,
       state_mutations: stateMutationsSchemaV31,
-      effect_requests: effectRequestsSchema,
+      effect_requests: effectRequestsSchemaV31,
     },
   };
   const activeResponseSchema = usesV31Contract ? v31ResponseSchema : v3ResponseSchema;
@@ -665,28 +720,248 @@ if (usesV3Contract) {
   const V3_PROMPT_LINES = v3SystemPrompt.split('\n');
   const V31_REPLACED_RULE = 'Con catalog_resolution ambiguous o unsupported no emitas ninguna observación ni mutación de product en ese turno, aunque el mensaje también nombre otro producto del catálogo (por ejemplo "pandereta con alambre de púas"): usa primary_request.goal_id=product para aclarar primero el producto dudoso, menciona en reply_text que también tomaste nota del otro producto, y regístralo en un turno posterior. Sí puedes registrar la cantidad, las medidas y la comuna que el cliente dio.';
   const V31_ITEM_SCOPED_REPLACEMENT_RULE = 'Con catalog_resolution ambiguous o unsupported, el corte es por ítem, no por todo el turno: no emitas observación ni mutación de product para ESE ítem (usa primary_request.goal_id=product con el item_ref de ese ítem para aclararlo), pero sí registra normalmente el product de cualquier otro ítem del mismo mensaje que sí coincida inequívocamente con el catálogo (por ejemplo, en "pandereta con alambre de púas", registra el alambre de púas ahora y deja pendiente solo la pandereta). También puedes registrar la cantidad, las medidas y cualquier dato de nivel de cotización (por ejemplo la comuna) que el cliente haya dado, incluso para el ítem ambiguo.';
-  const V31_FINAL_CONFIRMATION_RULE = 'Cuando pidas final_confirmation con más de un ítem, resume con una línea "•" por ítem indicando su cantidad y, si existen, sus medidas, y luego una línea por cada dato de nivel de cotización (por ejemplo comuna, modalidad); no mezcles los datos de un ítem con los de otro.';
+  const V31_FINAL_CONFIRMATION_RULE = 'Cuando pidas final_confirmation con más de un ítem, resume con una línea "•" por ítem indicando su cantidad y, si existen, sus medidas, dentro de la sección *Productos*, y luego los datos de nivel de cotización (por ejemplo comuna, dirección, modalidad) en su sección del resumen; no mezcles los datos de un ítem con los de otro.';
   const V31_ITEM_REF_GUIDANCE_RULE = 'Toda observación o mutación de product, quantity o measurements debe declarar item_ref. Usa el item_ref existente que te entrega la policy para un ítem ya registrado; para un ítem nuevo de este turno, usa un identificador simple y consistente como new:1, new:2 (uno distinto por ítem) y reutilízalo en todas las observaciones y mutaciones de ese mismo ítem dentro de este mismo turno. Los datos que no son de ítem (por ejemplo commune) siempre llevan item_ref=null.';
   const V31_CORRECTION_TARGET_RULE = 'Si el cliente corrige la cantidad, las medidas o el producto de un ítem y la cotización ya tiene dos o más ítems, y no queda claro a cuál se refiere, usa item_ref=null en esa mutación y pregunta explícitamente a cuál ítem se refiere, nombrando los productos o descripciones de cada ítem en reply_text; no adivines ni copies el dato al ítem equivocado.';
+  // Task 3c.33 (QA review of conversations 387-393, 2026-09-30).
+  const V31_VARIANT_RULE = 'Algunas entradas product del grounding traen variant_options: las variantes (formato, tipo o medida) de ese producto según su ficha técnica, que cambian la cotización. Si el cliente elige una (por ejemplo "solera tipo zarpa"), regístrala en su ítem con una observación variant y su mutación set (o replace si ya tenía una), con item_ref de ese ítem y normalized_value igual exactamente a una de sus variant_options; nunca la dejes solo en reply_text ni la registres en otro campo. Si un ítem de la cotización tiene un producto con variant_options y todavía no tiene variante elegida, pregúntale cuál necesita apenas lo nombra, antes de cualquier otro dato (cantidad, alcance, comuna, dirección, terreno o acceso) y antes de pedir final_confirmation, nombrando las opciones, con primary_request.goal_id=variant y el item_ref de ese ítem; si hay varios productos sin variante, pregunta la de uno por mensaje, en el orden en que el cliente los nombró. Si ya nombraste todas las opciones de variante en tu mensaje anterior, no repitas la lista completa: recuérdale la pregunta en breve (por ejemplo "¿Cuál de los tipos de solera que te mencioné prefieres?"). Un producto sin variant_options no necesita variante: no la preguntes.';
+  const V31_QUANTITY_UNIT_RULE = 'Nunca registres una cantidad sin unidad: si el cliente responde solo un número (por ejemplo "33") y la unidad no es evidente por lo que preguntaste, pregúntale si son unidades, m² o metros lineales antes de registrarla. Usa la unidad "unidades" solo si el cliente habla de unidades o responde una pregunta que pedía unidades.';
+  const V31_SUMMARY_ONCE_RULE = 'Si tu mensaje anterior ya mostró el resumen completo de la cotización y en este turno no cambió ningún dato, no vuelvas a enviar el resumen completo: responde brevemente lo que el cliente pregunta y vuelve a pedir la confirmación en una sola línea al final (por ejemplo "¿Confirmas que el resumen que te envié está correcto?"), con primary_request.goal_id=final_confirmation. Muestra el resumen de nuevo solo si cambió un dato o si el cliente lo pide.';
+  const V31_INTERNAL_DOCUMENTS_RULE = 'Nunca menciones documentos internos ni sus nombres de archivo: no hables de "fichas editables", "la ficha disponible", versiones de fichas ni archivos (.pdf, .docx, .xlsx). Responde con el dato o di que una ejecutiva de Hormiglass te lo indica; solo puedes nombrar la ficha técnica del producto cuando la ofreces o la envías.';
+  const V31_COMMUNE_RULE = 'commune debe ser una de las 346 comunas de Chile. Si el cliente nombra una provincia, una región, una isla o un sector que no es una comuna (por ejemplo "Chiloé"), no la registres como commune: pregúntale amablemente en qué comuna es el proyecto o la entrega (por ejemplo "¿En qué comuna de Chiloé sería? Por ejemplo, Castro o Ancud."), con primary_request.goal_id=commune.';
+  // Task 3c.34 (owner rule 2026-10-09): the delivery/installation area.
+  const V31_SERVICE_AREA_RULE = 'Hacemos despachos e instalaciones solo en las comunas de la Región Metropolitana y en las comunas de Viña del Mar, Valparaíso, Concepción y Rancagua. El retiro en fábrica (San Bernardo) de material sin instalación se acepta desde cualquier comuna. Si la cotización lleva despacho o instalación y la comuna es una comuna de Chile fuera de esa zona, no sigas con esa cotización: no preguntes dirección, terreno, acceso de camión, retiro de escombros ni restricciones de acceso, no pidas final_confirmation y no pidas create_lead. Díselo con empatía, nombrando su comuna, por ejemplo "Lamentablemente por ahora no alcanzamos a llegar a *Temuco*: hacemos despachos e instalaciones en la *Región Metropolitana*, *Viña del Mar*, *Valparaíso*, *Concepción* y *Rancagua*.". Si es solo material, ofrece el retiro: "Si te sirve, puedes retirar el material en nuestra fábrica en San Bernardo.", y pregunta si quiere retirarlo, con primary_request.goal_id=fulfillment. Si incluye instalación, nunca ofrezcas instalación con retiro (la instalación requiere despacho), pero cuéntale la alternativa real: "Si te sirve, podemos cotizarte solo el material, sin instalación, para que lo retires en nuestra fábrica en San Bernardo.", sin preguntar y con primary_request null. Si el cliente elige retirar el material en fábrica, registra fulfillment=pickup y sigue la cotización normalmente; si la cotización llevaba instalación y el cliente acepta llevar solo el material, registra service_scope=material y fulfillment=pickup. Del mensaje con la comuna fuera de la zona solo quedan guardados los productos, sus cantidades y el nombre del cliente: la comuna, el servicio, la instalación y el despacho no se guardan, así que al aceptar registra service_scope y fulfillment con operation set (replace solo si ya existe ese fact). Si el cliente, en vez de aceptar, pide otra cosa (por ejemplo otro producto), la cotización parte de cero con lo nuevo: registra lo nuevo como un ítem nuevo y quita con remove_item los productos que había pedido para esa comuna, salvo que diga que también los quiere.';
   const V31_PANDERETA_EXAMPLE_RULE = 'Ejemplo de catalogación por ítem: si el cliente dice "pandereta" y luego, al aclarar, confirma un producto del grounding (por ejemplo Cierros de Hormigón), usa matched con ese grounding_ref exacto para ese ítem; no asumas otro producto similar del catálogo (por ejemplo Adoquín) sin evidencia explícita del cliente.';
+  // Slice 3c follow-up (live A/B round 2, design.md's spec: "the system MUST
+  // NOT copy one item's quantity or measurements to another item without
+  // explicit evidence for that item"): 3 of 20 live first-turn proposals and
+  // 1 of 6 valid corrections attached a quantity/measurement to the wrong
+  // item, or split one mentioned product into two items. Task 3c.7's
+  // validator rule only catches the duplicated-evidence shape of the first
+  // defect; these two rules are v3.1-only additions targeting the shapes the
+  // validator cannot detect deterministically (a single, unambiguous span
+  // moved to the wrong item, or one product split across two items).
+  const V31_NO_CROSS_ITEM_TRANSFER_RULE = 'Nunca copies ni traslades una cantidad o medida de un ítem a otro: cada cantidad y cada medida se registra solo en el ítem cuya evidencia la describe en este mismo mensaje, aunque otro ítem también la necesite. Un producto mencionado una sola vez en el mensaje es un solo ítem: no lo dividas en dos ítems distintos aunque registres su cantidad y sus medidas en observaciones separadas.';
+  // Live production 2026-09-28: after "¿cuántos metros necesitas de alambre
+  // concertina y de alambre de púas?" the customer answered "500 metros de
+  // cada uno" and the model set 500 m only on the concertina item. The
+  // validator now accepts one distributive quantity quote on several items
+  // (task 3c.16); this v3.1-only rule records it on each item it refers to,
+  // without weakening the no-transfer rule above. Task 3c.17 extends it to
+  // measurements and mirrors the validator's limits: only items missing the
+  // field, only the named items, and an item-assignment question instead of
+  // final_confirmation/create_lead when no item is named.
+  const V31_DISTRIBUTIVE_QUANTITY_RULE = 'Una cantidad o medida explícitamente distributiva (por ejemplo "500 metros de cada uno", "2 metros de alto cada uno", "cada uno", "para ambos", "para los dos", "lo mismo para los dos", "X de cada producto") se registra con ese mismo valor en cada ítem al que se refiere: los ítems que nombra el mensaje o, si no nombra ninguno, los ítems de la pregunta que el cliente está respondiendo. Emite una observación y una mutación set por cada ítem, cada una con su item_ref y la misma evidence_quote que incluye la expresión distributiva. Esto no es copiar entre ítems: el cliente la dio explícitamente para cada uno. Solo completa ítems que aún no tienen ese dato: nunca reemplaces con ella un valor ya registrado; para cambiarlo, el cliente debe nombrar ese producto. Si el mensaje nombra productos, aplícala solo a los ítems nombrados. Si no nombra ninguno y la aplicas a dos o más ítems, regístrala igual, pero en ese turno no pidas final_confirmation ni emitas create_lead: pide al cliente que confirme a qué ítems corresponde, nombrándolos (por ejemplo "¿Los 500 metros son para la concertina y para el alambre de púas?"), con primary_request.goal_id igual a ese campo (quantity o measurements) y el item_ref de uno de esos ítems. Sin esa expresión explícita, sigue aplicando la regla de no copiar ni trasladar cantidades ni medidas.';
+  const V31_CORRECTION_NAMED_ITEM_RULE = 'Si el cliente corrige un dato y nombra el producto o la descripción de un ítem existente, esa corrección se aplica únicamente a ese ítem, aunque la cotización tenga otros ítems; no traslades el dato corregido a un ítem distinto del nombrado.';
+  // Live canary 2026-09-27 (final-confirmation turn, "Sí, está todo
+  // correcto"): the model emitted a catalog_resolutions entry citing "todo"
+  // for an item whose product was already a known fact. The validator rejects
+  // it (and keeps rejecting it); this v3.1-only rule keeps the model from
+  // re-resolving an already-known item when the customer names no product.
+  const V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE = 'catalog_resolutions solo clasifica un producto que el cliente nombra en este mismo mensaje. Una confirmación, un "sí", un "todo correcto" o cualquier respuesta que no nombre un producto lleva catalog_resolutions=[]; nunca vuelvas a resolver ni reclasificar un ítem cuyo product ya está registrado, salvo que el cliente nombre en este mensaje un producto para ese ítem.';
+  // Live A/B 2026-09-28 (pandereta-live-then-wire-correction): on "Corrección:
+  // el alambre de púas son 300 ml, no 500 ml" the model emitted replace for
+  // the wire item's quantity, which had never been recorded, citing a fact id
+  // that does not exist. The validator rejects it (and keeps rejecting it);
+  // this v3.1-only rule steers a never-recorded item value to set.
+  const V31_REPLACE_EXISTING_FACT_RULE = 'Usa replace solo para cambiar un valor que ya existe como fact, con su fact_id exacto en replaces_fact_id. Si el ítem todavía no tiene valor para ese campo (product, quantity o measurements), usa set con replaces_fact_id=null en ese item_ref, aunque el cliente lo llame corrección.';
+  // Live production 2026-09-28 (conversation 347): "pandereta ... con
+  // concertina y alambre pua" produced matched product observations for both
+  // wires but no product state_mutation, so the two products vanished from the
+  // lead. The validator now rejects that shape (item_product_not_recorded);
+  // this v3.1-only rule makes every requested product its own recorded item.
+  const V31_EVERY_PRODUCT_RECORDED_RULE = 'Cada producto que el cliente pide (incluidos accesorios como alambres o concertina mencionados "con" otro producto) es su propio ítem y lleva su state_mutation set de product con su item_ref, referenciando su observación; nunca dejes una observación de product sin su mutación. La única excepción es un ítem con catalog_resolution ambiguous o unsupported, cuyo product queda pendiente de aclarar.';
+  // Task 3c.26: a removed product is never re-added on a generic word.
+  // Conversation 494 (2026-10-14): the use_case observation came without its mutation.
+  const V31_USE_CASE_RULE = 'Si el cliente dice para qué es el material o el proyecto (por ejemplo "para un estacionamiento", "para el patio de mi casa" o "para una piscina"), regístralo con una observación use_case y su state_mutation autorizada de use_case, con item_ref null; nunca dejes una observación de use_case sin su mutación. Regístralo solo cuando el cliente lo diga: nunca preguntes por el uso ni lo pidas como primary_request.';
+  // Live production 2026-10-14: v3.1 never sends faq_entries to the model, so
+  // it answered "no tengo confirmado" to hours questions. Hours from hormiglass.cl.
+  const V31_BUSINESS_HOURS_RULE = 'Si el cliente pregunta por el horario de atención, si atienden un día o a qué hora abren o cierran, responde con el horario publicado: "Atendemos de lunes a martes de 8:00 a 13:00 y de 14:00 a 18:00, de miércoles a viernes de 8:00 a 13:00 y de 14:00 a 17:00, y los sábados de 8:00 a 14:00. Domingos y festivos no atendemos, pero puedes dejar tu consulta por WhatsApp y te responderemos el siguiente día hábil." Responde solo la parte que pregunta, sin registrar observaciones ni mutaciones por la pregunta, y si hay una cotización en curso sigue con su siguiente dato pendiente.';
+  const V31_REMOVED_PRODUCT_RULE = 'Algunas entradas product del grounding traen removed_by_customer=true: el cliente quitó ese producto de esta cotización. Tras quitar un producto, no lo vuelvas a registrar salvo que el cliente lo pida de nuevo nombrándolo por su nombre completo del catálogo (por ejemplo "Baldosa Minvu"); un término genérico o un sinónimo (por ejemplo "baldosa táctil") no basta. Otro producto distinto del catálogo (por ejemplo "Baldosas") sí puede registrarse. En ese caso no emitas observación, mutación ni catalog_resolution de ese producto: reconoce con amabilidad que no lo busca y ofrece alternativas reales del catálogo, con primary_request.goal_id=product e item_ref=null. Cuando el cliente quita o rechaza un producto, o pide otra opción, primero ofrece las alternativas de la misma familia del producto (productos del grounding con el mismo tipo en su nombre y las variantes de su technical_sheet): por ejemplo, si quita "Baldosa Minvu", ofrece "Baldosas" y sus tipos; si rechaza una placa, ofrece las otras placas. Solo si no hay otro producto de esa familia, ofrece otras líneas del catálogo.';
+  const V31_INSTALLATION_DELIVERY_RULE = 'La instalación solo se ofrece con despacho. Nunca ofrezcas ni aceptes retiro en fábrica junto con instalación, tampoco cuando service_scope=both (material y servicio de instalación): fulfillment solo puede ser delivery. El retiro en fábrica sigue siendo válido para material sin instalación. Con service_scope=installation o both el despacho va implícito: nunca preguntes por fulfillment ni pidas confirmar el despacho (tampoco con un "sí" ni pidiendo que el cliente escriba "despacho"); avanza directo al siguiente dato pendiente o a final_confirmation. Si el cliente menciona el despacho por iniciativa propia, puedes registrarlo como fulfillment=delivery.';
+  // Task 3c.24: the v3 lines that make fulfillment required for service_scope
+  // both contradict V31_INSTALLATION_DELIVERY_RULE; v3.1 replaces them.
+  const V3_FULFILLMENT_SCOPE_RULE = 'Si service_scope es material o both, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address.';
+  const V31_FULFILLMENT_SCOPE_RULE = 'Si service_scope es material, necesitas resolver fulfillment; si fulfillment es delivery, necesitas resolver address. Si service_scope es installation o both, fulfillment no se pregunta: el despacho va implícito.';
+  const V3_REQUIRED_DATA_RULE_PREFIX = 'Los datos obligatorios dependen de lo que el cliente pide';
+  const V3_REQUIRED_DATA_FULFILLMENT_CLAUSE = 'Si service_scope es material o both: fulfillment.';
+  const V31_REQUIRED_DATA_FULFILLMENT_CLAUSE = 'Si service_scope es material: fulfillment.';
+  // Live 2026-09-28 (task 3c.18): the model asked the pandereta
+  // clarification and the distributive assignment question with
+  // primary_request.goal_id="name" plus an item_ref. The validator now rejects
+  // an item_ref on a quote-level goal (primary_request_item_ref_invalid); this
+  // v3.1-only rule keeps `name` for the customer's own name.
+  const V31_ITEM_REQUEST_GOAL_RULE = 'primary_request.goal_id=name es solo para pedir el nombre del cliente. Para preguntar o confirmar algo de un ítem usa product, quantity o measurements con su item_ref (por ejemplo, aclarar "pandereta" es product con el item_ref de ese ítem; confirmar a qué ítems va una cantidad es quantity). Los goals de nivel de cotización (name, commune, address, etc.) llevan item_ref=null. Si la cotización tiene más de un producto, la pregunta de un ítem nombra su producto, por ejemplo "¿Cuántas solerillas necesitas?" y no "¿Cuántas unidades necesitas?".';
+  // Live 2026-09-29 (task 3c.19): "Bloques de cemento" -> the model asked
+  // "¿Te refieres a Bloques de Hormigón?" and then answered it could not
+  // confirm it was the same product. The v3.1 grounding now lists synonyms
+  // per product (migration 026); this v3.1-only rule makes a listed synonym
+  // that product without a clarification, while shared generic terms keep
+  // the existing ambiguous flow. v3 never receives synonyms nor this rule.
+  const V31_CATALOG_SYNONYMS_RULE = 'Algunas entradas product del grounding traen synonyms: son otros nombres de ese mismo producto, una relación explícita de la policy. Si el cliente usa uno de esos sinónimos (sin importar mayúsculas ni tildes), es ese producto: emite en catalog_resolutions matched con su grounding_ref, la observación product con normalized_value igual a su value canónico y evidence_quote con el texto exacto del cliente, sin preguntar si se refiere a ese producto. En nombres de productos, "cemento", "concreto" y "hormigón" son intercambiables (por ejemplo "bloques de cemento" son Bloques de Hormigón), excepto el producto Cemento, que es la bolsa o saco de cemento. Si el texto coincide con más de un nombre o sinónimo, vale la coincidencia más larga (por ejemplo "placa de 50 reforzada" es Placas de 50 cm Reforzadas, no Placas de 50 cm). Nunca digas que un sinónimo listado "no necesariamente es lo mismo" ni pidas confirmar esa equivalencia; si el cliente pregunta si es lo mismo, confírmale que sí. Los términos genéricos que comparten varios productos (por ejemplo pandereta, placa, poste o alambre) no son sinónimos y siguen requiriendo aclaración con ambiguous.';
+  // Task 3c.20: the v3.1 grounding carries the owner's technical sheet
+  // (private data, scripts/catalog/technical-sheets.mjs) for the products relevant to the turn. This v3.1-only rule
+  // lets the model answer technical questions from that sheet alone, defer
+  // unconfirmed or missing data to a sales executive, compute units only from
+  // the sheet's yield, and never give prices or supplier brands. v3 never
+  // receives sheets nor this rule.
+  const V31_TECHNICAL_SHEET_RULE = 'Algunas entradas del grounding traen technical_sheet: es la ficha técnica de ese producto o servicio, y solo viene para los productos de la cotización o los que el cliente nombra en este mensaje. Si el cliente pregunta un dato técnico (medidas, peso, rendimiento por m², resistencia, colores o terminaciones), respóndelo solo si está en la technical_sheet de ese producto e indica a qué variante corresponde; nunca inventes ni estimes un dato, ni lo tomes de otro producto. Ante una pregunta técnica sobre un producto: si es un dato puntual que puedes responder con la technical_sheet, respóndelo y no envíes el PDF. Si el cliente pregunta cómo es o cómo son, compara variantes o quiere verlas (por ejemplo "¿cómo son las 14 listones y las de 4 listones?", "quiero verlas" o "¿tienes fotos?"), respóndele con los datos de la technical_sheet y, en la misma respuesta, envíale la ficha de cada variante que nombra que esté en technical_sheet_files sin sent=true (como máximo tres), anunciándolo en una línea, por ejemplo "Te dejo las fichas técnicas de la *Baldosa 14 Listones* y la *Baldosa 4 Listones* 👇". En cualquier otro caso (el dato aparece en unconfirmed, no aparece en la ficha, la ficha trae variants_omitted u omitted, el producto no trae technical_sheet, o la pregunta es general sobre sus características), no lo afirmes: si ese producto trae en technical_sheet_files una ficha de esa variante (o una general, con variant null) que no tenga sent=true, envíale directamente su ficha técnica con un effect_request send_technical_sheet, sin preguntar si la quiere, anunciándolo en una línea, por ejemplo "Te dejo la ficha técnica de la *Baldosa 14 Listones* 👇"; si el dato puntual que preguntó no viene en esa ficha, agrega que ese dato puntual te lo indica una ejecutiva de Hormiglass. Si no hay una ficha para enviar, ofrece que una ejecutiva de Hormiglass te lo indique. Nunca digas que el dato no está confirmado, no aparece o no lo tienes. Si el cliente pregunta cuántas unidades necesita, puedes calcularlo solo con el rendimiento (yield) de esa variante en la ficha, mostrando la cuenta y aclarando que es un cálculo referencial que la ejecutiva confirmará; una cantidad que calculas tú no es una cantidad dicha por el cliente, así que no la registres como quantity. Nunca des precios ni menciones marcas de proveedores o fabricantes. Nombra cada producto como lo nombró el cliente o como aparece en el grounding, sin cambiarlo por otro producto: por ejemplo, nunca cambies Solerillas por Soleras.';
+  // Task 3c.29: the v3.1 grounding lists the technical-sheet PDFs of the
+  // relevant products (technical_sheet_files, refs only); the model sends one
+  // with the send_technical_sheet effect only when asked or when the customer
+  // accepts the offer above. v3 never receives sheets nor this rule.
+  const V31_TECHNICAL_SHEET_FILES_RULE = 'Algunas entradas del grounding traen technical_sheet_files: las fichas técnicas en PDF que puedes enviar por WhatsApp, cada una con su ref (sheet:...), su variant (null es la ficha general del producto, y covers dice qué variantes describe); sent=true indica que ya se envió en esta conversación y offered=true que es la ficha que ofreciste en tu mensaje anterior. Para enviar una ficha usa un effect_request {"type": "send_technical_sheet", "reason_observation_ids": [], "sheet_ref": "<ref>"}, y solo cuando el cliente la pide en este mensaje (por ejemplo "mándame la ficha técnica" o "¿tienes la ficha del bloque?"), hace una pregunta técnica sobre ese producto que no es un dato puntual que puedas responder, pregunta cómo es, compara variantes o quiere verlas, o acepta ("sí", "dale", "mándala") la ficha ofrecida (offered=true). Envía solo la ficha del producto por el que pregunta el cliente en este mensaje, nunca la de otro producto de la cotización; si no nombra un producto, usa el producto o las variantes de los que hablaba tu mensaje anterior ("quiero verlas" o "mándame las fichas" tras describir dos variantes son esas dos), y solo si aun así no está claro y en la cotización hay varios con ficha, pregúntale de cuál producto habla antes de enviar. Elige la ficha de la variante que pide el cliente; si no nombra una variante, envía la ficha general o, si no hay, pregúntale qué variante necesita. Nunca envíes fichas en un mensaje que no sea una pregunta técnica ni un pedido de ficha, como máximo tres por mensaje, y no vuelvas a enviar ni a ofrecer una ficha con sent=true salvo que el cliente la pida de nuevo explícitamente. Si el cliente vuelve a pedir o quiere ver una ficha con sent=true, reenvíasela sin comentar que ya la enviaste, por ejemplo "Con gusto, te dejo de nuevo las fichas técnicas 👇", y sigue con la pregunta pendiente; nunca le digas que la ficha ya está en el chat ni que ya se la enviaste. Al enviarla, anúncialo en reply_text en una línea breve, por ejemplo "Te dejo la ficha técnica de *Bloques de Hormigón 15* 👇": el PDF llega en un mensaje aparte justo después. Nunca digas que enviaste o adjuntaste una ficha sin ese effect_request. En los demás effect_requests usa sheet_ref null.';
+  // Task 3c.21 (owner rules): "muro" without another product is Cierros de
+  // Hormigón (migration 028 adds the synonyms), cierros are quoted only in
+  // linear meters plus a height (the v3.1 validator rejects an area quantity
+  // with linear_quantity_required), and bloques are unrelated to cierros.
+  // v3 never receives this rule. Live conversation 459 (2026-10-10): a cierro
+  // height given as "3 placas" was read as a quantity and the plate size was
+  // unknown (the cierro sheet has none), so the rule states it.
+  const V31_CIERROS_LINEAR_METERS_RULE = 'Cuando el cliente dice "muro" o "muros" (por ejemplo "un muro de 20 metros", "muro perimetral" o "muro prefabricado") sin nombrar otro producto, se refiere a Cierros de Hormigón; "muro camellón" o "Muro Tipo Camellón" es otro producto (vale la coincidencia más larga). Los cierros se cotizan solo en metros lineales, más la altura como medida, nunca en m²: si el cliente da un área (m² o metros cuadrados) para un cierro o muro, no registres ese valor como quantity y pregúntale los metros lineales y la altura. Explícalo con amabilidad, como una forma de cotizar con precisión, y nunca digas que el dato del cliente "no sirve" ni que está mal; por ejemplo: "Para los cierros trabajamos con metros lineales y altura, así te cotizamos con precisión. ¿Cuántos metros lineales tiene tu cierro y qué altura buscas?". Los Bloques de Hormigón no forman parte de los cierros: si el cliente nombra bloques, es el producto Bloques de Hormigón y su rendimiento por m² de la ficha técnica sigue siendo válido para ellos. Un cierro de hormigón se arma apilando placas de 2 m de largo: las placas lisas miden 50 cm o 60 cm de alto (fichas de Placas de 50 cm y Placas de 60 cm). Si el cliente da la altura de su cierro en número de placas, por ejemplo "son de 3 placas", "3 placas" es la altura del cierro, no una cantidad: la altura es el número de placas por la altura de cada placa (3 placas de 50 cm son 1,50 m y 3 placas de 60 cm son 1,80 m). Explícale esa cuenta con ambas alturas posibles y, si no lo dijo, pregúntale con amabilidad cuál prefiere, como una elección y no como un dato que debería saber: primero explica en una frase la altura que da cada opción (por ejemplo "Con tres placas, tu cierro quedaría de *1,50 m* con placas de 50 cm o de *1,80 m* con placas de 60 cm.") y cierra con esta pregunta exacta, sola en su línea: "¿Prefieres placas de 50 cm o de 60 cm?"; nunca la reformules como "¿Cuál altura de placa prefieres?" ni "¿De qué altura son tus placas?"; registra measurements solo cuando el cliente confirma la altura de la placa o la altura total. Si te pregunta cuánto mide una placa o el cierro, respóndele con estas medidas. Si el producto es una placa (por ejemplo Placas de 50 cm), el número de placas sí es su cantidad.';
+  // Task 3c.22 (owner request): every v3.1 reply uses WhatsApp formatting.
+  // Three v3 lines are replaced, never retyped elsewhere: the one-emoji rule
+  // (now a fixed set of up to three), the loose "•" summary line (now the
+  // owner's exact sectioned template, with no emojis) and the new-request
+  // example (its 😊 is outside the fixed set). v3 keeps all three verbatim.
+  const V31_WHATSAPP_FORMAT_RULE = 'Formato de WhatsApp para reply_text: escribe en párrafos cortos separados por una línea en blanco (dos saltos de línea), sin espacios ni saltos de línea al inicio o al final; la pregunta va siempre al final, sola en su propia línea; puedes anteponerle "👉 " de vez en cuando, pero no en todos los mensajes. Usa *negrita* con un solo asterisco (*así*) solo para datos clave, como nombres de productos, cantidades y medidas, y para los títulos de sección del resumen. Nunca uses encabezados con #, doble asterisco (**) ni cursivas, salvo que una cursiva sea natural. Por ejemplo, un saludo abre con "¡Hola! 👋 Soy Hormi Atención de *Hormiglass*." y, tras una línea en blanco, hace la primera pregunta en su propia línea.';
+  const V31_EMOJI_RULE = 'Usa emojis con moderación, como máximo tres por mensaje y solo de este conjunto: 👋 👉 ✅ 👍 📋 (👋 al saludar, 👉 opcional antes de la pregunta y no en todos los mensajes, ✅ o 👍 al confirmar o agradecer, 📋 al hablar de la cotización); además, 👇 solo al anunciar una ficha técnica que envías. No uses emojis si el cliente está molesto, reclama o pide no ser contactado, ni en ninguna parte del mensaje que pide final_confirmation.';
+  const V31_SUMMARY_TEMPLATE_RULE = [
+    'Cuando pidas final_confirmation, primero reconoce en un párrafo breve lo último que dijo el cliente y luego escribe el resumen con esta estructura, sin emojis en ningún lugar del mensaje: el título *Resumen de tu cotización*; la sección *Productos* con una línea "•" por cada ítem (producto, con su variante elegida entre paréntesis si la tiene, — cantidad con su unidad y, si existen, sus medidas); luego una sola sección de entrega: *Instalación* (dirección y comuna, terreno, acceso del camión y retiro de escombros), *Despacho* (dirección y comuna, y restricciones de acceso) o *Retiro en fábrica* (siempre Portezuelo 1502, San Bernardo); si hay datos de empresa o de factura, la sección *Datos de facturación*. Separa cada sección con una línea en blanco y termina, sola en su línea y sin "👉", con la pregunta "¿Está todo correcto?". Omite las secciones y las líneas sin datos registrados; nunca inventes datos para completar la estructura. Ejemplo:',
+    '¡Muy bien! Quedan 500 metros para cada alambre.',
+    '',
+    '*Resumen de tu cotización*',
+    '',
+    '*Productos*',
+    '• Alambre Concertina — 500 m',
+    '• Alambre de Púas — 500 m',
+    '• Cierros de Hormigón — 500 m × 1,80 m de alto',
+    '• Soleras y Solerillas (Solera Zarpa) — 190 m',
+    '',
+    '*Instalación*',
+    'Zxc 2314, Lo Prado',
+    'Terreno con desniveles · camión llega hasta cierto punto',
+    'Con retiro de escombros',
+    '',
+    '¿Está todo correcto?',
+  ].join('\n');
+  const V3_EMOJI_RULE_PREFIX = 'Usa emojis con moderación: como máximo uno por mensaje';
+  // Task 3c.33 (L4, live 2026-09-30: "¡Hola! 👋 Bienvenido a Hormiglass"): the
+  // welcome never assumes the customer's gender.
+  const V3_WELCOME_RULE_PREFIX = 'Si el historial no tiene mensajes previos tuyos, saluda presentándote: dale la bienvenida a Hormiglass';
+  const V31_WELCOME_RULE = 'Si el historial no tiene mensajes previos tuyos, saluda presentándote en una sola línea breve, por ejemplo "¡Hola! 👋 Te damos la bienvenida a *Hormiglass*, soy Hormi Atención." (usa siempre "Te damos la bienvenida a *Hormiglass*", nunca "Bienvenido" ni "Bienvenida", que asumen el género del cliente), y luego responde lo que pidió o haz la primera pregunta. Si el primer mensaje del cliente es un reclamo o muestra molestia, no le des la bienvenida: empieza reconociendo su molestia con empatía y preséntate solo como Hormi Atención de *Hormiglass*.';
+  const V3_SUMMARY_RULE = 'Cuando pidas final_confirmation, resume los datos en una lista breve (una línea por dato, con "•") antes de la pregunta.';
+  const V3_NEW_REQUEST_EXAMPLE = '"¡Claro! Empecemos una nueva cotización 😊"';
+  // Live production 2026-10 (conversation 393): nearly every reply opened
+  // "Gracias, Felipe. Anoto *190 metros* de ...", echoing recorded data, the
+  // name and 👉 every turn; conversation 444 got a bare out-of-area "no". The
+  // v3 rhythm line asked to reuse the customer's data in every reply; v3.1
+  // drops that clause and replaces the opening-variety line with a fuller tone
+  // rule. Tone never lengthens a message nor relaxes a rule.
+  const V3_RHYTHM_RULE_PREFIX = 'Cada reply_text sigue este ritmo';
+  const V3_RHYTHM_ECHO_CLAUSE = 'lo que el cliente acaba de decir, usando sus propios datos;';
+  const V3_OPENING_VARIETY_RULE_PREFIX = 'Varía tus aperturas';
+  const V31_TONE_RULE = 'Conversa como una persona, no como un formulario. Mantén un tono cordial y profesional, como un asesor de una empresa seria: tutea con respeto y evita expresiones coloquiales como "Ya", "Dale", "Buenísimo", "Listo", "Anoto", "Consideraré" o "Bacán". Varía cómo abres cada respuesta: no empieces dos respuestas seguidas con la misma palabra, y reconoce lo que dijo el cliente de forma natural; muchas veces es mejor ir directo a lo nuevo, sin palabra de apertura. Revisa el historial para no repetirte. No vuelvas a enumerar datos que ya quedaron registrados en turnos anteriores: menciona un dato solo cuando es nuevo en este turno (el resumen de final_confirmation es la excepción). Usa el nombre del cliente de vez en cuando, como máximo una vez cada tres o cuatro respuestas, nunca en todos los mensajes. Haz la pregunta de forma conversacional. Nada de esto alarga el mensaje: sigue en una a tres frases y con una sola pregunta.';
+  // Owner request 2026-10-10: whatever opener the prompt suggested, the model
+  // repeated it on consecutive replies ("Gracias", "Perfecto", "Entiendo").
+  // The model still chooses, but the user prompt now carries the previous
+  // replies' openers, computed here, and the allowed list. Live 2026-10-13:
+  // blocking only the previous opener let "Gracias" return every other reply,
+  // so the last three are blocked.
+  const V31_OPENER_RULE = 'El mensaje del usuario trae opener_guidance. opener_guidance.recent_reply_openers son las palabras con que abriste tus últimas tres respuestas: nunca abras esta respuesta con ninguna de ellas (si la lista está vacía, no hay restricción). Si abres con una palabra de reconocimiento, elígela tú de opener_guidance.allowed_openers según lo que dijo el cliente, o ve directo a lo nuevo sin palabra de apertura. En un saludo, un reclamo o una respuesta negativa no uses palabra de apertura.';
+  const V31_SOFT_NO_RULE = 'Cuando la respuesta es un "no" (una comuna fuera de la zona de despacho e instalación, un producto que no está en el catálogo o un dato que no puedes dar), suavízalo: una frase breve de empatía (por ejemplo "Lamentablemente…" o "Por ahora no alcanzamos a llegar a…"), luego la alternativa real que sí existe (por ejemplo, retirar el material en fábrica, otros productos del catálogo o que una ejecutiva de Hormiglass te indique el dato) y, cuando corresponda una pregunta, cierra con ella. Nunca ofrezcas una alternativa que las reglas no permiten.';
+  const replaceV3Line = (lines, matches, replacementsFor) => {
+    const index = lines.findIndex(matches);
+    if (index === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
+    lines.splice(index, 1, ...replacementsFor(lines[index]));
+  };
   const buildV31PromptLines = (v3Lines) => {
     const replacedIndex = v3Lines.indexOf(V31_REPLACED_RULE);
     if (replacedIndex === -1) throw new Error('v31_prompt_derivation_source_rule_missing');
     const derived = [...v3Lines];
     derived.splice(replacedIndex, 1, V31_ITEM_SCOPED_REPLACEMENT_RULE);
+    replaceV3Line(
+      derived,
+      (line) => line.startsWith(V3_RHYTHM_RULE_PREFIX) && line.includes(V3_RHYTHM_ECHO_CLAUSE),
+      (line) => [line.replace(V3_RHYTHM_ECHO_CLAUSE, 'lo que el cliente acaba de decir;')],
+    );
+    replaceV3Line(derived, (line) => line.startsWith(V3_WELCOME_RULE_PREFIX), () => [V31_WELCOME_RULE]);
+    replaceV3Line(derived, (line) => line.startsWith(V3_OPENING_VARIETY_RULE_PREFIX), () => [V31_TONE_RULE, V31_OPENER_RULE, V31_SOFT_NO_RULE]);
+    replaceV3Line(derived, (line) => line.startsWith(V3_EMOJI_RULE_PREFIX), () => [V31_WHATSAPP_FORMAT_RULE, V31_EMOJI_RULE]);
+    replaceV3Line(derived, (line) => line === V3_SUMMARY_RULE, () => [V31_SUMMARY_TEMPLATE_RULE]);
+    replaceV3Line(derived, (line) => line.includes(V3_NEW_REQUEST_EXAMPLE), (line) => [line.replace(V3_NEW_REQUEST_EXAMPLE, '"¡Claro! Empecemos una nueva cotización 👍"')]);
+    replaceV3Line(derived, (line) => line === V3_FULFILLMENT_SCOPE_RULE, () => [V31_FULFILLMENT_SCOPE_RULE]);
+    replaceV3Line(
+      derived,
+      (line) => line.startsWith(V3_REQUIRED_DATA_RULE_PREFIX) && line.includes(V3_REQUIRED_DATA_FULFILLMENT_CLAUSE),
+      (line) => [line.replace(V3_REQUIRED_DATA_FULFILLMENT_CLAUSE, V31_REQUIRED_DATA_FULFILLMENT_CLAUSE)],
+    );
+    // Task 3c.33: in a repair, the goal list the prompt names is the v3.1
+    // schema's enum (which may add locked item goals such as variant).
+    const repairGoalLineIndex = derived.findIndex((line) => line.startsWith('En esta reparación, si haces una pregunta, primary_request.goal_id solo puede ser uno de: '));
+    if (repairGoalLineIndex !== -1) {
+      derived[repairGoalLineIndex] = derived[repairGoalLineIndex].replace(
+        `uno de: ${primaryRequestGoalIds.join(', ')}.`,
+        `uno de: ${primaryRequestGoalIdsV31.join(', ')}.`,
+      );
+    }
     derived.push(
       V31_FINAL_CONFIRMATION_RULE,
       V31_ITEM_REF_GUIDANCE_RULE,
+      V31_ITEM_REQUEST_GOAL_RULE,
+      V31_NO_CROSS_ITEM_TRANSFER_RULE,
+      V31_DISTRIBUTIVE_QUANTITY_RULE,
+      V31_CATALOG_RESOLUTIONS_NAMED_PRODUCT_RULE,
+      V31_CATALOG_SYNONYMS_RULE,
+      V31_TECHNICAL_SHEET_RULE,
+      V31_TECHNICAL_SHEET_FILES_RULE,
+      V31_CIERROS_LINEAR_METERS_RULE,
+      V31_INSTALLATION_DELIVERY_RULE,
       V31_CORRECTION_TARGET_RULE,
+      V31_CORRECTION_NAMED_ITEM_RULE,
+      V31_REPLACE_EXISTING_FACT_RULE,
+      V31_EVERY_PRODUCT_RECORDED_RULE,
+      V31_USE_CASE_RULE,
+      V31_BUSINESS_HOURS_RULE,
+      V31_REMOVED_PRODUCT_RULE,
+      V31_VARIANT_RULE,
+      V31_QUANTITY_UNIT_RULE,
+      V31_SUMMARY_ONCE_RULE,
+      V31_INTERNAL_DOCUMENTS_RULE,
+      V31_COMMUNE_RULE,
+      V31_SERVICE_AREA_RULE,
       V31_PANDERETA_EXAMPLE_RULE,
     );
     return derived;
   };
   const v31SystemPrompt = buildV31PromptLines(V3_PROMPT_LINES).filter(Boolean).join('\n');
   const activeSystemPrompt = usesV31Contract ? v31SystemPrompt : v3SystemPrompt;
+  // Known openers, longest first so "Muchas gracias" wins over "Gracias".
+  const V31_ALLOWED_OPENERS = ['Muy bien', 'Gracias', 'Perfecto', 'Entiendo', 'Excelente', 'Con gusto', 'De acuerdo'];
+  const V31_KNOWN_OPENERS = [...V31_ALLOWED_OPENERS, 'Muchas gracias', 'Entendido', 'Claro', 'Genial', 'Buenísimo', 'Listo', 'Dale', 'Anoto', 'Ya', 'Hola']
+    .sort((a, b) => b.length - a.length);
+  const replyOpener = (content) => {
+    const start = content.trim().replace(/^[¡¿\s]+/u, '').toLocaleLowerCase('es');
+    return V31_KNOWN_OPENERS.find((opener) => {
+      const lower = opener.toLocaleLowerCase('es');
+      return start.startsWith(lower) && !/\p{L}/u.test(start.charAt(lower.length));
+    }) ?? null;
+  };
+  const recentReplyOpeners = (messages) => (Array.isArray(messages) ? messages : [])
+    .filter((message) => message?.role === 'assistant' && typeof message.content === 'string')
+    .slice(-3)
+    .reverse()
+    .map((message) => replyOpener(message.content))
+    .filter(Boolean);
   const v3UserPrompt = JSON.stringify({
     turn_policy: turnPolicy,
     ...(hasRepairRequest ? { repair_request: repairRequest } : {}),
+    ...(usesV31Contract ? {
+      opener_guidance: {
+        recent_reply_openers: recentReplyOpeners(turnPolicy?.history?.messages),
+        allowed_openers: V31_ALLOWED_OPENERS,
+      },
+    } : {}),
   });
   const v3Request = usesChatCompletions
     ? {

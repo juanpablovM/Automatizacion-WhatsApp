@@ -64,6 +64,14 @@ const isPartial = false;
 const leadStatusCode = 'qualified_complete';
 const rotationKey = lead.source_number_id ? 'whatsapp:' + lead.source_number_id : 'whatsapp:default';
 
+// A lead from a test phone goes to the test seller and stays out of the real
+// sellers' rotation. Both variables must be set; otherwise everyone rotates.
+const configured = (value) => !!value && !String(value).includes('__PENDIENTE__');
+const digitsOf = (value) => String(value ?? '').replace(/\D/g, '');
+const testPhones = String($env.LEAD_TEST_PHONE_NUMBERS || '').split(',').map(digitsOf).filter(Boolean);
+const isTestPhone = testPhones.includes(digitsOf(lead.phone_number));
+const testSellerId = isTestPhone && configured($env.LEAD_TEST_SELLER_ID) ? String($env.LEAD_TEST_SELLER_ID).trim() : '';
+
 return [
   {
     json: {
@@ -72,6 +80,7 @@ return [
       is_qualified: true,
       lead_status_code: leadStatusCode,
       rotation_key: rotationKey,
+      test_seller_id: testSellerId,
       completed_fields_count: completedCount,
     },
   },

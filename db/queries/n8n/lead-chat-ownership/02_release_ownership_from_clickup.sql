@@ -46,6 +46,25 @@ lead_row AS (
   ORDER BY l.id DESC
   LIMIT 1
 ),
+-- Migration 035: the lead keeps its task's latest status whatever the ownership
+-- outcome, so the bot can tell an open quote from a closed one. Newest event
+-- wins; an event without a timestamp is taken as current.
+lead_status AS (
+  UPDATE leads l
+  SET clickup_status = i.new_status,
+      clickup_status_at = COALESCE(i.history_event_at, NOW()),
+      updated_at = NOW()
+  FROM lead_row lr
+  CROSS JOIN input i
+  WHERE l.id = lr.id
+    AND i.new_status IS NOT NULL
+    AND (
+      l.clickup_status_at IS NULL
+      OR i.history_event_at IS NULL
+      OR i.history_event_at >= l.clickup_status_at
+    )
+  RETURNING l.id
+),
 -- Igual que en la adquisicion: se lee y se bloquea la ultima proyeccion del
 -- lead en el mismo paso, para que dos entregas simultaneas del webhook se
 -- serialicen en vez de liberar dos veces.

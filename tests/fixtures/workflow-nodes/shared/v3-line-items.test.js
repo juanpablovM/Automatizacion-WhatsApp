@@ -133,23 +133,25 @@ describe('projectFlat — mirrors the primary item into the flat compatibility f
   });
 });
 
-describe('composeRequirement — single-item output stays byte-identical to the legacy string', () => {
-  test('matches the current legacy requirement string for one item', () => {
+// Task 3c.33 (L3): a single item is itemized like a multi-item quote; the
+// legacy flat string ("Bloques de Hormigón 100") is retired with v3.
+describe('composeRequirement — every quote renders one bullet line per item', () => {
+  test('renders one bullet line for one item', () => {
     const requirement = composeRequirement(
       [{ item_id: 'li_0', product: 'Bloques de Hormigón', quantity: 100, measurements: null }],
       {},
     );
 
-    expect(requirement).toBe('Bloques de Hormigón 100');
+    expect(requirement).toBe('• Bloques de Hormigón — 100');
   });
 
-  test('appends measurements and the quote-level use_case, matching the legacy field order', () => {
+  test('adds the quote-level use_case as a Uso line for one item', () => {
     const requirement = composeRequirement(
       [{ item_id: 'li_0', product: 'hormigon H25', quantity: '20 m3', measurements: null }],
       { use_case: 'losa' },
     );
 
-    expect(requirement).toBe('hormigon H25 20 m3 losa');
+    expect(requirement).toBe('• hormigon H25 — 20 m3\nUso: losa');
   });
 
   test('is empty when the single item has no product, never inventing a requirement', () => {

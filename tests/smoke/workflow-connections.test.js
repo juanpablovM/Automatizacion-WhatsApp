@@ -38,8 +38,10 @@ const ALLOWED_TERMINALS = {
   ],
   'wa-inbound-entry.json': [
     // The health-check GET replies and stops; customer POSTs hand off
-    // downstream; own-message POSTs terminate explicitly after durable handling.
+    // downstream; own-message POSTs terminate explicitly after durable handling;
+    // a debounced (queued) customer event wakes its queue once the window closes.
     'Respond Health Check', 'Execute Durable Downstream Dispatcher', 'Finish Own Message',
+    'Drain Debounced Inbox',
   ],
   'wa-inbound-recovery.json': [
     // Customer events resume the durable dispatcher. Recovered own-message
