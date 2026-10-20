@@ -1220,7 +1220,10 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
         v3_grounding: row.v3_grounding ?? null,
         previous_commercial_pending_question_key: resetConversationLead ? null : row.previous_commercial_pending_question_key || null,
         previous_commercial_question_retry: resetConversationLead ? 0 : Number(row.previous_commercial_question_retry || 0),
-        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'operational_passthrough', 'measurement_visit_location', QUOTE_FOLLOWUP_NEW_QUOTE_KIND, SUPPRESSED_REPLY_KIND].includes(responseKind),
+        // operational_passthrough is not control-only: it leaves the reply to the
+        // advisor, and under v3 the advisor is the v3.1 lane. As control-only it
+        // reached the legacy fallback ("No pude procesar tu respuesta").
+        v3_control_only: humanControlActive || shouldEscalate || ['commercial_review_pending', 'previous_context_choice', 'escalation_already_required', 'measurement_visit_location', QUOTE_FOLLOWUP_NEW_QUOTE_KIND, SUPPRESSED_REPLY_KIND].includes(responseKind),
         phone_number: row.phone_number,
         source_number_id: row.input_source_number_id || row.source_number_id || null,
         instance_name: row.instance_name || null,
