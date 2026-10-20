@@ -34,6 +34,10 @@ const {
   const LINE_ITEM_SCHEMA = 'line_items/v1';
   const FLAT_ITEM_ID = 'li_0';
   const ITEM_FIELDS = ['product', 'quantity', 'measurements'];
+  // Task 3c.33 (M1): `variant` (the technical-sheet variant the customer chose,
+  // v3.1 only) is an item field too, but it is never mirrored into the flat
+  // projection and is only present on an item once it is set.
+  const ITEM_MUTATION_FIELDS = [...ITEM_FIELDS, 'variant'];
   const RESERVED_ITEM_KEYS = new Set(['line_items', 'line_items_projection', 'line_items_schema']);
   const MAX_LINE_ITEMS = 10;
 
@@ -208,7 +212,7 @@ const {
 
     const touchesItems = mutationList.some((raw) => {
       const mutation = asObject(raw);
-      return mutation.operation === 'remove_item' || ITEM_FIELDS.includes(mutation.field);
+      return mutation.operation === 'remove_item' || ITEM_MUTATION_FIELDS.includes(mutation.field);
     });
 
     if (!touchesItems && !Array.isArray(ctx.line_items)) {
@@ -236,7 +240,7 @@ const {
         continue;
       }
       const field = mutation.field;
-      if (!ITEM_FIELDS.includes(field)) {
+      if (!ITEM_MUTATION_FIELDS.includes(field)) {
         quoteLevel[field] = mutation.projected_value;
         continue;
       }
@@ -265,9 +269,8 @@ const {
   const hasValue = (value) => value !== undefined && value !== null
     && (typeof value !== 'string' || value.trim() !== '');
 
-  // Byte-identical to `formatRequirementValue` in
-  // wa-conversation-orchestrator/build-v3-lead-effect.js, so the single-item
-  // requirement this composes never drifts from the legacy string.
+  // Renders one fact value (a string, or a {name, value, unit} object) the
+  // way the legacy requirement string did.
   const formatFieldValue = (value) => {
     if (!hasValue(value)) return '';
     if (typeof value !== 'object' || Array.isArray(value)) return String(value).trim();
@@ -279,39 +282,31 @@ const {
     return JSON.stringify(value);
   };
 
-  // D9: one item keeps the exact legacy requirement string (product,
-  // quantity, measurements, then the quote-level use_case, in that order). A
-  // requirement without a product is never invented.
-  const composeSingleItemRequirement = (item, useCase) => {
-    const facts = asObject(item);
-    if (!hasValue(facts.product)) return '';
-    return [facts.product, facts.quantity, facts.measurements, useCase]
-      .map(formatFieldValue)
-      .filter(Boolean)
-      .join(' ');
+  // Task 3c.33 (M1): the chosen variant follows the product in parentheses.
+  const productLabel = (facts) => {
+    const product = formatFieldValue(facts.product);
+    const variant = formatFieldValue(facts.variant);
+    return variant ? `${product} (${variant})` : product;
   };
 
-  // D9: several items render one bullet line each, plus one Uso line for the
-  // quote-level use_case when present.
-  const composeMultiItemRequirement = (items, useCase) => {
-    const lines = items.map((item) => {
-      const facts = asObject(item);
-      const product = formatFieldValue(facts.product);
-      const quantity = formatFieldValue(facts.quantity);
-      const measurements = formatFieldValue(facts.measurements);
-      const head = `• ${product} — ${quantity}`;
-      return measurements ? `${head}, ${measurements}` : head;
-    });
-    const useCaseLine = hasValue(useCase) ? [`Uso: ${formatFieldValue(useCase)}`] : [];
-    return [...lines, ...useCaseLine].join('\n');
-  };
-
+  // D9, revised by task 3c.33 (L3): every quote renders one bullet line per
+  // item (the single-item flat string was a v3 compatibility rule, retired
+  // with v3), plus one Uso line for the quote-level use_case when present. A
+  // requirement without any product is never invented.
   const composeRequirement = (items, quoteLevelFacts = {}) => {
     const list = Array.isArray(items) ? items : [];
     const useCase = asObject(quoteLevelFacts).use_case;
     if (list.length === 0) return '';
-    if (list.length === 1) return composeSingleItemRequirement(list[0], useCase);
-    return composeMultiItemRequirement(list, useCase);
+    if (list.length === 1 && !hasValue(asObject(list[0]).product)) return '';
+    const lines = list.map((item) => {
+      const facts = asObject(item);
+      const quantity = formatFieldValue(facts.quantity);
+      const measurements = formatFieldValue(facts.measurements);
+      const head = `• ${productLabel(facts)} — ${quantity}`;
+      return measurements ? `${head}, ${measurements}` : head;
+    });
+    const useCaseLine = hasValue(useCase) ? [`Uso: ${formatFieldValue(useCase)}`] : [];
+    return [...lines, ...useCaseLine].join('\n');
   };
 
   return { readLineItems, deriveItemId, reduceV3StateMutations, projectFlat, composeRequirement };

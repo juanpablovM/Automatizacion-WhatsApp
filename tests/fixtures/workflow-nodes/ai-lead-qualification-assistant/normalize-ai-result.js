@@ -47,8 +47,12 @@ const parseStructuredOutput = (value) => {
     return JSON.parse(text.slice(start, end + 1));
   }
 };
+// Slice 2a (design.md D6), dark: the route family stays 'v3' under v3.1
+// (only the artifact version changes), but this widened check keeps the
+// fallback true even if a caller only carries the compiled policy version.
+const V3_POLICY_VERSIONS = new Set(['ai_prd_turn_policy/v3', 'ai_prd_turn_policy/v3.1']);
 const usesV3Contract = safe(row.ai_contract_version).toLowerCase() === 'v3'
-  || row.turn_policy?.version === 'ai_prd_turn_policy/v3';
+  || V3_POLICY_VERSIONS.has(row.turn_policy?.version);
 if (usesV3Contract) {
   const statusCode = Number(row.ai_status_code || 0);
   const responseOk = !row.ai_skipped && statusCode >= 200 && statusCode < 300;

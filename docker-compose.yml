@@ -90,6 +90,11 @@ services:
       INBOUND_PROCESSING_STALE_SECONDS: ${INBOUND_PROCESSING_STALE_SECONDS:-600}
       INBOUND_RECOVERY_BATCH_SIZE: ${INBOUND_RECOVERY_BATCH_SIZE:-20}
       INBOUND_MAX_PROCESSING_ATTEMPTS: ${INBOUND_MAX_PROCESSING_ATTEMPTS:-5}
+      # Inbound debounce (migration 034): a contact's messages wait until they
+      # have been quiet this many seconds and then become ONE turn. 0 disables
+      # it (one turn per message). The max wait bounds a customer who keeps typing.
+      INBOUND_DEBOUNCE_SECONDS: ${INBOUND_DEBOUNCE_SECONDS:-6}
+      INBOUND_DEBOUNCE_MAX_WAIT_SECONDS: ${INBOUND_DEBOUNCE_MAX_WAIT_SECONDS:-30}
       # Comma-separated phone numbers dropped at the webhook, before the durable
       # inbox. For counterparts that run their own bot and would otherwise trade
       # messages with ours forever. Empty means nobody is blocked.
@@ -102,6 +107,9 @@ services:
       CLICKUP_WEBHOOK_SECRET: ${CLICKUP_WEBHOOK_SECRET:-}
       CLICKUP_STATUS_ACKNOWLEDGED: ${CLICKUP_STATUS_ACKNOWLEDGED:-in progress,en progreso,en curso}
       CLICKUP_STATUS_RESOLVED: ${CLICKUP_STATUS_RESOLVED:-complete,completed,closed,done,cerrado,resuelto}
+      CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP: ${CLICKUP_STATUS_QUOTE_SENT_FOLLOWUP:-cotización enviada}
+      LEAD_CHAT_QUOTE_SENT_SLA_MINUTES: ${LEAD_CHAT_QUOTE_SENT_SLA_MINUTES:-30}
+      LEAD_CHAT_QUOTE_SENT_REALERT_HOURS: ${LEAD_CHAT_QUOTE_SENT_REALERT_HOURS:-24}
       CLICKUP_CF_WHATSAPP_NAME_ID: ${CLICKUP_CF_WHATSAPP_NAME_ID:-__PENDIENTE__}
       CLICKUP_CF_PHONE_ID: ${CLICKUP_CF_PHONE_ID:-__PENDIENTE__}
       CLICKUP_CF_SERVICE_ID: ${CLICKUP_CF_SERVICE_ID:-__PENDIENTE__}
@@ -111,6 +119,22 @@ services:
       CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID: ${CLICKUP_CF_CHANNEL_OPTION_WHATSAPP_ID:-__PENDIENTE__}
       CLICKUP_CF_INTERNAL_LEAD_ID: ${CLICKUP_CF_INTERNAL_LEAD_ID:-__PENDIENTE__}
       CLICKUP_CF_SOURCE_NUMBER_ID: ${CLICKUP_CF_SOURCE_NUMBER_ID:-__PENDIENTE__}
+      # Hormiglass "Cotizaciones WhatsApp" list. Empty leaves the field out.
+      CLICKUP_LEAD_INITIAL_STATUS: ${CLICKUP_LEAD_INITIAL_STATUS:-}
+      LEAD_TEST_PHONE_NUMBERS: ${LEAD_TEST_PHONE_NUMBERS:-}
+      LEAD_TEST_SELLER_ID: ${LEAD_TEST_SELLER_ID:-}
+      CLICKUP_CF_WHATSAPP_LINK_ID: ${CLICKUP_CF_WHATSAPP_LINK_ID:-}
+      CLICKUP_CF_CONSULTATION_DATE_ID: ${CLICKUP_CF_CONSULTATION_DATE_ID:-}
+      CLICKUP_CF_REFERRAL_ID: ${CLICKUP_CF_REFERRAL_ID:-}
+      CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID: ${CLICKUP_CF_REFERRAL_OPTION_WHATSAPP_ID:-}
+      CLICKUP_CF_PRODUCT_TYPE_ID: ${CLICKUP_CF_PRODUCT_TYPE_ID:-}
+      CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON: ${CLICKUP_CF_PRODUCT_TYPE_OPTIONS_JSON:-}
+      CLICKUP_CF_SERVICE_TYPE_ID: ${CLICKUP_CF_SERVICE_TYPE_ID:-}
+      CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON: ${CLICKUP_CF_SERVICE_TYPE_OPTIONS_JSON:-}
+      CLICKUP_CF_CUSTOMER_RUT_ID: ${CLICKUP_CF_CUSTOMER_RUT_ID:-}
+      CLICKUP_CF_TAX_DOCUMENT_ID: ${CLICKUP_CF_TAX_DOCUMENT_ID:-}
+      CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID: ${CLICKUP_CF_TAX_DOCUMENT_OPTION_FACTURA_ID:-}
+      CLICKUP_CF_TAX_DOCUMENT_OPTION_BOLETA_ID: ${CLICKUP_CF_TAX_DOCUMENT_OPTION_BOLETA_ID:-}
       HANDOFF_CLICKUP_ASSIGNEES_JSON: ${HANDOFF_CLICKUP_ASSIGNEES_JSON:-__PENDIENTE__}
       HANDOFF_NOTIFICATION_BATCH_SIZE: ${HANDOFF_NOTIFICATION_BATCH_SIZE:-20}
       HANDOFF_NOTIFICATION_STALE_SECONDS: ${HANDOFF_NOTIFICATION_STALE_SECONDS:-900}
@@ -134,6 +158,14 @@ services:
       # stays on AI_PRD_CONTRACT_MODE. Only ever raises a turn to v3, never
       # pulls one back. Empty means nobody.
       AI_PRD_CONTRACT_CANARY_PHONES: ${AI_PRD_CONTRACT_CANARY_PHONES:-}
+      # Per-turn, phone-scoped switch for the item-aware v3.1 policy inside the
+      # v3 lane (design.md D7). disabled | canary | enabled; an unrecognized
+      # value fails safe to disabled. Stays disabled until Slice 3 (Output)
+      # and the live gates pass.
+      AI_PRD_V3_LINE_ITEMS: ${AI_PRD_V3_LINE_ITEMS:-disabled}
+      # Comma-separated phone numbers promoted to v3.1 while AI_PRD_V3_LINE_ITEMS
+      # is canary. Empty means nobody. Ignored when disabled or enabled.
+      AI_PRD_V3_LINE_ITEMS_CANARY_PHONES: ${AI_PRD_V3_LINE_ITEMS_CANARY_PHONES:-}
       AI_DIRECT_API_BASE_URL: ${AI_DIRECT_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       AI_DIRECT_API_PATH: ${AI_DIRECT_API_PATH:-/chat/completions}
       AI_DIRECT_API_KEY: ${AI_DIRECT_API_KEY:-}

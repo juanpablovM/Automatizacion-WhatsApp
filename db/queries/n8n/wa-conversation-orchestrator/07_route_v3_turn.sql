@@ -24,7 +24,8 @@ WITH input AS MATERIALIZED (
       ELSE ('invalid_external_timestamp:' || BTRIM($11::TEXT))::TIMESTAMPTZ
     END AS external_timestamp,
     NULLIF($12::TEXT, '') AS text_body,
-    COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload
+    COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload,
+    COALESCE($14::BOOLEAN, FALSE) AS reopen_confirmed_quote
 ), valid_claim AS MATERIALIZED (
   SELECT event.id
   FROM inbound_events event
@@ -35,6 +36,14 @@ WITH input AS MATERIALIZED (
     AND event.phone_number = input.phone_number
     AND input.route_mode IN ('canary', 'enforce')
     AND NULLIF(input.route_rule_id, '') IS NOT NULL
+), batch_members AS MATERIALIZED (
+  -- Inbound debounce (migration 034): every event this turn answers, the
+  -- leader included. Empty when the turn answers a single event. The turn's
+  -- text (input.text_body) is the batch joined with "\n"; each message is
+  -- still stored as its own row, with its own text.
+  SELECT member.id, member.received_at, member.raw_payload, member.normalized_payload
+  FROM inbound_events member
+  JOIN valid_claim ON member.batch_leader_event_id = valid_claim.id
 ), identity_lock AS MATERIALIZED (
   SELECT pg_advisory_xact_lock(hashtextextended(
     'v3-turn:' || input.source_number_id::TEXT || ':' || input.phone_number,
@@ -67,7 +76,14 @@ WITH input AS MATERIALIZED (
       (existing_execution.id IS NULL
         AND input.requested_conversation_id IS NOT NULL
         AND conversation.id = input.requested_conversation_id
-        AND status.code NOT IN ('handed_to_sales', 'closed', 'inactive_timeout'))
+        AND (
+          status.code NOT IN ('handed_to_sales', 'closed', 'inactive_timeout')
+          -- Quote correction: evaluate-conversation-step reopened this
+          -- confirmed quote because its lead's ClickUp task is still open.
+          OR (input.reopen_confirmed_quote
+            AND status.code = 'handed_to_sales'
+            AND conversation.lead_id IS NOT NULL)
+        ))
     )
   ORDER BY
     CASE
@@ -137,7 +153,16 @@ WITH input AS MATERIALIZED (
   )
   SELECT execution.conversation_id, conversation.lead_id, 'incoming',
          input.message_type, input.external_message_id, input.external_timestamp,
-         NULL, input.text_body, input.raw_payload, input.inbound_event_id
+         NULL,
+         CASE
+           WHEN EXISTS (SELECT 1 FROM batch_members) THEN (
+             SELECT NULLIF(leader.normalized_payload->>'text_body', '')
+             FROM batch_members leader
+             WHERE leader.id = input.inbound_event_id
+           )
+           ELSE input.text_body
+         END,
+         input.raw_payload, input.inbound_event_id
   FROM matching_execution execution
   JOIN input ON TRUE
   JOIN resolved_conversation conversation ON conversation.id = execution.conversation_id
@@ -146,6 +171,32 @@ WITH input AS MATERIALIZED (
     WHERE inbound_event_id IS NOT NULL AND direction = 'incoming' AND deleted_at IS NULL
   DO NOTHING
   RETURNING id, conversation_id, inbound_event_id
+), inserted_batch_incoming AS (
+  -- The followers' rows are produced from the leader's inserted row, so they
+  -- are always written after it and the ids keep arrival order. A replay
+  -- inserts no leader row and therefore no follower row either.
+  INSERT INTO messages (
+    conversation_id, lead_id, direction, message_type, external_message_id,
+    external_timestamp, delivery_status, text_body, raw_payload, inbound_event_id
+  )
+  SELECT leader.conversation_id, conversation.lead_id, 'incoming',
+         COALESCE(NULLIF(member.normalized_payload->>'message_type', ''), 'unknown'),
+         NULLIF(member.normalized_payload->>'external_message_id', ''),
+         CASE
+           WHEN BTRIM(COALESCE(member.normalized_payload->>'external_timestamp', '')) ~ '^[0-9]{10}$'
+             THEN TO_TIMESTAMP(BTRIM(member.normalized_payload->>'external_timestamp')::DOUBLE PRECISION)
+           WHEN BTRIM(COALESCE(member.normalized_payload->>'external_timestamp', '')) ~ '^[0-9]{13}$'
+             THEN TO_TIMESTAMP(BTRIM(member.normalized_payload->>'external_timestamp')::DOUBLE PRECISION / 1000.0)
+           ELSE NULL::TIMESTAMPTZ
+         END,
+         NULL, NULLIF(member.normalized_payload->>'text_body', ''), member.raw_payload, member.id
+  FROM inserted_incoming leader
+  JOIN input ON leader.inbound_event_id = input.inbound_event_id
+  JOIN resolved_conversation conversation ON conversation.id = leader.conversation_id
+  JOIN batch_members member ON member.id <> input.inbound_event_id
+  ORDER BY member.received_at, member.id
+  ON CONFLICT DO NOTHING
+  RETURNING id
 ), fixed_incoming AS MATERIALIZED (
   SELECT inserted_incoming.* FROM inserted_incoming
   UNION ALL
