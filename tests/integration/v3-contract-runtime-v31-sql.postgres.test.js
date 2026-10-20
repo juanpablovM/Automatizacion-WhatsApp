@@ -112,7 +112,7 @@ describeIntegration('v3.1 SQL boundary accepts the item-aware artifact version (
     await client.query(routeSql, [
       event.inboundEventId, event.token, conversation.id, sourceNumberId, conversation.phone_number,
       'enforce', 'test-rule-v31', 'service', 'text', `message-${event.inboundEventId}`, null,
-      'pandereta de 3 metros con alambre púa', { source: 'integration-test' },
+      'pandereta de 3 metros con alambre púa', { source: 'integration-test' }, false,
     ]);
 
     const policyDigest = `policy-${suffix}`;
@@ -171,7 +171,7 @@ describeIntegration('v3.1 SQL boundary accepts the item-aware artifact version (
     await client.query(routeSql, [
       event.inboundEventId, event.token, conversation.id, sourceNumberId, conversation.phone_number,
       'enforce', 'test-rule-v31c', 'service', 'text', `message-${event.inboundEventId}`, null,
-      'algo salió mal', { source: 'integration-test' },
+      'algo salió mal', { source: 'integration-test' }, false,
     ]);
 
     const policyDigest = `policy-${suffix}`;

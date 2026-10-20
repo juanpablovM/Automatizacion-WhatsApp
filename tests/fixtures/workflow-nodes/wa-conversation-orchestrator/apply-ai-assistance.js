@@ -395,6 +395,22 @@ if (deterministic.response_kind === 'reply_suppressed') {
   } }];
 }
 
+// Migration 037: the customer accepted the new-quote offer of the quote
+// follow-up notice. The evaluator already reset the conversation and wrote the
+// reply; no assistant output may rewrite it or carry the old quote over.
+if (deterministic.response_kind === 'quote_followup_new_quote' && !deterministic.bot_suppressed) {
+  return [{ json: {
+    ...deterministic, response_text: deterministic.deterministic_reply,
+    should_create_lead: false, should_escalate: false, is_partial: false,
+    qualification_context: {}, qualification_context_json: '{}',
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: 'quote_followup_new_quote',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    metadata_json: JSON.stringify({ ...parseJsonObject(deterministic.metadata_json),
+      pending_question_key: null, commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
+  } }];
+}
+
 // Registered quote acknowledgments must not reopen qualification or duplicate
 // effects, even if a stale assistant result is present in the merged item.
 if (deterministic.response_kind === 'commercial_review_pending'
@@ -413,6 +429,27 @@ if (deterministic.response_kind === 'commercial_review_pending'
       commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
     after_payload_json: JSON.stringify({ ...parseJsonObject(deterministic.after_payload_json),
       conversation_status_code: 'handed_to_sales', qualification_context: deterministic.qualification_context,
+      should_create_lead: false, should_escalate: false }),
+  } }];
+}
+
+// Task 3c.33 (M5): collecting the location for a measurement handoff is a
+// deterministic question; the evaluator already recorded the commune it
+// resolved, and no assistant output may rewrite that turn.
+if (deterministic.response_kind === 'measurement_visit_location' && !deterministic.bot_suppressed) {
+  const visitContext = asObject(deterministic.qualification_context);
+  return [{ json: {
+    ...deterministic, response_text: deterministic.deterministic_reply,
+    should_create_lead: false, should_escalate: false, is_partial: false,
+    qualification_context: visitContext, qualification_context_json: jsonString(visitContext, {}),
+    ai_skipped: true, ai_invoked: false, ai_applied: false,
+    ai_fallback_reason: 'measurement_visit_location',
+    ai_accepted_fields: [], ai_accepted_fields_json: '[]',
+    metadata_json: JSON.stringify({ ...parseJsonObject(deterministic.metadata_json),
+      pending_question_key: deterministic.pending_question_key || null,
+      commercial_question_retry: 0, ai_invoked: false, ai_skipped: true }),
+    after_payload_json: JSON.stringify({ ...parseJsonObject(deterministic.after_payload_json),
+      qualification_context: visitContext, pending_question_key: deterministic.pending_question_key || null,
       should_create_lead: false, should_escalate: false }),
   } }];
 }
@@ -1121,10 +1158,10 @@ const LOOP_ESCALATION_REASONS = new Set([
 ]);
 const escalationRoutingText = () => {
   if (antiRepeatHandoff || LOOP_ESCALATION_REASONS.has(deterministic.escalation_reason)) {
-    return 'No quiero hacerte repetir lo mismo. Te derivaré con una persona del equipo para continuar.';
+    return 'No quiero hacerte repetir lo mismo.\n\nTe derivaré con una persona del equipo para continuar.';
   }
   if (deterministic.escalation_reason === 'human_requested') {
-    return 'Por supuesto. Te derivaré con una persona del equipo para que continúe contigo.';
+    return 'Por supuesto 👍\n\nTe derivaré con una persona del equipo para que continúe contigo.';
   }
   if (deterministic.escalation_reason === 'measurement_assistance_requested') return deterministic.deterministic_reply;
   return 'Voy a derivarte con una persona del equipo para que revise tu caso en detalle.';
@@ -1165,7 +1202,7 @@ const selectResponseText = () => {
   // for this turn; advisor guardrails must not overwrite their visible question.
   if (isEscalation) {
     if (deterministic.response_kind === 'escalation_already_required') {
-      return { text: deterministic.deterministic_reply || 'Tu solicitud ya está derivada a una persona del equipo.', kind: 'escalation_already_required' };
+      return { text: deterministic.deterministic_reply || 'Tu solicitud ya está en manos de una persona de nuestro equipo.', kind: 'escalation_already_required' };
     }
     return {
       text: escalationRoutingText(),
@@ -1245,7 +1282,7 @@ const selectResponseText = () => {
 
   // PRIORITY 4: Fallback to deterministic
   return {
-    text: deterministic.response_text || deterministic.deterministic_reply || 'No pude procesar tu respuesta. ¿Podrías intentarlo nuevamente?',
+    text: deterministic.response_text || deterministic.deterministic_reply || 'No pude procesar tu respuesta.\n\n👉 ¿Podrías intentarlo nuevamente?',
     kind: deterministic.response_kind || 'deterministic_fallback',
   };
 };

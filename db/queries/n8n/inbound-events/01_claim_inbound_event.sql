@@ -21,11 +21,17 @@ WITH claimed AS (
     'sha256', NULLIF($18::text, ''),
     'file_size', NULLIF($19::text, ''),
     'is_from_me', COALESCE(NULLIF($20::text, '')::boolean, FALSE),
-    'sender_type_candidate', NULLIF($21::text, '')
+    'sender_type_candidate', NULLIF($21::text, ''),
+    -- Inbound debounce window (migration 034); 0 or absent claims inline.
+    'debounce_seconds', NULLIF($22::text, '')
   )))
 )
 SELECT
   claimed.*,
   COALESCE(NULLIF($20::text, '')::boolean, FALSE) AS is_from_me,
-  NULLIF($21::text, '') AS sender_type_candidate
+  NULLIF($21::text, '') AS sender_type_candidate,
+  CASE
+    WHEN COALESCE($22::text, '') ~ '^[0-9]{1,4}$' THEN LEAST(60, $22::text::integer)
+    ELSE 0
+  END AS debounce_seconds
 FROM claimed;
