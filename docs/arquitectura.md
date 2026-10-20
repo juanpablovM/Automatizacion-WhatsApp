@@ -139,6 +139,16 @@ reanudacion requiere entonces intervencion manual o un redeploy verificado.
 - el diseno funcional y tecnico del asesor comercial AI vive en `docs/asesor-comercial-ai.md`
 - la exposicion publica de webhooks no se implementa todavia; antes de abrir trafico real deben quedar cerrados proxy, HTTPS, firewall y secreto del webhook
 
+## Catalog technical sheets (private data)
+
+The owner's product technical sheets are private and never committed (the repository is public). They reach `catalog_items.metadata.technical_sheet` through private SQL:
+
+- Data: `db/seeds/private/technical_sheets.json` (gitignored; obtain it from the owner). Shape and rules are documented in the header of `scripts/catalog/technical-sheets.mjs`; the generator rejects price-like data.
+- Generate: `node scripts/catalog/technical-sheets.mjs` writes `db/seeds/private/027_catalog_technical_sheets.sql` and `.down.sql` (gitignored); `--check` fails if they are missing or stale.
+- Apply once, after checking the target rows: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.sql`. It is idempotent and keyed by sku; it is not under `infra/postgres/migrations/`, so no database applies it automatically.
+- Roll back: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/private/027_catalog_technical_sheets.down.sql` restores the prior rows exactly (updated_at aside).
+- Runtime: `Load Conversation State` forwards the sheet without `source_files`; the v3.1 policy builder keeps a compact sheet only for the products in the quote and those named in the current message, capped at 6144 bytes; v3 never carries it.
+
 ## Autenticacion de n8n
 
 En versiones actuales de `n8n`, el acceso inicial queda protegido por el flujo de creacion del usuario propietario en el primer arranque. En esta base local no se implementa autenticacion basica antigua.

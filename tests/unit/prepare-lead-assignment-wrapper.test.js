@@ -88,3 +88,28 @@ describe('Prepare Lead Assignment — real n8n Code node wrapper', () => {
     expect(output.json.city).toBeNull();
   });
 });
+
+// Owner decision 2026-10-14: a lead from a test phone goes to the test seller
+// (the Hormiglass account), never into the real sellers' rotation.
+describe('Prepare Lead Assignment — test phones', () => {
+  const run = (phone, env) => runCodeNode(fs.readFileSync(fixturePath, 'utf8'), [{ json: {
+    conversation_id: 100, phone_number: phone, service: 'despacho', city: 'Maipú',
+    requirement: 'Adoquines 50 m2', commercial_missing_fields: [],
+  } }], env)[0].json;
+  const testEnv = { LEAD_TEST_PHONE_NUMBERS: '56997093038, +56 9 1111 2222', LEAD_TEST_SELLER_ID: '6' };
+
+  test('a listed phone, in any format, is routed to the test seller', () => {
+    expect(run('56997093038', testEnv).test_seller_id).toBe('6');
+    expect(run('+56911112222', testEnv).test_seller_id).toBe('6');
+  });
+
+  test('any other phone keeps the rotation', () => {
+    expect(run('56900000004', testEnv).test_seller_id).toBe('');
+  });
+
+  test('without both variables nobody is routed to a test seller', () => {
+    expect(run('56997093038', {}).test_seller_id).toBe('');
+    expect(run('56997093038', { LEAD_TEST_PHONE_NUMBERS: '56997093038' }).test_seller_id).toBe('');
+    expect(run('56997093038', { ...testEnv, LEAD_TEST_SELLER_ID: '__PENDIENTE__' }).test_seller_id).toBe('');
+  });
+});

@@ -51,6 +51,12 @@ const prepareHandoffClickup = (row, env = {}) => {
     `Cliente: ${row.phone_number || 'No informado'}`,
     `Conversación: ${row.conversation_id || 'No informada'}`,
     row.escalation_reason ? `Detalle: ${row.escalation_reason}` : null,
+    // Task 3c.33 (M5): the project data the conversation already holds
+    // (02_claim_notification.sql), so the person who takes the handoff knows
+    // what and where without reopening the chat.
+    row.project_product ? `Producto: ${row.project_product}` : null,
+    row.project_commune ? `Comuna: ${row.project_commune}` : null,
+    row.project_address ? `Dirección: ${row.project_address}` : null,
     `Operation key: ${operationKey}`,
   ].filter(Boolean).join('\n');
 

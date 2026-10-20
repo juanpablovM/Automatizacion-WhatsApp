@@ -27,6 +27,33 @@ const normalizeV3EffectReceipt = (row) => {
   const provided = row.v3_effect_receipt && typeof row.v3_effect_receipt === 'object'
     ? row.v3_effect_receipt
     : {};
+  // Task 3c.29: the technical-sheet executor (19_persist_v3_technical_sheet_effect.sql)
+  // returns its complete receipt; only its document message id is re-checked here.
+  if (effectType === 'send_technical_sheet') {
+    const documentMessageId = pick(row.document_message_id, provided.document_message_id);
+    if (!documentMessageId || !provided.delivery_key) throw new Error('technical_sheet_receipt_missing_document_message');
+    const receipt = {
+      version: 'v3_effect_receipt/v1',
+      operation_key: operationKey,
+      payload_digest: payloadDigest,
+      effect_type: effectType,
+      status: 'succeeded',
+      document_message_id: documentMessageId,
+      delivery_key: provided.delivery_key,
+      technical_sheet_file_id: provided.technical_sheet_file_id ?? null,
+      sha256: provided.sha256 ?? null,
+    };
+    return {
+      ...row,
+      operation_key: operationKey,
+      v3_effect_payload_digest: payloadDigest,
+      v3_effect_claim_token: claimToken,
+      v3_effect_outcome: 'succeeded',
+      v3_effect_receipt: receipt,
+      v3_effect_external_id: String(documentMessageId),
+      v3_effect_error: null,
+    };
+  }
   const leadId = pick(row.lead_id_1, row.lead_id, provided.lead_id);
   const handoffId = pick(row.handoff_id, row.handoff_id_1, provided.handoff_id);
   if (effectType === 'create_lead' && !leadId) throw new Error('create_lead_receipt_missing_lead_id');
