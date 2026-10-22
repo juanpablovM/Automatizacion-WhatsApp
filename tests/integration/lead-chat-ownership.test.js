@@ -486,6 +486,84 @@ describeIntegration('lead chat ownership: human takeover arbitrated by PostgreSQ
     expect(inbox.rows[0]).toEqual({ processing_status: 'processed', processing_phase: 'completed' });
   });
 
+  // Live test 2026-10-20 (s23): a seller reply in a returning customer's new
+  // conversation was attributed to the old lead's released ownership, which
+  // reopened its closed ClickUp task. A reply belongs to the current
+  // conversation's lead only.
+  const seedReturningCustomer = async ({ newLead }) => {
+    const old = await seedLead();
+    const acquired = await acquire(
+      old.clickupTaskId, 'to do', `hist-${old.clickupTaskId}-1`, new Date().toISOString(),
+    );
+    expect(acquired.rows[0].outcome).toBe('acquired');
+    const released = await release(
+      old.clickupTaskId, 'cerrada', `hist-${old.clickupTaskId}-2`, new Date().toISOString(),
+    );
+    expect(released.rows[0].outcome).toBe('released');
+
+    let newLeadId = null;
+    if (newLead) {
+      const { rows } = await client.query(`
+        INSERT INTO leads (
+          source_number_id, phone_number, lead_status_id, clickup_task_id, channel
+        ) VALUES ($1, $2, $3, $4, 'whatsapp')
+        RETURNING id
+      `, [sourceNumberId, old.phoneNumber, draftStatusId, `${old.clickupTaskId}-new`]);
+      newLeadId = rows[0].id;
+      createdLeadIds.push(newLeadId);
+    }
+    const { rows } = await client.query(`
+      INSERT INTO conversations (
+        lead_id, source_number_id, phone_number, conversation_status_id,
+        started_at, last_message_at
+      ) VALUES ($1, $2, $3, $4, NOW(), NOW() + INTERVAL '1 minute')
+      RETURNING id
+    `, [newLeadId, sourceNumberId, old.phoneNumber, activeStatusId]);
+    createdConversationIds.push(rows[0].id);
+    return { old, newLeadId, conversationId: rows[0].id, phoneNumber: old.phoneNumber };
+  };
+
+  const reacquireOperationCount = async (leadId) => {
+    const { rows } = await client.query(`
+      SELECT COUNT(*)::int AS total FROM external_operations
+      WHERE operation_type = 'clickup_status_reacquire'
+        AND (request_payload->>'lead_id')::bigint = $1
+    `, [leadId]);
+    return rows[0].total;
+  };
+
+  test.each([
+    ['its new lead', true],
+    ['no lead yet', false],
+  ])('a seller reply in a returning customer\'s conversation with %s never reopens the old lead', async (_label, newLead) => {
+    const customer = await seedReturningCustomer({ newLead });
+    const externalMessageId = `returning-reply-${sequence}`;
+    const event = await seedOwnInboundEvent({ phoneNumber: customer.phoneNumber, externalMessageId });
+
+    const persisted = await persistOwnMessage(event, customer, externalMessageId);
+    expect(persisted.rows[0].own_message_kind).toBe('human_reply');
+    expect(persisted.rows[0].conversation_id).toBe(customer.conversationId);
+    expect(persisted.rows[0].lead_id).toBe(customer.newLeadId);
+    createdMessageIds.push(persisted.rows[0].message_id);
+
+    const registered = await registerHumanReply(
+      persisted.rows[0].lead_id,
+      persisted.rows[0].message_id,
+      persisted.rows[0].replied_at,
+      event.id,
+      event.token,
+    );
+    expect(registered.rows[0].outcome).toBe('no_active_ownership');
+    expect(await ownershipCount(customer.old.leadId)).toBe(1);
+    expect((await ownershipRow(customer.old.leadId)).released_at).not.toBeNull();
+    expect(await reacquireOperationCount(customer.old.leadId)).toBe(0);
+    const inbox = await client.query(
+      'SELECT processing_status, processing_phase FROM inbound_events WHERE id = $1',
+      [event.id],
+    );
+    expect(inbox.rows[0]).toEqual({ processing_status: 'processed', processing_phase: 'completed' });
+  });
+
   test('an unmatched fromMe event is requeued while a matching bot send has no provider id', async () => {
     const lead = await seedLead();
     const pendingBotId = await seedMessage(

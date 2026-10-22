@@ -10,7 +10,7 @@
 --     vuelve el evento a `received`; el recovery lo correlaciona en otro tick
 --     y no adivina que fue humano mientras el proveedor sigue ambiguo;
 --   - si no existe, se persiste como outgoing/human en la conversacion mas
---     reciente del contacto;
+--     reciente del contacto, con el lead de esa conversacion (o sin lead);
 --   - si colisiona con customer, se falla visiblemente en vez de atribuirlo.
 --
 -- La consulta conserva el CAS del inbox durable. Un worker viejo no puede
@@ -72,34 +72,8 @@ pending_bot_echo AS MATERIALIZED (
   ORDER BY m.updated_at DESC, m.id DESC
   LIMIT 1
 ),
-ownership_context AS (
-  SELECT o.lead_id
-  FROM lead_chat_ownerships o
-  JOIN leads l ON l.id = o.lead_id AND l.deleted_at IS NULL
-  CROSS JOIN input i
-  WHERE o.deleted_at IS NULL
-    AND l.source_number_id = i.source_number_id
-    AND l.phone_number = i.phone_number
-  ORDER BY o.id DESC
-  LIMIT 1
-),
-lead_context AS (
-  SELECT COALESCE(
-    (SELECT lead_id FROM ownership_context),
-    (
-      SELECT l.id
-      FROM leads l
-      CROSS JOIN input i
-      WHERE l.deleted_at IS NULL
-        AND l.source_number_id = i.source_number_id
-        AND l.phone_number = i.phone_number
-      ORDER BY l.id DESC
-      LIMIT 1
-    )
-  ) AS lead_id
-),
 conversation_context AS (
-  SELECT c.id AS conversation_id
+  SELECT c.id AS conversation_id, c.lead_id
   FROM conversations c
   CROSS JOIN input i
   WHERE c.deleted_at IS NULL
@@ -107,6 +81,16 @@ conversation_context AS (
     AND c.phone_number = i.phone_number
   ORDER BY c.last_message_at DESC, c.id DESC
   LIMIT 1
+),
+-- Live test 2026-10-20: the reply used to take the newest ownership of any
+-- lead of the phone, so a seller reply in a returning customer's new
+-- conversation reacquired the old lead and reopened its closed ClickUp task.
+-- A reply belongs to the current conversation's lead only; a conversation
+-- with no lead yet keeps the message and touches no ownership.
+lead_context AS (
+  SELECT l.id AS lead_id
+  FROM conversation_context cc
+  JOIN leads l ON l.id = cc.lead_id AND l.deleted_at IS NULL
 ),
 inserted_human AS (
   INSERT INTO messages (
@@ -136,7 +120,7 @@ inserted_human AS (
   FROM input i
   JOIN claimed_event ce ON TRUE
   JOIN conversation_context cc ON TRUE
-  CROSS JOIN lead_context lc
+  LEFT JOIN lead_context lc ON TRUE
   WHERE i.external_message_id IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM existing_message)
     AND NOT EXISTS (SELECT 1 FROM pending_bot_echo)
@@ -170,7 +154,7 @@ classified AS (
     END AS own_message_kind
   FROM input i
   JOIN claimed_event ce ON TRUE
-  CROSS JOIN lead_context lc
+  LEFT JOIN lead_context lc ON TRUE
   LEFT JOIN resolved_message rm ON TRUE
 ),
 conversation_touch AS (
