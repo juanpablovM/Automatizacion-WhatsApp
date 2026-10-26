@@ -83,7 +83,14 @@ const MEASUREMENT_VISIT_COMMUNE_KEY = 'measurement_visit_commune';
 const MEASUREMENT_VISIT_COMMUNE_RETRY_KEY = 'measurement_visit_commune_retry';
 const MEASUREMENT_VISIT_ADDRESS_KEY = 'measurement_visit_address';
 const MEASUREMENT_VISIT_KEYS = [MEASUREMENT_VISIT_COMMUNE_KEY, MEASUREMENT_VISIT_COMMUNE_RETRY_KEY, MEASUREMENT_VISIT_ADDRESS_KEY];
-const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
+const MEASUREMENT_VISIT_REQUEST_PATTERNS = [
+  // Someone else goes: "voy a ir a medir" is the customer measuring, not a visit.
+  /\b(?:venga|vengan|venir|vaya|vayan|(?:pueden|podrian|puede|podria)\s+ir)\s+a\s+(?:medir|tomar\s+(?:las\s+)?medidas)\b/,
+  /\balguien\b.*\b(?:mida|midan|medir|tome\s+(?:las\s+)?medidas)\b/,
+  /\bvisita\s+(?:para\s+(?:medir|tomar\s+(?:las\s+)?medidas)|de\s+medicion|tecnica)\b/,
+];
+const MEASUREMENT_VISIT_WELCOME = '¡Hola! 👋 Te damos la bienvenida a *Hormiglass*, soy Hormi Atención.\n\n';
+const MEASUREMENT_VISIT_COMMUNE_QUESTION ='¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
 
 // Migration 037: the quote follow-up notice (ops-lead-chat-lease-scheduler)
 // ends with "¿Quieres hacer una cotización nueva?" while the seller still owns
@@ -1031,7 +1038,11 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   // Task 3c.33 (M5): the person who coordinates the measurement needs the
   // project location, so the commune (an official comuna) and the street are
   // collected first; whatever is already known is kept and not asked again.
+  // Live conversation 541 (2026-10-20): asking for someone to come and measure
+  // ("que alguien venga a medir") opens the flow at any point, the first
+  // message included; uncertainty ("no sé") only after a quantity question.
   else if (MEASUREMENT_VISIT_KEYS.includes(pendingQuestionKey)
+    || MEASUREMENT_VISIT_REQUEST_PATTERNS.some((pattern) => pattern.test(normalizedText))
     || ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
       && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
         || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText)))) {
@@ -1080,6 +1091,7 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
       responseText = '¡Gracias! Te derivaré con una persona de nuestro equipo para coordinar las medidas en *'
         + compact(visitContext.address) + ', ' + knownPlace + '* 👍\n\nTe escribirá por este mismo WhatsApp.';
     }
+    if (firstInteraction) responseText = MEASUREMENT_VISIT_WELCOME + responseText;
   }
 
   // 8. CONFIRMACIÓN EXPLÍCITA
