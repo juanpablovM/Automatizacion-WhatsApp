@@ -377,19 +377,18 @@ const buildV3PolicyInput = (row, options = {}) => {
         ? { ...entry, removed_by_customer: true }
         : entry));
     }
-    // Task 3c.33 (M2): a quoted (or named) product whose technical sheet lists
-    // two or more variants exposes their names as `variant_options`, outside
-    // the technical-sheet byte cap, so the customer's choice can be asked and
+    // Task 3c.33 (M2): a product whose technical sheet lists two or more
+    // variants exposes their names as `variant_options`, outside the
+    // technical-sheet byte cap, so the customer's choice can be asked and
     // validated before final_confirmation. A product with one variant or none
     // carries no key, so its policy is unchanged.
-    const variantRefs = relevantCatalogRefs({
-      catalog: versionedCatalog,
-      messageText: turnMessageText,
-      lineItems: turnLineItems,
-    });
+    // Live conversation 532 (2026-10-20): every such product lists them, not
+    // only the quoted or named ones. The model grounds loose words ("bloques")
+    // that name no product or synonym, and an item it creates that way must
+    // still need its variant before the summary.
     const variantOptionsByRef = new Map();
     for (const entry of sourceCatalog) {
-      if (!isPlainObject(entry) || typeof entry.ref !== 'string' || !variantRefs.includes(entry.ref)
+      if (!isPlainObject(entry) || entry.concept !== 'product' || typeof entry.ref !== 'string'
         || variantOptionsByRef.has(entry.ref) || !isPlainObject(entry.technical_sheet)) continue;
       const options = [...new Set((Array.isArray(entry.technical_sheet.variants) ? entry.technical_sheet.variants : [])
         .map((variant) => (isPlainObject(variant) && typeof variant.name === 'string' ? variant.name.trim() : ''))
