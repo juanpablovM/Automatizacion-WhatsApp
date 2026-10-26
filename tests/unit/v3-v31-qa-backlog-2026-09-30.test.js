@@ -80,6 +80,40 @@ describe('M1/M2: variant of a product with several technical-sheet variants', ()
     expect(policy.goals.find((goal) => goal.goal_id === 'line_items').status).toBe('unresolved');
   });
 
+  // Live conversation 532 (2026-10-20): "Quiero 100 bloques de 20 liso" named
+  // the product by a word that is neither its name nor a synonym. The model
+  // still grounded it, but the policy listed no variant options, so the summary
+  // went out without a variant and the next correction asked for it.
+  test('every multi-variant product lists its options, even one the message does not name', () => {
+    const policy = buildTurnPolicy('v3.1', pickupContext([]), GROUNDING, { text: 'Quiero 100 soleritas, las retiro en fábrica' });
+    const soleras = policy.grounding.catalog.find((entry) => entry.ref === 'product:soleras');
+    const pastelones = policy.grounding.catalog.find((entry) => entry.ref === 'product:pastelones');
+    const alambre = policy.grounding.catalog.find((entry) => entry.ref === 'product:alambre');
+    expect(soleras.variant_options).toEqual(['Solera Tipo Uno', 'Solera Zarpa']);
+    expect(pastelones.variant_options).toEqual(['Formato Uno', 'Formato Dos']);
+    expect(alambre).not.toHaveProperty('variant_options');
+  });
+
+  test('a new item grounded from a loose product word is not ready for final_confirmation without its variant', () => {
+    const text = 'Quiero 100 soleritas, las retiro en fábrica';
+    const policy = buildTurnPolicy('v3.1', pickupContext([]), GROUNDING, { text });
+    const validation = validateV3AiProposal(policy, proposal(policy, {
+      reply_text: PICKUP_REPLY.replace('• Pastelones — 100 m²', '• Soleras y Solerillas — 100 unidades'),
+      catalog_resolutions: [{
+        item_ref: 'new:1', status: 'matched', grounding_ref: 'product:soleras',
+        evidence_quote: 'soleritas', evidence_occurrence: 1,
+      }],
+      observations: [
+        { ...observation('obs_p', 'product', 'soleritas', 'Soleras y Solerillas', 'new:1'), grounding_ref: 'product:soleras', resolves_goal_ids: ['product'] },
+        { ...observation('obs_q', 'quantity', '100 soleritas', { kind: 'count', name: null, unit: 'unidades', value: 100 }, 'new:1'), resolves_goal_ids: ['quantity'] },
+      ],
+      state_mutations: [setMutation('product', 'obs_p', 'new:1'), setMutation('quantity', 'obs_q', 'new:1')],
+    }));
+    const error = validation.errors.find((entry) => entry.code === 'final_confirmation_not_ready');
+    expect(error?.allowed_values).toContain('variant@new:1');
+    expect(error.instruction).toContain('Solera Zarpa');
+  });
+
   test('v3 never sees variant options or variant authority', () => {
     const policy = buildTurnPolicy('v3', pickupContext([item('li_p', 'Pastelones')]), GROUNDING, { text: 'hola' });
     expect(JSON.stringify(policy)).not.toContain('variant_options');
