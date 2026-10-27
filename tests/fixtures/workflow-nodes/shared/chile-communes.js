@@ -126,7 +126,10 @@ const { CHILE_COMMUNE_NAMES, resolveChileanCommune, isServiceAreaCommune } = (()
   const byFold = new Map(names.map((name) => [fold(name), name]));
   for (const [alias, name] of Object.entries(ALIASES)) byFold.set(alias, name);
   const lookup = (value) => {
-    const key = fold(String(value ?? '').replace(/^\s*(?:la\s+)?comuna\s+(?:de\s+)?/i, ''));
+    // "En Ñuñoa", "es en la comuna de Maipú": no official name starts with these words.
+    const key = fold(String(value ?? '')
+      .replace(/^\s*(?:(?:es|esta|está|queda|vivo|estoy)\s+)?(?:en|desde)\s+/i, '')
+      .replace(/^\s*(?:la\s+)?comuna\s+(?:de\s+)?/i, ''));
     return key ? byFold.get(key) ?? null : null;
   };
   // "Puente Alto, Santiago" or "Lo Barnechea (La Dehesa)": the whole text

@@ -83,7 +83,14 @@ const MEASUREMENT_VISIT_COMMUNE_KEY = 'measurement_visit_commune';
 const MEASUREMENT_VISIT_COMMUNE_RETRY_KEY = 'measurement_visit_commune_retry';
 const MEASUREMENT_VISIT_ADDRESS_KEY = 'measurement_visit_address';
 const MEASUREMENT_VISIT_KEYS = [MEASUREMENT_VISIT_COMMUNE_KEY, MEASUREMENT_VISIT_COMMUNE_RETRY_KEY, MEASUREMENT_VISIT_ADDRESS_KEY];
-const MEASUREMENT_VISIT_COMMUNE_QUESTION = '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
+const MEASUREMENT_VISIT_REQUEST_PATTERNS = [
+  // Someone else goes: "voy a ir a medir" is the customer measuring, not a visit.
+  /\b(?:venga|vengan|venir|vaya|vayan|(?:pueden|podrian|puede|podria)\s+ir)\s+a\s+(?:medir|tomar\s+(?:las\s+)?medidas)\b/,
+  /\balguien\b.*\b(?:mida|midan|medir|tome\s+(?:las\s+)?medidas)\b/,
+  /\bvisita\s+(?:para\s+(?:medir|tomar\s+(?:las\s+)?medidas)|de\s+medicion|tecnica)\b/,
+];
+const MEASUREMENT_VISIT_WELCOME = '¡Hola! 👋 Te damos la bienvenida a *Hormiglass*, soy Hormi Atención.\n\n';
+const MEASUREMENT_VISIT_COMMUNE_QUESTION ='¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo, necesito saber dónde es tu proyecto.\n\n👉 ¿En qué comuna está?';
 
 // Migration 037: the quote follow-up notice (ops-lead-chat-lease-scheduler)
 // ends with "¿Quieres hacer una cotización nueva?" while the seller still owns
@@ -759,6 +766,56 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
     responseText = 'Entiendo. ¿Qué dato de la solicitud quieres corregir?';
   };
 
+  // Measurement visit (M5): collects the commune and the address, then hands
+  // off. `visitContext` is what is already known about the project location.
+  const requestsMeasurementVisit = MEASUREMENT_VISIT_REQUEST_PATTERNS.some((pattern) => pattern.test(normalizedText));
+  const runMeasurementVisit = (visitContext, stepField) => {
+    let reaskCommune = false;
+    if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY || pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_RETRY_KEY) {
+      const commune = communeRuntime.resolveChileanCommune(rawText);
+      if (commune) {
+        visitContext.commune = commune;
+      } else if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY) {
+        reaskCommune = true;
+      } else {
+        visitContext.location_note = rawText;
+      }
+    } else if (pendingQuestionKey === MEASUREMENT_VISIT_ADDRESS_KEY && rawText) {
+      visitContext.address = rawText;
+    }
+    const knownPlace = compact(visitContext.commune) || compact(visitContext.location_note);
+    updatedQualificationContext = visitContext;
+    if (reaskCommune) {
+      currentStepField = stepField;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_RETRY_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = 'No encuentro *' + rawText.replace(/[*_~]/g, '') + '* como comuna.\n\n👉 ¿En qué comuna de Chile está tu proyecto?';
+    } else if (!knownPlace) {
+      currentStepField = stepField;
+      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_COMMUNE_QUESTION;
+    } else if (!compact(visitContext.address)) {
+      currentStepField = stepField;
+      pendingQuestionKey = MEASUREMENT_VISIT_ADDRESS_KEY;
+      responseKind = 'measurement_visit_location';
+      responseText = MEASUREMENT_VISIT_KEYS.includes(row.pending_question_key)
+        ? 'Gracias, anoto *' + knownPlace + '*.\n\n👉 ¿Cuál es la calle y el número aproximado?'
+        : '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo en *' + knownPlace + '*, necesito la dirección.\n\n👉 ¿Cuál es la calle y el número aproximado?';
+    } else {
+      shouldEscalate = true;
+      shouldCreateLead = false;
+      escalationReason = 'measurement_assistance_requested';
+      currentStepField = 'escalation';
+      pendingQuestionKey = null;
+      conversationStatusCode = 'escalation_required';
+      responseKind = 'escalation_routing';
+      responseText = '¡Gracias! Te derivaré con una persona de nuestro equipo para coordinar las medidas en *'
+        + compact(visitContext.address) + ', ' + knownPlace + '* 👍\n\nTe escribirá por este mismo WhatsApp.';
+    }
+    if (firstInteraction) responseText = MEASUREMENT_VISIT_WELCOME + responseText;
+  };
+
   // ============================================================
   // PRECEDENCE ORDER — contentless → opt-out/abandono → humano →
   // escalación/terminal → operacional → re-engagement → comercial/IA
@@ -909,6 +966,15 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
     responseText = '';
   }
 
+  // Live re-test 2026-10-27 (conversation 557): a returning customer whose
+  // last request is closed or handed to sales asks for a measurement visit.
+  // It is a new request, so the visit starts from an empty location instead
+  // of the previous quote's commune and address.
+  else if (requestsMeasurementVisit && (isTerminalConversation || isHandoffAlreadyDone || wantsNew(normalizedText))) {
+    resetConversationLead = true;
+    runMeasurementVisit({}, 'city');
+  }
+
   // 4. TERMINAL: una conversación cerrada no puede reaparecer como re-engagement.
   else if (isTerminalConversation) {
     current.service = null;
@@ -1031,55 +1097,16 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   // Task 3c.33 (M5): the person who coordinates the measurement needs the
   // project location, so the commune (an official comuna) and the street are
   // collected first; whatever is already known is kept and not asked again.
+  // Live conversation 541 (2026-10-20): asking for someone to come and measure
+  // ("que alguien venga a medir") opens the flow at any point, the first
+  // message included; uncertainty ("no sé") only after a quantity question.
   else if (MEASUREMENT_VISIT_KEYS.includes(pendingQuestionKey)
+    || requestsMeasurementVisit
     || ((['quantity', 'measurements'].includes(pendingQuestionKey) || stepInfo.field === 'requirement')
       && (/\b(?:no tengo claro|no lo tengo claro|no se|no tengo las medidas|no tengo la cantidad)\b/.test(normalizedText)
         || /\b(?:pueden|podrian|puede|podria)\b.*\b(?:medir|tomar medidas)\b/.test(normalizedText)))) {
     resetConversationLead = false;
-    const visitContext = { ...persistedQualificationContext };
-    let reaskCommune = false;
-    if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY || pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_RETRY_KEY) {
-      const commune = communeRuntime.resolveChileanCommune(rawText);
-      if (commune) {
-        visitContext.commune = commune;
-      } else if (pendingQuestionKey === MEASUREMENT_VISIT_COMMUNE_KEY) {
-        reaskCommune = true;
-      } else {
-        visitContext.location_note = rawText;
-      }
-    } else if (pendingQuestionKey === MEASUREMENT_VISIT_ADDRESS_KEY && rawText) {
-      visitContext.address = rawText;
-    }
-    const knownPlace = compact(visitContext.commune) || compact(visitContext.location_note);
-    updatedQualificationContext = visitContext;
-    if (reaskCommune) {
-      currentStepField = stepInfo.field;
-      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_RETRY_KEY;
-      responseKind = 'measurement_visit_location';
-      responseText = 'No encuentro *' + rawText.replace(/[*_~]/g, '') + '* como comuna.\n\n👉 ¿En qué comuna de Chile está tu proyecto?';
-    } else if (!knownPlace) {
-      currentStepField = stepInfo.field;
-      pendingQuestionKey = MEASUREMENT_VISIT_COMMUNE_KEY;
-      responseKind = 'measurement_visit_location';
-      responseText = MEASUREMENT_VISIT_COMMUNE_QUESTION;
-    } else if (!compact(visitContext.address)) {
-      currentStepField = stepInfo.field;
-      pendingQuestionKey = MEASUREMENT_VISIT_ADDRESS_KEY;
-      responseKind = 'measurement_visit_location';
-      responseText = MEASUREMENT_VISIT_KEYS.includes(row.pending_question_key)
-        ? 'Gracias, anoto *' + knownPlace + '*.\n\n👉 ¿Cuál es la calle y el número aproximado?'
-        : '¡Claro! Una persona de nuestro equipo puede ayudarte con las medidas 👍\n\nPara coordinarlo en *' + knownPlace + '*, necesito la dirección.\n\n👉 ¿Cuál es la calle y el número aproximado?';
-    } else {
-      shouldEscalate = true;
-      shouldCreateLead = false;
-      escalationReason = 'measurement_assistance_requested';
-      currentStepField = 'escalation';
-      pendingQuestionKey = null;
-      conversationStatusCode = 'escalation_required';
-      responseKind = 'escalation_routing';
-      responseText = '¡Gracias! Te derivaré con una persona de nuestro equipo para coordinar las medidas en *'
-        + compact(visitContext.address) + ', ' + knownPlace + '* 👍\n\nTe escribirá por este mismo WhatsApp.';
-    }
+    runMeasurementVisit({ ...persistedQualificationContext }, stepInfo.field);
   }
 
   // 8. CONFIRMACIÓN EXPLÍCITA
