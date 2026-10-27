@@ -25,6 +25,11 @@ describe('official Chilean communes', () => {
     ['Puente Alto, Santiago', 'Puente Alto'],
     ['Chicureo', 'Colina'],
     ['La Dehesa', 'Lo Barnechea'],
+    // Live re-test 2026-10-27 (conversation 557): a reply to "¿En qué comuna?".
+    ['En Ñuñoa', 'Ñuñoa'],
+    ['es en la comuna de Maipú', 'Maipú'],
+    ['Vivo en Puente Alto', 'Puente Alto'],
+    ['desde La Florida', 'La Florida'],
   ])('%s resolves to %s', (text, expected) => {
     expect(resolveChileanCommune(text)).toBe(expected);
   });
