@@ -132,6 +132,26 @@ describe('measurement assistance collects the location before the handoff (M5)',
     expect(out.deterministic_reply).toMatch(/comuna/);
   });
 
+  // Live re-test 2026-10-27 (conversation 557): the phone had a closed earlier
+  // conversation, so the terminal "new request" branch caught the message first.
+  test.each([
+    ['closed', { conversation_status_code: 'closed', current_step: 'complete' }],
+    ['handed to sales', { conversation_status_code: 'handed_to_sales', current_step: 'complete', has_active_conversation: true }],
+  ])('a returning customer whose last conversation is %s opens the visit flow with a fresh context', (_label, extra) => {
+    const out = evaluateConversationStep({
+      ...base, ...extra, pending_question_key: null, is_recent_conversation: false,
+      qualification_context: { product: 'Adoquín', commune: 'Colina', address: 'Calle Uno 100' },
+      text_body: 'Necesito que alguien venga a medir mi patio para instalar baldosas',
+    }).json;
+    expect(out.response_kind).toBe('measurement_visit_location');
+    expect(out.pending_question_key).toBe('measurement_visit_commune');
+    expect(out.should_escalate).toBe(false);
+    expect(out.reset_conversation_lead).toBe(true);
+    expect(out.qualification_context.commune).toBeUndefined();
+    expect(out.qualification_context.address).toBeUndefined();
+    expect(out.deterministic_reply).not.toMatch(/bienvenida/);
+  });
+
   test('an explicit measurement visit request mid-quote opens the flow without a welcome', () => {
     const out = evaluate('Necesito que alguien venga a medir', { pending_question_key: 'service_scope', current_step: 'service_scope' });
     expect(out.response_kind).toBe('measurement_visit_location');
