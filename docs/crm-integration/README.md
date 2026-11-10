@@ -1,6 +1,8 @@
 # CRM integration (ClickUp replacement)
 
-Status: design approved on 2026-10-05. Integration contract pending.
+Status (2026-11-10): the bot → CRM contract (v1 + revision 1.1) is agreed and live in
+the CRM **development** project. Transport is verified end to end. The bot-side
+sender is not built yet. The CRM → bot endpoints are not built yet.
 
 ## Scope
 
@@ -14,25 +16,62 @@ not apply.
 - **Integration shape:** two-way webhooks through n8n. No shared database: PostgreSQL
   stays private, and the handoff/lease rules keep living in our SQL.
 - **Seller assignment:** stays in our rotation (`crm-lead-creation-and-assignment`).
-  The CRM only receives `assigned_seller_id`; each seller's `crm_user_id` is stored next
-  to the current `clickup_user_id`.
-- **Customer creation:** `lead.qualified` upserts the customer by phone and creates a new
-  opportunity. Idempotent by `event_id`; the CRM returns `crm_customer_id` and
-  `crm_opportunity_id`, stored like the ClickUp task id today.
+  The CRM only receives `crm_seller_id`, the seller's `usuarios.id` UUID, stored next to
+  the current `clickup_user_id`.
+- **Customer creation:** `lead.qualified` reuses the customer that matches the phone, or
+  creates one, and creates a new opportunity. Idempotent by `event_id`; the CRM returns
+  `crm_customer_id` and `crm_opportunity_id`, stored like the ClickUp task id today.
+- **RUT is optional (2026-11-06, owner).** The bot does not ask a natural person for
+  their RUT. It sends `rut` only when it has a `company_rut`. The seller completes the
+  RUT in the CRM later. `clientes.rut` is nullable in CRM dev and production since
+  2026-11-10.
 - **Transition:** ClickUp and the CRM run in parallel until the CRM is proven.
 
-## Draft contract (to be detailed)
+## Contract
 
-Events sent to the CRM:
+The source of truth lives in the CRM repository (`hormiglass-cl/hormiglass-system`),
+on branch `feat/whatsapp-webhook-receiver`. It is not merged to `main` yet.
 
-| Event | Replaces today |
-|---|---|
-| `lead.qualified` | ClickUp task creation (`crm-clickup-sync-lead`) |
-| `handoff.created` | Handoff task dispatch |
-| `message.new` | — (new: integrated chat) |
-| `ownership.released` | Lease restoration (`dispatch-lead-chat-restoration`) |
+- Contract: `docs/integrations/whatsapp-events.md`
+- CRM reply to our review: `docs/integrations/whatsapp-events-crm-response.md`
+- Receiver: `app/api/integrations/whatsapp/events/route.ts`, `lib/integrations/whatsapp/`
+- Migrations: `supabase/migrations/20261104120000_whatsapp_events_receiver.sql`,
+  `20261104130000_whatsapp_events_v1_1.sql`
 
-Endpoints the CRM calls (n8n webhooks):
+The CRM's contract text still says `clientes.rut` is NOT NULL. That part is outdated.
+The receiver reads the column's nullability at runtime, so `rut_required` no longer
+fires.
+
+Our review and requests: `.orca/drops/whatsapp-events-bot-response.md`.
+
+### Transport
+
+- `POST /api/integrations/whatsapp/events`, JSON, at most 65,536 raw bytes. Unknown
+  fields are rejected, both at the top level and inside `data`.
+- `X-WhatsApp-Timestamp` (Unix seconds) and `X-WhatsApp-Signature: v1=<hex>`, an
+  HMAC-SHA256 over `timestamp + "." + raw body`. The timestamp must be within ±300 s.
+- A retry keeps the same `event_id` and **byte-identical body**, with a fresh
+  timestamp and signature. Changed bytes under the same `event_id` return 409.
+- Retry 503 and network errors with backoff. Park 400, 401, 409 and 422 for
+  reconciliation.
+
+### Events sent to the CRM
+
+Envelope: `schema_version: 1`, `protocol_revision: "1.1"`, `event_id`, `type`,
+`conversation_id`, `data`.
+
+| Event | Replaces today | Notes |
+|---|---|---|
+| `lead.qualified` | ClickUp task creation (`crm-clickup-sync-lead`) | `lead_id`, `revision`, `phone` (`+56…`), `name`, optional `rut`, `crm_seller_id`, `title`, `requirement`. A correction sends a higher `revision` |
+| `handoff.created` | Handoff task dispatch | `kind` is `commercial` (`area` sales or management), `operational` or `complaint`. Always sends `reason` (snake_case) and `priority` (urgente, alta, media, baja) |
+| `message.new` | — (new: integrated chat) | Text only. Media goes as a placeholder text until a `media` contract exists |
+| `ownership.taken` | ClickUp status moved to "in progress" | `version`, `crm_seller_id` (uuid or null), `source: "clickup"` |
+| `ownership.released` | Lease restoration (`dispatch-lead-chat-restoration`) | Shares the `version` sequence with `ownership.taken` |
+
+Handoffs to `management`, `finance`, `scheduling` and `claims` return
+`pending_routing` until the CRM maps recipients per area.
+
+### Endpoints the CRM calls (n8n webhooks) — not built
 
 | Endpoint | Replaces today |
 |---|---|
@@ -41,10 +80,33 @@ Endpoints the CRM calls (n8n webhooks):
 | `send` | — (new: reply goes out through `wa-outbound-messages`) |
 | `history` | — (new: reads conversation messages from PostgreSQL) |
 
-Still to define: payload fields per event, authentication (HMAC), retries and
-idempotency, and behavior while the CRM is down.
+Proposed signing: the same scheme with `X-CRM-Timestamp` / `X-CRM-Signature` and a
+separate secret.
 
-Also deferred to this work: route claims (reclamos) to post-sale instead of Ventas.
+## Development environment
+
+- CRM dev Supabase project: `whbqrracrxmeuyerrbdg`. Its schema matches production since
+  2026-11-10.
+- The endpoint is a Cloudflare quick tunnel. Its URL changes on every restart, and the
+  CRM team shares the current one out of band.
+- The HMAC secret lives only in the bot's `.env`. It was shared in chat for dev and must
+  be rotated before production.
+- 2026-11-04 probe: an unsigned request returned 401, and a signed `{}` returned 400
+  `invalid_event`. Both are the expected results, and nothing was written.
+- Dev sellers: the final UUID list is pending confirmation from the CRM after the
+  2026-11-10 production copy.
+
+## Open items
+
+- Bot-side sender: outbox with a persisted raw body, n8n signer/retrier, and the
+  `crm_seller_id` mapping.
+- Confirmed dev seller UUIDs.
+- Phones duplicated among the imported Dolibarr customers return 422
+  `ambiguous_customer`.
+- CRM → bot endpoints (`take`, `release`/`close`, `send`, `history`).
+- Media messages, structured lead fields (city, commune, service, items).
+- Customer corrections after confirmation reach the CRM through `revision`.
+- Re-enable handoff delivery: since 2026-10-14 it is off in ClickUp.
 
 ## Design
 
