@@ -94,7 +94,8 @@ running in parallel.
   `crm_customer_id`, `crm_opportunity_id`, `crm_revision`, `crm_enqueued_requirement`
   and `crm_blocked_reason`.
 - Workflow `n8n/workflows/crm-events-dispatcher.json` (`CRM - Events Dispatcher`,
-  inactive on import). It runs every 30 s in two stages:
+  active like the other schedulers; it does nothing unless `CRM_EVENTS_ENABLED=true`).
+  It runs every minute in two stages:
   - **Enqueue.** It picks leads that have a seller and were created at or after
     `CRM_EVENTS_SINCE`, and whose requirement differs from the last one enqueued. It
     builds the body once and stores the exact string in `crm_events.body`. A trigger

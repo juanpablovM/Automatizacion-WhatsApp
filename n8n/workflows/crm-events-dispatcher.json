@@ -1,15 +1,15 @@
 {
   "id": "99999999-0000-0000-0000-000000000006",
   "name": "CRM - Events Dispatcher",
-  "active": false,
+  "active": true,
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
             {
-              "field": "seconds",
-              "secondsInterval": 30
+              "field": "minutes",
+              "minutesInterval": 1
             }
           ]
         }
