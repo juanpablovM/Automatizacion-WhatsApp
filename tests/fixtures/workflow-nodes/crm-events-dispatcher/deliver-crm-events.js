@@ -30,7 +30,8 @@ const deliverOne = async (row) => {
   } catch (error) {
     response = { error };
   }
-  const classified = classifyCrmResponse(response, row.event_id);
+  const eventType = String(row.event_type || 'lead.qualified');
+  const classified = classifyCrmResponse(response, row.event_id, eventType);
   let outcome = classified.outcome;
   let error = classified.error;
   let retryDelay = null;
@@ -48,6 +49,7 @@ const deliverOne = async (row) => {
   return {
     crm_event_id: Number(row.crm_event_id),
     event_id: row.event_id,
+    event_type: eventType,
     claim_token: row.claim_token,
     attempt_count: attempt,
     delivery_outcome: outcome,
@@ -60,8 +62,33 @@ const deliverOne = async (row) => {
   };
 };
 
+// A claimed row this pass will not attempt goes back to pending in a second,
+// so the next pass sends it instead of waiting for the stale-claim timeout.
+const deferOne = (row) => ({
+  crm_event_id: Number(row.crm_event_id),
+  event_id: row.event_id,
+  event_type: String(row.event_type || 'lead.qualified'),
+  claim_token: row.claim_token,
+  attempt_count: Number(row.attempt_count) || 1,
+  delivery_outcome: 'retry',
+  http_status: null,
+  delivery_error: 'deferred:execution_budget',
+  response_json: null,
+  crm_customer_id: null,
+  crm_opportunity_id: null,
+  retry_delay_seconds: 1,
+});
+
+// Never start a request that could still be running when the budget ends, so
+// the workflow's execution timeout cannot cut a pass mid-delivery.
+const deliverStartedAt = Date.now();
+const deliverBudgetMs = deliverConfig.deliver_budget_seconds * 1000;
 const delivered = [];
 for (const row of items.map((item) => item.json ?? {}).filter(isClaimedCrmEvent)) {
+  if (Date.now() - deliverStartedAt + deliverConfig.timeout_ms > deliverBudgetMs) {
+    delivered.push({ json: deferOne(row) });
+    continue;
+  }
   delivered.push({ json: await deliverOne(row) });
 }
 return delivered;

@@ -10,7 +10,9 @@ if (crmEventsConfig.errors.length > 0) {
 return [{ json: {
   since: crmEventsConfig.since,
   protocol_revision: crmEventsConfig.protocol_revision,
+  id_prefix: crmEventsConfig.id_prefix,
   enqueue_batch_size: crmEventsConfig.enqueue_batch_size,
+  message_batch_size: crmEventsConfig.message_batch_size,
   deliver_batch_size: crmEventsConfig.deliver_batch_size,
   stale_seconds: crmEventsConfig.stale_seconds,
 } }];

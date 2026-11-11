@@ -5,7 +5,8 @@
 --
 -- Only the holder of the current claim_token may complete. delivered stores
 -- the CRM result and writes the CRM ids on the lead unless a newer revision
--- was already delivered; retry returns the row to pending at now + delay;
+-- was already delivered (a message.new row has no lead and carries no ids, so
+-- it never touches leads); retry returns the row to pending at now + delay;
 -- anything else parks it for reconciliation. The body is never touched.
 WITH authorized AS MATERIALIZED (
   SELECT e.id

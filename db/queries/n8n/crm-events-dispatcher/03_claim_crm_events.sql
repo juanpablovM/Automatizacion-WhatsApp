@@ -5,7 +5,8 @@
 -- mid-delivery) are claimed together with a fresh claim_token; the old token
 -- can no longer complete. Re-sending a stale row is safe: the CRM answers a
 -- duplicate event_id with its stored 200 result. The body is returned exactly
--- as stored and must be sent as-is.
+-- as stored and must be sent as-is. event_type tells delivery which success
+-- shape to expect (lead.qualified or message.new).
 WITH candidates AS MATERIALIZED (
   SELECT e.id
   FROM crm_events e
@@ -26,15 +27,17 @@ claimed AS (
       updated_at = NOW()
   FROM candidates c
   WHERE e.id = c.id
-  RETURNING e.id, e.event_id, e.claim_token, e.attempt_count, e.body, e.lead_id, e.revision
+  RETURNING e.id, e.event_id, e.event_type, e.claim_token, e.attempt_count, e.body, e.lead_id, e.message_id, e.revision
 )
 SELECT
   id AS crm_event_id,
   event_id,
+  event_type,
   claim_token::text AS claim_token,
   attempt_count,
   body,
   lead_id,
+  message_id,
   revision
 FROM claimed
 ORDER BY id;

@@ -124,12 +124,12 @@ describe('readCrmEventsConfig', () => {
       ...ENABLED_ENV,
       CRM_EVENTS_URL: 'ftp://crm.example.test/x',
       CRM_EVENTS_SINCE: 'yesterday',
-      CRM_EVENTS_PROTOCOL_REVISION: '1.2',
+      CRM_EVENTS_PROTOCOL_REVISION: '1.3',
     });
     expect(config.errors).toEqual([
       'CRM_EVENTS_URL_invalid',
       'CRM_EVENTS_SINCE_invalid',
-      'CRM_EVENTS_PROTOCOL_REVISION_unsupported:1.2',
+      'CRM_EVENTS_PROTOCOL_REVISION_unsupported:1.3',
     ]);
   });
 

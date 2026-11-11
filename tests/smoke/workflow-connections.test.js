@@ -29,8 +29,9 @@ const workflowsDir = path.join(repoRoot, 'n8n', 'workflows');
 // deliberate edit here rather than a silent drift.
 const ALLOWED_TERMINALS = {
   'crm-events-dispatcher.json': [
-    // Two independent stages fed by the same config gate: enqueue and deliver.
-    'Complete CRM Event', 'Insert Lead Qualified Event',
+    // Independent stages fed by the same config gate: enqueue leads, enqueue
+    // messages (revision 1.2 only) and deliver.
+    'Complete CRM Event', 'Insert Lead Qualified Event', 'Insert Message Events',
   ],
   'ops-handoff-clickup-closure.json': [
     // Webhook responder: one reply node per authorization outcome.
