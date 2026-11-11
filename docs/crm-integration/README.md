@@ -1,8 +1,9 @@
 # CRM integration (ClickUp replacement)
 
-Status (2026-11-10): the bot → CRM contract (v1 + revision 1.1) is agreed and live in
+Status (2026-11-11): the bot → CRM contract (v1 + revision 1.1) is agreed and live in
 the CRM **development** project. Transport is verified end to end. The bot-side
-sender is not built yet. The CRM → bot endpoints are not built yet.
+sender for `lead.qualified` is built (see [Bot sender](#bot-sender)) and off by
+default. The CRM → bot endpoints are not built yet.
 
 ## Scope
 
@@ -83,6 +84,81 @@ Handoffs to `management`, `finance`, `scheduling` and `claims` return
 Proposed signing: the same scheme with `X-CRM-Timestamp` / `X-CRM-Signature` and a
 separate secret.
 
+## Bot sender
+
+`lead.qualified` goes out through an outbox. The ClickUp path is untouched and keeps
+running in parallel.
+
+- Migration `038_create_crm_outbox.sql` (rollback in `infra/postgres/rollback/`):
+  table `crm_events`, `sellers.crm_user_id`, and on `leads` the columns
+  `crm_customer_id`, `crm_opportunity_id`, `crm_revision`, `crm_enqueued_requirement`
+  and `crm_blocked_reason`.
+- Workflow `n8n/workflows/crm-events-dispatcher.json` (`CRM - Events Dispatcher`,
+  inactive on import). It runs every 30 s in two stages:
+  - **Enqueue.** It picks leads that have a seller and were created at or after
+    `CRM_EVENTS_SINCE`, and whose requirement differs from the last one enqueued. It
+    builds the body once and stores the exact string in `crm_events.body`. A trigger
+    keeps that body immutable. A correction to the requirement creates the next
+    `revision` as a new event.
+  - **Deliver.** It claims due events with `FOR UPDATE SKIP LOCKED` and a
+    `claim_token`, then signs and POSTs the stored body unchanged with a fresh
+    timestamp. A 200 marks the event `delivered` and writes the CRM ids on the lead.
+    503, other 5xx, 408, 429 and network errors go back to `pending` with exponential
+    backoff and jitter. Other statuses are `parked`. A row stuck in `processing`
+    longer than `CRM_EVENTS_STALE_SECONDS` is claimed again; the CRM answers a
+    duplicate with its stored result.
+- Logic lives in `tests/fixtures/workflow-nodes/crm-events-dispatcher/` and
+  `db/queries/n8n/crm-events-dispatcher/` (synced by `npm run check:parity`).
+
+### Configuration (n8n service)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CRM_EVENTS_ENABLED` | `false` | Only `true` turns the dispatcher on |
+| `CRM_EVENTS_URL` | `__PENDIENTE__` | Full URL including `/api/integrations/whatsapp/events` |
+| `CRM_EVENTS_HMAC_SECRET` | `__PENDIENTE__` | Shared HMAC secret. Never logged |
+| `CRM_EVENTS_SINCE` | `__PENDIENTE__` | ISO instant. Older leads are never sent |
+| `CRM_EVENTS_PROTOCOL_REVISION` | `1.1` | Only `1.1` is supported |
+| `CRM_EVENTS_BATCH_SIZE` | `20` | Leads enqueued and events delivered per pass |
+| `CRM_EVENTS_STALE_SECONDS` | `900` | Age at which a `processing` claim is taken back |
+| `CRM_EVENTS_TIMEOUT_MS` | `15000` | HTTP timeout per delivery |
+| `CRM_EVENTS_RETRY_BASE_SECONDS` / `_MAX_SECONDS` | `30` / `3600` | Backoff base and cap |
+| `CRM_EVENTS_MAX_ATTEMPTS` | `20` | Retryable failures beyond this are parked |
+
+When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
+protocol revision is unsupported, the execution fails with the variable names and
+nothing is enqueued or sent.
+
+### Mapping sellers
+
+Set each seller's CRM `usuarios.id`:
+
+```sql
+UPDATE sellers SET crm_user_id = '<crm usuarios.id uuid>' WHERE id = <seller id>;
+```
+
+Until a seller is mapped, their leads stay blocked with `seller_not_mapped`. The
+next pass after the mapping enqueues them.
+
+### Ops queries
+
+```sql
+-- Parked events (need reconciliation)
+SELECT id, event_id, lead_id, revision, attempt_count, last_http_status, last_error, updated_at
+FROM crm_events WHERE status = 'parked' ORDER BY updated_at DESC;
+
+-- Leads blocked before enqueue
+SELECT id, assigned_seller_id, crm_blocked_reason, created_at
+FROM leads WHERE crm_blocked_reason IS NOT NULL AND deleted_at IS NULL ORDER BY created_at DESC;
+
+-- Queue health
+SELECT status, count(*), min(next_attempt_at) FROM crm_events GROUP BY status;
+
+-- Re-send a parked event after fixing the cause (same event_id, same bytes)
+UPDATE crm_events SET status = 'pending', next_attempt_at = NOW(), attempt_count = 0, updated_at = NOW()
+WHERE event_id = '<event_id>' AND status = 'parked';
+```
+
 ## Development environment
 
 - CRM dev Supabase project: `whbqrracrxmeuyerrbdg`. Its schema matches production since
@@ -98,8 +174,10 @@ separate secret.
 
 ## Open items
 
-- Bot-side sender: outbox with a persisted raw body, n8n signer/retrier, and the
-  `crm_seller_id` mapping.
+- Bot sender rollout: apply migration 038, import `crm-events-dispatcher`, map
+  `sellers.crm_user_id`, set the `CRM_EVENTS_*` variables, then activate. Only
+  `lead.qualified` is sent. `handoff.created`, `message.new` and `ownership.*` are
+  not built yet.
 - Confirmed dev seller UUIDs.
 - Phones duplicated among the imported Dolibarr customers return 422
   `ambiguous_customer`.

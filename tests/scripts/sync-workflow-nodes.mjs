@@ -561,6 +561,58 @@ const NODES = [
     "workflow": "n8n/workflows/crm-clickup-sync-lead.json",
     "node": "Normalize ClickUp Result",
     "fixture": "crm-clickup-sync-lead/normalize-clickup-result.js"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Load CRM Events Config",
+    "fixture": "crm-events-dispatcher/load-crm-events-config.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Lead Qualified Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/01_select_lead_qualified_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Lead Qualified Events",
+    "fixture": "crm-events-dispatcher/build-lead-qualified-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Lead Qualified Event",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/02_insert_lead_qualified_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Claim CRM Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/03_claim_crm_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Deliver CRM Events",
+    "fixture": "crm-events-dispatcher/deliver-crm-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Complete CRM Event",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/04_complete_crm_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {
