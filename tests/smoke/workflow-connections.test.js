@@ -28,6 +28,10 @@ const workflowsDir = path.join(repoRoot, 'n8n', 'workflows');
 // each is listed with the reason it is allowed, so adding a terminal is a
 // deliberate edit here rather than a silent drift.
 const ALLOWED_TERMINALS = {
+  'crm-events-dispatcher.json': [
+    // Two independent stages fed by the same config gate: enqueue and deliver.
+    'Complete CRM Event', 'Insert Lead Qualified Event',
+  ],
   'ops-handoff-clickup-closure.json': [
     // Webhook responder: one reply node per authorization outcome.
     'Respond Applied', 'Respond Ignored', 'Respond Unauthorized',
