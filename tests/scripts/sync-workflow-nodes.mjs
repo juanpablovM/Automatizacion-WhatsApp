@@ -594,6 +594,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Message Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/05_select_message_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Message Events",
+    "fixture": "crm-events-dispatcher/build-message-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Message Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/06_insert_message_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Claim CRM Events",
     "fixture": "db/queries/n8n/crm-events-dispatcher/03_claim_crm_events.sql",
     "type": "n8n-nodes-base.postgres",

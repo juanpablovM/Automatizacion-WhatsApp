@@ -20,5 +20,11 @@ return items
       // correction is a requirement that differs from the last one enqueued.
       requirement_snapshot: String(row.requirement ?? ''),
       blocked_reason: built.blocked_reason,
+      // Revision 1.2 detects corrections by record, not by requirement: the
+      // hash of the business fields this body carries, and the source hash the
+      // candidate was selected with (Insert re-checks it under the row lock).
+      // Both stay null under 1.1, which keeps the requirement rule.
+      record_hash: built.record_hash ?? null,
+      source_hash: leadEventsConfig.protocol_revision === '1.2' && row.crm_source_hash ? String(row.crm_source_hash) : null,
     } };
   });

@@ -83,13 +83,15 @@ describeIntegration('CRM outbox', () => {
 
   // Stage A exactly as the workflow chains it: select, build, insert.
   const runEnqueue = async (since = SINCE, batch = 200) => {
-    const { rows: candidates } = await client.query(selectSql, [since, String(batch)]);
+    // p3 protocol revision; the record and source hashes (p8, p9) stay empty
+    // under 1.1, which keeps the requirement rule.
+    const { rows: candidates } = await client.query(selectSql, [since, String(batch), '1.1']);
     const results = [];
     for (const row of candidates) {
       const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
       const { rows } = await client.query(insertSql, [
         String(row.lead_id), String(built.revision ?? row.revision), built.event_id ?? '', built.conversation_id ?? '',
-        built.body ?? '', String(row.requirement ?? ''), built.blocked_reason ?? '',
+        built.body ?? '', String(row.requirement ?? ''), built.blocked_reason ?? '', '', '',
       ]);
       results.push(...rows);
     }
@@ -128,10 +130,10 @@ describeIntegration('CRM outbox', () => {
 
     test('a stale candidate (already enqueued by a concurrent run) inserts nothing', async () => {
       const leadId = await insertLead();
-      const { rows: candidates } = await client.query(selectSql, [SINCE, '200']);
+      const { rows: candidates } = await client.query(selectSql, [SINCE, '200', '1.1']);
       const row = candidates.find((candidate) => String(candidate.lead_id) === leadId);
       const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
-      const args = [leadId, '1', built.event_id, built.conversation_id, built.body, '50 bloques', ''];
+      const args = [leadId, '1', built.event_id, built.conversation_id, built.body, '50 bloques', '', '', ''];
       const [first] = (await client.query(insertSql, args)).rows;
       const [second] = (await client.query(insertSql, args)).rows;
       expect(first.enqueued).toBe(true);

@@ -145,6 +145,10 @@ services:
       # instant from which leads are sent: older leads are never backfilled.
       # CRM_EVENTS_ID_PREFIX namespaces every id sent to the CRM (e.g. prod);
       # it must be unique per environment and never reused.
+      # CRM_EVENTS_PROTOCOL_REVISION=1.2 adds the full lead record and
+      # message.new; switch only after the CRM confirms 1.2 in that environment.
+      # Empty CRM_EVENTS_DELIVER_BATCH_SIZE means the revision default (1.1:
+      # CRM_EVENTS_BATCH_SIZE, 1.2: 100).
       CRM_EVENTS_ENABLED: ${CRM_EVENTS_ENABLED:-false}
       CRM_EVENTS_URL: ${CRM_EVENTS_URL:-__PENDIENTE__}
       CRM_EVENTS_HMAC_SECRET: ${CRM_EVENTS_HMAC_SECRET:-__PENDIENTE__}
@@ -152,6 +156,9 @@ services:
       CRM_EVENTS_ID_PREFIX: ${CRM_EVENTS_ID_PREFIX:-__PENDIENTE__}
       CRM_EVENTS_PROTOCOL_REVISION: ${CRM_EVENTS_PROTOCOL_REVISION:-1.1}
       CRM_EVENTS_BATCH_SIZE: ${CRM_EVENTS_BATCH_SIZE:-20}
+      CRM_EVENTS_DELIVER_BATCH_SIZE: ${CRM_EVENTS_DELIVER_BATCH_SIZE:-}
+      CRM_EVENTS_MESSAGE_BATCH_SIZE: ${CRM_EVENTS_MESSAGE_BATCH_SIZE:-100}
+      CRM_EVENTS_DELIVER_BUDGET_SECONDS: ${CRM_EVENTS_DELIVER_BUDGET_SECONDS:-450}
       CRM_EVENTS_STALE_SECONDS: ${CRM_EVENTS_STALE_SECONDS:-900}
       CRM_EVENTS_TIMEOUT_MS: ${CRM_EVENTS_TIMEOUT_MS:-15000}
       CRM_EVENTS_RETRY_BASE_SECONDS: ${CRM_EVENTS_RETRY_BASE_SECONDS:-30}

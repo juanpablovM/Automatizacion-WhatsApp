@@ -3,6 +3,8 @@
 Status (2026-11-11): the bot → CRM contract (v1 + revision 1.1) is agreed and live in
 the CRM **development** project. Transport is verified end to end. The bot-side
 sender for `lead.qualified` is built (see [Bot sender](#bot-sender)) and off by
+default. Revision 1.2a (full lead record and `message.new`) is built behind
+`CRM_EVENTS_PROTOCOL_REVISION=1.2` (see [Revision 1.2a](#revision-12a)); 1.1 stays the
 default. The CRM → bot endpoints are not built yet.
 
 ## Scope
@@ -95,12 +97,15 @@ running in parallel.
   and `crm_blocked_reason`.
 - Workflow `n8n/workflows/crm-events-dispatcher.json` (`CRM - Events Dispatcher`,
   active like the other schedulers; it does nothing unless `CRM_EVENTS_ENABLED=true`).
-  It runs every minute in two stages:
+  It runs every minute in three stages:
   - **Enqueue.** It picks leads that have a seller and were created at or after
     `CRM_EVENTS_SINCE`, and whose requirement differs from the last one enqueued. It
     builds the body once and stores the exact string in `crm_events.body`. A trigger
     keeps that body immutable. A correction to the requirement creates the next
-    `revision` as a new event.
+    `revision` as a new event. Under 1.2 any change in the record the CRM receives
+    is a correction (see [Revision 1.2a](#revision-12a)).
+  - **Enqueue messages (1.2 only).** Chat messages of conversations the CRM already
+    knows become `message.new` events. Under 1.1 this stage selects nothing.
   - **Deliver.** It claims due events with `FOR UPDATE SKIP LOCKED` and a
     `claim_token`, then signs and POSTs the stored body unchanged with a fresh
     timestamp. A 200 marks the event `delivered` and writes the CRM ids on the lead.
@@ -120,8 +125,11 @@ running in parallel.
 | `CRM_EVENTS_HMAC_SECRET` | `__PENDIENTE__` | Shared HMAC secret. Never logged |
 | `CRM_EVENTS_SINCE` | `__PENDIENTE__` | ISO instant. Older leads are never sent |
 | `CRM_EVENTS_ID_PREFIX` | `__PENDIENTE__` (`test` in the test stack) | Environment namespace for every id, 1-16 lowercase letters or digits |
-| `CRM_EVENTS_PROTOCOL_REVISION` | `1.1` | Only `1.1` is supported |
-| `CRM_EVENTS_BATCH_SIZE` | `20` | Leads enqueued and events delivered per pass |
+| `CRM_EVENTS_PROTOCOL_REVISION` | `1.1` | `1.1` or `1.2`. Switch to `1.2` only after the CRM confirms it in that environment |
+| `CRM_EVENTS_BATCH_SIZE` | `20` | Leads enqueued per pass; under 1.1 also events delivered per pass |
+| `CRM_EVENTS_DELIVER_BATCH_SIZE` | empty (1.1: `CRM_EVENTS_BATCH_SIZE`, 1.2: `100`) | Events delivered per pass. 1.2 sends one event per chat message, so 100 per minute keeps bursts from lagging |
+| `CRM_EVENTS_MESSAGE_BATCH_SIZE` | `100` | Messages enqueued per pass (1.2 only) |
+| `CRM_EVENTS_DELIVER_BUDGET_SECONDS` | `450` | A pass never starts a POST that could outlive this budget (the workflow times out at 600 s). Rows it does not reach go back to `pending` in 1 s with `last_error = deferred:execution_budget` |
 | `CRM_EVENTS_STALE_SECONDS` | `900` | Age at which a `processing` claim is taken back |
 | `CRM_EVENTS_TIMEOUT_MS` | `15000` | HTTP timeout per delivery |
 | `CRM_EVENTS_RETRY_BASE_SECONDS` / `_MAX_SECONDS` | `30` / `3600` | Backoff base and cap |
@@ -139,6 +147,101 @@ arrives with different content, so a prefix must never be reused across
 environments or after a database reset. Use `prod` for production, `test` for
 the test stack, and a unique value per developer machine (e.g. `devjp`); pick a
 new prefix whenever a database that already sent events is reset.
+
+### Revision 1.2a
+
+Revision 1.2 is live on CRM dev. The receiver rejects any unknown key or invalid
+value with 400, so the bot **omits** an optional key whenever its value does not map
+cleanly; it never sends an empty string or `null` for an optional key. Free text is
+cut to the CRM maximum; identifiers (`rut`, `purchase_order`) are omitted instead of
+cut. Migration `039_crm_events_messages.sql` (rollback in `infra/postgres/rollback/`)
+backs it.
+
+#### `lead.qualified` fields under 1.2
+
+The 1.1 fields (`lead_id`, `revision`, `phone`, `name`, `rut`, `crm_seller_id`,
+`title`, `requirement`) are unchanged. `qc` is `leads.qualification_context`.
+
+| CRM field | Bot source | Mapping |
+|---|---|---|
+| `customer_type` | `qc.customer_type` | `b2c`, `particular`, `persona`, `natural` → `natural`; `b2b`, `contractor`, `empresa`, `constructora`, `company` → `company`; anything else omitted |
+| `company` | `qc.company` | Text, 200 |
+| `tax_document` | `qc.invoice_required` | `true` → `factura`, `false` → `boleta` (booleans only, as the ClickUp label) |
+| `purchase_order` | `qc.purchase_order` | Omitted if longer than 100 |
+| `service` | `leads.service` | Text, 100 |
+| `fulfillment` | `qc.service_scope`, `qc.fulfillment`, `qc.modality`, `leads.service` | Factory pickup (same rule as the title) → `pickup`; `service_scope` installation/both or `modality` installation → `install`; `fulfillment`/`modality` delivery → `delivery`; else omitted |
+| `city` | `leads.city` | Text, 100. Omitted for a pickup |
+| `commune` | `qc.commune` | Text, 100. Omitted for a pickup |
+| `address` | `qc.address` | Text, 300 |
+| `use_case` | `qc.use_case` | Text, 200 |
+| `urgency` | `qc.urgency` | `urgente`/`urgent`, `alta`/`high`, `media`/`medium`, `baja`/`low` (case and accents ignored); else omitted |
+| `desired_date` | `qc.desired_date` | `YYYY-MM-DD`, or day-first `DD/MM/YYYY` / `DD-MM-YYYY`, only if it is a real calendar date. Free text ("el lunes") is omitted |
+| `source_number` | `whatsapp_numbers.phone_number` of `leads.source_number_id` | `+` and 8–15 digits, else omitted |
+| `site` | `qc.terrain` (100), `qc.truck_access` (bool), `qc.debris_removal` (bool), `qc.access_restrictions` (500) | Only the keys present; non-boolean access values omitted; no `site` if none |
+| `items` | `qc.line_items[]` (or the flat `qc.product`/`quantity`/`measurements` of a historical quote) | Up to 50; items without a product skipped. `quantity` is a number when the bot value is a positive number or "number + one unit word" (`"20 m3"` → `20`, `unit: "m3"`); anything else (`"1.500"`, `"unas cuantas"`) is `null`, the full text stays in `requirement`. `variant`/`measurements` text 200 or `null`; `unit` from the item or the parsed word, `null` if over 20 |
+| `ai_summary` | newest `advisor_decisions.output_payload` of the lead | `lead_class` (except `none`), `next_best_action`, `executive_summary`, `diagnostic_datos.pain/scope/timing/obstacle`; text 4000; omitted if empty. Dropped first if the body would exceed 65,536 bytes |
+
+**Corrections.** Under 1.2 a new `revision` is sent when the record the CRM would
+receive changes, not only the requirement. `leads.crm_enqueued_record_hash` holds the
+sha256 of every `data` field except `lead_id`, `revision` and `ai_summary`, so AI
+summary churn never creates a revision. To avoid rebuilding every lead each minute,
+`crm_lead_source_hash()` fingerprints the raw inputs (lead columns,
+qualification context, conversation, seller mapping, source number) and
+`leads.crm_checked_source_hash` records the last one examined; a lead is rebuilt
+only when its inputs changed, and enqueued only when its record hash changed.
+
+Switching an environment from 1.1 to 1.2 sends each lead already enqueued under 1.1
+once more, as its next revision with the full record (the CRM answers `updated`).
+Switching back to 1.1 does not re-send them.
+
+#### `message.new`
+
+Sent only under 1.2. A message is enqueued when its conversation was announced by a
+**delivered** `lead.qualified` (so the CRM knows the conversation), it was created at
+or after `CRM_EVENTS_SINCE`, and it is not deleted. The whole chat of that
+conversation goes, including messages from before the lead qualified. Messages of
+the lead's other conversations do not.
+
+| CRM field | Bot source |
+|---|---|
+| `message_id` | `wa-<prefix>-message-<messages.id>` (event id: `…-e1`) |
+| `conversation_id` | `wa-<prefix>-conversation-<messages.conversation_id>` (same as the lead events) |
+| `direction` / `sender` | `incoming` → `inbound` / `customer`. `outgoing` → `outbound` with `sender_type` `bot` → `bot`, `system` → `system`, `human` → `seller` |
+| `crm_seller_id` | Only for `seller`: `sellers.crm_user_id` of the seller assigned to the conversation's lead |
+| `text` | `text_body`. Media becomes `[image]`, `[audio]`, `[video]`, `[location]` or `[document] <file name>`, followed by the caption on a new line when there is one. Empty text is `[empty message]`, other types `[unsupported message]`. Cut to 16,000 |
+| `sent_at` | `external_timestamp`, else `created_at`, as UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` |
+
+- Outgoing messages go only once `delivery_status = 'sent'` (the rule the
+  conversation history uses); queued, failed, cancelled or unknown sends never do.
+- `sender_type` is `NOT NULL` with a check (`customer`, `bot`, `human`, `system`) since
+  migration 018, and its historic rows were backfilled from `direction`. A value
+  outside that set, or an outgoing `customer`, is blocked rather than guessed.
+- A seller reply whose seller has no `crm_user_id` is blocked, never sent as `bot`.
+  Mapping the seller sends it on the next pass.
+- A message event has `lead_id` NULL; delivering it never touches `leads`. The CRM
+  result (`crm_message_id`, `status` `created` or `duplicate`) is kept in
+  `crm_events.response`.
+
+#### Blocked reasons
+
+| Where | Reason | Fix |
+|---|---|---|
+| `leads.crm_blocked_reason` | `seller_not_mapped`, `invalid_seller_uuid` | Map `sellers.crm_user_id` |
+| `leads.crm_blocked_reason` | `invalid_phone`, `conversation_missing`, `invalid_revision`, `invalid_id`, `payload_too_large` | Fix the lead data; under 1.2 the change is picked up automatically |
+| `crm_message_blocks.reason` | `seller_not_mapped`, `invalid_seller_uuid` | Map the conversation seller's `crm_user_id` |
+| `crm_message_blocks.reason` | `sender_direction_mismatch`, `unknown_sender_type`, `invalid_direction`, `invalid_sent_at`, `conversation_missing`, `invalid_id`, `payload_too_large` | Data defect in `messages`; investigate before fixing |
+
+Blocked messages are retried every pass, after fresh ones.
+
+#### Switching to 1.2
+
+1. The CRM confirms revision 1.2 in that environment.
+2. Apply migration 039.
+3. Import the updated `crm-events-dispatcher` workflow.
+4. Set `CRM_EVENTS_PROTOCOL_REVISION=1.2` and restart n8n.
+
+To go back, set `CRM_EVENTS_PROTOCOL_REVISION=1.1`: message enqueue stops, and
+pending `message.new` rows keep being delivered (they are already stored as 1.2).
 
 ### Mapping sellers
 
@@ -161,6 +264,13 @@ FROM crm_events WHERE status = 'parked' ORDER BY updated_at DESC;
 -- Leads blocked before enqueue
 SELECT id, assigned_seller_id, crm_blocked_reason, created_at
 FROM leads WHERE crm_blocked_reason IS NOT NULL AND deleted_at IS NULL ORDER BY created_at DESC;
+
+-- Messages blocked before enqueue (1.2)
+SELECT b.message_id, b.reason, m.conversation_id, m.sender_type, b.updated_at
+FROM crm_message_blocks b JOIN messages m ON m.id = b.message_id ORDER BY b.updated_at DESC;
+
+-- Queue health per event type
+SELECT event_type, status, count(*), min(next_attempt_at) FROM crm_events GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- Queue health
 SELECT status, count(*), min(next_attempt_at) FROM crm_events GROUP BY status;
@@ -185,15 +295,15 @@ WHERE event_id = '<event_id>' AND status = 'parked';
 
 ## Open items
 
-- Bot sender rollout: apply migration 038, import `crm-events-dispatcher`, map
-  `sellers.crm_user_id`, set the `CRM_EVENTS_*` variables, then activate. Only
-  `lead.qualified` is sent. `handoff.created`, `message.new` and `ownership.*` are
-  not built yet.
+- Bot sender rollout: apply migrations 038 and 039, import `crm-events-dispatcher`,
+  map `sellers.crm_user_id`, set the `CRM_EVENTS_*` variables, then activate.
+  `lead.qualified` (1.1 and 1.2) and `message.new` (1.2) are built.
+  `handoff.created` and `ownership.*` are not.
 - Confirmed dev seller UUIDs.
 - Phones duplicated among the imported Dolibarr customers return 422
   `ambiguous_customer`.
 - CRM → bot endpoints (`take`, `release`/`close`, `send`, `history`).
-- Media messages, structured lead fields (city, commune, service, items).
+- Media files in the CRM chat (1.2a sends a placeholder text).
 - Customer corrections after confirmation reach the CRM through `revision`.
 - Re-enable handoff delivery: since 2026-10-14 it is off in ClickUp.
 
