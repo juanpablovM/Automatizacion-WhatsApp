@@ -13,6 +13,9 @@ const CRM_MAX_BODY_BYTES = 65536;
 const CRM_NAME_FALLBACK = 'Cliente WhatsApp';
 const CRM_REQUIREMENT_FALLBACK = 'Sin requerimiento informado';
 const CRM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+// Environment namespace for every id sent to the CRM. The CRM treats ids as
+// global, so a reset database or a second environment must never reuse one.
+const CRM_ID_PREFIX_PATTERN = /^[a-z0-9]{1,16}$/;
 const CRM_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CRM_MAX_STORED_RESPONSE_CHARS = 8192;
 
@@ -37,6 +40,7 @@ const readCrmEventsConfig = (env = {}) => {
     url: null,
     since: null,
     protocol_revision: null,
+    id_prefix: null,
     enqueue_batch_size: crmPositiveInt(env.CRM_EVENTS_BATCH_SIZE, 20),
     deliver_batch_size: crmPositiveInt(env.CRM_EVENTS_BATCH_SIZE, 20),
     stale_seconds: crmPositiveInt(env.CRM_EVENTS_STALE_SECONDS, 900),
@@ -64,6 +68,11 @@ const readCrmEventsConfig = (env = {}) => {
     if (Number.isNaN(parsed.getTime())) config.errors.push('CRM_EVENTS_SINCE_invalid');
     else config.since = parsed.toISOString();
   }
+
+  const idPrefix = String(env.CRM_EVENTS_ID_PREFIX ?? '').trim();
+  if (!crmConfigured(idPrefix)) config.errors.push('CRM_EVENTS_ID_PREFIX_missing');
+  else if (!CRM_ID_PREFIX_PATTERN.test(idPrefix)) config.errors.push('CRM_EVENTS_ID_PREFIX_invalid');
+  else config.id_prefix = idPrefix;
 
   const revision = crmConfigured(env.CRM_EVENTS_PROTOCOL_REVISION)
     ? String(env.CRM_EVENTS_PROTOCOL_REVISION).trim()
@@ -140,9 +149,12 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
   const phone = normalizeCrmPhone(row.phone_number);
   if (!phone) return blockedCrmEvent('invalid_phone');
 
-  const leadId = `wa-lead-${leadNumber}`;
+  // Defensive: the config gate normally rejects a missing or invalid prefix.
+  const idPrefix = config.id_prefix;
+  if (typeof idPrefix !== 'string' || !CRM_ID_PREFIX_PATTERN.test(idPrefix)) return blockedCrmEvent('id_prefix_missing');
+  const leadId = `wa-${idPrefix}-lead-${leadNumber}`;
   const eventId = `${leadId}-r${revision}`;
-  const conversationId = `wa-conversation-${conversationNumber}`;
+  const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
   if (![leadId, eventId, conversationId].every(isValidCrmId)) return blockedCrmEvent('invalid_id');
 
   const qualification = crmAsObject(row.qualification_context);

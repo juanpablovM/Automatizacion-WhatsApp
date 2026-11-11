@@ -118,6 +118,7 @@ running in parallel.
 | `CRM_EVENTS_URL` | `__PENDIENTE__` | Full URL including `/api/integrations/whatsapp/events` |
 | `CRM_EVENTS_HMAC_SECRET` | `__PENDIENTE__` | Shared HMAC secret. Never logged |
 | `CRM_EVENTS_SINCE` | `__PENDIENTE__` | ISO instant. Older leads are never sent |
+| `CRM_EVENTS_ID_PREFIX` | `__PENDIENTE__` (`test` in the test stack) | Environment namespace for every id, 1-16 lowercase letters or digits |
 | `CRM_EVENTS_PROTOCOL_REVISION` | `1.1` | Only `1.1` is supported |
 | `CRM_EVENTS_BATCH_SIZE` | `20` | Leads enqueued and events delivered per pass |
 | `CRM_EVENTS_STALE_SECONDS` | `900` | Age at which a `processing` claim is taken back |
@@ -128,6 +129,15 @@ running in parallel.
 When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
 protocol revision is unsupported, the execution fails with the variable names and
 nothing is enqueued or sent.
+
+`CRM_EVENTS_ID_PREFIX` is required when enabled. Ids sent to the CRM are
+`wa-<prefix>-lead-<id>`, `wa-<prefix>-lead-<id>-r<rev>` and
+`wa-<prefix>-conversation-<id>`, where `<id>` is the local database id. The CRM
+treats ids as global and answers `409 identity_conflict` when a known id
+arrives with different content, so a prefix must never be reused across
+environments or after a database reset. Use `prod` for production, `test` for
+the test stack, and a unique value per developer machine (e.g. `devjp`); pick a
+new prefix whenever a database that already sent events is reset.
 
 ### Mapping sellers
 

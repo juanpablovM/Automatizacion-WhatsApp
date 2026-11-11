@@ -41,7 +41,10 @@ const ENABLED_ENV = {
   CRM_EVENTS_HMAC_SECRET: SECRET,
   CRM_EVENTS_SINCE: '2026-11-11T00:00:00Z',
   CRM_EVENTS_PROTOCOL_REVISION: '1.1',
+  CRM_EVENTS_ID_PREFIX: 'test',
 };
+
+const BUILD_CONFIG = { protocol_revision: '1.1', id_prefix: 'test' };
 
 const candidate = (overrides = {}) => ({
   lead_id: 42,
@@ -86,8 +89,34 @@ describe('readCrmEventsConfig', () => {
       'CRM_EVENTS_URL_missing',
       'CRM_EVENTS_HMAC_SECRET_missing',
       'CRM_EVENTS_SINCE_missing',
+      'CRM_EVENTS_ID_PREFIX_missing',
     ]);
     expect(JSON.stringify(config)).not.toContain(SECRET);
+  });
+
+  test('requires CRM_EVENTS_ID_PREFIX when enabled and exposes it as id_prefix', () => {
+    expect(readCrmEventsConfig(ENABLED_ENV).id_prefix).toBe('test');
+    for (const value of [undefined, '', '  ', '__PENDIENTE__']) {
+      const config = readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_ID_PREFIX: value });
+      expect(config.errors).toEqual(['CRM_EVENTS_ID_PREFIX_missing']);
+      expect(config.id_prefix).toBeNull();
+    }
+  });
+
+  test('rejects an id prefix that is not 1-16 lowercase letters or digits', () => {
+    for (const value of ['Prod', 'pr-od', 'pr_od', 'a'.repeat(17), 'pród', 'pr od']) {
+      const config = readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_ID_PREFIX: value });
+      expect(config.errors).toEqual(['CRM_EVENTS_ID_PREFIX_invalid']);
+      expect(config.id_prefix).toBeNull();
+    }
+    expect(readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_ID_PREFIX: 'a'.repeat(16) }).errors).toEqual([]);
+    expect(readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_ID_PREFIX: 'dev2' }).id_prefix).toBe('dev2');
+  });
+
+  test('does not require the id prefix while disabled', () => {
+    const config = readCrmEventsConfig({ CRM_EVENTS_ENABLED: 'false' });
+    expect(config.enabled).toBe(false);
+    expect(config.errors).toEqual([]);
   });
 
   test('rejects an unsupported protocol revision, an invalid URL and an invalid since', () => {
@@ -122,7 +151,7 @@ describe('normalizeCrmPhone and isValidCrmId', () => {
   });
 
   test('accepts 1–128 ASCII ids that start alphanumeric and use only . _ : -', () => {
-    expect(isValidCrmId('wa-lead-42-r1')).toBe(true);
+    expect(isValidCrmId('wa-test-lead-42-r1')).toBe(true);
     expect(isValidCrmId('a')).toBe(true);
     expect(isValidCrmId('a'.repeat(128))).toBe(true);
     expect(isValidCrmId('a'.repeat(129))).toBe(false);
@@ -135,7 +164,7 @@ describe('normalizeCrmPhone and isValidCrmId', () => {
 
 describe('buildLeadQualifiedEvent', () => {
   test('builds the exact envelope and data key set, in contract order', () => {
-    const result = buildLeadQualifiedEvent(candidate(), { protocol_revision: '1.1' });
+    const result = buildLeadQualifiedEvent(candidate(), BUILD_CONFIG);
     expect(result.blocked_reason).toBeNull();
     const parsed = JSON.parse(result.body);
     expect(Object.keys(parsed)).toEqual(['schema_version', 'protocol_revision', 'event_id', 'type', 'conversation_id', 'data']);
@@ -143,11 +172,11 @@ describe('buildLeadQualifiedEvent', () => {
     expect(parsed).toEqual({
       schema_version: 1,
       protocol_revision: '1.1',
-      event_id: 'wa-lead-42-r1',
+      event_id: 'wa-test-lead-42-r1',
       type: 'lead.qualified',
-      conversation_id: 'wa-conversation-7',
+      conversation_id: 'wa-test-conversation-7',
       data: {
-        lead_id: 'wa-lead-42',
+        lead_id: 'wa-test-lead-42',
         revision: 1,
         phone: '+56912345678',
         name: 'Juan Pérez',
@@ -156,27 +185,52 @@ describe('buildLeadQualifiedEvent', () => {
         requirement: '50 bloques de hormigón',
       },
     });
-    expect(result.event_id).toBe('wa-lead-42-r1');
-    expect(result.conversation_id).toBe('wa-conversation-7');
+    expect(result.event_id).toBe('wa-test-lead-42-r1');
+    expect(result.conversation_id).toBe('wa-test-conversation-7');
     expect(result.revision).toBe(1);
     expect(result.body).toBe(JSON.stringify(parsed));
   });
 
+  test('every id carries the environment prefix', () => {
+    const result = buildLeadQualifiedEvent(candidate(), { ...BUILD_CONFIG, id_prefix: 'prod' });
+    const parsed = JSON.parse(result.body);
+    expect(result.event_id).toBe('wa-prod-lead-42-r1');
+    expect(result.conversation_id).toBe('wa-prod-conversation-7');
+    expect(parsed.event_id).toBe('wa-prod-lead-42-r1');
+    expect(parsed.conversation_id).toBe('wa-prod-conversation-7');
+    expect(parsed.data.lead_id).toBe('wa-prod-lead-42');
+  });
+
+  test('two environments produce different ids for the same local lead', () => {
+    const test = buildLeadQualifiedEvent(candidate(), { ...BUILD_CONFIG, id_prefix: 'test' });
+    const prod = buildLeadQualifiedEvent(candidate(), { ...BUILD_CONFIG, id_prefix: 'prod' });
+    expect(test.event_id).not.toBe(prod.event_id);
+    expect(test.conversation_id).not.toBe(prod.conversation_id);
+    expect(JSON.parse(test.body).data.lead_id).not.toBe(JSON.parse(prod.body).data.lead_id);
+  });
+
+  test('blocks when the id prefix is missing or invalid', () => {
+    for (const idPrefix of [undefined, null, '', 'Prod', 'a'.repeat(17), 'pr-od']) {
+      const blocked = buildLeadQualifiedEvent(candidate(), { protocol_revision: '1.1', id_prefix: idPrefix });
+      expect(blocked).toMatchObject({ blocked_reason: 'id_prefix_missing', event_id: null, body: null });
+    }
+  });
+
   test('a correction carries the higher revision in event_id and data', () => {
-    const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({ revision: 3 }), {}).body);
-    expect(parsed.event_id).toBe('wa-lead-42-r3');
+    const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({ revision: 3 }), BUILD_CONFIG).body);
+    expect(parsed.event_id).toBe('wa-test-lead-42-r3');
     expect(parsed.data.revision).toBe(3);
   });
 
   test('sends rut only when the qualification holds a nonblank company_rut of at most 32 chars', () => {
     const withRut = JSON.parse(buildLeadQualifiedEvent(candidate({
       qualification_context: { company_rut: ' 76.123.456-7 ', rut: '11.111.111-1' },
-    }), {}).body);
+    }), BUILD_CONFIG).body);
     expect(Object.keys(withRut.data)).toEqual(['lead_id', 'revision', 'phone', 'name', 'rut', 'crm_seller_id', 'title', 'requirement']);
     expect(withRut.data.rut).toBe('76.123.456-7');
 
     for (const qualification of [{}, { company_rut: '   ' }, { rut: '11.111.111-1' }, { company_rut: 'x'.repeat(33) }]) {
-      const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({ qualification_context: qualification }), {}).body);
+      const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({ qualification_context: qualification }), BUILD_CONFIG).body);
       expect(parsed.data).not.toHaveProperty('rut');
     }
   });
@@ -184,14 +238,14 @@ describe('buildLeadQualifiedEvent', () => {
   test('accepts the qualification context as a JSON string', () => {
     const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({
       qualification_context: JSON.stringify({ company_rut: '76.123.456-7' }),
-    }), {}).body);
+    }), BUILD_CONFIG).body);
     expect(parsed.data.rut).toBe('76.123.456-7');
   });
 
   test('falls back for a blank name, service, city and requirement', () => {
     const parsed = JSON.parse(buildLeadQualifiedEvent(candidate({
       whatsapp_name: '  ', service: null, city: '', requirement: null,
-    }), {}).body);
+    }), BUILD_CONFIG).body);
     expect(parsed.data.name).toBe('Cliente WhatsApp');
     expect(parsed.data.title).toBe('Cliente WhatsApp - Sin Servicio - Sin Ciudad');
     expect(parsed.data.requirement).toBe('Sin requerimiento informado');
@@ -203,10 +257,10 @@ describe('buildLeadQualifiedEvent', () => {
       { city: null, qualification_context: { modality: 'pickup' } },
       { city: null, qualification_context: { service_scope: 'material', fulfillment: 'pickup' } },
     ]) {
-      const parsed = JSON.parse(buildLeadQualifiedEvent(candidate(overrides), {}).body);
+      const parsed = JSON.parse(buildLeadQualifiedEvent(candidate(overrides), BUILD_CONFIG).body);
       expect(parsed.data.title).toBe('Juan Pérez - retiro en fábrica');
     }
-    const withCity = JSON.parse(buildLeadQualifiedEvent(candidate({ service: 'retiro', city: 'Talca' }), {}).body);
+    const withCity = JSON.parse(buildLeadQualifiedEvent(candidate({ service: 'retiro', city: 'Talca' }), BUILD_CONFIG).body);
     expect(withCity.data.title).toBe('Juan Pérez - retiro - Talca');
   });
 
@@ -215,26 +269,26 @@ describe('buildLeadQualifiedEvent', () => {
       whatsapp_name: `${'n'.repeat(199)}😀tail`,
       service: 's'.repeat(300),
       requirement: 'r'.repeat(20000),
-    }), {}).body);
+    }), BUILD_CONFIG).body);
     expect(parsed.data.name).toBe('n'.repeat(199));
     expect(parsed.data.title.length).toBeLessThanOrEqual(200);
     expect(parsed.data.requirement.length).toBe(16000);
   });
 
   test('keeps the UTF-8 body within 65,536 bytes by shortening the requirement', () => {
-    const result = buildLeadQualifiedEvent(candidate({ requirement: '\u0001'.repeat(16000) }), {});
+    const result = buildLeadQualifiedEvent(candidate({ requirement: '\u0001'.repeat(16000) }), BUILD_CONFIG);
     expect(result.blocked_reason).toBeNull();
     expect(Buffer.byteLength(result.body, 'utf8')).toBeLessThanOrEqual(65536);
     expect(JSON.parse(result.body).data.requirement.length).toBeGreaterThan(0);
   });
 
   test('blocks instead of building an event the CRM would reject', () => {
-    expect(buildLeadQualifiedEvent(candidate({ phone_number: '123' }), {}).blocked_reason).toBe('invalid_phone');
-    expect(buildLeadQualifiedEvent(candidate({ crm_user_id: null }), {}).blocked_reason).toBe('seller_not_mapped');
-    expect(buildLeadQualifiedEvent(candidate({ crm_user_id: 'not-a-uuid' }), {}).blocked_reason).toBe('invalid_seller_uuid');
-    expect(buildLeadQualifiedEvent(candidate({ conversation_id: null }), {}).blocked_reason).toBe('conversation_missing');
-    expect(buildLeadQualifiedEvent(candidate({ revision: 0 }), {}).blocked_reason).toBe('invalid_revision');
-    const blocked = buildLeadQualifiedEvent(candidate({ phone_number: '123' }), {});
+    expect(buildLeadQualifiedEvent(candidate({ phone_number: '123' }), BUILD_CONFIG).blocked_reason).toBe('invalid_phone');
+    expect(buildLeadQualifiedEvent(candidate({ crm_user_id: null }), BUILD_CONFIG).blocked_reason).toBe('seller_not_mapped');
+    expect(buildLeadQualifiedEvent(candidate({ crm_user_id: 'not-a-uuid' }), BUILD_CONFIG).blocked_reason).toBe('invalid_seller_uuid');
+    expect(buildLeadQualifiedEvent(candidate({ conversation_id: null }), BUILD_CONFIG).blocked_reason).toBe('conversation_missing');
+    expect(buildLeadQualifiedEvent(candidate({ revision: 0 }), BUILD_CONFIG).blocked_reason).toBe('invalid_revision');
+    const blocked = buildLeadQualifiedEvent(candidate({ phone_number: '123' }), BUILD_CONFIG);
     expect(blocked.body).toBeNull();
     expect(blocked.event_id).toBeNull();
   });
@@ -268,10 +322,10 @@ describe('signCrmRequest', () => {
 });
 
 describe('classifyCrmResponse', () => {
-  const okBody = { event_id: 'wa-lead-42-r1', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID };
+  const okBody = { event_id: 'wa-test-lead-42-r1', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID };
 
   test('a 200 with the matching result is delivered', () => {
-    const outcome = classifyCrmResponse({ statusCode: 200, body: JSON.stringify(okBody) }, 'wa-lead-42-r1');
+    const outcome = classifyCrmResponse({ statusCode: 200, body: JSON.stringify(okBody) }, 'wa-test-lead-42-r1');
     expect(outcome).toMatchObject({
       outcome: 'delivered',
       http_status: 200,
@@ -283,9 +337,9 @@ describe('classifyCrmResponse', () => {
   });
 
   test('a 200 with a malformed or mismatched result is parked for reconciliation', () => {
-    expect(classifyCrmResponse({ statusCode: 200, body: 'not json' }, 'wa-lead-42-r1')).toMatchObject({ outcome: 'parked', error: 'invalid_success_response' });
-    expect(classifyCrmResponse({ statusCode: 200, body: { ...okBody, event_id: 'other' } }, 'wa-lead-42-r1')).toMatchObject({ outcome: 'parked', error: 'invalid_success_response' });
-    expect(classifyCrmResponse({ statusCode: 200, body: { ...okBody, crm_customer_id: 'x' } }, 'wa-lead-42-r1')).toMatchObject({ outcome: 'parked' });
+    expect(classifyCrmResponse({ statusCode: 200, body: 'not json' }, 'wa-test-lead-42-r1')).toMatchObject({ outcome: 'parked', error: 'invalid_success_response' });
+    expect(classifyCrmResponse({ statusCode: 200, body: { ...okBody, event_id: 'other' } }, 'wa-test-lead-42-r1')).toMatchObject({ outcome: 'parked', error: 'invalid_success_response' });
+    expect(classifyCrmResponse({ statusCode: 200, body: { ...okBody, crm_customer_id: 'x' } }, 'wa-test-lead-42-r1')).toMatchObject({ outcome: 'parked' });
   });
 
   test.each([
@@ -300,7 +354,7 @@ describe('classifyCrmResponse', () => {
     [422, 'ambiguous_customer'],
     [422, 'invalid_opportunity'],
   ])('%i %s is parked without retry', (statusCode, code) => {
-    const outcome = classifyCrmResponse({ statusCode, body: JSON.stringify({ error: code }) }, 'wa-lead-42-r1');
+    const outcome = classifyCrmResponse({ statusCode, body: JSON.stringify({ error: code }) }, 'wa-test-lead-42-r1');
     expect(outcome.outcome).toBe('parked');
     expect(outcome.http_status).toBe(statusCode);
     expect(outcome.error).toBe(`http_${statusCode}:${code}`);
@@ -316,13 +370,13 @@ describe('classifyCrmResponse', () => {
     [408, null],
   ])('%i %s is retried', (statusCode, code) => {
     const body = code ? { error: code } : '<html>bad gateway</html>';
-    const outcome = classifyCrmResponse({ statusCode, body }, 'wa-lead-42-r1');
+    const outcome = classifyCrmResponse({ statusCode, body }, 'wa-test-lead-42-r1');
     expect(outcome.outcome).toBe('retry');
     expect(outcome.error).toBe(`http_${statusCode}${code ? `:${code}` : ''}`);
   });
 
   test('a network error or timeout is retried', () => {
-    const outcome = classifyCrmResponse({ error: new Error('ETIMEDOUT') }, 'wa-lead-42-r1');
+    const outcome = classifyCrmResponse({ error: new Error('ETIMEDOUT') }, 'wa-test-lead-42-r1');
     expect(outcome).toMatchObject({ outcome: 'retry', http_status: null, error: 'network_error:ETIMEDOUT' });
   });
 
@@ -394,7 +448,7 @@ describe('Build Lead Qualified Events node', () => {
       { json: candidate({ lead_id: 43, phone_number: '1' }) },
     ], ENABLED_ENV);
     expect(out).toHaveLength(2);
-    expect(out[0].json).toMatchObject({ lead_id: 42, revision: 1, event_id: 'wa-lead-42-r1', blocked_reason: null, requirement_snapshot: '50 bloques de hormigón' });
+    expect(out[0].json).toMatchObject({ lead_id: 42, revision: 1, event_id: 'wa-test-lead-42-r1', blocked_reason: null, requirement_snapshot: '50 bloques de hormigón' });
     expect(typeof out[0].json.body).toBe('string');
     expect(out[1].json).toMatchObject({ lead_id: 43, blocked_reason: 'invalid_phone', body: null });
   });
@@ -412,10 +466,10 @@ describe('Build Lead Qualified Events node', () => {
 describe('Deliver CRM Events node', () => {
   const claimed = (overrides = {}) => ({
     crm_event_id: 9,
-    event_id: 'wa-lead-42-r1',
+    event_id: 'wa-test-lead-42-r1',
     claim_token: 'f7d1b8a2-0000-4000-8000-000000000001',
     attempt_count: 1,
-    body: buildLeadQualifiedEvent(candidate(), {}).body,
+    body: buildLeadQualifiedEvent(candidate(), BUILD_CONFIG).body,
     ...overrides,
   });
 
@@ -423,7 +477,7 @@ describe('Deliver CRM Events node', () => {
     const calls = [];
     const httpRequest = async (options) => {
       calls.push(options);
-      return { statusCode: 200, body: JSON.stringify({ event_id: 'wa-lead-42-r1', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID }) };
+      return { statusCode: 200, body: JSON.stringify({ event_id: 'wa-test-lead-42-r1', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID }) };
     };
     const item = claimed();
     const before = Math.floor(Date.now() / 1000);

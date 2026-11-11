@@ -14,6 +14,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 const require = createRequire(import.meta.url);
 const { buildLeadQualifiedEvent } = require('../fixtures/workflow-nodes/crm-events-dispatcher/crm-events-runtime.js');
 
+const BUILD_CONFIG = { protocol_revision: '1.1', id_prefix: 'test' };
+
 const enabled = process.env.TEST_PG_INTEGRATION === '1';
 const describeIntegration = enabled ? describe : describe.skip;
 const connection = {
@@ -84,7 +86,7 @@ describeIntegration('CRM outbox', () => {
     const { rows: candidates } = await client.query(selectSql, [since, String(batch)]);
     const results = [];
     for (const row of candidates) {
-      const built = buildLeadQualifiedEvent(row, { protocol_revision: '1.1' });
+      const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
       const { rows } = await client.query(insertSql, [
         String(row.lead_id), String(built.revision ?? row.revision), built.event_id ?? '', built.conversation_id ?? '',
         built.body ?? '', String(row.requirement ?? ''), built.blocked_reason ?? '',
@@ -114,7 +116,7 @@ describeIntegration('CRM outbox', () => {
       const events = await eventsOf(leadId);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        event_id: `wa-lead-${leadId}-r1`, event_type: 'lead.qualified', revision: 1, status: 'pending', attempt_count: 0,
+        event_id: `wa-test-lead-${leadId}-r1`, event_type: 'lead.qualified', revision: 1, status: 'pending', attempt_count: 0,
       });
       const body = JSON.parse(events[0].body);
       expect(body.data.crm_seller_id).toBe(SELLER_UUID);
@@ -128,7 +130,7 @@ describeIntegration('CRM outbox', () => {
       const leadId = await insertLead();
       const { rows: candidates } = await client.query(selectSql, [SINCE, '200']);
       const row = candidates.find((candidate) => String(candidate.lead_id) === leadId);
-      const built = buildLeadQualifiedEvent(row, {});
+      const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
       const args = [leadId, '1', built.event_id, built.conversation_id, built.body, '50 bloques', ''];
       const [first] = (await client.query(insertSql, args)).rows;
       const [second] = (await client.query(insertSql, args)).rows;
@@ -144,7 +146,7 @@ describeIntegration('CRM outbox', () => {
       await runEnqueue();
       await runEnqueue();
       const events = await eventsOf(leadId);
-      expect(events.map((event) => event.event_id)).toEqual([`wa-lead-${leadId}-r1`, `wa-lead-${leadId}-r2`]);
+      expect(events.map((event) => event.event_id)).toEqual([`wa-test-lead-${leadId}-r1`, `wa-test-lead-${leadId}-r2`]);
       expect(JSON.parse(events[1].body).data).toMatchObject({ revision: 2, requirement: '80 bloques' });
       expect(JSON.parse(events[0].body).data.requirement).toBe('50 bloques');
     });
@@ -204,7 +206,7 @@ describeIntegration('CRM outbox', () => {
     };
     const claimOwn = async (leadId) => {
       const rows = await claim();
-      const mine = rows.find((row) => row.event_id === `wa-lead-${leadId}-r1`);
+      const mine = rows.find((row) => row.event_id === `wa-test-lead-${leadId}-r1`);
       expect(mine, 'event was not claimed').toBeDefined();
       return mine;
     };
@@ -294,8 +296,8 @@ describeIntegration('CRM outbox', () => {
       await client.query("UPDATE leads SET requirement = '80 bloques' WHERE id = $1", [leadId]);
       await runEnqueue();
       const claimed = await claim();
-      const r1 = claimed.find((row) => row.event_id === `wa-lead-${leadId}-r1`);
-      const r2 = claimed.find((row) => row.event_id === `wa-lead-${leadId}-r2`);
+      const r1 = claimed.find((row) => row.event_id === `wa-test-lead-${leadId}-r1`);
+      const r2 = claimed.find((row) => row.event_id === `wa-test-lead-${leadId}-r2`);
       await complete(r2, 'delivered', { http_status: '200', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID });
       await complete(r1, 'delivered', { http_status: '200', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: '99999999-7777-4888-9999-aaaaaaaaaaaa' });
       expect(await leadOf(leadId)).toMatchObject({ crm_revision: 2, crm_opportunity_id: OPPORTUNITY_UUID });
