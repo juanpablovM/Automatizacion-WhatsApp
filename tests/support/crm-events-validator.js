@@ -1,5 +1,5 @@
 // Local mirror of the CRM receiver validator for contract v1, revisions 1.1 and
-// 1.2 ("1.2a", live on CRM dev). Anything the real validator rejects answers
+// 1.2 ("1.2a" and the 1.2b ownership events, live on CRM dev). Anything the real validator rejects answers
 // 400, so every event the bot builds must pass these exact rules. Returns the
 // list of violations; an empty list means the CRM would accept the shape.
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -122,6 +122,23 @@ const validateMessageNew = (data, errors) => {
   }
 };
 
+// 1.2b: ownership.taken data keys only {version, crm_seller_id, source};
+// crm_seller_id is required and may be null. ownership.released data keys only
+// {version, reason}.
+const OWNERSHIP_VERSION_OK = (value) => Number.isInteger(value) && value >= 1 && value <= 2147483647;
+const validateOwnershipTaken = (data, errors) => {
+  onlyKeys(errors, 'data', data, ['version', 'crm_seller_id', 'source']);
+  if (!OWNERSHIP_VERSION_OK(data.version)) errors.push('data.version');
+  if (!('crm_seller_id' in data)) errors.push('data.crm_seller_id: missing');
+  else if (data.crm_seller_id !== null && !(typeof data.crm_seller_id === 'string' && UUID.test(data.crm_seller_id))) errors.push('data.crm_seller_id');
+  if (!['clickup', 'crm'].includes(data.source)) errors.push('data.source');
+};
+const validateOwnershipReleased = (data, errors) => {
+  onlyKeys(errors, 'data', data, ['version', 'reason']);
+  if (!OWNERSHIP_VERSION_OK(data.version)) errors.push('data.version');
+  if (!['seller_released', 'sla_expired', 'customer_new_quote', 'opportunity_closed'].includes(data.reason)) errors.push('data.reason');
+};
+
 const validateCrmEvent = (event) => {
   const errors = [];
   const parsed = typeof event === 'string' ? JSON.parse(event) : event;
@@ -138,6 +155,10 @@ const validateCrmEvent = (event) => {
   } else if (parsed.type === 'message.new') {
     if (parsed.protocol_revision !== '1.2') errors.push('message.new requires protocol_revision 1.2');
     validateMessageNew(parsed.data, errors);
+  } else if (parsed.type === 'ownership.taken' || parsed.type === 'ownership.released') {
+    if (parsed.protocol_revision !== '1.2') errors.push(`${parsed.type} requires protocol_revision 1.2 in the bot`);
+    if (parsed.type === 'ownership.taken') validateOwnershipTaken(parsed.data, errors);
+    else validateOwnershipReleased(parsed.data, errors);
   } else {
     errors.push(`envelope.type: ${parsed.type}`);
   }
