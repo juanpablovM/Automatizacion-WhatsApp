@@ -5,7 +5,10 @@ the CRM **development** project. Transport is verified end to end. The bot-side
 sender for `lead.qualified` is built (see [Bot sender](#bot-sender)) and off by
 default. Revision 1.2a (full lead record and `message.new`) is built behind
 `CRM_EVENTS_PROTOCOL_REVISION=1.2` (see [Revision 1.2a](#revision-12a)); 1.1 stays the
-default. The CRM → bot endpoints are not built yet.
+default. Revision 1.2b (`ownership_version`, `ownership.taken` / `ownership.released`
+and the CRM → bot `chat.take` / `chat.release` webhook) is built behind the same
+switch and `CRM_INBOUND_ENABLED` (see [Revision 1.2b](#revision-12b)). Other CRM → bot
+events (`opportunity.*`, `handoff.*`, `message.send`) are not built yet.
 
 ## Scope
 
@@ -68,23 +71,25 @@ Envelope: `schema_version: 1`, `protocol_revision: "1.1"`, `event_id`, `type`,
 | `lead.qualified` | ClickUp task creation (`crm-clickup-sync-lead`) | `lead_id`, `revision`, `phone` (`+56…`), `name`, optional `rut`, `crm_seller_id`, `title`, `requirement`. A correction sends a higher `revision` |
 | `handoff.created` | Handoff task dispatch | `kind` is `commercial` (`area` sales or management), `operational` or `complaint`. Always sends `reason` (snake_case) and `priority` (urgente, alta, media, baja) |
 | `message.new` | — (new: integrated chat) | Text only. Media goes as a placeholder text until a `media` contract exists |
-| `ownership.taken` | ClickUp status moved to "in progress" | `version`, `crm_seller_id` (uuid or null), `source: "clickup"` |
-| `ownership.released` | Lease restoration (`dispatch-lead-chat-restoration`) | Shares the `version` sequence with `ownership.taken` |
+| `ownership.taken` | ClickUp status moved to "in progress" | 1.2 only. `version`, `crm_seller_id` (uuid or null), `source` (`clickup` or `crm`). See [Revision 1.2b](#revision-12b) |
+| `ownership.released` | Lease restoration (`dispatch-lead-chat-restoration`) | 1.2 only. `version`, `reason`. Shares the `version` sequence with `ownership.taken` |
 
 Handoffs to `management`, `finance`, `scheduling` and `claims` return
 `pending_routing` until the CRM maps recipients per area.
 
-### Endpoints the CRM calls (n8n webhooks) — not built
+### Endpoint the CRM calls (n8n webhook)
 
-| Endpoint | Replaces today |
-|---|---|
-| `take` | ClickUp status moved to "in progress" (ownership acquisition) |
-| `release` / `close` | ClickUp resolved statuses (`normalize-clickup-closure`) |
-| `send` | — (new: reply goes out through `wa-outbound-messages`) |
-| `history` | — (new: reads conversation messages from PostgreSQL) |
+One endpoint, `POST <bot n8n>/webhook/crm-events`, takes every CRM → bot event. Only
+`chat.take` and `chat.release` are built (1.2b); see
+[Inbound webhook](#inbound-webhook-crm--bot). The rest come later:
 
-Proposed signing: the same scheme with `X-CRM-Timestamp` / `X-CRM-Signature` and a
-separate secret.
+| Event | Replaces today | Status |
+|---|---|---|
+| `chat.take` | ClickUp status moved to "in progress" (ownership acquisition) | Built (1.2b) |
+| `chat.release` | ClickUp leaving "in progress" (`normalize-clickup-closure`) | Built (1.2b) |
+| `opportunity.quote_sent`, `opportunity.closed`, `opportunity.reopened` | ClickUp quote statuses | 1.2c, answers `400 invalid_event` today |
+| `handoff.acknowledged`, `handoff.resolved` | ClickUp handoff closure | 1.2d, answers `400 invalid_event` today |
+| `message.send` | — (new: reply goes out through `wa-outbound-messages`) | Phase 3, answers `400 invalid_event` today |
 
 ## Bot sender
 
@@ -134,6 +139,9 @@ running in parallel.
 | `CRM_EVENTS_TIMEOUT_MS` | `15000` | HTTP timeout per delivery |
 | `CRM_EVENTS_RETRY_BASE_SECONDS` / `_MAX_SECONDS` | `30` / `3600` | Backoff base and cap |
 | `CRM_EVENTS_MAX_ATTEMPTS` | `20` | Retryable failures beyond this are parked |
+
+| `CRM_INBOUND_ENABLED` | `false` | Only `true` turns the `/webhook/crm-events` receiver on. Otherwise it answers `503 receiver_unavailable` |
+| `CRM_INBOUND_HMAC_SECRET` | `__PENDIENTE__` | Secret the CRM signs `X-CRM-Signature` with. Must differ from `CRM_EVENTS_HMAC_SECRET` (the receiver answers 503 if they are equal). Never logged |
 
 When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
 protocol revision is unsupported, the execution fails with the variable names and
@@ -243,6 +251,140 @@ Blocked messages are retried every pass, after fresh ones.
 To go back, set `CRM_EVENTS_PROTOCOL_REVISION=1.1`: message enqueue stops, and
 pending `message.new` rows keep being delivered (they are already stored as 1.2).
 
+### Revision 1.2b
+
+Migration `040_crm_ownership_and_inbound.sql` (rollback in `infra/postgres/rollback/`)
+backs it. ClickUp keeps running in parallel and **no ClickUp query or workflow
+changed** (owner decision 2026-11-11, option 1).
+
+#### `ownership_version`
+
+- One monotonic `ownership_version` per conversation, in
+  `crm_conversation_ownership` (with the last change: owner `bot`/`seller`,
+  `seller_id`, `source` `clickup`/`crm`/`bot`, `reason`, `changed_at`). Every version is
+  a row of `crm_ownership_changes`.
+- A trigger on `lead_chat_ownerships` advances it on **every** acquisition (a live row
+  inserted) and **every** release (`released_at` set), whoever wrote it: the ClickUp
+  webhook, the CRM webhook, the SLA sweeper, a seller's own WhatsApp reply, or the
+  customer asking for a new quote. ClickUp and the CRM share one sequence. A ClickUp
+  re-delivery of the same take does not advance it.
+- The trigger never fails the write that fired it. An error is logged as a PostgreSQL
+  `WARNING` and only the tracking is skipped. A lead without a conversation is not
+  versioned.
+- The conversation is the one the lead is announced under (`leads.source_conversation_id`,
+  else its newest conversation), the same as `lead.qualified`.
+
+#### `ownership.taken` / `ownership.released`
+
+Sent only under 1.2, one event per version, for conversations announced by a
+**delivered** `lead.qualified`, changes at or after `CRM_EVENTS_SINCE`, in version
+order (changes from before the lead qualified are included). The dispatcher stage
+`Select Ownership Candidates` → `Build Ownership Events` → `Insert Ownership Events`
+enqueues them; delivery is the shared stage. Event id:
+`wa-<prefix>-ownership-<conversation id>-v<version>`.
+
+```json
+{"schema_version":1,"protocol_revision":"1.2","event_id":"wa-prod-ownership-812-v3","type":"ownership.taken","conversation_id":"wa-prod-conversation-812","data":{"version":3,"crm_seller_id":"6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b","source":"crm"}}
+{"schema_version":1,"protocol_revision":"1.2","event_id":"wa-prod-ownership-812-v4","type":"ownership.released","conversation_id":"wa-prod-conversation-812","data":{"version":4,"reason":"sla_expired"}}
+```
+
+| Field | Source |
+|---|---|
+| `version` | `crm_ownership_changes.ownership_version` (1 … 2,147,483,647) |
+| `crm_seller_id` | `sellers.crm_user_id` of the taking seller: the CRM seller for a CRM take, else the lead's assigned seller. `null` when unmapped (the key is always sent) |
+| `source` | `crm` for a CRM `chat.take`, else `clickup` (a ClickUp take or a seller's late WhatsApp reply) |
+| `reason` | `release_reason` `sla_expired` → `sla_expired`; `customer_new_quote` → `customer_new_quote`; `clickup_released`, `manual` (CRM `chat.release`, ops archive) and anything else → `seller_released`. `opportunity_closed` comes with 1.2c |
+
+The CRM answers `200 {event_id, ownership_version, owner}`, also for a stale version
+(it keeps its newer state). Any 200 echoing the `event_id` is `delivered`; nothing is
+written on the lead. A change that cannot be built (for example a version over the
+int32 range) records `crm_ownership_changes.crm_blocked_reason` and is retried after
+fresh ones.
+
+#### Inbound webhook (CRM → bot)
+
+Workflow `n8n/workflows/crm-inbound-events.json` (`CRM - Inbound Events`), webhook
+`POST /webhook/crm-events`. Logic lives in
+`tests/fixtures/workflow-nodes/crm-inbound-events/` and
+`crm_inbound_apply_chat_event()` (migration 040), called from
+`db/queries/n8n/crm-inbound-events/01_apply_crm_chat_event.sql`.
+
+Request:
+
+```http
+POST /webhook/crm-events
+Content-Type: application/json
+X-CRM-Timestamp: 1794409200
+X-CRM-Signature: v1=<lowercase hex HMAC-SHA256(CRM_INBOUND_HMAC_SECRET, timestamp + "." + raw body)>
+
+{"schema_version":1,"protocol_revision":"1.2","event_id":"crm-evt-01HF","type":"chat.take","occurred_at":"2026-11-11T15:00:00Z","data":{"crm_opportunity_id":"66666666-7777-4888-9999-aaaaaaaaaaaa","crm_seller_id":"6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b","ownership_version":2}}
+```
+
+- The webhook runs with n8n's Raw Body option; the HMAC is checked over the exact
+  bytes with a constant-time compare, never over the parsed JSON. Timestamp: 10
+  digits, within ±300 s. Body: at most 65,536 bytes of UTF-8 JSON.
+- Envelope keys only `schema_version` (1), `protocol_revision` (`"1.2"`), `event_id`
+  (`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`), `type`, `occurred_at` (UTC ISO with `Z`),
+  `data`. `chat.take` / `chat.release` data keys only `crm_opportunity_id` (uuid),
+  `crm_seller_id` (uuid), `ownership_version` (integer ≥ 0; `0` when the CRM never
+  saw one). Anything else is `400 invalid_event`.
+- Idempotency: `crm_inbound_events` keeps each `event_id` with the sha256 of the raw
+  body and the response it got. The same id with the same bytes returns that stored
+  response (status and body); the same id with other bytes is `409 event_conflict`.
+  Only responses decided by the database (200, 409 `ownership_conflict`, 422) are
+  stored; 400/401/413/503 are not.
+- The conversation comes from `leads.crm_opportunity_id`; the seller from an active
+  `sellers.crm_user_id`.
+- `chat.take` uses the ClickUp acquire semantics (copied, not shared): the bot goes
+  silent, the newest customer message is pending and opens a 2-hour window (no
+  message, no deadline yet), `sla_mode` standard. The row has no ClickUp task
+  (`clickup_task_id` NULL, `acquired_via = 'crm'`, `owner_seller_id`). A lease whose SLA
+  already expired but was not swept yet is first released as `sla_expired`.
+- `chat.release` is allowed only to the holder; it releases with `release_reason
+  'manual'`, `released_via = 'crm'`, and the bot resumes.
+- Both changes go through the version trigger, so the bot echoes them back as
+  `ownership.taken` (`source: "crm"`) / `ownership.released` (`seller_released`).
+
+Responses (JSON, `Cache-Control: no-store`):
+
+| Status | Body | When |
+|---|---|---|
+| 200 | `{"event_id":"crm-evt-01HF","result":"applied","ownership_version":3}` | Applied. A take by the seller who already holds the chat is also `applied`, with the unchanged version |
+| 200 | `{"event_id":"crm-evt-01HF","result":"ignored_stale","ownership_version":5}` | `data.ownership_version` is lower than the bot's, or a release of a chat the bot already owns. Nothing changes |
+| 409 | `{"error":"ownership_conflict","holder_crm_seller_id":"7a2d3b45-6c7e-4f80-9bac-1d2e3f4a5b6c","ownership_version":3}` | Another seller holds the chat (`holder_crm_seller_id` is `null` for a seller without a CRM mapping). The bot never reassigns silently |
+| 409 | `{"error":"event_conflict","event_id":"crm-evt-01HF"}` | Same `event_id`, different bytes |
+| 422 | `{"error":"invalid_opportunity","event_id":"crm-evt-01HF"}` / `{"error":"invalid_seller","event_id":"crm-evt-01HF"}` | Unknown opportunity (or its lead has no conversation) / seller not mapped or inactive |
+| 400 | `{"error":"invalid_event","details":["data.note: unknown"]}` | Envelope or data invalid, or a type not built yet. `details` names fields, never values |
+| 401 | `{"error":"unauthorized"}` | Missing, malformed, wrong or stale signature or timestamp |
+| 413 | `{"error":"payload_too_large"}` | Body over 65,536 bytes |
+| 503 | `{"error":"receiver_unavailable"}` | `CRM_INBOUND_ENABLED` is not `true`, the secret is missing or equals the outbound one, or the database failed. Retry with backoff |
+
+Neither the secret nor the raw body is ever logged or returned.
+
+#### SLA expiry and the ClickUp path during the parallel run
+
+- A CRM-held chat follows the same 2-hour rule. The existing lease sweeper
+  (`06_claim_expired_ownerships.sql`) releases it as `sla_expired`; with no ClickUp task
+  and no previous status it queues no ClickUp call (`restoration_state
+  'skipped_no_previous_status'`, whose `restoration_error` text is expected for these
+  rows). The trigger emits `ownership.released` (`sla_expired`).
+- A seller replying from their phone after the CRM released the chat takes it back as
+  today (`04_register_human_reply.sql`); the ClickUp reacquisition is skipped because
+  the row has no task (`clickup_task_id_missing`).
+- **ClickUp shows stale status for CRM-driven actions.** A CRM take or release never
+  moves the ClickUp task. A ClickUp transition still acts on the chat, whichever side
+  took it: the most recent action wins, and both share `ownership_version`.
+- Shared-schema change: `lead_chat_ownerships.clickup_task_id` is now nullable (the
+  `<> ''` check stays). Every ClickUp query keeps writing a task id.
+
+#### Switching 1.2b on
+
+1. Apply migration 040 and import `crm-events-dispatcher` and `crm-inbound-events`.
+2. Expose `/webhook/crm-events` the same way as the ClickUp webhook (stable HTTPS
+   hostname) and share the URL and a new `CRM_INBOUND_HMAC_SECRET` out of band.
+3. Set `CRM_INBOUND_HMAC_SECRET`, then `CRM_INBOUND_ENABLED=true`, and restart n8n.
+   Ownership events go out once `CRM_EVENTS_PROTOCOL_REVISION=1.2`.
+
 ### Mapping sellers
 
 Set each seller's CRM `usuarios.id`:
@@ -275,6 +417,15 @@ SELECT event_type, status, count(*), min(next_attempt_at) FROM crm_events GROUP 
 -- Queue health
 SELECT status, count(*), min(next_attempt_at) FROM crm_events GROUP BY status;
 
+-- Ownership version and recent changes of a conversation (1.2b)
+SELECT * FROM crm_conversation_ownership WHERE conversation_id = <conversation id>;
+SELECT ownership_version, change_kind, source, reason, raw_reason, crm_blocked_reason, changed_at
+FROM crm_ownership_changes WHERE conversation_id = <conversation id> ORDER BY ownership_version;
+
+-- Recent CRM -> bot events and the answer they got (1.2b)
+SELECT event_id, event_type, http_status, response, lead_id, created_at
+FROM crm_inbound_events ORDER BY created_at DESC LIMIT 50;
+
 -- Re-send a parked event after fixing the cause (same event_id, same bytes)
 UPDATE crm_events SET status = 'pending', next_attempt_at = NOW(), attempt_count = 0, updated_at = NOW()
 WHERE event_id = '<event_id>' AND status = 'parked';
@@ -297,12 +448,14 @@ WHERE event_id = '<event_id>' AND status = 'parked';
 
 - Bot sender rollout: apply migrations 038 and 039, import `crm-events-dispatcher`,
   map `sellers.crm_user_id`, set the `CRM_EVENTS_*` variables, then activate.
-  `lead.qualified` (1.1 and 1.2) and `message.new` (1.2) are built.
-  `handoff.created` and `ownership.*` are not.
+  `lead.qualified` (1.1 and 1.2), `message.new` and `ownership.*` (1.2) are built.
+  `handoff.created` is not.
 - Confirmed dev seller UUIDs.
 - Phones duplicated among the imported Dolibarr customers return 422
   `ambiguous_customer`.
-- CRM → bot endpoints (`take`, `release`/`close`, `send`, `history`).
+- CRM → bot events beyond `chat.take` / `chat.release` (`opportunity.*` in 1.2c,
+  `handoff.*` in 1.2d, `message.send` in phase 3), and the dev URL + secret for
+  `/webhook/crm-events`.
 - Media files in the CRM chat (1.2a sends a placeholder text).
 - Customer corrections after confirmation reach the CRM through `revision`.
 - Re-enable handoff delivery: since 2026-10-14 it is off in ClickUp.

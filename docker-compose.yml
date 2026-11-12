@@ -164,6 +164,12 @@ services:
       CRM_EVENTS_RETRY_BASE_SECONDS: ${CRM_EVENTS_RETRY_BASE_SECONDS:-30}
       CRM_EVENTS_RETRY_MAX_SECONDS: ${CRM_EVENTS_RETRY_MAX_SECONDS:-3600}
       CRM_EVENTS_MAX_ATTEMPTS: ${CRM_EVENTS_MAX_ATTEMPTS:-20}
+      # CRM -> bot webhook (crm-inbound-events, POST /webhook/crm-events,
+      # revision 1.2b: chat.take / chat.release). Off by default: every request
+      # answers 503 until CRM_INBOUND_ENABLED=true. CRM_INBOUND_HMAC_SECRET signs
+      # X-CRM-Signature and must differ from CRM_EVENTS_HMAC_SECRET.
+      CRM_INBOUND_ENABLED: ${CRM_INBOUND_ENABLED:-false}
+      CRM_INBOUND_HMAC_SECRET: ${CRM_INBOUND_HMAC_SECRET:-__PENDIENTE__}
       FOLLOW_UP_BATCH_SIZE: ${FOLLOW_UP_BATCH_SIZE:-50}
       FOLLOW_UP_WINDOW_START: ${FOLLOW_UP_WINDOW_START:-09:00}
       FOLLOW_UP_WINDOW_END: ${FOLLOW_UP_WINDOW_END:-20:00}

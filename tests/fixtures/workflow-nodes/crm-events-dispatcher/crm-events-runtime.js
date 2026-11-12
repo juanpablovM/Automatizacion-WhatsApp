@@ -6,8 +6,9 @@
 // classification and retry backoff. The CRM rejects unknown fields, so the
 // builders emit exactly the contract keys, in contract order, and the stored
 // body string is what every delivery attempt sends: it is never re-serialized.
-// Revision 1.2 adds the structured lead record and message.new; 1.1 stays the
-// default and its bodies are unchanged.
+// Revision 1.2 adds the structured lead record and message.new ("1.2a") and
+// ownership.taken / ownership.released ("1.2b"); 1.1 stays the default and its
+// bodies are unchanged.
 // =============================================================================
 
 const CRM_SUPPORTED_PROTOCOL_REVISIONS = ['1.1', '1.2'];
@@ -511,6 +512,69 @@ const buildMessageNewEvent = (row, config = {}) => {
   return { blocked_reason: null, message_id: messageNumber, event_id: eventId, conversation_id: conversationId, body };
 };
 
+// ---------------------------------------------------------------------------
+// ownership.taken / ownership.released (revision 1.2 only, "1.2b").
+// ---------------------------------------------------------------------------
+// One event per row of crm_ownership_changes (migration 040): every change of
+// chat ownership advances the conversation's ownership_version, whatever caused
+// it (ClickUp, CRM, SLA expiry, customer new quote), so the CRM can order them.
+const CRM_OWNERSHIP_SOURCES = ['clickup', 'crm'];
+const CRM_OWNERSHIP_RELEASE_REASONS = ['seller_released', 'sla_expired', 'customer_new_quote', 'opportunity_closed'];
+const CRM_OWNERSHIP_MAX_VERSION = 2147483647;
+
+const blockedCrmOwnership = (reason, changeNumber) => ({
+  blocked_reason: reason, change_id: changeNumber, event_id: null, conversation_id: null, body: null,
+});
+
+const buildOwnershipEvent = (row, config = {}) => {
+  const changeNumber = Number(row.change_id);
+  if (!Number.isSafeInteger(changeNumber) || changeNumber <= 0) return blockedCrmOwnership('invalid_change_id', null);
+  if (config.protocol_revision !== '1.2') return blockedCrmOwnership('protocol_revision_unsupported', changeNumber);
+  const conversationNumber = Number(row.conversation_id);
+  if (row.conversation_id === null || row.conversation_id === undefined || !Number.isSafeInteger(conversationNumber) || conversationNumber <= 0) {
+    return blockedCrmOwnership('conversation_missing', changeNumber);
+  }
+  const idPrefix = config.id_prefix;
+  if (typeof idPrefix !== 'string' || !CRM_ID_PREFIX_PATTERN.test(idPrefix)) return blockedCrmOwnership('id_prefix_missing', changeNumber);
+  const version = Number(row.ownership_version);
+  if (!Number.isSafeInteger(version) || version < 1 || version > CRM_OWNERSHIP_MAX_VERSION) {
+    return blockedCrmOwnership('invalid_version', changeNumber);
+  }
+
+  const kind = crmText(row.change_kind);
+  let type;
+  let data;
+  if (kind === 'taken') {
+    const source = crmText(row.source);
+    if (!CRM_OWNERSHIP_SOURCES.includes(source)) return blockedCrmOwnership('invalid_source', changeNumber);
+    const sellerId = crmText(row.crm_user_id).toLowerCase();
+    if (sellerId && !CRM_UUID_PATTERN.test(sellerId)) return blockedCrmOwnership('invalid_seller_uuid', changeNumber);
+    type = 'ownership.taken';
+    // The key is required; an unmapped seller is sent as null.
+    data = { version, crm_seller_id: sellerId || null, source };
+  } else if (kind === 'released') {
+    const reason = crmText(row.reason);
+    if (!CRM_OWNERSHIP_RELEASE_REASONS.includes(reason)) return blockedCrmOwnership('invalid_reason', changeNumber);
+    type = 'ownership.released';
+    data = { version, reason };
+  } else {
+    return blockedCrmOwnership('invalid_change_kind', changeNumber);
+  }
+
+  const eventId = `wa-${idPrefix}-ownership-${conversationNumber}-v${version}`;
+  const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
+  if (![eventId, conversationId].every(isValidCrmId)) return blockedCrmOwnership('invalid_id', changeNumber);
+  const body = JSON.stringify({
+    schema_version: 1,
+    protocol_revision: '1.2',
+    event_id: eventId,
+    type,
+    conversation_id: conversationId,
+    data,
+  });
+  return { blocked_reason: null, change_id: changeNumber, event_id: eventId, conversation_id: conversationId, body };
+};
+
 // X-WhatsApp-Signature = "v1=" + hex HMAC-SHA256(secret, timestamp + "." + body).
 const signCrmRequest = (body, secret, timestamp, cryptoModule) => {
   const ts = String(timestamp);
@@ -564,6 +628,13 @@ const classifyCrmResponse = (response, eventId, eventType = 'lead.qualified') =>
   const base = { http_status: status || null, response_json: crmStoredResponse(parsed, code), crm_customer_id: null, crm_opportunity_id: null };
 
   if (status === 200) {
+    // ownership.*: 200 {event_id, ownership_version, owner}. The CRM answers a
+    // stale version with 200 too (it keeps its newer state), so any 200 for
+    // this event id is delivered; nothing is written on the lead.
+    if (eventType === 'ownership.taken' || eventType === 'ownership.released') {
+      if (!(parsed && parsed.event_id === eventId)) return { ...base, outcome: 'parked', error: 'invalid_success_response' };
+      return { ...base, outcome: 'delivered', error: null };
+    }
     if (eventType === 'message.new') {
       const validMessage = parsed
         && parsed.event_id === eventId
@@ -616,6 +687,7 @@ if (typeof module !== 'undefined' && module.exports) {
     readCrmEventsConfig,
     buildLeadQualifiedEvent,
     buildMessageNewEvent,
+    buildOwnershipEvent,
     crmMessageText,
     normalizeCrmPhone,
     isValidCrmId,
