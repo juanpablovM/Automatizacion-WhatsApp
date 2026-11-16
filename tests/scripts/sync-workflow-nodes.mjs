@@ -616,6 +616,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Ownership Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/07_select_ownership_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Ownership Events",
+    "fixture": "crm-events-dispatcher/build-ownership-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Ownership Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/08_insert_ownership_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Claim CRM Events",
     "fixture": "db/queries/n8n/crm-events-dispatcher/03_claim_crm_events.sql",
     "type": "n8n-nodes-base.postgres",
@@ -635,6 +657,29 @@ const NODES = [
     "fixture": "db/queries/n8n/crm-events-dispatcher/04_complete_crm_event.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Verify CRM Event",
+    "fixture": "crm-inbound-events/verify-crm-inbound-event.js",
+    "runtimes": [
+      "crm-inbound-events/crm-inbound-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Apply CRM Chat Event",
+    "fixture": "db/queries/n8n/crm-inbound-events/01_apply_crm_chat_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Build CRM Event Response",
+    "fixture": "crm-inbound-events/build-crm-inbound-response.js",
+    "runtimes": [
+      "crm-inbound-events/crm-inbound-runtime.js"
+    ]
   }
 ];const V3_CONTRACT_WRAPPERS = [
   {

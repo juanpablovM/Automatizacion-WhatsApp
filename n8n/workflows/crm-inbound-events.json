@@ -1,0 +1,214 @@
+{
+  "id": "99999999-0000-0000-0000-000000000007",
+  "name": "CRM - Inbound Events",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "94000000-0000-0000-0000-000000000001",
+      "name": "CRM Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -760,
+        0
+      ],
+      "webhookId": "crm-events",
+      "notes": "Raw Body is on: Verify CRM Event checks the HMAC over the exact request bytes, never over the parsed JSON."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// CRM inbound runtime (CRM -> bot, contract v1 revision 1.2, \"1.2b\").\n// -----------------------------------------------------------------------------\n// Pure helpers shared by the crm-inbound-events Code nodes: configuration,\n// signature verification over the raw request bytes, envelope validation and\n// response shaping. Nothing here touches the database; the idempotency inbox\n// and the ownership change live in crm_inbound_apply_chat_event() (migration\n// 040). The secret and the raw body are never returned, so any output item can\n// be logged by n8n without exposing either.\n//\n// Request rules (agreed with the CRM, .orca/drops/crm-requirements-v1-2.md B):\n//   X-CRM-Timestamp: 10-digit Unix seconds, within +-300 s of now.\n//   X-CRM-Signature: \"v1=\" + lowercase hex HMAC-SHA256(secret,\n//                    timestamp + \".\" + raw body bytes).\n//   Body: at most 65,536 bytes of UTF-8 JSON; unknown fields are rejected.\n// =============================================================================\n\nconst CRM_INBOUND_MAX_BODY_BYTES = 65536;\nconst CRM_INBOUND_SKEW_SECONDS = 300;\nconst CRM_INBOUND_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;\nconst CRM_INBOUND_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst CRM_INBOUND_OCCURRED_AT_PATTERN = /^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(\\.\\d{1,6})?Z$/;\nconst CRM_INBOUND_SIGNATURE_PATTERN = /^v1=[0-9a-f]{64}$/;\nconst CRM_INBOUND_ENVELOPE_KEYS = ['schema_version', 'protocol_revision', 'event_id', 'type', 'occurred_at', 'data'];\n// Only chat ownership is implemented in 1.2b. opportunity.*, handoff.* and\n// message.send arrive in 1.2c+ and answer invalid_event until then.\nconst CRM_INBOUND_CHAT_TYPES = ['chat.take', 'chat.release'];\nconst CRM_INBOUND_CHAT_DATA_KEYS = ['crm_opportunity_id', 'crm_seller_id', 'ownership_version'];\n\nconst crmInboundConfigured = (value) => {\n  const text = String(value ?? '').trim();\n  return text !== '' && !text.includes('__PENDIENTE__');\n};\n\n// Disabled (the default) answers 503 to every request. Enabled without its own\n// secret is a misconfiguration that also answers 503: the CRM retries 503 with\n// backoff, so no event is lost while an operator fixes the variables.\nconst readCrmInboundConfig = (env = {}) => {\n  const enabled = String(env.CRM_INBOUND_ENABLED ?? '').trim() === 'true';\n  const config = { enabled, errors: [] };\n  if (!enabled) return config;\n  if (!crmInboundConfigured(env.CRM_INBOUND_HMAC_SECRET)) {\n    config.errors.push('CRM_INBOUND_HMAC_SECRET_missing');\n  } else if (String(env.CRM_INBOUND_HMAC_SECRET) === String(env.CRM_EVENTS_HMAC_SECRET ?? '')) {\n    // Each direction has its own secret: a leaked outbound secret must not let\n    // anyone drive chat ownership.\n    config.errors.push('CRM_INBOUND_HMAC_SECRET_reused');\n  }\n  return config;\n};\n\nconst crmInboundRespond = (httpStatus, response) => ({ action: 'respond', http_status: httpStatus, response });\nconst crmInboundInvalid = (details) => crmInboundRespond(400, { error: 'invalid_event', details });\n\nconst crmInboundHeader = (headers, name) => {\n  if (!headers || typeof headers !== 'object') return '';\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return String(Array.isArray(value) ? value[0] : value ?? '').trim();\n  }\n  return '';\n};\n\nconst crmInboundSignatureValid = (rawBody, headers, secret, nowMs, cryptoModule) => {\n  const timestamp = crmInboundHeader(headers, 'x-crm-timestamp');\n  const presented = crmInboundHeader(headers, 'x-crm-signature');\n  if (!/^\\d{10}$/.test(timestamp) || !CRM_INBOUND_SIGNATURE_PATTERN.test(presented)) return false;\n  if (Math.abs(Math.floor(nowMs / 1000) - Number(timestamp)) > CRM_INBOUND_SKEW_SECONDS) return false;\n  const expected = cryptoModule\n    .createHmac('sha256', String(secret))\n    .update(Buffer.concat([Buffer.from(`${timestamp}.`, 'ascii'), rawBody]))\n    .digest();\n  const given = Buffer.from(presented.slice(3), 'hex');\n  return given.length === expected.length && cryptoModule.timingSafeEqual(given, expected);\n};\n\nconst crmInboundRealInstant = (value) => {\n  if (typeof value !== 'string') return false;\n  const match = CRM_INBOUND_OCCURRED_AT_PATTERN.exec(value);\n  if (!match) return false;\n  const [, year, month, day, hour, minute, second] = match.map(Number);\n  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));\n  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day\n    && date.getUTCHours() === hour && date.getUTCMinutes() === minute && date.getUTCSeconds() === second;\n};\n\nconst crmInboundIsObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);\n\n// Returns the list of violations of the envelope and of chat.take/chat.release\n// data. Field names only: values are never echoed back.\nconst validateCrmInboundEnvelope = (parsed) => {\n  if (!crmInboundIsObject(parsed)) return ['envelope'];\n  const errors = [];\n  for (const key of Object.keys(parsed)) {\n    if (!CRM_INBOUND_ENVELOPE_KEYS.includes(key)) errors.push(`envelope.${key}: unknown`);\n  }\n  for (const key of CRM_INBOUND_ENVELOPE_KEYS) if (!(key in parsed)) errors.push(`envelope.${key}: missing`);\n  if (parsed.schema_version !== 1) errors.push('envelope.schema_version');\n  if (parsed.protocol_revision !== '1.2') errors.push('envelope.protocol_revision');\n  if (!(typeof parsed.event_id === 'string' && CRM_INBOUND_ID_PATTERN.test(parsed.event_id))) errors.push('envelope.event_id');\n  if (!crmInboundRealInstant(parsed.occurred_at)) errors.push('envelope.occurred_at');\n  if (!CRM_INBOUND_CHAT_TYPES.includes(parsed.type)) errors.push('envelope.type: unsupported');\n  if (!crmInboundIsObject(parsed.data)) return [...errors, 'envelope.data'];\n  const data = parsed.data;\n  for (const key of Object.keys(data)) {\n    if (!CRM_INBOUND_CHAT_DATA_KEYS.includes(key)) errors.push(`data.${key}: unknown`);\n  }\n  if (!(typeof data.crm_opportunity_id === 'string' && CRM_INBOUND_UUID_PATTERN.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');\n  if (!(typeof data.crm_seller_id === 'string' && CRM_INBOUND_UUID_PATTERN.test(data.crm_seller_id))) errors.push('data.crm_seller_id');\n  if (!(Number.isSafeInteger(data.ownership_version) && data.ownership_version >= 0)) errors.push('data.ownership_version');\n  return errors;\n};\n\n// Order matters: availability, then size (before hashing anything), then the\n// signature (before reading any field), then the envelope.\nconst verifyCrmInboundRequest = ({ rawBody, headers, env, now, crypto: cryptoModule }) => {\n  const config = readCrmInboundConfig(env);\n  if (!config.enabled || config.errors.length > 0) return crmInboundRespond(503, { error: 'receiver_unavailable' });\n\n  if (!Buffer.isBuffer(rawBody)) return crmInboundRespond(401, { error: 'unauthorized' });\n  if (rawBody.length > CRM_INBOUND_MAX_BODY_BYTES) return crmInboundRespond(413, { error: 'payload_too_large' });\n\n  if (!crmInboundSignatureValid(rawBody, headers, env.CRM_INBOUND_HMAC_SECRET, now, cryptoModule)) {\n    return crmInboundRespond(401, { error: 'unauthorized' });\n  }\n\n  let parsed;\n  try {\n    const text = new TextDecoder('utf-8', { fatal: true }).decode(rawBody);\n    parsed = JSON.parse(text);\n  } catch (_error) {\n    return crmInboundInvalid(['body: not UTF-8 JSON']);\n  }\n  const errors = validateCrmInboundEnvelope(parsed);\n  if (errors.length > 0) return crmInboundInvalid(errors);\n\n  return {\n    action: 'apply',\n    event_id: parsed.event_id,\n    event_type: parsed.type,\n    body_sha256: cryptoModule.createHash('sha256').update(rawBody).digest('hex'),\n    crm_opportunity_id: parsed.data.crm_opportunity_id.toLowerCase(),\n    crm_seller_id: parsed.data.crm_seller_id.toLowerCase(),\n    ownership_version: String(parsed.data.ownership_version),\n  };\n};\n\n// One shape for the Respond node, whichever branch produced the item: a\n// validation answer, the database result, or a database failure (the Postgres\n// node continues on error), which answers 503 so the CRM retries the same bytes.\nconst shapeCrmInboundResponse = (json = {}) => {\n  if (json.action === 'respond' && Number.isInteger(json.http_status) && crmInboundIsObject(json.response)) {\n    return { http_status: json.http_status, response_body: json.response };\n  }\n  const status = Number(json.http_status);\n  let response = json.response;\n  if (typeof response === 'string') {\n    try { response = JSON.parse(response); } catch (_error) { response = null; }\n  }\n  if (!json.error && Number.isInteger(status) && status >= 200 && status <= 599 && crmInboundIsObject(response)) {\n    return { http_status: status, response_body: response };\n  }\n  return { http_status: 503, response_body: { error: 'receiver_unavailable' } };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    readCrmInboundConfig,\n    validateCrmInboundEnvelope,\n    verifyCrmInboundRequest,\n    shapeCrmInboundResponse,\n  };\n}\n\n\n// Verify CRM Event: the webhook node runs with the Raw Body option, so the\n// exact request bytes arrive as the binary property \"data\" (base64 in memory\n// mode, a stored id in filesystem mode). The HMAC is computed over those bytes,\n// never over n8n's parsed JSON: a re-serialization would accept a body the CRM\n// never signed. The output carries no binary, no raw body and no secret.\nconst crmInboundCrypto = require('crypto');\nconst crmInboundItem = items[0] ?? { json: {} };\nconst crmInboundBinary = crmInboundItem.binary?.data;\n\nlet crmInboundRaw = null;\nif (crmInboundBinary && typeof crmInboundBinary.data === 'string' && crmInboundBinary.data !== ''\n  && !crmInboundBinary.id) {\n  crmInboundRaw = Buffer.from(crmInboundBinary.data, 'base64');\n} else if (crmInboundBinary && typeof helpers?.getBinaryDataBuffer === 'function') {\n  try {\n    crmInboundRaw = await helpers.getBinaryDataBuffer(0, 'data');\n  } catch (_error) {\n    crmInboundRaw = null;\n  }\n}\n\nconst crmInboundResult = verifyCrmInboundRequest({\n  rawBody: Buffer.isBuffer(crmInboundRaw) ? crmInboundRaw : null,\n  headers: crmInboundItem.json?.headers ?? {},\n  env: $env,\n  now: Date.now(),\n  crypto: crmInboundCrypto,\n});\nreturn [{ json: crmInboundResult }];\n"
+      },
+      "id": "94000000-0000-0000-0000-000000000002",
+      "name": "Verify CRM Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "crm-event-apply",
+              "leftValue": "={{ $json.action === 'apply' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "94000000-0000-0000-0000-000000000003",
+      "name": "Is Chat Event To Apply",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Apply one verified CRM chat.take / chat.release event (crm-inbound-events).\n-- p1 event_id, p2 sha256 hex of the raw request body, p3 type, p4\n-- crm_opportunity_id, p5 crm_seller_id, p6 data.ownership_version.\n--\n-- The signature, size and envelope were already verified by Verify CRM Event.\n-- Everything else happens in one transaction inside\n-- crm_inbound_apply_chat_event() (migration 040): the idempotency inbox (same\n-- id and bytes replay the stored response; same id, other bytes answer 409\n-- event_conflict), opportunity and seller resolution (422), the stale-version\n-- check, the holder conflict (409) and the take / release itself, which copies\n-- the ClickUp acquire and release semantics without writing ClickUp columns.\n-- It is a function so the response can carry the ownership_version that the\n-- lead_chat_ownerships trigger wrote in the same transaction.\nSELECT http_status, response, replayed\nFROM crm_inbound_apply_chat_event(\n  NULLIF($1::text, ''),\n  NULLIF($2::text, ''),\n  NULLIF($3::text, ''),\n  NULLIF($4::text, '')::uuid,\n  NULLIF($5::text, '')::uuid,\n  NULLIF($6::text, '')::bigint\n);\n",
+        "options": {
+          "queryBatching": "transaction",
+          "queryReplacement": "={{ [$json.event_id, $json.body_sha256, $json.event_type, $json.crm_opportunity_id, $json.crm_seller_id, $json.ownership_version] }}"
+        }
+      },
+      "id": "94000000-0000-0000-0000-000000000004",
+      "name": "Apply CRM Chat Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        20,
+        -120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "4f0b597f-5081-48fc-9226-1cd8db06ca38",
+          "name": "Postgres CRM App Local"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "A database failure continues to Build CRM Event Response, which answers 503 so the CRM retries the same bytes."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================================\n// CRM inbound runtime (CRM -> bot, contract v1 revision 1.2, \"1.2b\").\n// -----------------------------------------------------------------------------\n// Pure helpers shared by the crm-inbound-events Code nodes: configuration,\n// signature verification over the raw request bytes, envelope validation and\n// response shaping. Nothing here touches the database; the idempotency inbox\n// and the ownership change live in crm_inbound_apply_chat_event() (migration\n// 040). The secret and the raw body are never returned, so any output item can\n// be logged by n8n without exposing either.\n//\n// Request rules (agreed with the CRM, .orca/drops/crm-requirements-v1-2.md B):\n//   X-CRM-Timestamp: 10-digit Unix seconds, within +-300 s of now.\n//   X-CRM-Signature: \"v1=\" + lowercase hex HMAC-SHA256(secret,\n//                    timestamp + \".\" + raw body bytes).\n//   Body: at most 65,536 bytes of UTF-8 JSON; unknown fields are rejected.\n// =============================================================================\n\nconst CRM_INBOUND_MAX_BODY_BYTES = 65536;\nconst CRM_INBOUND_SKEW_SECONDS = 300;\nconst CRM_INBOUND_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;\nconst CRM_INBOUND_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst CRM_INBOUND_OCCURRED_AT_PATTERN = /^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(\\.\\d{1,6})?Z$/;\nconst CRM_INBOUND_SIGNATURE_PATTERN = /^v1=[0-9a-f]{64}$/;\nconst CRM_INBOUND_ENVELOPE_KEYS = ['schema_version', 'protocol_revision', 'event_id', 'type', 'occurred_at', 'data'];\n// Only chat ownership is implemented in 1.2b. opportunity.*, handoff.* and\n// message.send arrive in 1.2c+ and answer invalid_event until then.\nconst CRM_INBOUND_CHAT_TYPES = ['chat.take', 'chat.release'];\nconst CRM_INBOUND_CHAT_DATA_KEYS = ['crm_opportunity_id', 'crm_seller_id', 'ownership_version'];\n\nconst crmInboundConfigured = (value) => {\n  const text = String(value ?? '').trim();\n  return text !== '' && !text.includes('__PENDIENTE__');\n};\n\n// Disabled (the default) answers 503 to every request. Enabled without its own\n// secret is a misconfiguration that also answers 503: the CRM retries 503 with\n// backoff, so no event is lost while an operator fixes the variables.\nconst readCrmInboundConfig = (env = {}) => {\n  const enabled = String(env.CRM_INBOUND_ENABLED ?? '').trim() === 'true';\n  const config = { enabled, errors: [] };\n  if (!enabled) return config;\n  if (!crmInboundConfigured(env.CRM_INBOUND_HMAC_SECRET)) {\n    config.errors.push('CRM_INBOUND_HMAC_SECRET_missing');\n  } else if (String(env.CRM_INBOUND_HMAC_SECRET) === String(env.CRM_EVENTS_HMAC_SECRET ?? '')) {\n    // Each direction has its own secret: a leaked outbound secret must not let\n    // anyone drive chat ownership.\n    config.errors.push('CRM_INBOUND_HMAC_SECRET_reused');\n  }\n  return config;\n};\n\nconst crmInboundRespond = (httpStatus, response) => ({ action: 'respond', http_status: httpStatus, response });\nconst crmInboundInvalid = (details) => crmInboundRespond(400, { error: 'invalid_event', details });\n\nconst crmInboundHeader = (headers, name) => {\n  if (!headers || typeof headers !== 'object') return '';\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return String(Array.isArray(value) ? value[0] : value ?? '').trim();\n  }\n  return '';\n};\n\nconst crmInboundSignatureValid = (rawBody, headers, secret, nowMs, cryptoModule) => {\n  const timestamp = crmInboundHeader(headers, 'x-crm-timestamp');\n  const presented = crmInboundHeader(headers, 'x-crm-signature');\n  if (!/^\\d{10}$/.test(timestamp) || !CRM_INBOUND_SIGNATURE_PATTERN.test(presented)) return false;\n  if (Math.abs(Math.floor(nowMs / 1000) - Number(timestamp)) > CRM_INBOUND_SKEW_SECONDS) return false;\n  const expected = cryptoModule\n    .createHmac('sha256', String(secret))\n    .update(Buffer.concat([Buffer.from(`${timestamp}.`, 'ascii'), rawBody]))\n    .digest();\n  const given = Buffer.from(presented.slice(3), 'hex');\n  return given.length === expected.length && cryptoModule.timingSafeEqual(given, expected);\n};\n\nconst crmInboundRealInstant = (value) => {\n  if (typeof value !== 'string') return false;\n  const match = CRM_INBOUND_OCCURRED_AT_PATTERN.exec(value);\n  if (!match) return false;\n  const [, year, month, day, hour, minute, second] = match.map(Number);\n  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));\n  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day\n    && date.getUTCHours() === hour && date.getUTCMinutes() === minute && date.getUTCSeconds() === second;\n};\n\nconst crmInboundIsObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);\n\n// Returns the list of violations of the envelope and of chat.take/chat.release\n// data. Field names only: values are never echoed back.\nconst validateCrmInboundEnvelope = (parsed) => {\n  if (!crmInboundIsObject(parsed)) return ['envelope'];\n  const errors = [];\n  for (const key of Object.keys(parsed)) {\n    if (!CRM_INBOUND_ENVELOPE_KEYS.includes(key)) errors.push(`envelope.${key}: unknown`);\n  }\n  for (const key of CRM_INBOUND_ENVELOPE_KEYS) if (!(key in parsed)) errors.push(`envelope.${key}: missing`);\n  if (parsed.schema_version !== 1) errors.push('envelope.schema_version');\n  if (parsed.protocol_revision !== '1.2') errors.push('envelope.protocol_revision');\n  if (!(typeof parsed.event_id === 'string' && CRM_INBOUND_ID_PATTERN.test(parsed.event_id))) errors.push('envelope.event_id');\n  if (!crmInboundRealInstant(parsed.occurred_at)) errors.push('envelope.occurred_at');\n  if (!CRM_INBOUND_CHAT_TYPES.includes(parsed.type)) errors.push('envelope.type: unsupported');\n  if (!crmInboundIsObject(parsed.data)) return [...errors, 'envelope.data'];\n  const data = parsed.data;\n  for (const key of Object.keys(data)) {\n    if (!CRM_INBOUND_CHAT_DATA_KEYS.includes(key)) errors.push(`data.${key}: unknown`);\n  }\n  if (!(typeof data.crm_opportunity_id === 'string' && CRM_INBOUND_UUID_PATTERN.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');\n  if (!(typeof data.crm_seller_id === 'string' && CRM_INBOUND_UUID_PATTERN.test(data.crm_seller_id))) errors.push('data.crm_seller_id');\n  if (!(Number.isSafeInteger(data.ownership_version) && data.ownership_version >= 0)) errors.push('data.ownership_version');\n  return errors;\n};\n\n// Order matters: availability, then size (before hashing anything), then the\n// signature (before reading any field), then the envelope.\nconst verifyCrmInboundRequest = ({ rawBody, headers, env, now, crypto: cryptoModule }) => {\n  const config = readCrmInboundConfig(env);\n  if (!config.enabled || config.errors.length > 0) return crmInboundRespond(503, { error: 'receiver_unavailable' });\n\n  if (!Buffer.isBuffer(rawBody)) return crmInboundRespond(401, { error: 'unauthorized' });\n  if (rawBody.length > CRM_INBOUND_MAX_BODY_BYTES) return crmInboundRespond(413, { error: 'payload_too_large' });\n\n  if (!crmInboundSignatureValid(rawBody, headers, env.CRM_INBOUND_HMAC_SECRET, now, cryptoModule)) {\n    return crmInboundRespond(401, { error: 'unauthorized' });\n  }\n\n  let parsed;\n  try {\n    const text = new TextDecoder('utf-8', { fatal: true }).decode(rawBody);\n    parsed = JSON.parse(text);\n  } catch (_error) {\n    return crmInboundInvalid(['body: not UTF-8 JSON']);\n  }\n  const errors = validateCrmInboundEnvelope(parsed);\n  if (errors.length > 0) return crmInboundInvalid(errors);\n\n  return {\n    action: 'apply',\n    event_id: parsed.event_id,\n    event_type: parsed.type,\n    body_sha256: cryptoModule.createHash('sha256').update(rawBody).digest('hex'),\n    crm_opportunity_id: parsed.data.crm_opportunity_id.toLowerCase(),\n    crm_seller_id: parsed.data.crm_seller_id.toLowerCase(),\n    ownership_version: String(parsed.data.ownership_version),\n  };\n};\n\n// One shape for the Respond node, whichever branch produced the item: a\n// validation answer, the database result, or a database failure (the Postgres\n// node continues on error), which answers 503 so the CRM retries the same bytes.\nconst shapeCrmInboundResponse = (json = {}) => {\n  if (json.action === 'respond' && Number.isInteger(json.http_status) && crmInboundIsObject(json.response)) {\n    return { http_status: json.http_status, response_body: json.response };\n  }\n  const status = Number(json.http_status);\n  let response = json.response;\n  if (typeof response === 'string') {\n    try { response = JSON.parse(response); } catch (_error) { response = null; }\n  }\n  if (!json.error && Number.isInteger(status) && status >= 200 && status <= 599 && crmInboundIsObject(response)) {\n    return { http_status: status, response_body: response };\n  }\n  return { http_status: 503, response_body: { error: 'receiver_unavailable' } };\n};\n\nif (typeof module !== 'undefined' && module.exports) {\n  module.exports = {\n    readCrmInboundConfig,\n    validateCrmInboundEnvelope,\n    verifyCrmInboundRequest,\n    shapeCrmInboundResponse,\n  };\n}\n\n\n// Build CRM Event Response: one item with http_status and response_body for\n// the single Respond node, from either branch (validation answer, database\n// result, or database failure -> 503 so the CRM retries).\nconst crmInboundJson = items[0]?.json ?? {};\nreturn [{ json: shapeCrmInboundResponse(crmInboundJson) }];\n"
+      },
+      "id": "94000000-0000-0000-0000-000000000005",
+      "name": "Build CRM Event Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.response_body }}",
+        "options": {
+          "responseCode": "={{ $json.http_status }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "94000000-0000-0000-0000-000000000006",
+      "name": "Respond CRM Event",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        540,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "CRM Events Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify CRM Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify CRM Event": {
+      "main": [
+        [
+          {
+            "node": "Is Chat Event To Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Chat Event To Apply": {
+      "main": [
+        [
+          {
+            "node": "Apply CRM Chat Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build CRM Event Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply CRM Chat Event": {
+      "main": [
+        [
+          {
+            "node": "Build CRM Event Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CRM Event Response": {
+      "main": [
+        [
+          {
+            "node": "Respond CRM Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 60
+  },
+  "pinData": {},
+  "versionId": "94000000-0000-0000-0000-000000000099",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
