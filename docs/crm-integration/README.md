@@ -396,6 +396,23 @@ UPDATE sellers SET crm_user_id = '<crm usuarios.id uuid>' WHERE id = <seller id>
 Until a seller is mapped, their leads stay blocked with `seller_not_mapped`. The
 next pass after the mapping enqueues them.
 
+CRM admins must be able to take and answer chats too. Map each one as an active
+seller **without a ClickUp user**:
+
+```sql
+INSERT INTO sellers (name, is_active, sort_order, crm_user_id)
+VALUES ('<admin name> (CRM admin)', TRUE, <unused sort_order>, '<crm usuarios.id uuid>');
+```
+
+- The rotation only picks sellers with a `clickup_user_id`, so an admin is never
+  assigned a lead.
+- An admin's `chat.take` makes them the holder: the bot goes silent, the 2-hour
+  window applies, and `ownership.taken` carries the admin's `crm_seller_id`.
+- To act on a chat another seller holds, the admin first releases it on the holder's
+  behalf (the CRM sends the holder's `crm_seller_id`), then takes it. A take while
+  someone else holds the chat is `409 ownership_conflict`.
+- An unmapped admin gets `422 invalid_seller`.
+
 ### Ops queries
 
 ```sql

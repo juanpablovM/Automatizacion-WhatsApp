@@ -97,6 +97,21 @@ describeIntegration('lead assignment to the test seller', () => {
     expect(nextReal.seller_id).toBe(sellers.Edith);
   });
 
+  // CRM admins are mapped as active sellers with a crm_user_id and no ClickUp
+  // user, so they can take chats from the CRM but never enter the rotation.
+  test('an active CRM admin without a ClickUp user is never assigned by the rotation', async () => {
+    const { rows: [{ id: admin }] } = await client.query(
+      `INSERT INTO sellers (name, is_active, sort_order, crm_user_id)
+       VALUES ('CRM admin', TRUE, 0, gen_random_uuid()) RETURNING id`,
+    );
+    const assigned = [];
+    for (const phone of ['56900000001', '56900000002', '56900000003', '56900000004']) {
+      assigned.push((await persist({ phone })).seller_id);
+    }
+    expect(assigned).toEqual([sellers.Catherine, sellers.Edith, sellers.Lorena, sellers.Catherine]);
+    expect(assigned).not.toContain(String(admin));
+  });
+
   test('a missing test seller never falls back to a real seller', async () => {
     await client.query('UPDATE sellers SET deleted_at = NOW() WHERE id = $1', [sellers['Hormiglass (pruebas)']]);
     const testLead = await persist({ phone: '56997093038', testSellerId: sellers['Hormiglass (pruebas)'] });

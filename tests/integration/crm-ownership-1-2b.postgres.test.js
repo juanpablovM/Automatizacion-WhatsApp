@@ -305,6 +305,47 @@ describeIntegration('CRM revision 1.2b: ownership version, events and chat webho
       expect(result).toMatchObject({ http_status: 409, response: { error: 'ownership_conflict', holder_crm_seller_id: SELLER_A } });
     });
 
+    describe('CRM admins (mapped as active sellers with no ClickUp user)', () => {
+      const ADMIN = '7b726374-5516-429d-b993-fe18d7d421d6';
+      let admin;
+
+      beforeEach(async () => {
+        await client.query('UPDATE sellers SET crm_user_id = NULL WHERE crm_user_id = $1', [ADMIN]);
+        ({ rows: [{ id: admin }] } = await client.query(
+          `INSERT INTO sellers (name, is_active, sort_order, crm_user_id)
+           VALUES ('CRM admin', TRUE, 90000 + (random() * 9000)::int, $1) RETURNING id`, [ADMIN],
+        ));
+      });
+
+      test('an admin takes a free chat with their own id and is echoed as the holder', async () => {
+        const lead = await insertLead({ customerMessage: true });
+        await announce(lead);
+        const result = await applyChat({ seller: ADMIN, version: 0 });
+        expect(result).toMatchObject({ http_status: 200, response: { result: 'applied', ownership_version: 1 } });
+        const [row] = await ownershipsOf(lead.leadId);
+        expect(row).toMatchObject({ acquired_via: 'crm', owner_seller_id: String(admin), clickup_task_id: null });
+        expect(await botSuppressed(lead.leadId)).toBe(true);
+        const [candidate] = (await client.query(selectOwnershipSql, ['1.2', SINCE, PREFIX, '500'])).rows
+          .filter((c) => String(c.conversation_id) === lead.conversationId);
+        expect(candidate).toMatchObject({ change_kind: 'taken', source: 'crm', crm_user_id: ADMIN });
+      });
+
+      test('an admin releases on the holder\'s behalf by sending the holder\'s id', async () => {
+        const lead = await insertLead();
+        await applyChat({ seller: SELLER_A, version: 0 });
+        const result = await applyChat({ type: 'chat.release', seller: SELLER_A, version: 1 });
+        expect(result.response).toMatchObject({ result: 'applied', ownership_version: 2 });
+        expect(await botSuppressed(lead.leadId)).toBe(false);
+      });
+
+      test('an admin take on a chat another seller holds is a 409 naming the holder', async () => {
+        await insertLead();
+        await applyChat({ seller: SELLER_A, version: 0 });
+        const result = await applyChat({ seller: ADMIN, version: 1 });
+        expect(result).toMatchObject({ http_status: 409, response: { error: 'ownership_conflict', holder_crm_seller_id: SELLER_A } });
+      });
+    });
+
     test('a take by the seller who already holds the chat is applied without a new version', async () => {
       const lead = await insertLead();
       await clickupAcquire(lead.taskId);
