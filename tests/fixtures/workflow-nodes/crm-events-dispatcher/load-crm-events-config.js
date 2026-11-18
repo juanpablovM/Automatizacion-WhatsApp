@@ -15,4 +15,5 @@ return [{ json: {
   message_batch_size: crmEventsConfig.message_batch_size,
   deliver_batch_size: crmEventsConfig.deliver_batch_size,
   stale_seconds: crmEventsConfig.stale_seconds,
+  phone_allowlist: crmEventsConfig.phone_allowlist,
 } }];

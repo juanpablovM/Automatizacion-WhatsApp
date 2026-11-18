@@ -61,6 +61,7 @@ const readCrmEventsConfig = (env = {}) => {
     retry_max_seconds: crmPositiveInt(env.CRM_EVENTS_RETRY_MAX_SECONDS, 3600),
     max_attempts: crmPositiveInt(env.CRM_EVENTS_MAX_ATTEMPTS, 20),
     timeout_ms: crmPositiveInt(env.CRM_EVENTS_TIMEOUT_MS, 15000),
+    phone_allowlist: '',
   };
   if (!enabled) return config;
 
@@ -96,6 +97,21 @@ const readCrmEventsConfig = (env = {}) => {
     config.protocol_revision = revision;
     if (revision === '1.2') {
       config.deliver_batch_size = crmPositiveInt(env.CRM_EVENTS_DELIVER_BATCH_SIZE, 100);
+    }
+  }
+
+  // Optional: only leads with one of these phones are announced, so production
+  // can feed the CRM dev environment with test phones only. Messages and
+  // ownership changes follow, since they need a delivered lead.qualified.
+  // Empty means no filter; any entry that is not 8-15 digits once spaces and a
+  // leading + are dropped is a misconfiguration, never a silent "send all".
+  const allowlist = String(env.CRM_EVENTS_PHONE_ALLOWLIST ?? '').trim();
+  if (allowlist !== '') {
+    const phones = allowlist.split(',').map((entry) => entry.replace(/\s+/g, '').replace(/^\+/, ''));
+    if (phones.every((phone) => /^\d{8,15}$/.test(phone))) config.phone_allowlist = phones.join(',');
+    else {
+      config.phone_allowlist = null;
+      config.errors.push('CRM_EVENTS_PHONE_ALLOWLIST_invalid');
     }
   }
   return config;

@@ -136,6 +136,30 @@ describe('readCrmEventsConfig', () => {
   test('never exposes the secret in the returned configuration', () => {
     expect(JSON.stringify(readCrmEventsConfig(ENABLED_ENV))).not.toContain(SECRET);
   });
+
+  test('CRM_EVENTS_PHONE_ALLOWLIST unset or blank means no phone filter', () => {
+    for (const value of [undefined, '', '   ']) {
+      const config = readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_PHONE_ALLOWLIST: value });
+      expect(config.errors).toEqual([]);
+      expect(config.phone_allowlist).toBe('');
+    }
+  });
+
+  test('CRM_EVENTS_PHONE_ALLOWLIST is normalized to comma-joined digits', () => {
+    const config = readCrmEventsConfig({
+      ...ENABLED_ENV, CRM_EVENTS_PHONE_ALLOWLIST: '+56 9 9709 3038, 56911112222',
+    });
+    expect(config.errors).toEqual([]);
+    expect(config.phone_allowlist).toBe('56997093038,56911112222');
+  });
+
+  test('an allowlist entry that is not 8-15 digits is a misconfiguration', () => {
+    for (const value of ['56997093038,1234567', '56997093038,,56911112222', 'abc', '5699709303812345678', '569-9709-3038']) {
+      const config = readCrmEventsConfig({ ...ENABLED_ENV, CRM_EVENTS_PHONE_ALLOWLIST: value });
+      expect(config.errors).toEqual(['CRM_EVENTS_PHONE_ALLOWLIST_invalid']);
+      expect(config.phone_allowlist).toBeNull();
+    }
+  });
 });
 
 describe('normalizeCrmPhone and isValidCrmId', () => {
@@ -437,6 +461,33 @@ describe('Load CRM Events Config node', () => {
     expect(out).toHaveLength(1);
     expect(out[0].json).toMatchObject({ since: '2026-11-11T00:00:00.000Z', enqueue_batch_size: 20 });
     expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
+  test('emits the phone allowlist, empty when unset', async () => {
+    const [unset] = await runNode('load-crm-events-config.js', [{ json: {} }], ENABLED_ENV);
+    expect(unset.json.phone_allowlist).toBe('');
+    const [set] = await runNode('load-crm-events-config.js', [{ json: {} }], {
+      ...ENABLED_ENV, CRM_EVENTS_PHONE_ALLOWLIST: '+56997093038',
+    });
+    expect(set.json.phone_allowlist).toBe('56997093038');
+  });
+
+  test('fails the execution on an invalid phone allowlist', async () => {
+    await expect(runNode('load-crm-events-config.js', [{ json: {} }], {
+      ...ENABLED_ENV, CRM_EVENTS_PHONE_ALLOWLIST: '123',
+    })).rejects.toThrow(/CRM_EVENTS_PHONE_ALLOWLIST_invalid/);
+  });
+});
+
+describe('Select Lead Qualified Candidates node', () => {
+  test('passes the phone allowlist as the fourth query parameter', () => {
+    const workflow = JSON.parse(fs.readFileSync('n8n/workflows/crm-events-dispatcher.json', 'utf8'));
+    const node = workflow.nodes.find((candidateNode) => candidateNode.name === 'Select Lead Qualified Candidates');
+    expect(node.parameters.options.queryReplacement).toBe(
+      "={{ [$json.since, $json.enqueue_batch_size, $json.protocol_revision, $json.phone_allowlist ?? ''] }}",
+    );
+    expect(workflow.connections['Load CRM Events Config'].main[0].map((link) => link.node))
+      .toContain('Select Lead Qualified Candidates');
   });
 });
 

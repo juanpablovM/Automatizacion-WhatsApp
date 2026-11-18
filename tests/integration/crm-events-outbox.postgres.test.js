@@ -82,10 +82,10 @@ describeIntegration('CRM outbox', () => {
   };
 
   // Stage A exactly as the workflow chains it: select, build, insert.
-  const runEnqueue = async (since = SINCE, batch = 200) => {
-    // p3 protocol revision; the record and source hashes (p8, p9) stay empty
-    // under 1.1, which keeps the requirement rule.
-    const { rows: candidates } = await client.query(selectSql, [since, String(batch), '1.1']);
+  const runEnqueue = async (since = SINCE, batch = 200, allowlist = '') => {
+    // p3 protocol revision, p4 phone allowlist ('' = no filter); the record and
+    // source hashes (p8, p9) stay empty under 1.1, which keeps the requirement rule.
+    const { rows: candidates } = await client.query(selectSql, [since, String(batch), '1.1', allowlist]);
     const results = [];
     for (const row of candidates) {
       const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
@@ -130,7 +130,7 @@ describeIntegration('CRM outbox', () => {
 
     test('a stale candidate (already enqueued by a concurrent run) inserts nothing', async () => {
       const leadId = await insertLead();
-      const { rows: candidates } = await client.query(selectSql, [SINCE, '200', '1.1']);
+      const { rows: candidates } = await client.query(selectSql, [SINCE, '200', '1.1', '']);
       const row = candidates.find((candidate) => String(candidate.lead_id) === leadId);
       const built = buildLeadQualifiedEvent(row, BUILD_CONFIG);
       const args = [leadId, '1', built.event_id, built.conversation_id, built.body, '50 bloques', '', '', ''];
@@ -189,6 +189,33 @@ describeIntegration('CRM outbox', () => {
       expect(ids).not.toContain(unassigned);
       expect(await eventsOf(old)).toHaveLength(0);
       expect((await leadOf(old)).crm_blocked_reason).toBeNull();
+    });
+
+    test('a phone allowlist selects only the listed leads and never blocks the others', async () => {
+      const { rows: [{ id: unmapped }] } = await client.query(
+        "INSERT INTO sellers (name, is_active, sort_order) VALUES ('Unmapped', TRUE, 90000 + (random() * 9000)::int + 9001) RETURNING id",
+      );
+      const listed = await insertLead();
+      const unlisted = await insertLead();
+      const unlistedUnmapped = await insertLead({ seller: unmapped });
+      const listedPhone = (await leadOf(listed)).phone_number;
+
+      const { candidates } = await runEnqueue(SINCE, 200, `56900000000,${listedPhone}`);
+      expect(candidates.map((row) => String(row.lead_id))).toEqual([listed]);
+      expect(await eventsOf(listed)).toHaveLength(1);
+      expect(await eventsOf(unlisted)).toHaveLength(0);
+      expect(await eventsOf(unlistedUnmapped)).toHaveLength(0);
+      expect((await leadOf(unlistedUnmapped)).crm_blocked_reason).toBeNull();
+      expect((await leadOf(unlisted)).crm_enqueued_requirement).toBeNull();
+    });
+
+    test('an empty phone allowlist selects every qualifying lead', async () => {
+      const first = await insertLead();
+      const second = await insertLead();
+      const { candidates } = await runEnqueue(SINCE, 200, '');
+      const ids = candidates.map((row) => String(row.lead_id));
+      expect(ids).toContain(first);
+      expect(ids).toContain(second);
     });
 
     test('the batch limit bounds one pass', async () => {
