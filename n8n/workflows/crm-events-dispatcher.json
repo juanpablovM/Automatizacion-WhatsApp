@@ -8,8 +8,8 @@
         "rule": {
           "interval": [
             {
-              "field": "minutes",
-              "minutesInterval": 1
+              "field": "seconds",
+              "secondsInterval": 5
             }
           ]
         }
@@ -415,7 +415,8 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "executionTimeout": 600
+    "executionTimeout": 600,
+    "saveDataSuccessExecution": "none"
   },
   "pinData": {},
   "versionId": "93000000-0000-0000-0000-000000000099",
