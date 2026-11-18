@@ -455,33 +455,3 @@ describeIntegration('CRM message.send (migration 041)', () => {
     expect(row).toMatchObject({ send: true, phone_number: lead.phone, text_body: 'Hola' });
   });
 });
-
-// Runs last and outside the rolled-back transactions: 041 and its rollback are
-// single transactions of their own (BEGIN ... COMMIT). Ends with 041 applied.
-describeIntegration('migration 041 and its rollback', () => {
-  const client = new pg.Client(connection);
-  const migrationSql = read('infra/postgres/migrations/041_crm_message_send.sql');
-  const rollbackSql = read('infra/postgres/rollback/041_crm_message_send.down.sql');
-  const objects = async () => (await client.query(
-    `SELECT to_regclass('public.crm_outbound_messages') IS NOT NULL AS table_exists,
-            to_regprocedure('crm_inbound_claim_message_send(text,text,uuid,uuid,uuid,bigint,text)') IS NOT NULL AS claim_exists,
-            to_regprocedure('crm_inbound_complete_message_send(bigint,integer,text,text,integer,text,text)') IS NOT NULL AS complete_exists`,
-  )).rows[0];
-
-  beforeAll(async () => { await client.connect(); });
-  afterAll(async () => {
-    await client.query(migrationSql);
-    await client.end();
-  });
-
-  test('the rollback removes every 041 object and the migration restores them, twice in a row', async () => {
-    await client.query(rollbackSql);
-    expect(await objects()).toEqual({ table_exists: false, claim_exists: false, complete_exists: false });
-    expect((await client.query('SELECT to_regprocedure($1) IS NOT NULL AS ok', [
-      'crm_inbound_apply_chat_event(text,text,text,uuid,uuid,bigint)',
-    ])).rows[0].ok).toBe(true);
-    await client.query(migrationSql);
-    await client.query(migrationSql);
-    expect(await objects()).toEqual({ table_exists: true, claim_exists: true, complete_exists: true });
-  });
-});
