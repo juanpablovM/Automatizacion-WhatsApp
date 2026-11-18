@@ -13,7 +13,9 @@
 -- the seller sees the whole chat. sender_type is NOT NULL and limited to
 -- customer, bot, human and system since migration 018; the builder maps it and
 -- blocks anything else. A human reply carries the crm_user_id of the seller
--- assigned to the conversation's lead. sent_at is the provider timestamp when
+-- assigned to the conversation's lead, except a message sent from the CRM
+-- (message.send, migration 041), which carries the crm_seller_id that sent it
+-- (an admin is not the assigned seller). sent_at is the provider timestamp when
 -- known, else the row creation time, as UTC with milliseconds and Z.
 -- Messages blocked on a previous pass go last so they cannot starve the batch.
 WITH announced AS MATERIALIZED (
@@ -38,12 +40,16 @@ SELECT
     NULLIF(btrim(m.raw_payload#>>'{message,documentMessage,fileName}'), '')
   ) AS file_name,
   to_char(COALESCE(m.external_timestamp, m.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS sent_at,
-  CASE WHEN m.direction = 'outgoing' AND m.sender_type = 'human' THEN s.crm_user_id::text END AS crm_user_id
+  CASE
+    WHEN m.direction = 'outgoing' AND m.sender_type = 'human'
+      THEN COALESCE(om.crm_seller_id::text, s.crm_user_id::text)
+  END AS crm_user_id
 FROM announced a
 JOIN messages m ON m.conversation_id = a.conversation_id
 JOIN conversations c ON c.id = m.conversation_id
 LEFT JOIN leads l ON l.id = COALESCE(c.lead_id, m.lead_id)
 LEFT JOIN sellers s ON s.id = l.assigned_seller_id AND s.deleted_at IS NULL
+LEFT JOIN crm_outbound_messages om ON om.message_id = m.id
 LEFT JOIN LATERAL (
   SELECT NULLIF(btrim(ma.filename), '') AS filename
   FROM message_attachments ma
