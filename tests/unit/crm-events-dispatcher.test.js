@@ -479,6 +479,30 @@ describe('Load CRM Events Config node', () => {
   });
 });
 
+// The CRM chat shows messages live: a pass runs every 5 seconds. Overlapping
+// passes are safe (the claim skips locked rows, inserts ignore duplicates).
+// Delivery must run after the enqueue branches: n8n v1 runs the branches of
+// one node top to bottom, so Claim CRM Events stays the lowest node.
+describe('CRM Events Schedule', () => {
+  const workflow = JSON.parse(fs.readFileSync('n8n/workflows/crm-events-dispatcher.json', 'utf8'));
+  const node = (name) => workflow.nodes.find((candidateNode) => candidateNode.name === name);
+
+  test('runs a pass every 5 seconds', () => {
+    expect(node('CRM Events Schedule').parameters.rule.interval).toEqual([{ field: 'seconds', secondsInterval: 5 }]);
+  });
+
+  test('delivers in the same pass that enqueues', () => {
+    const claimY = node('Claim CRM Events').position[1];
+    for (const name of ['Select Lead Qualified Candidates', 'Select Message Candidates', 'Select Ownership Candidates']) {
+      expect(node(name).position[1]).toBeLessThan(claimY);
+    }
+  });
+
+  test('keeps no execution data for successful passes', () => {
+    expect(workflow.settings.saveDataSuccessExecution).toBe('none');
+  });
+});
+
 describe('Select Lead Qualified Candidates node', () => {
   test('passes the phone allowlist as the fourth query parameter', () => {
     const workflow = JSON.parse(fs.readFileSync('n8n/workflows/crm-events-dispatcher.json', 'utf8'));
