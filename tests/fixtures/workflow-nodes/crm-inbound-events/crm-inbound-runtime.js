@@ -263,8 +263,9 @@ const crmEvolutionErrorText = (value) => {
 // an outcome that proves the message was NOT sent is 'failed' (the CRM retry
 // sends it again). Anything ambiguous is 'unknown' and is never resent
 // automatically; an operator resolves it (docs/crm-integration/README.md).
-//   2xx -> sent; 4xx -> failed; 5xx "Connection Closed" (WhatsApp unlinked)
-//   -> failed; other 5xx, timeouts and resets -> unknown.
+//   2xx with a provider message id -> sent; 2xx without one -> unknown;
+//   4xx -> failed; 5xx "Connection Closed" (WhatsApp unlinked) -> failed;
+//   other 5xx, timeouts and resets -> unknown.
 const classifyCrmEvolutionResult = ({ statusCode, body, error } = {}) => {
   if (error) {
     const code = String(error.code ?? '').toUpperCase();
@@ -277,8 +278,17 @@ const classifyCrmEvolutionResult = ({ statusCode, body, error } = {}) => {
   }
   const status = Number(statusCode);
   if (status >= 200 && status < 300) {
-    const id = body?.key?.id ?? body?.data?.key?.id ?? null;
-    return { outcome: 'sent', provider_message_id: id ? String(id) : null, provider_status: status, error: null };
+    const id = [body?.key?.id, body?.data?.key?.id]
+      .find((value) => typeof value === 'string' && value.trim() !== '');
+    if (id === undefined) {
+      return {
+        outcome: 'unknown',
+        provider_message_id: null,
+        provider_status: status,
+        error: 'evolution_message_id_missing',
+      };
+    }
+    return { outcome: 'sent', provider_message_id: id.trim(), provider_status: status, error: null };
   }
   const detail = crmEvolutionErrorText(body);
   if (status >= 400 && status < 500) return { outcome: 'failed', provider_message_id: null, provider_status: status, error: detail };

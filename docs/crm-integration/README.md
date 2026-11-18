@@ -407,12 +407,17 @@ size and idempotency rules as `chat.take`; off until
 - Exactly once toward the customer: the intent is stored and claimed in
   `crm_outbound_messages` (status `sending`) **before** Evolution is called, and
   Evolution is called once per claim (it has no idempotency key). Outcome:
-  - 2xx → `sent`. The message is stored in `messages` as outgoing, `sender_type
-    'human'` (the same shape as a seller's reply from their phone), with Evolution's
-    message id. The seller's reply satisfies the 2-hour window of a live lease, as
-    `04_register_human_reply.sql` does. The dispatcher then sends the usual
-    `message.new` with `sender: "seller"` and the **sender's** `crm_seller_id` (an
-    admin is not the assigned seller).
+  - 2xx with a nonblank string message id in `body.key.id` or `body.data.key.id` →
+    `sent`; no other id format is assumed. The message is stored in `messages` as
+    outgoing, `sender_type 'human'` (the same shape as a seller's reply from their
+    phone), with that Evolution id. The seller's reply satisfies the 2-hour window
+    of a live lease, as `04_register_human_reply.sql` does. The dispatcher then sends
+    the usual `message.new` with `sender: "seller"` and the **sender's**
+    `crm_seller_id` (an admin is not the assigned seller).
+  - 2xx without a usable id → `unknown`, `503`. The provider status is retained,
+    the provider id stays null, and the fixed diagnostic is
+    `evolution_message_id_missing`; the provider response body is not stored. Never
+    resent automatically (see [Stuck message.send](#stuck-messagesend)).
   - 4xx, a refused connection, or 5xx "Connection Closed" (WhatsApp unlinked) →
     `failed`, `503`. A retry with the same bytes sends again.
   - Any other 5xx, a timeout or a reset → `unknown`, `503`. Never resent
@@ -430,11 +435,11 @@ Responses (besides the 400/401/413 of every event):
 
 | Status | Body | When |
 |---|---|---|
-| 200 | `{"event_id":"crm-evt-02AB","result":"sent","message_id":"wa-prod-message-4871","ownership_version":5}` | Evolution accepted it. `message_id` is the one the later `message.new` carries |
+| 200 | `{"event_id":"crm-evt-02AB","result":"sent","message_id":"wa-prod-message-4871","ownership_version":5}` | Evolution accepted it and returned a usable provider message id. `message_id` is the one the later `message.new` carries |
 | 409 | `{"error":"ownership_conflict","holder_crm_seller_id":"…","ownership_version":5}` | Another seller holds the chat. Nothing sent |
 | 409 | `{"error":"event_conflict","event_id":"crm-evt-02AB"}` | Same `event_id`, other bytes; or the `client_message_id` was already used by another `event_id` |
 | 422 | `invalid_opportunity` / `invalid_seller` | As `chat.take` |
-| 503 | `{"error":"receiver_unavailable"}` | Not sent (Evolution failed or WhatsApp is down; retry the same bytes), an earlier attempt of this event is still `sending` / `unknown` (never resent), the database failed, or `CRM_EVENTS_ID_PREFIX` is invalid |
+| 503 | `{"error":"receiver_unavailable"}` | Not sent (Evolution failed or WhatsApp is down; retry the same bytes), Evolution returned 2xx without a usable provider message id (`unknown`, never resent), an earlier attempt is still `sending` / `unknown`, the database failed, or `CRM_EVENTS_ID_PREFIX` is invalid |
 
 Retries with the same `event_id` and bytes: `sent` returns the stored 200;
 `failed` sends again; `sending` / `unknown` answer 503 and send nothing. 409

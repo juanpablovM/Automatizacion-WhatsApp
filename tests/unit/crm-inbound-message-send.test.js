@@ -38,6 +38,7 @@ const OPPORTUNITY = '66666666-7777-4888-9999-aaaaaaaaaaaa';
 const SELLER = '6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b';
 const CLIENT_MESSAGE = '0b6f7a1e-2c3d-4e5f-8a9b-1c2d3e4f5a6b';
 const TEXT = 'Hola, le escribo de Hormiglass';
+const MISSING_PROVIDER_ID_ERROR = 'evolution_message_id_missing';
 
 const sendEnvelope = (overrides = {}, dataOverrides = {}) => ({
   schema_version: 1,
@@ -191,11 +192,28 @@ describe('buildCrmEvolutionSendRequest', () => {
 });
 
 describe('classifyCrmEvolutionResult', () => {
-  test('2xx is sent with the provider message id', () => {
+  test('2xx is sent with a nonblank provider message id from either supported shape', () => {
     expect(classifyCrmEvolutionResult({ statusCode: 201, body: { key: { id: 'BAE5ABC' } } }))
       .toEqual({ outcome: 'sent', provider_message_id: 'BAE5ABC', provider_status: 201, error: null });
-    expect(classifyCrmEvolutionResult({ statusCode: 200, body: { data: { key: { id: 'BAE5DEF' } } } }).provider_message_id)
-      .toBe('BAE5DEF');
+    expect(classifyCrmEvolutionResult({ statusCode: 200, body: { data: { key: { id: 'provider:id/+ arbitrary' } } } }))
+      .toEqual({ outcome: 'sent', provider_message_id: 'provider:id/+ arbitrary', provider_status: 200, error: null });
+    expect(classifyCrmEvolutionResult({ statusCode: 202, body: { key: { id: 42 }, data: { key: { id: 'BAE5DEF' } } } }))
+      .toEqual({ outcome: 'sent', provider_message_id: 'BAE5DEF', provider_status: 202, error: null });
+  });
+
+  test.each([
+    ['absent', {}],
+    ['blank', { key: { id: '  ' } }],
+    ['number', { key: { id: 42 } }],
+    ['object', { data: { key: { id: { value: 'BAE5ABC' } } } }],
+  ])('2xx with an %s provider message id is unknown without provider payload', (_label, body) => {
+    body.provider_payload_secret = 'must-not-be-stored';
+    expect(classifyCrmEvolutionResult({ statusCode: 202, body })).toEqual({
+      outcome: 'unknown',
+      provider_message_id: null,
+      provider_status: 202,
+      error: MISSING_PROVIDER_ID_ERROR,
+    });
   });
 
   test('4xx is a definite failure', () => {
@@ -252,6 +270,23 @@ describe('Send CRM Message node', () => {
       provider_status: '201', error: '', id_prefix: 'dev',
     });
     expect(JSON.stringify(out.json)).not.toContain('evo-key');
+  });
+
+  test('a 2xx without a usable provider id is passed to completion as unknown after one call', async () => {
+    const calls = [];
+    const helpers = {
+      httpRequest: async (options) => {
+        calls.push(options);
+        return { statusCode: 202, body: { accepted: true, provider_payload_secret: 'must-not-be-stored' } };
+      },
+    };
+    const [out] = await runNode('send-crm-message.js', [{ json: claim }], EVOLUTION, helpers);
+    expect(calls).toHaveLength(1);
+    expect(out.json).toEqual({
+      outbound_id: '7', attempt: '2', outcome: 'unknown', provider_message_id: '',
+      provider_status: '202', error: MISSING_PROVIDER_ID_ERROR, id_prefix: 'dev',
+    });
+    expect(JSON.stringify(out.json)).not.toContain('must-not-be-stored');
   });
 
   test('a thrown request error becomes an outcome, never a node failure', async () => {
