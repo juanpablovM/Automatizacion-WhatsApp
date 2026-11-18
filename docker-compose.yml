@@ -228,6 +228,9 @@ services:
       AI_PRD_VALIDATION_ENABLED: ${AI_PRD_VALIDATION_ENABLED:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # Containers do not use Tailscale MagicDNS. CRM_EVENTS_HOST_ENTRY maps a
+      # tailnet receiver name to its Tailscale IP ("name:100.x.y.z").
+      - "${CRM_EVENTS_HOST_ENTRY:-crm-events.invalid:127.0.0.1}"
     ports:
       - "0.0.0.0:${N8N_PORT:-5678}:5678"
     volumes:
