@@ -7,8 +7,10 @@ default. Revision 1.2a (full lead record and `message.new`) is built behind
 `CRM_EVENTS_PROTOCOL_REVISION=1.2` (see [Revision 1.2a](#revision-12a)); 1.1 stays the
 default. Revision 1.2b (`ownership_version`, `ownership.taken` / `ownership.released`
 and the CRM → bot `chat.take` / `chat.release` webhook) is built behind the same
-switch and `CRM_INBOUND_ENABLED` (see [Revision 1.2b](#revision-12b)). Other CRM → bot
-events (`opportunity.*`, `handoff.*`, `message.send`) are not built yet.
+switch and `CRM_INBOUND_ENABLED` (see [Revision 1.2b](#revision-12b)). The CRM → bot
+`message.send` (a seller replies from the CRM) is built behind
+`CRM_INBOUND_MESSAGE_SEND_ENABLED` (see [message.send](#messagesend-crm--customer)).
+Other CRM → bot events (`opportunity.*`, `handoff.*`) are not built yet.
 
 ## Scope
 
@@ -79,9 +81,10 @@ Handoffs to `management`, `finance`, `scheduling` and `claims` return
 
 ### Endpoint the CRM calls (n8n webhook)
 
-One endpoint, `POST <bot n8n>/webhook/crm-events`, takes every CRM → bot event. Only
-`chat.take` and `chat.release` are built (1.2b); see
-[Inbound webhook](#inbound-webhook-crm--bot). The rest come later:
+One endpoint, `POST <bot n8n>/webhook/crm-events`, takes every CRM → bot event.
+`chat.take` and `chat.release` are built (1.2b), see
+[Inbound webhook](#inbound-webhook-crm--bot), and `message.send`, see
+[message.send](#messagesend-crm--customer). The rest come later:
 
 | Event | Replaces today | Status |
 |---|---|---|
@@ -89,7 +92,7 @@ One endpoint, `POST <bot n8n>/webhook/crm-events`, takes every CRM → bot event
 | `chat.release` | ClickUp leaving "in progress" (`normalize-clickup-closure`) | Built (1.2b) |
 | `opportunity.quote_sent`, `opportunity.closed`, `opportunity.reopened` | ClickUp quote statuses | 1.2c, answers `400 invalid_event` today |
 | `handoff.acknowledged`, `handoff.resolved` | ClickUp handoff closure | 1.2d, answers `400 invalid_event` today |
-| `message.send` | — (new: reply goes out through `wa-outbound-messages`) | Phase 3, answers `400 invalid_event` today |
+| `message.send` | — (new: a seller replies from the CRM) | Built, behind `CRM_INBOUND_MESSAGE_SEND_ENABLED` (off: `400 invalid_event`) |
 
 ## Bot sender
 
@@ -143,6 +146,7 @@ running in parallel.
 
 | `CRM_INBOUND_ENABLED` | `false` | Only `true` turns the `/webhook/crm-events` receiver on. Otherwise it answers `503 receiver_unavailable` |
 | `CRM_INBOUND_HMAC_SECRET` | `__PENDIENTE__` | Secret the CRM signs `X-CRM-Signature` with. Must differ from `CRM_EVENTS_HMAC_SECRET` (the receiver answers 503 if they are equal). Never logged |
+| `CRM_INBOUND_MESSAGE_SEND_ENABLED` | `false` | Only `true` accepts `message.send`; otherwise it answers `400 invalid_event` (type not built). Needs a valid `CRM_EVENTS_ID_PREFIX` (else `message.send` answers 503) and the `EVOLUTION_API_*` variables the bot already uses |
 
 When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
 protocol revision is unsupported, the execution fails with the variable names and
@@ -373,6 +377,98 @@ Responses (JSON, `Cache-Control: no-store`):
 
 Neither the secret nor the raw body is ever logged or returned.
 
+#### `message.send` (CRM → customer)
+
+A seller replies to the customer from the CRM. Same endpoint, signature, timestamp,
+size and idempotency rules as `chat.take`; off until
+`CRM_INBOUND_MESSAGE_SEND_ENABLED=true`. Logic: `crm_inbound_claim_message_send()` and
+`crm_inbound_complete_message_send()` (migration 041), called from
+`db/queries/n8n/crm-inbound-events/02_claim_crm_message_send.sql` and
+`03_complete_crm_message_send.sql`; the Evolution call is
+`tests/fixtures/workflow-nodes/crm-inbound-events/send-crm-message.js`.
+
+```json
+{"schema_version":1,"protocol_revision":"1.2","event_id":"crm-evt-02AB","type":"message.send","occurred_at":"2026-11-18T15:00:00Z","data":{"crm_opportunity_id":"66666666-7777-4888-9999-aaaaaaaaaaaa","crm_seller_id":"6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b","client_message_id":"0b6f7a1e-2c3d-4e5f-8a9b-1c2d3e4f5a6b","ownership_version":4,"text":"Hola, le escribo de Hormiglass"}}
+```
+
+- `data` keys only `crm_opportunity_id` (uuid), `crm_seller_id` (uuid, the sender's
+  own id), `client_message_id` (uuid, one per message), `ownership_version` (integer
+  ≥ 0) and `text` (string; trimmed, 1–4,096 characters, no NUL). The trimmed text is
+  what the customer receives. Anything else is `400 invalid_event` naming the field.
+- Opportunity and seller resolve exactly as `chat.take` (422 in the same cases).
+- Ownership: the sender holds the chat → send. The bot holds it → the chat is first
+  taken for the sender by `crm_inbound_apply_chat_event()` itself (the same effect as
+  an applied `chat.take`: bot silent, 2-hour window, version advanced,
+  `ownership.taken` with `source: "crm"`; its inbox row is
+  `message.send/<event_id>/take-<attempt>`), then the message is sent. Another seller
+  holds it → `409 ownership_conflict`, nothing sent. `data.ownership_version` is
+  validated but never blocks a send (a seller replying is attending); responses carry
+  the current version.
+- Exactly once toward the customer: the intent is stored and claimed in
+  `crm_outbound_messages` (status `sending`) **before** Evolution is called, and
+  Evolution is called once per claim (it has no idempotency key). Outcome:
+  - 2xx with a nonblank string message id in `body.key.id` or `body.data.key.id` →
+    `sent`; no other id format is assumed. The message is stored in `messages` as
+    outgoing, `sender_type 'human'` (the same shape as a seller's reply from their
+    phone), with that Evolution id. The seller's reply satisfies the 2-hour window
+    of a live lease, as `04_register_human_reply.sql` does. The dispatcher then sends
+    the usual `message.new` with `sender: "seller"` and the **sender's**
+    `crm_seller_id` (an admin is not the assigned seller).
+  - 2xx without a usable id → `unknown`, `503`. The provider status is retained,
+    the provider id stays null, and the fixed diagnostic is
+    `evolution_message_id_missing`; the provider response body is not stored. Never
+    resent automatically (see [Stuck message.send](#stuck-messagesend)).
+  - 4xx, a refused connection, or 5xx "Connection Closed" (WhatsApp unlinked) →
+    `failed`, `503`. A retry with the same bytes sends again.
+  - Any other 5xx, a timeout or a reset → `unknown`, `503`. Never resent
+    automatically (see [Stuck message.send](#stuck-messagesend)).
+- The fromMe echo Evolution sends for that message is recognized by its
+  `external_message_id` in `08_persist_own_message_from_evolution.sql` (unchanged) and
+  is not stored again; it runs the seller-reply path like any phone reply. If the echo
+  is processed before the completion, the completion adopts the row the echo stored.
+- `CRM_EVENTS_PHONE_ALLOWLIST` only filters bot → CRM events. It does not restrict
+  `message.send`: the CRM can only address opportunities it received, which the
+  allowlist already limits. The `message.new` of a CRM-sent message is emitted only
+  for conversations whose `lead.qualified` was delivered, like every message.
+
+Responses (besides the 400/401/413 of every event):
+
+| Status | Body | When |
+|---|---|---|
+| 200 | `{"event_id":"crm-evt-02AB","result":"sent","message_id":"wa-prod-message-4871","ownership_version":5}` | Evolution accepted it and returned a usable provider message id. `message_id` is the one the later `message.new` carries |
+| 409 | `{"error":"ownership_conflict","holder_crm_seller_id":"…","ownership_version":5}` | Another seller holds the chat. Nothing sent |
+| 409 | `{"error":"event_conflict","event_id":"crm-evt-02AB"}` | Same `event_id`, other bytes; or the `client_message_id` was already used by another `event_id` |
+| 422 | `invalid_opportunity` / `invalid_seller` | As `chat.take` |
+| 503 | `{"error":"receiver_unavailable"}` | Not sent (Evolution failed or WhatsApp is down; retry the same bytes), Evolution returned 2xx without a usable provider message id (`unknown`, never resent), an earlier attempt is still `sending` / `unknown`, the database failed, or `CRM_EVENTS_ID_PREFIX` is invalid |
+
+Retries with the same `event_id` and bytes: `sent` returns the stored 200;
+`failed` sends again; `sending` / `unknown` answer 503 and send nothing. 409
+(`ownership_conflict`) and 422 are stored and replayed like `chat.take`'s.
+
+#### Stuck `message.send`
+
+A `sending` row older than a minute (the n8n execution died between the claim and
+the completion, or the completion's database write failed) or an `unknown` row
+(ambiguous Evolution result) needs an operator: the bot cannot tell whether the
+customer got the message, so it never resends it.
+
+```sql
+SELECT id, event_id, conversation_id, status, attempt_count, provider_status, last_error, claimed_at
+FROM crm_outbound_messages
+WHERE status IN ('sending', 'unknown') AND claimed_at < NOW() - INTERVAL '1 minute'
+ORDER BY claimed_at;
+```
+
+Check the chat in WhatsApp (or `messages` for an outgoing row with the same text
+around `claimed_at`, which the fromMe echo stores as `sender_type 'human'`). Then:
+
+- **It reached the customer:** link it and mark it sent:
+  `UPDATE crm_outbound_messages SET status = 'sent', message_id = <messages.id>, sent_at = NOW(), completed_at = NOW() WHERE id = <id>;`
+  and store the answer the CRM will get on its next retry:
+  `UPDATE crm_inbound_events SET http_status = 200, response = jsonb_build_object('event_id', '<event_id>', 'result', 'sent', 'message_id', 'wa-<prefix>-message-<messages.id>', 'ownership_version', <current version>) WHERE event_id = '<event_id>';`
+- **It did not:** `UPDATE crm_outbound_messages SET status = 'failed', last_error = 'operator: not delivered', completed_at = NOW() WHERE id = <id>;`
+  The next CRM retry with the same bytes sends it.
+
 #### SLA expiry and the ClickUp path during the parallel run
 
 - A CRM-held chat follows the same 2-hour rule. The existing lease sweeper
@@ -388,6 +484,15 @@ Neither the secret nor the raw body is ever logged or returned.
   took it: the most recent action wins, and both share `ownership_version`.
 - Shared-schema change: `lead_chat_ownerships.clickup_task_id` is now nullable (the
   `<> ''` check stays). Every ClickUp query keeps writing a task id.
+
+#### Switching message.send on
+
+1. Apply migration 041, then import `crm-inbound-events` **and** `crm-events-dispatcher`
+   (its message query reads `crm_outbound_messages`, so it needs 041 first).
+2. Check `CRM_EVENTS_ID_PREFIX` is the dispatcher's prefix, set
+   `CRM_INBOUND_MESSAGE_SEND_ENABLED=true` and restart n8n.
+3. Rollback: `CRM_INBOUND_MESSAGE_SEND_ENABLED=false`, re-import the previous two
+   workflows, then `infra/postgres/rollback/041_crm_message_send.down.sql`.
 
 #### Switching 1.2b on
 
@@ -482,9 +587,10 @@ WHERE event_id = '<event_id>' AND status = 'parked';
 - Confirmed dev seller UUIDs.
 - Phones duplicated among the imported Dolibarr customers return 422
   `ambiguous_customer`.
-- CRM → bot events beyond `chat.take` / `chat.release` (`opportunity.*` in 1.2c,
-  `handoff.*` in 1.2d, `message.send` in phase 3), and the dev URL + secret for
+- CRM → bot events beyond `chat.take` / `chat.release` / `message.send`
+  (`opportunity.*` in 1.2c, `handoff.*` in 1.2d), and the dev URL + secret for
   `/webhook/crm-events`.
+- `message.send` is text only; media needs a `media` contract.
 - Media files in the CRM chat (1.2a sends a placeholder text).
 - Customer corrections after confirmation reach the CRM through `revision`.
 - Re-enable handoff delivery: since 2026-10-14 it is off in ClickUp.

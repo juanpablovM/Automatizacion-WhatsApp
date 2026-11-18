@@ -174,6 +174,10 @@ services:
       # X-CRM-Signature and must differ from CRM_EVENTS_HMAC_SECRET.
       CRM_INBOUND_ENABLED: ${CRM_INBOUND_ENABLED:-false}
       CRM_INBOUND_HMAC_SECRET: ${CRM_INBOUND_HMAC_SECRET:-__PENDIENTE__}
+      # message.send (the CRM replies to the customer through the bot). Off by
+      # default: message.send answers 400 invalid_event until it is "true". It
+      # needs CRM_EVENTS_ID_PREFIX, the prefix of the message_id it answers.
+      CRM_INBOUND_MESSAGE_SEND_ENABLED: ${CRM_INBOUND_MESSAGE_SEND_ENABLED:-false}
       FOLLOW_UP_BATCH_SIZE: ${FOLLOW_UP_BATCH_SIZE:-50}
       FOLLOW_UP_WINDOW_START: ${FOLLOW_UP_WINDOW_START:-09:00}
       FOLLOW_UP_WINDOW_END: ${FOLLOW_UP_WINDOW_END:-20:00}
@@ -224,6 +228,9 @@ services:
       AI_PRD_VALIDATION_ENABLED: ${AI_PRD_VALIDATION_ENABLED:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # Containers do not use Tailscale MagicDNS. CRM_EVENTS_HOST_ENTRY maps a
+      # tailnet receiver name to its Tailscale IP ("name:100.x.y.z").
+      - "${CRM_EVENTS_HOST_ENTRY:-crm-events.invalid:127.0.0.1}"
     ports:
       - "0.0.0.0:${N8N_PORT:-5678}:5678"
     volumes:

@@ -675,6 +675,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Claim CRM Message Send",
+    "fixture": "db/queries/n8n/crm-inbound-events/02_claim_crm_message_send.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Send CRM Message",
+    "fixture": "crm-inbound-events/send-crm-message.js",
+    "runtimes": [
+      "crm-inbound-events/crm-inbound-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Complete CRM Message Send",
+    "fixture": "db/queries/n8n/crm-inbound-events/03_complete_crm_message_send.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
     "node": "Build CRM Event Response",
     "fixture": "crm-inbound-events/build-crm-inbound-response.js",
     "runtimes": [
