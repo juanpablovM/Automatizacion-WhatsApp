@@ -4,6 +4,7 @@
 // stage. Every test runs inside a transaction that is rolled back, with rows
 // created in 2100 and a matching CRM_EVENTS_SINCE so other suites never mix in.
 // =============================================================================
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import pg from 'pg';
@@ -30,6 +31,8 @@ const claimSql = fs.readFileSync(`${sqlDir}/03_claim_crm_events.sql`, 'utf8');
 const completeSql = fs.readFileSync(`${sqlDir}/04_complete_crm_event.sql`, 'utf8');
 const selectMessagesSql = fs.readFileSync(`${sqlDir}/05_select_message_candidates.sql`, 'utf8');
 const insertMessagesSql = fs.readFileSync(`${sqlDir}/06_insert_message_events.sql`, 'utf8');
+const selectOwnershipSql = fs.readFileSync(`${sqlDir}/07_select_ownership_candidates.sql`, 'utf8');
+const clickupAcquireSql = fs.readFileSync('db/queries/n8n/lead-chat-ownership/01_acquire_ownership_from_clickup.sql', 'utf8');
 
 const SINCE = '2100-01-01T00:00:00.000Z';
 const SELLER_UUID = '6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b';
@@ -90,8 +93,8 @@ describeIntegration('CRM outbox, revision 1.2', () => {
   };
 
   // Stage A as the workflow chains it: select, build, insert.
-  const runLeadEnqueue = async (config = CONFIG_12) => {
-    const { rows: candidates } = await client.query(selectLeadsSql, [SINCE, '200', config.protocol_revision]);
+  const runLeadEnqueue = async (config = CONFIG_12, allowlist = '') => {
+    const { rows: candidates } = await client.query(selectLeadsSql, [SINCE, '200', config.protocol_revision, allowlist]);
     const results = [];
     for (const row of candidates) {
       const built = buildLeadQualifiedEvent(row, config);
@@ -207,7 +210,7 @@ describeIntegration('CRM outbox, revision 1.2', () => {
 
     test('a stale snapshot (the lead changed after the select) inserts nothing', async () => {
       const { leadId } = await insertLead();
-      const { rows: candidates } = await client.query(selectLeadsSql, [SINCE, '200', '1.2']);
+      const { rows: candidates } = await client.query(selectLeadsSql, [SINCE, '200', '1.2', '']);
       const row = candidates.find((candidate) => String(candidate.lead_id) === leadId);
       const built = buildLeadQualifiedEvent(row, CONFIG_12);
       await client.query("UPDATE leads SET city = 'Talca' WHERE id = $1", [leadId]);
@@ -401,6 +404,54 @@ describeIntegration('CRM outbox, revision 1.2', () => {
       )).toMatchObject({ message: expect.stringMatching(/crm_events_message_type_key/) });
       expect(await tryQuery("UPDATE crm_events SET message_id = NULL WHERE event_id = 'x-3'"))
         .toMatchObject({ message: expect.stringMatching(/immutable/) });
+    });
+  });
+
+  // CRM_EVENTS_PHONE_ALLOWLIST filters only the lead stage. Messages (05) and
+  // ownership changes (07) need a delivered lead.qualified for their
+  // conversation, so a lead outside the allowlist never leaks either.
+  describe('phone allowlist', () => {
+    const OWNERSHIP_SINCE = '2000-01-01T00:00:00.000Z';
+    const insertCustomerMessage = (conversationId, leadId) => client.query(
+      `INSERT INTO messages (conversation_id, lead_id, direction, sender_type, message_type, text_body, created_at, raw_payload)
+       VALUES ($1, $2, 'incoming', 'customer', 'text', 'hola', '2100-01-02T10:00:00Z', '{}'::jsonb)`,
+      [conversationId, leadId],
+    );
+    const takeChat = async (leadId) => {
+      const taskId = `allowlist-task-${leadId}-${crypto.randomUUID()}`;
+      await client.query('UPDATE leads SET clickup_task_id = $2 WHERE id = $1', [leadId, taskId]);
+      await client.query(clickupAcquireSql, [
+        taskId, 'nueva', `hist-${crypto.randomUUID()}`, new Date().toISOString(), 'in progress', 'cotización enviada',
+      ]);
+    };
+
+    test('a lead outside the allowlist sends no lead.qualified, no message.new and no ownership event', async () => {
+      const listed = await insertLead();
+      const unlisted = await insertLead();
+      const listedPhone = (await leadOf(listed.leadId)).phone_number;
+
+      const { candidates } = await runLeadEnqueue(CONFIG_12, listedPhone);
+      expect(candidates.map((row) => String(row.lead_id))).toEqual([listed.leadId]);
+      expect(await leadEventsOf(unlisted.leadId)).toHaveLength(0);
+      expect((await leadOf(unlisted.leadId)).crm_checked_source_hash).toBeNull();
+
+      const delivered = (await claim()).find((row) => row.event_id === `wa-test-lead-${listed.leadId}-r1`);
+      await complete(delivered, 'delivered', { http_status: '200', crm_customer_id: CUSTOMER_UUID, crm_opportunity_id: OPPORTUNITY_UUID });
+
+      for (const { leadId, conversationId } of [listed, unlisted]) {
+        await insertCustomerMessage(conversationId, leadId);
+        await takeChat(leadId);
+      }
+
+      const messageConversations = (await client.query(selectMessagesSql, ['1.2', SINCE, 'test', '500'])).rows
+        .map((row) => String(row.conversation_id));
+      expect(messageConversations).toContain(listed.conversationId);
+      expect(messageConversations).not.toContain(unlisted.conversationId);
+
+      const ownershipConversations = (await client.query(selectOwnershipSql, ['1.2', OWNERSHIP_SINCE, 'test', '500'])).rows
+        .map((row) => String(row.conversation_id));
+      expect(ownershipConversations).toContain(listed.conversationId);
+      expect(ownershipConversations).not.toContain(unlisted.conversationId);
     });
   });
 });

@@ -1,5 +1,6 @@
 -- Select leads to announce to the CRM as lead.qualified (stage A, read side).
--- p1 CRM_EVENTS_SINCE (ISO timestamp), p2 batch size, p3 protocol revision.
+-- p1 CRM_EVENTS_SINCE (ISO timestamp), p2 batch size, p3 protocol revision,
+-- p4 CRM_EVENTS_PHONE_ALLOWLIST (comma-separated digits, '' = no filter).
 --
 -- A lead qualifies once it has an assigned seller and was created at or after
 -- CRM_EVENTS_SINCE (historic leads are never backfilled). Under 1.1 it is a
@@ -11,6 +12,10 @@
 -- seller makes it a candidate on the next pass. `revision` is only a proposal:
 -- Insert Lead Qualified Event re-checks it under a row lock, so concurrent
 -- passes can never enqueue the same revision twice.
+-- A non-empty allowlist restricts the scope to leads with one of those phones
+-- (e.g. test phones against the CRM dev environment); other leads are neither
+-- selected nor marked blocked. Messages and ownership changes follow, since
+-- they are only sent for conversations of a delivered lead.qualified.
 WITH scope AS MATERIALIZED (
   SELECT l.id, s.crm_user_id,
          CASE WHEN $3::text = '1.2' THEN crm_lead_source_hash(l.id) END AS source_hash
@@ -18,6 +23,7 @@ WITH scope AS MATERIALIZED (
   JOIN sellers s ON s.id = l.assigned_seller_id
   WHERE l.deleted_at IS NULL
     AND l.created_at >= $1::timestamptz
+    AND ($4::text = '' OR l.phone_number = ANY(string_to_array($4::text, ',')))
     AND CASE
       WHEN $3::text = '1.2' THEN crm_lead_source_hash(l.id) IS DISTINCT FROM l.crm_checked_source_hash
       ELSE l.crm_enqueued_requirement IS DISTINCT FROM COALESCE(l.requirement, '')

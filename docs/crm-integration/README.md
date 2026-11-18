@@ -129,6 +129,7 @@ running in parallel.
 | `CRM_EVENTS_URL` | `__PENDIENTE__` | Full URL including `/api/integrations/whatsapp/events` |
 | `CRM_EVENTS_HMAC_SECRET` | `__PENDIENTE__` | Shared HMAC secret. Never logged |
 | `CRM_EVENTS_SINCE` | `__PENDIENTE__` | ISO instant. Older leads are never sent |
+| `CRM_EVENTS_PHONE_ALLOWLIST` | empty (no filter) | Comma-separated phones (spaces and a leading `+` are ignored, each 8-15 digits). When set, only leads with one of these phones are sent. See [Phone allowlist](#phone-allowlist) |
 | `CRM_EVENTS_ID_PREFIX` | `__PENDIENTE__` (`test` in the test stack) | Environment namespace for every id, 1-16 lowercase letters or digits |
 | `CRM_EVENTS_PROTOCOL_REVISION` | `1.1` | `1.1` or `1.2`. Switch to `1.2` only after the CRM confirms it in that environment |
 | `CRM_EVENTS_BATCH_SIZE` | `20` | Leads enqueued per pass; under 1.1 also events delivered per pass |
@@ -146,6 +147,17 @@ running in parallel.
 When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
 protocol revision is unsupported, the execution fails with the variable names and
 nothing is enqueued or sent.
+
+### Phone allowlist
+
+`CRM_EVENTS_PHONE_ALLOWLIST` lets production send events to the CRM's dev
+environment for test phones only, never for real customers. Leads whose phone is
+not listed are not selected at all: no `lead.qualified`, and they are not marked
+blocked. Messages and ownership events follow the lead filter, because both are
+only sent for conversations already announced by a delivered `lead.qualified`.
+An entry that is not 8-15 digits fails the execution
+(`CRM_EVENTS_PHONE_ALLOWLIST_invalid`) and nothing is sent. Remove the variable
+when going live against the CRM production environment.
 
 `CRM_EVENTS_ID_PREFIX` is required when enabled. Ids sent to the CRM are
 `wa-<prefix>-lead-<id>`, `wa-<prefix>-lead-<id>-r<rev>` and
