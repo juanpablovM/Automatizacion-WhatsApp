@@ -89,7 +89,7 @@ El orquestador no anuncia una derivacion si no existe `lead_id`.
 
 ## ClickUp y notificacion
 
-`CRM - ClickUp Sync Lead` crea la tarea en `Leads Entrantes` con:
+`CRM - ClickUp Sync Lead` crea la tarea en `Cotizaciones WhatsApp` (ClickUp de Hormiglass, espacio `Cotizaciones`) con:
 
 - identidad y contacto
 - producto, comuna, modalidad y necesidad
