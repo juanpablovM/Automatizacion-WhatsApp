@@ -315,7 +315,7 @@ Uso de SQL:
 Responsabilidad:
 
 - construir el payload de ClickUp
-- crear la tarea en `Leads Entrantes`
+- crear la tarea en `Cotizaciones WhatsApp` (ClickUp de Hormiglass, espacio `Cotizaciones`)
 - asignar vendedor con `clickup_user_id`
 - devolver siempre `lead_id`, `clickup_task_id` y `clickup_task_url` al workflow padre
 - crear comentario con conversacion completa cuando hay historial disponible

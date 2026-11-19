@@ -4,13 +4,26 @@
 
 Definir la configuracion recomendada de ClickUp para que el CRM automatizado sea consistente, portable y facil de integrar con `n8n`.
 
-## Estado actual
+## Destino vigente (actualizado 2026-11-19)
+
+El bot escribe en el ClickUp de Hormiglass:
+
+- workspace Hormiglass (`9017080697`)
+- espacio `Cotizaciones` (`90170850570`); la lista estaba antes en el espacio `Prueba`
+- lista `Cotizaciones WhatsApp` (`901717795905`), configurada en `CLICKUP_LEADS_LIST_ID`
+- estados: `nueva`, `en atención`, `cotización enviada`, `cerrada`
+
+Las listas `Leads Entrantes` y `Handoffs WhatsApp` que se mencionan más abajo pertenecen al ClickUp antiguo de pruebas. Se conservan como referencia histórica y no son el destino de la empresa. La entrega de handoffs a ClickUp está desactivada (`CLICKUP_HANDOFF_LIST_ID` sin valor) hasta la integración con el CRM.
+
+Los `field_id` vigentes viven en `.env` (`CLICKUP_CF_*`). Ante cualquier duda, se deben comparar contra la API de la lista y no contra este documento.
+
+## Estado histórico (ClickUp de pruebas)
 
 ClickUp ya fue configurado y validado con el workflow `CRM - ClickUp Sync Lead`.
 
 Estado validado:
 
-- lista real `Leads Entrantes`
+- lista de pruebas `Leads Entrantes` (reemplazada por `Cotizaciones WhatsApp`)
 - custom fields reales mapeados por variables `CLICKUP_*`
 - creacion de tareas desde leads confirmados
 - asignacion inicial a vendedores activos con `clickup_user_id`
@@ -178,8 +191,8 @@ Ese comentario debe incluir el historial conversacional completo para no sobreca
 
 El proyecto usa variables para los IDs de ClickUp. En `.env.example` quedan placeholders y en `.env` local se mantienen los valores reales:
 
-- `CLICKUP_LEADS_LIST_ID`: lista `Leads Entrantes`, usada por el flujo comercial
-- `CLICKUP_HANDOFF_LIST_ID`: lista `Handoffs WhatsApp`, usada por las notificaciones y cierres de handoff
+- `CLICKUP_LEADS_LIST_ID`: lista `Cotizaciones WhatsApp` de Hormiglass, usada por el flujo comercial
+- `CLICKUP_HANDOFF_LIST_ID`: sin valor por ahora (handoffs a ClickUp desactivados); antes apuntaba a la lista de pruebas `Handoffs WhatsApp`
 - `CLICKUP_TEAM_ID`
 - `CLICKUP_CF_WHATSAPP_NAME_ID`
 - `CLICKUP_CF_PHONE_ID`
