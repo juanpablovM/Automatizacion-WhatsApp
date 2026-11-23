@@ -16,6 +16,8 @@ Test runner: vitest (`npm run test:unit`, `npm run test:integration:postgres`, `
 - **S4** — A linked conversation that re-qualifies into its own lead is a new quote: its messages
   are no longer sent through the link (they follow its own `lead.qualified`, as today). Messages
   already sent through the link stay on the old opportunity and are not re-sent (owner, L5).
+- **S6** — Owner request (L6, verbatim): "arreglemos esto de \"quiero otra cotización\"". "otra
+  cotización", "cotización nueva" and "cotizar otra cosa" are explicit new-request directives.
 - **S5** — Existing behavior unchanged: announced conversations keep sending as before; conversations
   without a link stay invisible to the CRM.
 
@@ -41,6 +43,7 @@ messages. The seller would not see that the customer wrote again.
 - [x] **T1** (S1-S5, inline; no writer trigger: one unit) — Migration 043 (`conversations.continues_conversation_id` +
       `conversation_continuation_target()`), rollback, evaluate step flag, Fix V3 Route and Persist
       Conversation State links, dispatcher 05, workflow sync, tests, CRM README.
+- [x] **T3** (S6, inline) — widen `NEW_REQUEST_DIRECTIVE`.
 - [ ] **T2** — Deploy to production after the owner approves (backup, migration, workflow import).
 
 ## Log
@@ -74,3 +77,7 @@ messages. The seller would not see that the customer wrote again.
   ON DELETE SET NULL, 1.1 selects nothing).
 - **L5 (2026-11-23) — owner decision on S4:** "si" to keeping it as is: qualification messages sent
   through the link stay on the old opportunity; the new one starts with its `lead.qualified` summary.
+- **L6 (2026-11-23) — owner request, verbatim:** "arreglemos esto de \"quiero otra cotización\"".
+  Differential check (base vs change, 4 contexts x 16 phrases): only the new phrases changed. Also
+  fixes "quiero otra cotización" on a recent quote with an open task, which used to reopen the
+  confirmed quote as a correction, and "cotizar otra cosa" being stored as service "Otra Cosa".

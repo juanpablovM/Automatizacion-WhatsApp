@@ -616,7 +616,7 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
   const isRejection = (text) => isRejectionText(text)
     || (text === normalizedText && everyBurstLine(isRejectionText));
   const wantsPrevious = (text) => /\b(continuar|seguir|retomar)\b.*\b(anterior|misma|mismo|solicitud|cotizacion)\b|\b(la anterior|lo anterior|misma solicitud|misma cotizacion)\b/.test(text);
-  const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
+  const NEW_REQUEST_DIRECTIVE = /^(?:una? )?(?:nueva|nuevo|otra|otro)$|\b(?:nueva cotizacion|otra cotizacion|cotizacion nueva|cotizar otra cosa|nueva solicitud|nuevo pedido|nuevo proyecto|iniciar una nueva|empezar una nueva|continuar con una nueva|desde cero|partir de cero)\b/;
   const isCourtesyOnly = (text) => /^(?:muchas )?gracias(?: por (?:todo|la ayuda))?$|^(?:chao|chau|hasta luego|adios)$/.test(text);
   const wantsNewText = (text) => NEW_REQUEST_DIRECTIVE.test(text);
   const wantsNew = (text) => wantsNewText(text) || (text === normalizedText && anyBurstLine(wantsNewText));
