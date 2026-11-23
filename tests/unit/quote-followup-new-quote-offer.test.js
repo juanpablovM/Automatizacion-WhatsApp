@@ -78,7 +78,9 @@ describe('answer to the new-quote offer', () => {
     expect(metadataOf(out)).toMatchObject({
       response_kind: 'quote_followup_new_quote',
       release_quote_followup_ownership: true,
+      customer_chose_new_quote: true,
     });
+    expect(out.customer_chose_new_quote).toBe(true);
   });
 
   test.each([
@@ -96,6 +98,8 @@ describe('answer to the new-quote offer', () => {
     });
     expect(out.response_kind).not.toBe('quote_followup_new_quote');
     expect(metadataOf(out).release_quote_followup_ownership).toBeFalsy();
+    expect(out.customer_chose_new_quote).toBe(false);
+    expect(metadataOf(out).customer_chose_new_quote).toBe(false);
   });
 
   test('a yes without a pending offer is just another message to the seller', () => {
@@ -126,5 +130,54 @@ describe('answer to the new-quote offer', () => {
       bot_suppressed: false,
       response_text: QUOTE_FOLLOWUP_NEW_QUOTE_REPLY,
     });
+  });
+});
+
+// Migration 043: only a customer who asked for a new quote leaves the CRM
+// opportunity of the previous one. Any other turn that opens a new
+// conversation links it to the conversation it continues.
+describe('customer_chose_new_quote after a handoff without a pending offer', () => {
+  const returningTurn = (text) => offeredTurn({
+    text_body: text, bot_suppressed: false, quote_followup_offer_pending: false,
+    ownership_id: null, ownership_lead_id: null, lead_clickup_status: 'cerrada', is_recent_conversation: false,
+  });
+
+  test('an explicit new-request directive marks it', () => {
+    const out = evaluateConversationStep(returningTurn('Quiero una nueva cotización'), { CLICKUP_STATUS_RESOLVED: 'cerrada' }).json;
+    expect(out.reset_conversation_lead).toBe(true);
+    expect(out.customer_chose_new_quote).toBe(true);
+    expect(metadataOf(out).customer_chose_new_quote).toBe(true);
+  });
+
+  // Owner request 2026-11-23: "arreglemos esto de 'quiero otra cotización'".
+  test.each([
+    'Quiero otra cotización', 'Necesito otra cotización', 'otra cotización por favor',
+    'Una cotización nueva', 'quiero cotizar otra cosa',
+  ])('%j is an explicit new quote', (text) => {
+    const out = evaluateConversationStep(returningTurn(text), { CLICKUP_STATUS_RESOLVED: 'cerrada' }).json;
+    expect(out).toMatchObject({ reset_conversation_lead: true, customer_chose_new_quote: true, response_kind: 'new_request_started' });
+    expect(metadataOf(out).customer_chose_new_quote).toBe(true);
+  });
+
+  test('"quiero otra cotización" on a recent quote with an open task is a new quote, not a correction', () => {
+    const out = evaluateConversationStep(offeredTurn({
+      text_body: 'Quiero otra cotización', bot_suppressed: false, quote_followup_offer_pending: false,
+      ownership_id: null, ownership_lead_id: null, lead_clickup_status: null,
+    })).json;
+    expect(out).toMatchObject({ reopen_confirmed_quote: false, reset_conversation_lead: true, customer_chose_new_quote: true });
+  });
+
+  test.each([
+    '¿Me reenvías la cotización?', '¿Recibieron mi cotización?', 'Quiero cambiar la cotización',
+  ])('%j is not a new quote', (text) => {
+    const out = evaluateConversationStep(returningTurn(text), { CLICKUP_STATUS_RESOLVED: 'cerrada' }).json;
+    expect(out.customer_chose_new_quote).toBe(false);
+  });
+
+  test('a returning greeting opens a new conversation without marking it', () => {
+    const out = evaluateConversationStep(returningTurn('Hola, buenas tardes'), { CLICKUP_STATUS_RESOLVED: 'cerrada' }).json;
+    expect(out.reset_conversation_lead).toBe(true);
+    expect(out.customer_chose_new_quote).toBe(false);
+    expect(metadataOf(out).customer_chose_new_quote).toBe(false);
   });
 });

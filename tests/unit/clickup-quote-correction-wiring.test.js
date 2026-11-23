@@ -24,10 +24,10 @@ describe('quote correction wiring', () => {
     );
   });
 
-  test('the v3 route receives the reopened-quote flag as its last parameter', () => {
+  test('the v3 route receives the reopened-quote flag ($14) and the new-quote choice ($15, migration 043)', () => {
     const route = node('wa-conversation-orchestrator', 'Fix V3 Route');
     expect(route.parameters.options.queryReplacement).toContain(
-      '$json.raw_payload_json, $json.reopen_confirmed_quote === true] }}',
+      '$json.raw_payload_json, $json.reopen_confirmed_quote === true, $json.customer_chose_new_quote === true] }}',
     );
   });
 });

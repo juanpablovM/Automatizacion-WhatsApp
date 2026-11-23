@@ -25,7 +25,10 @@ WITH input AS MATERIALIZED (
     END AS external_timestamp,
     NULLIF($12::TEXT, '') AS text_body,
     COALESCE($13::JSONB, '{}'::JSONB) AS raw_payload,
-    COALESCE($14::BOOLEAN, FALSE) AS reopen_confirmed_quote
+    COALESCE($14::BOOLEAN, FALSE) AS reopen_confirmed_quote,
+    -- Migration 043: a customer who did not ask for a new quote continues the
+    -- same CRM opportunity, so a new conversation links to the one it continues.
+    COALESCE($15::BOOLEAN, FALSE) AS customer_chose_new_quote
 ), valid_claim AS MATERIALIZED (
   SELECT event.id
   FROM inbound_events event
@@ -97,10 +100,13 @@ WITH input AS MATERIALIZED (
 ), created_conversation AS (
   INSERT INTO conversations (
     source_number_id, phone_number, conversation_status_id, current_step,
-    qualification_context, started_at, last_message_at
+    qualification_context, started_at, last_message_at, continues_conversation_id
   )
   SELECT input.source_number_id, input.phone_number, status.id,
-         input.current_step, '{}'::JSONB, NOW(), NOW()
+         input.current_step, '{}'::JSONB, NOW(), NOW(),
+         CASE WHEN NOT input.customer_chose_new_quote
+           THEN conversation_continuation_target(input.source_number_id, input.phone_number)
+         END
   FROM input
   JOIN valid_claim ON TRUE
   CROSS JOIN identity_lock

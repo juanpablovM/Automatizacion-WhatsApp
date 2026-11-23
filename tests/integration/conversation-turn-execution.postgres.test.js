@@ -165,6 +165,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
     textBody,
     { source: 'integration-test' },
     false,
+    false,
   ]);
 
   const seedTurn = async ({
@@ -829,7 +830,7 @@ describeIntegration('v3 conversation turn execution saga', () => {
         event.inboundEventId, event.token, conversation.id, sourceNumberId,
         conversation.phone_number, 'enforce', 'serial', 'service', 'text',
         `message-${event.inboundEventId}`, null, 'Necesito una cotización',
-        { source: 'integration-test' }, false,
+        { source: 'integration-test' }, false, false,
       ];
       const [a, b] = await Promise.all([
         client.query(routeSql, routeValues(first)),

@@ -18,6 +18,12 @@
 -- (an admin is not the assigned seller). sent_at is the provider timestamp when
 -- known, else the row creation time, as UTC with milliseconds and Z.
 -- Messages blocked on a previous pass go last so they cannot starve the batch.
+-- A returning customer who did not ask for a new quote (migration 043): the
+-- messages of a conversation linked by continues_conversation_id to an
+-- announced one are sent under the announced conversation id, with its lead's
+-- seller, while the linked conversation has no lead of its own. Once it
+-- re-qualifies into its own lead it is a new quote and follows its own
+-- lead.qualified.
 WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
@@ -25,10 +31,26 @@ WITH announced AS MATERIALIZED (
     AND e.event_type = 'lead.qualified'
     AND e.status = 'delivered'
     AND e.conversation_id LIKE 'wa-' || $3::text || '-conversation-%'
+), targets AS MATERIALIZED (
+  SELECT a.conversation_id AS message_conversation_id, a.conversation_id AS announced_conversation_id
+  FROM announced a
+  UNION ALL
+  SELECT linked.id, a.conversation_id
+  FROM announced a
+  JOIN conversations linked ON linked.continues_conversation_id = a.conversation_id
+  WHERE linked.deleted_at IS NULL
+    AND linked.lead_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM announced own WHERE own.conversation_id = linked.id)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM leads own_lead
+      WHERE own_lead.source_conversation_id = linked.id
+        AND own_lead.deleted_at IS NULL
+    )
 )
 SELECT
   m.id AS message_id,
-  m.conversation_id,
+  t.announced_conversation_id AS conversation_id,
   m.direction,
   m.sender_type,
   m.message_type,
@@ -44,10 +66,11 @@ SELECT
     WHEN m.direction = 'outgoing' AND m.sender_type = 'human'
       THEN COALESCE(om.crm_seller_id::text, s.crm_user_id::text)
   END AS crm_user_id
-FROM announced a
-JOIN messages m ON m.conversation_id = a.conversation_id
+FROM targets t
+JOIN messages m ON m.conversation_id = t.message_conversation_id
 JOIN conversations c ON c.id = m.conversation_id
-LEFT JOIN leads l ON l.id = COALESCE(c.lead_id, m.lead_id)
+JOIN conversations announced_conversation ON announced_conversation.id = t.announced_conversation_id
+LEFT JOIN leads l ON l.id = COALESCE(c.lead_id, m.lead_id, announced_conversation.lead_id)
 LEFT JOIN sellers s ON s.id = l.assigned_seller_id AND s.deleted_at IS NULL
 LEFT JOIN crm_outbound_messages om ON om.message_id = m.id
 LEFT JOIN LATERAL (

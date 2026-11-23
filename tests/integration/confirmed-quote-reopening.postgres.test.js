@@ -87,7 +87,7 @@ integration('a confirmed quote reopened by a correction', () => {
   };
   const route = (event, requestedConversationId, reopen) => client.query(routeSql, [
     event.id, 'reopen-token', requestedConversationId, sourceId, phone, 'enforce', 'reopen-rule',
-    'service', 'text', event.identity, null, 'Perdón, me equivoqué: son 80 bloques, no 50', {}, reopen,
+    'service', 'text', event.identity, null, 'Perdón, me equivoqué: son 80 bloques, no 50', {}, reopen, false,
   ]);
 
   test('loads the open task and the history of a quote handed to sales', async () => {
