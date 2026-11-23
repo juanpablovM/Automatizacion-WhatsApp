@@ -7,8 +7,8 @@ Scope: repair and verify the orchestrator path; the separate CRM endpoint HTTP 5
 2. **S2** — After the health audit found the production backlog, the user chose: “Reparar el orquestador ahora”.
 
 ## Tasks
-- [x] **T1** — S2 — Parent route — Snapshot the runtime, restore the resolved `Execute V3 Lead Effect` target through the supported manifest-aware path, and preserve unrelated workflow state. Risk: item 5 (production workflow deployment). Commit: pending.
-- [x] **T2** — S1-S2 — Independent verification route — Confirm the live target ID, workflow health, queue drainage, and absence of new orchestration failures; report the separate CRM HTTP 502 condition without changing it. Risk: item 5 (production verification after deployment). Commit: pending.
+- [x] **T1** — S2 — Parent route — Snapshot the runtime, restore the resolved `Execute V3 Lead Effect` target through the supported manifest-aware path, and preserve unrelated workflow state. Risk: item 5 (production workflow deployment). Commit: `4c6b843`.
+- [x] **T2** — S1-S2 — Independent verification route — Confirm the live target ID, workflow health, queue drainage, and absence of new orchestration failures; report the separate CRM HTTP 502 condition without changing it. Risk: item 5 (production verification after deployment). Commit: `4c6b843`.
 
 ## Verification
 - Read back the deployed `Execute V3 Lead Effect.workflowId` and compare it with the sole runtime ID of `CRM - Lead Creation And Assignment`.
