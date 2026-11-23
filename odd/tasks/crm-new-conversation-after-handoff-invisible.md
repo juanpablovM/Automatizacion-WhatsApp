@@ -14,7 +14,8 @@ Test runner: vitest (`npm run test:unit`, `npm run test:integration:postgres`, `
   `conversation_id` of the conversation it continues, when that one was announced by a delivered
   `lead.qualified` and the linked conversation has no lead of its own.
 - **S4** — A linked conversation that re-qualifies into its own lead is a new quote: its messages
-  are no longer sent through the link (they follow its own `lead.qualified`, as today).
+  are no longer sent through the link (they follow its own `lead.qualified`, as today). Messages
+  already sent through the link stay on the old opportunity and are not re-sent (owner, L5).
 - **S5** — Existing behavior unchanged: announced conversations keep sending as before; conversations
   without a link stay invisible to the CRM.
 
@@ -71,3 +72,5 @@ messages. The seller would not see that the customer wrote again.
   "quiero otra cotización" without a pending offer does not match `NEW_REQUEST_DIRECTIVE`, so it is
   linked (pre-existing bot reading). Probes added as regression tests (target after own lead,
   ON DELETE SET NULL, 1.1 selects nothing).
+- **L5 (2026-11-23) — owner decision on S4:** "si" to keeping it as is: qualification messages sent
+  through the link stay on the old opportunity; the new one starts with its `lead.qualified` summary.
