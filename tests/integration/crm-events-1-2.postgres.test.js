@@ -315,6 +315,80 @@ describeIntegration('CRM outbox, revision 1.2', () => {
       for (const id of [queued, failed, old, deleted, notAnnounced]) expect(ids).not.toContain(id);
     });
 
+    // Owner rule 2026-11-23: a returning customer who did not ask for a new
+    // quote stays on the same CRM opportunity (migration 043).
+    describe('a conversation that continues an announced one', () => {
+      const continuingConversation = async (continuedId, phoneOf) => {
+        const { rows: [continued] } = await client.query('SELECT phone_number FROM conversations WHERE id = $1', [continuedId]);
+        const { rows: [conversation] } = await client.query(
+          `INSERT INTO conversations (phone_number, conversation_status_id, source_number_id, continues_conversation_id)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [phoneOf ?? continued.phone_number, conversationStatusId, sourceNumberId, continuedId],
+        );
+        return String(conversation.id);
+      };
+
+      test('sends its messages under the announced conversation id, with the announced seller', async () => {
+        const { conversationId } = await announcedConversation();
+        const later = await continuingConversation(conversationId);
+        const customer = await insertMessage(later, null, { text_body: 'Hola, ¿y mi cotización?' });
+        const seller = await insertMessage(later, null, {
+          direction: 'outgoing', sender_type: 'human', delivery_status: 'sent', text_body: 'Te la reenvío', created_at: '2100-01-02T10:00:05Z',
+        });
+        const candidates = await selectMessages();
+        expect(candidates.map((row) => String(row.message_id))).toEqual([customer, seller]);
+        expect(candidates.map((row) => String(row.conversation_id))).toEqual([conversationId, conversationId]);
+
+        const { result } = await runMessageEnqueue();
+        expect(result.enqueued).toBe(2);
+        const customerEvent = await messageEventOf(customer);
+        expect(customerEvent.conversation_id).toBe(`wa-test-conversation-${conversationId}`);
+        const body = JSON.parse(customerEvent.body);
+        expect(validateCrmEvent(body)).toEqual([]);
+        expect(body).toMatchObject({ conversation_id: `wa-test-conversation-${conversationId}` });
+        expect(body.data).toMatchObject({ sender: 'customer', text: 'Hola, ¿y mi cotización?' });
+        expect(JSON.parse((await messageEventOf(seller)).body).data).toMatchObject({ sender: 'seller', crm_seller_id: SELLER_UUID });
+        expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(customer);
+      });
+
+      test('stops once it re-qualifies into its own lead (a new quote)', async () => {
+        const { conversationId } = await announcedConversation();
+        const later = await continuingConversation(conversationId);
+        const before = await insertMessage(later, null);
+        await runMessageEnqueue();
+        expect((await messageEventOf(before)).conversation_id).toBe(`wa-test-conversation-${conversationId}`);
+
+        const { rows: [lead] } = await client.query(
+          `INSERT INTO leads (phone_number, lead_status_id, assigned_seller_id, source_number_id, source_conversation_id, created_at)
+           SELECT phone_number, $2, $3, $4, id, '2100-01-03T00:00:00Z' FROM conversations WHERE id = $1 RETURNING id`,
+          [later, leadStatusId, sellerId, sourceNumberId],
+        );
+        const after = await insertMessage(later, null, { created_at: '2100-01-03T10:00:00Z' });
+        expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(after);
+        await client.query('UPDATE conversations SET lead_id = $2 WHERE id = $1', [later, lead.id]);
+        expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(after);
+      });
+
+      test('sends nothing when the conversation it continues was never announced', async () => {
+        const pending = await insertLead();
+        await runLeadEnqueue();
+        const later = await continuingConversation(pending.conversationId);
+        const message = await insertMessage(later, null);
+        expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(message);
+      });
+
+      test('a conversation without a link stays out, as before', async () => {
+        const { conversationId } = await announcedConversation();
+        const { rows: [{ phone_number: phone }] } = await client.query('SELECT phone_number FROM conversations WHERE id = $1', [conversationId]);
+        const { rows: [unlinked] } = await client.query(
+          `INSERT INTO conversations (phone_number, conversation_status_id, source_number_id) VALUES ($1, $2, $3) RETURNING id`,
+          [phone, conversationStatusId, sourceNumberId],
+        );
+        const message = await insertMessage(String(unlinked.id), null);
+        expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(message);
+      });
+    });
+
     test('a document carries its file name from the attachment', async () => {
       const { leadId, conversationId } = await announcedConversation();
       const doc = await insertMessage(conversationId, leadId, { message_type: 'document', text_body: null });

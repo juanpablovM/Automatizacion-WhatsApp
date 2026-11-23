@@ -65,7 +65,8 @@ created_conversation AS (
     started_at,
     last_message_at,
     handed_to_sales_at,
-    closed_at
+    closed_at,
+    continues_conversation_id
   )
   SELECT
     CASE
@@ -84,7 +85,13 @@ created_conversation AS (
     NOW(),
     NOW(),
     CASE WHEN cs.code = 'handed_to_sales' THEN NOW() ELSE NULL END,
-    CASE WHEN cs.code IN ('closed', 'inactive_timeout') THEN NOW() ELSE NULL END
+    CASE WHEN cs.code IN ('closed', 'inactive_timeout') THEN NOW() ELSE NULL END,
+    -- Migration 043: a customer who did not ask for a new quote continues the
+    -- same CRM opportunity, so the new conversation links to the one it continues.
+    CASE
+      WHEN NOT COALESCE((NULLIF($23::text, '')::jsonb->>'customer_chose_new_quote')::boolean, FALSE)
+        THEN conversation_continuation_target(NULLIF($3::text, '')::bigint, $2::text)
+    END
   FROM conversation_statuses cs
   CROSS JOIN valid_claim
   WHERE cs.code = $18::text

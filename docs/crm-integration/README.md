@@ -224,12 +224,24 @@ Sent only under 1.2. A message is enqueued when its conversation was announced b
 **delivered** `lead.qualified` (so the CRM knows the conversation), it was created at
 or after `CRM_EVENTS_SINCE`, and it is not deleted. The whole chat of that
 conversation goes, including messages from before the lead qualified. Messages of
-the lead's other conversations do not.
+the lead's other conversations do not, with one exception below.
+
+**Returning customer (migration 043).** After a handoff the bot opens a new
+conversation for most turns. Owner rule: the customer stays on the same
+opportunity unless they asked for a new quote. When the bot opens a conversation
+and the customer did not accept the quote follow-up offer nor wrote an explicit
+new-request directive ("nueva cotización", "otra cotización", …), the new
+conversation records `conversations.continues_conversation_id`. Its messages are
+sent under the **announced** conversation id, with that lead's seller, while it
+has no lead of its own. Once it re-qualifies into its own lead it is a new quote:
+it follows its own `lead.qualified`, and its earlier messages stay where they
+were sent. A customer who asked for a new quote gets no link, so their new
+conversation reaches the CRM only once it qualifies.
 
 | CRM field | Bot source |
 |---|---|
 | `message_id` | `wa-<prefix>-message-<messages.id>` (event id: `…-e1`) |
-| `conversation_id` | `wa-<prefix>-conversation-<messages.conversation_id>` (same as the lead events) |
+| `conversation_id` | `wa-<prefix>-conversation-<messages.conversation_id>` (same as the lead events); for a linked conversation, the announced one it continues |
 | `direction` / `sender` | `incoming` → `inbound` / `customer`. `outgoing` → `outbound` with `sender_type` `bot` → `bot`, `system` → `system`, `human` → `seller` |
 | `crm_seller_id` | Only for `seller`: `sellers.crm_user_id` of the seller assigned to the conversation's lead |
 | `text` | `text_body`. Media becomes `[image]`, `[audio]`, `[video]`, `[location]` or `[document] <file name>`, followed by the caption on a new line when there is one. Empty text is `[empty message]`, other types `[unsupported message]`. Cut to 16,000 |

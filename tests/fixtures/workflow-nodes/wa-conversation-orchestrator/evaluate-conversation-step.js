@@ -632,6 +632,10 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
     && Boolean(row.quote_followup_offer_pending)
     && (acceptsQuoteOfferText(normalizedText) || everyBurstLine(acceptsQuoteOfferText));
   if (acceptsNewQuoteOffer) humanControlActive = false;
+  // Migration 043: only a customer who asked for a new quote leaves the CRM
+  // opportunity of the previous one; a new conversation opened for any other
+  // reason continues it (Fix V3 Route and Persist Conversation State link it).
+  const customerChoseNewQuote = acceptsNewQuoteOffer || wantsNew(normalizedText);
   const hasCommercialRequestReference = /\b(?:cotizacion|solicitud|presupuesto|pedido)\b/.test(normalizedText);
   const isAnchoredStatusInquiry = (text) => /^(?:como va (?:mi|la) cotizacion|hay novedades|alguna novedad|sigo esperando)$/.test(text)
     || /^(?:(?:aun|todavia) )?no me (?:responden|contactan|llaman)|^cuando me (?:responden|contactan|llaman)/.test(text);
@@ -1288,6 +1292,7 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
         reset_conversation_lead: resetConversationLead,
         // Fix V3 Route reuses a handed_to_sales conversation only on this flag.
         reopen_confirmed_quote: reopenConfirmedQuote,
+        customer_chose_new_quote: customerChoseNewQuote,
         previous_lead_id: usedPreviousContext ? row.previous_lead_id || null : null,
         service: current.service || null,
         city: current.city || null,
@@ -1334,6 +1339,7 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
           human_control_active: humanControlActive,
           quote_followup_offer_pending: Boolean(row.quote_followup_offer_pending),
           release_quote_followup_ownership: acceptsNewQuoteOffer,
+          customer_chose_new_quote: customerChoseNewQuote,
           human_response_due_at: row.human_response_due_at || null,
           has_intent: hasIntent,
           used_previous_context: usedPreviousContext,
