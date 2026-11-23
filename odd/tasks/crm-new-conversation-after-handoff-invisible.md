@@ -64,3 +64,10 @@ messages. The seller would not see that the customer wrote again.
   test cleanups that hard-delete conversations, so it is `ON DELETE SET NULL`. Pre-existing, not
   this change: several integration suites commit rows without cleanup, so the suite only passes
   once per fresh test DB. Risk: item 1 (migration 043 adds a column, a function and an index).
+- **L4 (2026-11-23) — independent verification.** S1, S2, S3, S5 PASS; unit 1930 passed, 6 rollback
+  integration files 118 passed, parity OK. S4 partial: messages a linked conversation sent before it
+  re-qualified stay on the old opportunity (already sent as `message.new`, never re-sent), so the
+  new opportunity starts mid-chat. Design consequence, pending an owner decision. Advisory:
+  "quiero otra cotización" without a pending offer does not match `NEW_REQUEST_DIRECTIVE`, so it is
+  linked (pre-existing bot reading). Probes added as regression tests (target after own lead,
+  ON DELETE SET NULL, 1.1 selects nothing).

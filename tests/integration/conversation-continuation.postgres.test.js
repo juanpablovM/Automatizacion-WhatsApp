@@ -135,6 +135,24 @@ integration('conversation continuation', () => {
     });
   });
 
+  test('a linked conversation that holds its own lead is what the next one continues', async () => {
+    const linked = await route(false);
+    const ownLead = (await client.query(`INSERT INTO leads (source_number_id, source_conversation_id, phone_number, lead_status_id)
+      SELECT $1, $2, $3, id FROM lead_statuses WHERE code = 'assigned' RETURNING id`, [sourceId, linked, phone])).rows[0].id;
+    expect(ownLead).toBeTruthy();
+    const { rows: [{ target }] } = await client.query('SELECT conversation_continuation_target($1, $2) AS target', [sourceId, phone]);
+    expect(String(target)).toBe(String(linked));
+  });
+
+  test('deleting the continued conversation drops the link instead of blocking', async () => {
+    const linked = await route(false);
+    await client.query('UPDATE conversations SET lead_id = NULL WHERE id = $1', [handedId]);
+    await client.query('DELETE FROM leads WHERE id = $1', [leadId]);
+    await client.query('DELETE FROM conversation_turn_executions WHERE conversation_id = $1', [handedId]);
+    await client.query('DELETE FROM conversations WHERE id = $1', [handedId]);
+    expect(await linkOf(linked)).toBeNull();
+  });
+
   test('a first contact has nothing to continue', async () => {
     await client.query('UPDATE conversations SET deleted_at = NOW() WHERE id = $1', [handedId]);
     expect(await linkOf(await route(false))).toBeNull();

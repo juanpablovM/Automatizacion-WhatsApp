@@ -369,6 +369,13 @@ describeIntegration('CRM outbox, revision 1.2', () => {
         expect((await selectMessages()).map((row) => String(row.message_id))).not.toContain(after);
       });
 
+      test('selects nothing under 1.1', async () => {
+        const { conversationId } = await announcedConversation();
+        const later = await continuingConversation(conversationId);
+        await insertMessage(later, null);
+        expect(await selectMessages('1.1')).toHaveLength(0);
+      });
+
       test('sends nothing when the conversation it continues was never announced', async () => {
         const pending = await insertLead();
         await runLeadEnqueue();
