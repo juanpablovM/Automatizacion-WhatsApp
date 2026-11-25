@@ -57,9 +57,12 @@ BEGIN
   IF NOT FOUND THEN
     RETURN;
   END IF;
-  -- Handoffs of one conversation are routed one at a time, so a re-escalation
-  -- always sees the routing of the handoff it re-escalates.
-  PERFORM pg_advisory_xact_lock(hashtextextended('crm-handoff-routing:' || v_conversation_id::text, 0));
+  -- Handoffs are routed one pass at a time, so a re-escalation always sees the
+  -- routing of the handoff it re-escalates. One lock for every conversation,
+  -- always taken before the rotation lock: a pass routes several handoffs in
+  -- one transaction, and per-conversation locks taken in pass order deadlock
+  -- two overlapping passes (one holds the rotation, the other a conversation).
+  PERFORM pg_advisory_xact_lock(hashtextextended('crm-handoff-routing', 0));
 
   SELECT h.* INTO v_handoff
   FROM handoffs h

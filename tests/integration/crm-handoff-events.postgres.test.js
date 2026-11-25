@@ -263,6 +263,17 @@ describeIntegration('CRM handoff.created (1.2d)', () => {
       expect(await rotation()).toEqual(pointer);
     });
 
+    test('two unrouted open handoffs of one conversation in one pass get the same seller; rotation advances once', async () => {
+      const phone = newPhone();
+      const conversationId = await insertConversation(phone);
+      const first = await insertHandoff({ conversationId, phone, createdAt: '2100-01-02T00:00:00Z' });
+      const second = await insertHandoff({ conversationId, phone, createdAt: '2100-01-04T00:00:00Z' });
+      await runHandoffs();
+      expect((await handoffOf(first)).crm_routing_seller_id).toBe(sellerA);
+      expect((await handoffOf(second)).crm_routing_seller_id).toBe(sellerA);
+      expect(await rotation()).toEqual({ last_seller_id: sellerA, next_seller_id: sellerB });
+    });
+
     test('a resolved earlier handoff is not reused', async () => {
       const first = await newHandoff();
       await runHandoffs();
@@ -476,5 +487,75 @@ describeIntegration('CRM handoff.created (1.2d)', () => {
       expect(change).toMatchObject({ change_kind: 'taken', crm_user_id: SELLER_A });
       expect(buildOwnershipEvent(change, CONFIG).blocked_reason).toBeNull();
     });
+  });
+});
+
+// Two dispatcher passes can overlap (2 s schedule, no run lock). Each pass is
+// one transaction that routes several handoffs, so the routing locks must be
+// taken in one order or two passes deadlock (independent verification P3).
+describeIntegration('CRM handoff routing under overlapping passes', () => {
+  const first = new pg.Client(connection);
+  const second = new pg.Client(connection);
+  const created = { sellers: [], numbers: [], conversations: [], handoffs: [] };
+
+  beforeAll(async () => { await first.connect(); await second.connect(); });
+  afterAll(async () => {
+    await first.query('DELETE FROM handoffs WHERE id = ANY($1)', [created.handoffs]);
+    await first.query('DELETE FROM conversations WHERE id = ANY($1)', [created.conversations]);
+    await first.query("DELETE FROM assignment_rotations WHERE rotation_key = ANY($1)",
+      [created.numbers.map((id) => `whatsapp:${id}`)]);
+    await first.query('DELETE FROM sellers WHERE id = ANY($1)', [created.sellers]);
+    await first.query('DELETE FROM whatsapp_numbers WHERE id = ANY($1)', [created.numbers]);
+    await first.end(); await second.end();
+  });
+
+  test('a pass routing a second conversation never deadlocks with a pass re-escalating it', async () => {
+    const one = async (sql, params) => (await first.query(sql, params)).rows[0].id;
+    const statusId = await one(`INSERT INTO conversation_statuses (code, label, sort_order) VALUES ('open', 'Open', 1)
+      ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code RETURNING id`);
+    const numberId = await one(`INSERT INTO whatsapp_numbers (display_name, phone_number, phone_number_id)
+      VALUES ('Ventas', '56223456700', 'crm-handoff-race-' || gen_random_uuid()) RETURNING id`);
+    created.numbers.push(numberId);
+    created.sellers.push(await one(`INSERT INTO sellers (name, is_active, sort_order, crm_user_id, clickup_user_id)
+      VALUES ('Race', TRUE, 1, gen_random_uuid(), 'cu-race') RETURNING id`));
+    const conversation = async (phone) => {
+      const id = await one(`INSERT INTO conversations (phone_number, conversation_status_id, source_number_id)
+        VALUES ($1, $2, $3) RETURNING id`, [phone, statusId, numberId]);
+      created.conversations.push(id);
+      return id;
+    };
+    const handoff = async (conversationId, phone, createdAt) => {
+      const id = await one(`INSERT INTO handoffs (idempotency_key, conversation_id, phone_number, source_number_id,
+          motivo, area, area_label, prioridad, responsable, estado, created_at)
+        VALUES ('crm-handoff-race-' || gen_random_uuid(), $1, $2, $3, 'talk_human', 'sales', 'Ventas', 'alta',
+          'Ejecutiva comercial', 'pending', $4) RETURNING id`, [conversationId, phone, numberId, createdAt]);
+      created.handoffs.push(id);
+      return id;
+    };
+    const c5 = await conversation('56990000105');
+    const c6 = await conversation('56990000106');
+    const h5 = await handoff(c5, '56990000105', '2200-01-07T00:00:00Z');
+    const h6 = await handoff(c6, '56990000106', '2200-01-08T00:00:00Z');
+    const h7 = await handoff(c6, '56990000106', '2200-01-09T00:00:00Z');
+
+    const route = (client, id) => client.query('SELECT * FROM crm_route_handoff($1)', [id])
+      .then(() => 'ok', (error) => error.message);
+    await first.query('BEGIN');
+    await second.query('BEGIN');
+    try {
+      expect(await route(first, h5)).toBe('ok');
+      const secondPass = route(second, h7);
+      await new Promise((resolve) => { setTimeout(resolve, 300); });
+      const firstPass = route(first, h6);
+      const settledFirst = await Promise.race([firstPass,
+        new Promise((resolve) => { setTimeout(() => resolve('still waiting'), 3000); })]);
+      expect(settledFirst).toBe('ok');
+      await first.query('COMMIT');
+      expect(await secondPass).toBe('ok');
+      await second.query('COMMIT');
+    } finally {
+      await first.query('ROLLBACK').catch(() => {});
+      await second.query('ROLLBACK').catch(() => {});
+    }
   });
 });
