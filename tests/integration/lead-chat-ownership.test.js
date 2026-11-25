@@ -56,9 +56,9 @@ describeIntegration('lead chat ownership: human takeover arbitrated by PostgreSQ
 
   const registerHumanReply = (
     leadId, messageId, repliedAt,
-    inboundEventId = null, processingToken = null, acquisitionStatus = 'in progress',
+    inboundEventId = null, processingToken = null, acquisitionStatus = 'in progress', conversationId = null,
   ) => client.query(humanReplySql, [
-    leadId, messageId, repliedAt, inboundEventId, processingToken, acquisitionStatus,
+    leadId, messageId, repliedAt, inboundEventId, processingToken, acquisitionStatus, conversationId,
   ]);
 
   const loadState = (leadId) => client.query(loadStateSql, [leadId]);

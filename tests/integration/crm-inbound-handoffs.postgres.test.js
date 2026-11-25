@@ -262,7 +262,6 @@ describeIntegration('CRM 1.2d inbound (migration 046)', () => {
       ['no handoff.created delivered for it', { delivered: false }],
       ['its handoff was routed by opportunity', { routeByOpportunity: true }],
       ['its lead has an opportunity', { opportunity: OPPORTUNITY }],
-      ['it has no lead to hold the chat', { withLead: false }],
     ])('422 unknown_conversation when %s, nothing changes', async (_name, options) => {
       const conv = await handedOff(options);
       const answer = await chatByConversation(conv);
@@ -334,10 +333,23 @@ describeIntegration('CRM 1.2d inbound (migration 046)', () => {
     });
 
     test('unknown conversation is 422 and nothing is claimed', async () => {
-      const conv = await handedOff({ withLead: false });
+      const conv = await handedOff({ delivered: false });
       const answer = await sendByConversation(conv);
       expect(answer).toMatchObject({ send: false, http_status: 422, response: { error: 'unknown_conversation' } });
       expect((await client.query('SELECT 1 FROM crm_outbound_messages WHERE event_id = $1', [answer.eventId])).rows).toEqual([]);
+    });
+
+    // Migration 047 (S8): no lead is no longer unknown; the chat is held by a
+    // conversation-keyed ownership (crm-conversation-chat-ownership test).
+    test('a handed-off conversation without a lead is taken and sent by conversation_id', async () => {
+      const conv = await handedOff({ withLead: false });
+      expect(await chatByConversation(conv)).toMatchObject({ http_status: 200, response: { result: 'applied', ownership_version: 1 } });
+      expect(await sendByConversation(conv, { version: 1 })).toMatchObject({ send: true, http_status: null });
+      const rows = (await client.query(
+        'SELECT lead_id, conversation_id FROM lead_chat_ownerships WHERE conversation_id = $1', [conv.conversationId],
+      )).rows;
+      expect(rows).toEqual([{ lead_id: null, conversation_id: conv.conversationId }]);
+      expect((await client.query('SELECT 1 FROM leads WHERE phone_number = $1', [conv.phone])).rows).toEqual([]);
     });
 
     test('a send intent carries exactly one identity', async () => {
