@@ -5,7 +5,9 @@
 -- workflows: their queries read lead_chat_ownerships.conversation_id.
 -- Destructive: conversation-keyed ownerships (lead_id NULL) are deleted, so a
 -- chat a seller holds without a lead goes back to the bot at once, with no
--- ownership.released event; their crm_ownership_changes rows stay. Leases a
+-- ownership.released event; their crm_ownership_changes rows stay. Lead
+-- leases keep their lead (a CRM take on a re-engaged conversation loses its
+-- conversation_id and is tracked under the lead's own conversation again). Leases a
 -- lead adopted (section 7 of 047) are ordinary lead-keyed rows and stay.
 -- The functions are restored verbatim from 040, 041, 042 and 046: a
 -- handed-off conversation without a lead answers 422 unknown_conversation
@@ -807,5 +809,6 @@ DROP INDEX IF EXISTS uq_lead_chat_ownerships_active_conversation;
 ALTER TABLE lead_chat_ownerships DROP CONSTRAINT IF EXISTS chk_lead_chat_ownerships_holder;
 ALTER TABLE lead_chat_ownerships ALTER COLUMN lead_id SET NOT NULL;
 ALTER TABLE lead_chat_ownerships DROP COLUMN IF EXISTS conversation_id;
+DROP FUNCTION IF EXISTS contact_latest_lead_id(BIGINT, TEXT);
 
 COMMIT;

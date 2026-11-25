@@ -11,14 +11,19 @@
 -- one (bot silent while the seller holds it, 2-hour response window, lease
 -- expiry, release restores the bot, ownership.taken / ownership.released).
 --
--- 1. lead_chat_ownerships.conversation_id; lead_id nullable; exactly one of
---    the two; one live row per conversation. Every lead-keyed path (ClickUp
+-- 1. lead_chat_ownerships.conversation_id; lead_id nullable; at least one of
+--    the two; one live row per conversation. conversation_id alone: the
+--    contact has no lead. Both: a lead lease the CRM took on a conversation
+--    that is not the lead's own (a re-engaged conversation that inherited an
+--    older lead), tracked under that conversation. Every lead-keyed path (ClickUp
 --    01/02/09-12, ON CONFLICT (lead_id), uq_lead_chat_ownerships_active_lead)
 --    is unchanged: ClickUp never writes a conversation-keyed row.
 -- 2. crm_track_lead_chat_ownership() (040): a conversation-keyed row tracks
 --    its own conversation.
--- 3. crm_inbound_handoff_conversation() (046): 'ok' with lead_id NULL when the
---    handed-off conversation has no lead (was 'no_lead').
+-- 3. crm_inbound_handoff_conversation() (046): the lead is the contact's
+--    latest lead (contact_latest_lead_id(), the orchestrator's latest_lead),
+--    the one the bot's silence reads; 'ok' with lead_id NULL only when the
+--    contact has no lead at all (was 'no_lead').
 -- 4. crm_inbound_apply_conversation_chat_event() and
 --    crm_inbound_claim_conversation_message_send() (046): without a lead the
 --    live row is found / inserted by conversation_id, under the same
@@ -54,8 +59,30 @@ ALTER TABLE lead_chat_ownerships ALTER COLUMN lead_id DROP NOT NULL;
 
 ALTER TABLE lead_chat_ownerships DROP CONSTRAINT IF EXISTS chk_lead_chat_ownerships_holder;
 ALTER TABLE lead_chat_ownerships ADD CONSTRAINT chk_lead_chat_ownerships_holder CHECK (
-  num_nonnulls(lead_id, conversation_id) = 1
+  lead_id IS NOT NULL OR conversation_id IS NOT NULL
 );
+
+-- The contact's latest lead: latest_lead of the orchestrator's Load
+-- Conversation State (01_load_active_context.sql), the lead whose ownership
+-- the bot's silence reads.
+CREATE OR REPLACE FUNCTION contact_latest_lead_id(
+  p_source_number_id BIGINT,
+  p_phone_number TEXT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT l.id
+  FROM leads l
+  JOIN lead_statuses ls ON ls.id = l.lead_status_id
+  WHERE l.deleted_at IS NULL
+    AND l.phone_number = p_phone_number
+    AND p_source_number_id IS NOT NULL
+    AND l.source_number_id = p_source_number_id
+  ORDER BY l.created_at DESC, l.id DESC
+  LIMIT 1
+$$;
 
 -- One live ownership per conversation, as uq_lead_chat_ownerships_active_lead
 -- per lead (same predicate).
@@ -156,11 +183,14 @@ $$;
 --              an opportunity (the CRM must use crm_opportunity_id) ->
 --              422 unknown_conversation;
 --   'ok'       routed_seller_id is the seller of the newest delivered handoff
---              (handoffs.crm_routing_seller_id); lead_id is the conversation's
---              newest live lead (no opportunity), or NULL when it has none:
---              the chat is then held by a conversation-keyed ownership.
+--              (handoffs.crm_routing_seller_id); lead_id is the contact's
+--              latest lead (contact_latest_lead_id(): same phone and source
+--              number as the conversation, what the bot's silence reads), or
+--              NULL when the contact has no lead at all: the chat is then held
+--              by a conversation-keyed ownership.
 -- A lead belongs to the conversation when crm_lead_conversation_id() (040)
--- names it: the conversation its ownership versions are tracked under.
+-- names it; such a lead, or the contact's latest lead, with an opportunity
+-- -> 'unknown' (the CRM uses crm_opportunity_id).
 CREATE OR REPLACE FUNCTION crm_inbound_handoff_conversation(
   p_conversation_ref TEXT,
   p_conversation_id BIGINT
@@ -209,13 +239,11 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT l.id INTO v_lead
-  FROM leads l
-  WHERE l.deleted_at IS NULL
-    AND (l.id = v_conversation.lead_id OR l.source_conversation_id = v_conversation.id)
-    AND crm_lead_conversation_id(l.id) = v_conversation.id
-  ORDER BY l.id DESC
-  LIMIT 1;
+  v_lead := contact_latest_lead_id(v_conversation.source_number_id, v_conversation.phone_number);
+  IF EXISTS (SELECT 1 FROM leads l WHERE l.id = v_lead AND l.crm_opportunity_id IS NOT NULL) THEN
+    RETURN QUERY SELECT 'unknown'::TEXT, v_conversation.id, NULL::BIGINT, NULL::BIGINT;
+    RETURN;
+  END IF;
 
   RETURN QUERY SELECT 'ok'::TEXT, v_conversation.id, v_lead, v_routed;
 END;
@@ -224,7 +252,11 @@ $$;
 -- -----------------------------------------------------------------------------
 -- 4a. chat.take / chat.release by conversation_id (046)
 -- -----------------------------------------------------------------------------
--- 046 step by step. Without a lead, the live row is the conversation's
+-- 046 step by step, with the lead of crm_inbound_handoff_conversation() (the
+-- contact's latest lead). A lease taken on a lead whose own conversation is
+-- another one also records conversation_id, so its versions and ownership
+-- events follow the conversation the CRM knows. Without a lead, the live row
+-- is the conversation's
 -- (lead_chat_ownerships.conversation_id) and the chat-authority lock is taken
 -- with the conversation's source number and phone; the resolution is then
 -- repeated under the lock (a lead created meanwhile moved the row onto
@@ -407,7 +439,10 @@ BEGIN
           pending_message_id, pending_message_at, response_due_at,
           sla_mode, acquired_via, owner_seller_id
         ) VALUES (
-          v_lead.id, CASE WHEN v_lead.id IS NULL THEN v_conversation END, NULL, NULL, NOW(),
+          v_lead.id,
+          CASE WHEN v_lead.id IS NULL OR crm_lead_conversation_id(v_lead.id) IS DISTINCT FROM v_conversation
+            THEN v_conversation END,
+          NULL, NULL, NOW(),
           v_message_id, v_message_at,
           CASE WHEN v_message_id IS NOT NULL THEN NOW() + INTERVAL '2 hours' END,
           'standard', 'crm', v_seller.id
@@ -719,7 +754,8 @@ $$;
 -- -----------------------------------------------------------------------------
 -- 5. message.send completion (041)
 -- -----------------------------------------------------------------------------
--- 041 unchanged for an intent with a lead. Without one (a conversation-keyed
+-- 041 for an intent with a lead, except that the conversation row is locked
+-- before chat-authority (lock order shared with section 7). Without one (a conversation-keyed
 -- chat), the chat-authority lock is the conversation's and the seller's reply
 -- satisfies the live window of the conversation's row.
 CREATE OR REPLACE FUNCTION crm_inbound_complete_message_send(
@@ -777,6 +813,12 @@ BEGIN
     RETURN QUERY SELECT 503, jsonb_build_object('error', 'receiver_unavailable');
     RETURN;
   END IF;
+
+  -- Lock order: the conversation row first, then chat-authority, as a lead
+  -- created for this conversation does (Persist Lead And Rotation updates the
+  -- conversation row, then the leads trigger of section 7 takes
+  -- chat-authority). The other order deadlocks with it.
+  PERFORM 1 FROM conversations c WHERE c.id = v_outbound.conversation_id FOR NO KEY UPDATE;
 
   SELECT l.* INTO v_lead FROM leads l WHERE l.id = v_outbound.lead_id;
   IF v_lead.id IS NOT NULL THEN
@@ -904,18 +946,8 @@ AS $$
     FROM (
       SELECT ownership.id, ownership.released_at, ownership.response_due_at, ownership.sla_mode
       FROM lead_chat_ownerships ownership
-      JOIN (
-        SELECT l.id
-        FROM leads l
-        JOIN lead_statuses ls ON ls.id = l.lead_status_id
-        WHERE l.deleted_at IS NULL
-          AND l.phone_number = p_phone_number
-          AND p_source_number_id IS NOT NULL
-          AND l.source_number_id = p_source_number_id
-        ORDER BY l.created_at DESC, l.id DESC
-        LIMIT 1
-      ) latest_lead ON latest_lead.id = ownership.lead_id
-      WHERE ownership.deleted_at IS NULL
+      WHERE ownership.lead_id = contact_latest_lead_id(p_source_number_id, p_phone_number)
+        AND ownership.deleted_at IS NULL
       UNION ALL
       SELECT ownership.id, ownership.released_at, ownership.response_due_at, ownership.sla_mode
       FROM lead_chat_ownerships ownership
@@ -946,7 +978,10 @@ $$;
 -- (no released_at change), so no version and no ownership event. Released
 -- conversation rows stay as history. A brand-new lead holds no ownership, so
 -- the lead's live-row index cannot conflict. Taken under the chat-authority
--- lock, the one the CRM take of the conversation holds.
+-- lock, the one the CRM take of the conversation holds. Lock order: this
+-- statement already updated the conversation row (linked_conversation), then
+-- chat-authority; crm_inbound_complete_message_send() takes them in the same
+-- order.
 CREATE OR REPLACE FUNCTION crm_adopt_conversation_chat_ownership()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -965,6 +1000,7 @@ BEGIN
       conversation_id = NULL,
       updated_at = NOW()
   WHERE o.conversation_id = NEW.source_conversation_id
+    AND o.lead_id IS NULL
     AND o.released_at IS NULL
     AND o.deleted_at IS NULL
     AND NOT EXISTS (
