@@ -10,7 +10,10 @@ and the CRM → bot `chat.take` / `chat.release` webhook) is built behind the sa
 switch and `CRM_INBOUND_ENABLED` (see [Revision 1.2b](#revision-12b)). The CRM → bot
 `message.send` (a seller replies from the CRM) is built behind
 `CRM_INBOUND_MESSAGE_SEND_ENABLED` (see [message.send](#messagesend-crm--customer)).
-Other CRM → bot events (`opportunity.*`, `handoff.*`) are not built yet.
+Revision 1.2d (contingency handoffs: `handoff.created`, the `conversation_id` identity and
+`handoff.acknowledged` / `handoff.resolved`) is built behind `CRM_EVENTS_HANDOFFS_ENABLED` and
+`CRM_INBOUND_HANDOFFS_ENABLED` (see [Revision 1.2d](#revision-12d)). The CRM → bot
+`opportunity.*` events are not built yet.
 
 ## Scope
 
@@ -71,27 +74,29 @@ Envelope: `schema_version: 1`, `protocol_revision: "1.1"`, `event_id`, `type`,
 | Event | Replaces today | Notes |
 |---|---|---|
 | `lead.qualified` | ClickUp task creation (`crm-clickup-sync-lead`) | `lead_id`, `revision`, `phone` (`+56…`), `name`, optional `rut`, `crm_seller_id`, `title`, `requirement`. A correction sends a higher `revision` |
-| `handoff.created` | Handoff task dispatch | `kind` is `commercial` (`area` sales or management), `operational` or `complaint`. Always sends `reason` (snake_case) and `priority` (urgente, alta, media, baja) |
+| `handoff.created` | Handoff task dispatch | 1.2d only. `kind`/`area` is `complaint`/`claims` or `commercial`/`sales`, with `reason` (snake_case), `priority` and exactly one routing key. See [Revision 1.2d](#revision-12d) |
 | `message.new` | — (new: integrated chat) | Text only. Media goes as a placeholder text until a `media` contract exists |
 | `ownership.taken` | ClickUp status moved to "in progress" | 1.2 only. `version`, `crm_seller_id` (uuid or null), `source` (`clickup` or `crm`). See [Revision 1.2b](#revision-12b) |
 | `ownership.released` | Lease restoration (`dispatch-lead-chat-restoration`) | 1.2 only. `version`, `reason`. Shares the `version` sequence with `ownership.taken` |
 
-Handoffs to `management`, `finance`, `scheduling` and `claims` return
-`pending_routing` until the CRM maps recipients per area.
+Under 1.1, handoffs to `management`, `finance`, `scheduling` and `claims` return
+`pending_routing`; the bot never sends 1.1 handoffs. Revision 1.2d routes every handoff
+to one seller.
 
 ### Endpoint the CRM calls (n8n webhook)
 
 One endpoint, `POST <bot n8n>/webhook/crm-events`, takes every CRM → bot event.
 `chat.take` and `chat.release` are built (1.2b), see
-[Inbound webhook](#inbound-webhook-crm--bot), and `message.send`, see
-[message.send](#messagesend-crm--customer). The rest come later:
+[Inbound webhook](#inbound-webhook-crm--bot), `message.send`, see
+[message.send](#messagesend-crm--customer), and the 1.2d handoff events, see
+[Revision 1.2d](#revision-12d). `opportunity.*` comes later:
 
 | Event | Replaces today | Status |
 |---|---|---|
 | `chat.take` | ClickUp status moved to "in progress" (ownership acquisition) | Built (1.2b) |
 | `chat.release` | ClickUp leaving "in progress" (`normalize-clickup-closure`) | Built (1.2b) |
 | `opportunity.quote_sent`, `opportunity.closed`, `opportunity.reopened` | ClickUp quote statuses | 1.2c, answers `400 invalid_event` today |
-| `handoff.acknowledged`, `handoff.resolved` | ClickUp handoff closure | 1.2d, answers `400 invalid_event` today |
+| `handoff.acknowledged`, `handoff.resolved` | ClickUp handoff closure | Built (1.2d), behind `CRM_INBOUND_HANDOFFS_ENABLED` (off: `400 invalid_event`) |
 | `message.send` | — (new: a seller replies from the CRM) | Built, behind `CRM_INBOUND_MESSAGE_SEND_ENABLED` (off: `400 invalid_event`) |
 
 ## Bot sender
@@ -143,9 +148,11 @@ running in parallel.
 | `CRM_EVENTS_TIMEOUT_MS` | `15000` | HTTP timeout per delivery |
 | `CRM_EVENTS_RETRY_BASE_SECONDS` / `_MAX_SECONDS` | `30` / `3600` | Backoff base and cap |
 | `CRM_EVENTS_MAX_ATTEMPTS` | `20` | Retryable failures beyond this are parked |
+| `CRM_EVENTS_HANDOFFS_ENABLED` | `false` | Only `true` sends handoffs as `handoff.created`. Ignored unless the protocol revision is `1.2` |
 
 | `CRM_INBOUND_ENABLED` | `false` | Only `true` turns the `/webhook/crm-events` receiver on. Otherwise it answers `503 receiver_unavailable` |
 | `CRM_INBOUND_HMAC_SECRET` | `__PENDIENTE__` | Secret the CRM signs `X-CRM-Signature` with. Must differ from `CRM_EVENTS_HMAC_SECRET` (the receiver answers 503 if they are equal). Never logged |
+| `CRM_INBOUND_HANDOFFS_ENABLED` | `false` | Only `true` accepts `handoff.acknowledged` / `handoff.resolved` and the `conversation_id` identity; otherwise they answer exactly as before (`400 invalid_event`). Needs a valid `CRM_EVENTS_ID_PREFIX` (else those requests answer 503) |
 | `CRM_INBOUND_MESSAGE_SEND_ENABLED` | `false` | Only `true` accepts `message.send`; otherwise it answers `400 invalid_event` (type not built). Needs a valid `CRM_EVENTS_ID_PREFIX` (else `message.send` answers 503) and the `EVOLUTION_API_*` variables the bot already uses |
 
 When it is enabled but a required variable is missing, uses `__PENDIENTE__`, or the
@@ -514,6 +521,69 @@ around `claimed_at`, which the fromMe echo stores as `sender_type 'human'`). The
 3. Set `CRM_INBOUND_HMAC_SECRET`, then `CRM_INBOUND_ENABLED=true`, and restart n8n.
    Ownership events go out once `CRM_EVENTS_PROTOCOL_REVISION=1.2`.
 
+### Revision 1.2d
+
+Contingency handoffs (a complaint, the customer asks for a person, the bot cannot
+continue) reach the CRM with one owner each. Agreed in `.orca/drops/whatsapp-events-1.2d-*.md`;
+feature document `odd/tasks/crm-1-2d-contingency-handoffs.md`.
+
+**Owner rules (2026-11-23):** complaints go to post-sale and everything else to sales.
+Post-sale is the sales team. Each handoff has one owner: the seller of the customer's
+opportunity, otherwise the next seller in the lead rotation. A re-escalation (a new
+handoff while one is still open, after 48 h) goes back to the same seller.
+
+#### handoff.created (bot → CRM)
+
+- **Area.** A v3 handoff whose reason names an `issue_description` observation is a
+  complaint: stored as `area = 'claims'` (`17_persist_v3_handoff_effect.sql`) and sent as
+  `kind: complaint, area: claims`. Every other handoff is `kind: commercial, area: sales`.
+- **Routing** (`crm_route_handoff`, migration 045), decided once and stored on the handoff
+  (`crm_opportunity_id` or `crm_routing_seller_id`, migration 044):
+  1. another open, routed handoff of the same conversation: the same key;
+  2. the newest live lead of that phone with an opportunity: `crm_opportunity_id`;
+  3. a test phone (`LEAD_TEST_PHONE_NUMBERS`): `LEAD_TEST_SELLER_ID`;
+  4. the lead rotation (same lock, pointer and order as leads), among active sellers
+     with a `crm_user_id`: `crm_seller_id` plus `phone` and `name` when known.
+  All routing takes one lock (`crm-handoff-routing`) before the rotation lock, so two
+  overlapping dispatcher passes never deadlock.
+- **Responses.** 200 stores `crm_case_id`. `422 invalid_seller` parks the event and the
+  next pass sends revision + 1 (same `handoff_id`, new `event_id` `...-r<revision>`) to the
+  next seller; once every eligible seller was rejected the handoff is blocked
+  (`crm_blocked_reason = 'no_eligible_seller'`).
+- **Messages.** A delivered `handoff.created` announces the conversation like a delivered
+  `lead.qualified`: earlier messages are backfilled as `message.new`, then live ones and
+  ownership changes follow.
+- Handoffs stay `estado = 'pending'` after delivery; the ClickUp handoff path is untouched.
+
+#### conversation_id identity and closure (CRM → bot)
+
+- `chat.take`, `chat.release` and `message.send` carry exactly one of
+  `crm_opportunity_id` or `conversation_id` (`wa-<prefix>-conversation-<id>`); both or
+  neither is `400 invalid_event`. A conversation not handed off by the bot, or one with
+  an opportunity, answers `422 unknown_conversation`.
+- **No lead needed (migration 047).** A handed-off conversation whose customer has no
+  lead keeps its chat ownership in `lead_chat_ownerships` keyed by `conversation_id`
+  (`lead_id` NULL, exactly one key). The bot's silence, outbound authority, debounce,
+  2-hour expiry and seller phone replies read that key too. If a lead is created later
+  for that conversation, the live row moves onto the lead. No lead or opportunity is
+  ever created for it.
+- `handoff.acknowledged` / `handoff.resolved`, `data` exactly `{handoff_id, crm_seller_id}`:
+  same transitions as the ClickUp closure (`notified → acknowledged`,
+  `notified | acknowledged → resolved`; a delivered `pending` handoff counts as
+  `notified`). Resolved closes an `escalation_required` conversation and every other
+  open handoff of it. `200 applied`, `200 duplicate` (state already reached),
+  `409 invalid_transition`, `422 unknown_handoff`.
+
+#### Switching 1.2d on
+
+1. Apply migrations 044, 045, 046 and 047 (rollbacks in `infra/postgres/rollback/`, in
+   reverse order). Import `crm-events-dispatcher`, `crm-inbound-events`,
+   `wa-conversation-orchestrator`, `wa-inbound-entry` and `wa-outbound-messages`.
+2. With `CRM_EVENTS_PROTOCOL_REVISION=1.2`, set `CRM_EVENTS_HANDOFFS_ENABLED=true` and
+   `CRM_INBOUND_HANDOFFS_ENABLED=true`, then restart n8n.
+3. Rollback: both flags `false`, re-import the previous workflows, then the rollbacks
+   047 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
+
 ### Mapping sellers
 
 Set each seller's CRM `usuarios.id`:
@@ -594,14 +664,12 @@ WHERE event_id = '<event_id>' AND status = 'parked';
 
 - Bot sender rollout: apply migrations 038 and 039, import `crm-events-dispatcher`,
   map `sellers.crm_user_id`, set the `CRM_EVENTS_*` variables, then activate.
-  `lead.qualified` (1.1 and 1.2), `message.new` and `ownership.*` (1.2) are built.
-  `handoff.created` is not.
+  `lead.qualified` (1.1 and 1.2), `message.new`, `ownership.*` (1.2) and
+  `handoff.created` (1.2d) are built.
 - Confirmed dev seller UUIDs.
 - Phones duplicated among the imported Dolibarr customers return 422
   `ambiguous_customer`.
-- CRM → bot events beyond `chat.take` / `chat.release` / `message.send`
-  (`opportunity.*` in 1.2c, `handoff.*` in 1.2d), and the dev URL + secret for
-  `/webhook/crm-events`.
+- CRM → bot `opportunity.*` events (1.2c).
 - `message.send` is text only; media needs a `media` contract.
 - Media files in the CRM chat (1.2a sends a placeholder text).
 - Customer corrections after confirmation reach the CRM through `revision`.
