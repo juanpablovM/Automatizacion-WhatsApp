@@ -6,7 +6,8 @@
 --
 -- One row of crm_ownership_changes (migration 040) is one version of the
 -- conversation's ownership. A change is a candidate when its conversation was
--- already announced by a delivered lead.qualified event (the CRM knows the
+-- already announced by a delivered lead.qualified or handoff.created (1.2d)
+-- event (the CRM knows the
 -- conversation), it happened at or after CRM_EVENTS_SINCE, and it has no
 -- crm_events row yet. Changes from before the lead qualified are included, in
 -- version order, like the chat history: the CRM keeps the newest version and
@@ -17,7 +18,7 @@ WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
   WHERE $1::text = '1.2'
-    AND e.event_type = 'lead.qualified'
+    AND e.event_type IN ('lead.qualified', 'handoff.created')
     AND e.status = 'delivered'
     AND e.conversation_id LIKE 'wa-' || $3::text || '-conversation-%'
 )

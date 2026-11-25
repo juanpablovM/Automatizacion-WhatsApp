@@ -16,4 +16,7 @@ return [{ json: {
   deliver_batch_size: crmEventsConfig.deliver_batch_size,
   stale_seconds: crmEventsConfig.stale_seconds,
   phone_allowlist: crmEventsConfig.phone_allowlist,
+  handoffs_enabled: crmEventsConfig.handoffs_enabled,
+  handoff_test_phones: crmEventsConfig.handoff_test_phones,
+  handoff_test_seller_id: crmEventsConfig.handoff_test_seller_id,
 } }];

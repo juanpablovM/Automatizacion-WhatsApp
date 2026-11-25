@@ -4,7 +4,8 @@
 -- p4 batch size.
 --
 -- A message is a candidate when its conversation was already announced to the
--- CRM by a delivered lead.qualified event (so the CRM knows the conversation),
+-- CRM by a delivered lead.qualified or handoff.created (1.2d) event (so the CRM
+-- knows the conversation),
 -- it was created at or after CRM_EVENTS_SINCE, it is not deleted, and it has no
 -- message.new event yet. Incoming messages always qualify; outgoing ones only
 -- once actually sent (delivery_status 'sent', the same rule the conversation
@@ -28,7 +29,7 @@ WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
   WHERE $1::text = '1.2'
-    AND e.event_type = 'lead.qualified'
+    AND e.event_type IN ('lead.qualified', 'handoff.created')
     AND e.status = 'delivered'
     AND e.conversation_id LIKE 'wa-' || $3::text || '-conversation-%'
 ), targets AS MATERIALIZED (

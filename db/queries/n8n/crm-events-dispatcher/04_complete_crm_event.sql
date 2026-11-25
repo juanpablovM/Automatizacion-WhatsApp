@@ -8,6 +8,11 @@
 -- was already delivered (a message.new row has no lead and carries no ids, so
 -- it never touches leads); retry returns the row to pending at now + delay;
 -- anything else parks it for reconciliation. The body is never touched.
+-- handoff.created (1.2d) has no lead either: delivered stores the CRM's
+-- crm_case_id (read from the stored response) on the handoff when it is a
+-- UUID; parked by 422 invalid_seller clears the handoff's routing seller when
+-- it is still the rejected one, so Select Handoff Candidates routes it to the
+-- next seller in the rotation (revision + 1, same handoff_id).
 WITH authorized AS MATERIALIZED (
   SELECT e.id
   FROM crm_events e
@@ -33,7 +38,7 @@ event_update AS (
       updated_at = NOW()
   FROM authorized a
   WHERE e.id = a.id
-  RETURNING e.id, e.event_id, e.lead_id, e.revision, e.status
+  RETURNING e.id, e.event_id, e.event_type, e.lead_id, e.handoff_id, e.revision, e.status, e.body
 ),
 lead_update AS (
   UPDATE leads l
@@ -47,6 +52,28 @@ lead_update AS (
     AND NULLIF($7::text, '') IS NOT NULL
     AND NULLIF($8::text, '') IS NOT NULL
   RETURNING l.id
+),
+handoff_case AS (
+  UPDATE handoffs h
+  SET crm_case_id = (NULLIF($6::text, '')::jsonb ->> 'crm_case_id')::uuid
+  FROM event_update u
+  WHERE u.status = 'delivered'
+    AND u.event_type = 'handoff.created'
+    AND h.id = u.handoff_id
+    AND (NULLIF($6::text, '')::jsonb ->> 'crm_case_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  RETURNING h.id
+),
+handoff_rejected AS (
+  UPDATE handoffs h
+  SET crm_routing_seller_id = NULL
+  FROM event_update u, sellers s
+  WHERE u.status = 'parked'
+    AND u.event_type = 'handoff.created'
+    AND $5::text = 'http_422:invalid_seller'
+    AND h.id = u.handoff_id
+    AND s.id = h.crm_routing_seller_id
+    AND s.crm_user_id::text = lower(u.body::jsonb #>> '{data,crm_seller_id}')
+  RETURNING h.id
 )
 SELECT
   u.id AS crm_event_id,

@@ -638,6 +638,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Handoff Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/09_select_handoff_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Handoff Events",
+    "fixture": "crm-events-dispatcher/build-handoff-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Handoff Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/10_insert_handoff_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Claim CRM Events",
     "fixture": "db/queries/n8n/crm-events-dispatcher/03_claim_crm_events.sql",
     "type": "n8n-nodes-base.postgres",
