@@ -44,7 +44,7 @@ messages. The seller would not see that the customer wrote again.
       `conversation_continuation_target()`), rollback, evaluate step flag, Fix V3 Route and Persist
       Conversation State links, dispatcher 05, workflow sync, tests, CRM README.
 - [x] **T3** (S6, inline) — widen `NEW_REQUEST_DIRECTIVE`.
-- [ ] **T2** — Deploy to production after the owner approves (backup, migration, workflow import).
+- [x] **T2** — Deploy to production after the owner approves (backup, migration, workflow import).
 
 ## Log
 
@@ -81,3 +81,8 @@ messages. The seller would not see that the customer wrote again.
   Differential check (base vs change, 4 contexts x 16 phrases): only the new phrases changed. Also
   fixes "quiero otra cotización" on a recent quote with an open task, which used to reopen the
   confirmed quote as a correction, and "cotizar otra cosa" being stored as service "Otra Cosa".
+- **L7 (2026-11-23 14:03) — deployed to production.** Quiet window checked (last inbound 13:19,
+  follow-up 1194 sent 13:55, 0 events processing). Backup `backups/20261123-135438` verified;
+  migration 043 applied (572 conversations, 0 links); orchestrator and CRM dispatcher imported with
+  errorWorkflow kept, dispatcher reactivated, n8n recreated. All workflows activated, no error
+  executions, deployed nodes carry the new SQL, dispatcher query dry-run OK (0 pending).

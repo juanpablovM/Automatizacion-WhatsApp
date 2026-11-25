@@ -1040,6 +1040,29 @@ describeIntegration('v3 conversation turn execution saga', () => {
     expect(stored.rows[0]).toEqual({ motivo: 'no_progress_commercial_question_loop', escalation_reason: 'no_progress_commercial_question_loop' });
   });
 
+  // CRM 1.2d (S1): an issue-description handoff is a complaint for claims;
+  // a plain v3 handoff stays in sales.
+  test.each([
+    ['claims', { escalation_area: 'claims' }, {
+      area: 'claims', area_label: 'Reclamos', prioridad: 'urgente',
+      responsable: 'Responsable de Reclamos', escalation_area: 'claims' }],
+    ['sales', {}, {
+      area: 'sales', area_label: 'Ventas', prioridad: 'alta',
+      responsable: 'Equipo Ventas', escalation_area: 'sales' }],
+  ])('v3 handoff with %s area persists its routing labels', async (label, extra, expected) => {
+    const effect = { type: 'handoff', operation_key: `area-handoff-${label}-${sequence + 1}`,
+      payload: { reason_observation_ids: ['obs_issue'], ...extra },
+      payload_digest: `area-handoff-payload-${label}-${sequence + 1}`, required_before_reply: true };
+    const turn = await seedTurn({ effectCommands: [effect], stateMutations: [] });
+    const claimed = await client.query(prepareEffectSql, [turn.decisionId, effect.operation_key,
+      effect.type, effect.payload, effect.payload_digest]);
+    const handoff = await client.query(persistHandoffEffectSql, [effect.operation_key,
+      turn.decisionId, effect.payload_digest, claimed.rows[0].claim_token]);
+    const stored = await client.query(`SELECT area, area_label, prioridad, responsable, escalation_area
+      FROM handoffs WHERE id=$1`, [handoff.rows[0].handoff_id]);
+    expect(stored.rows[0]).toEqual(expected);
+  });
+
   // Task 3c.25: live conversations 390 and 393 (2026-09-30) emitted an
   // authorized v3 handoff, but the commit only closed the flow for the bounded
   // address handoff: the conversation stayed waiting_user with a stale

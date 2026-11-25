@@ -15,7 +15,15 @@
 -- Params:
 --   p1 lead_id, p2 message_id, p3 replied_at,
 --   p4 inbound_event_id (nullable), p5 processing_token (nullable),
---   p6 clickup_acquisition_status (default 'in progress')
+--   p6 clickup_acquisition_status (default 'in progress'),
+--   p7 conversation_id (nullable; the conversation of the reply)
+--
+-- Migration 047: without a lead (p1 empty), the reply is checked against the
+-- conversation's own ownership, the one a CRM take of a conversation handed
+-- off without a lead holds (lead_chat_ownerships.conversation_id). Same lock
+-- (the conversation's source number and phone), same window rule, and a late
+-- reply re-acquires the chat for the same seller. There is no ClickUp task:
+-- no reacquisition is queued. With a lead p7 is ignored.
 --
 -- Migration 037: an ownership released because the customer accepted the
 -- new-quote offer ('customer_new_quote') left its task in the quote-sent status
@@ -33,7 +41,8 @@ WITH input AS (
     -- CLICKUP_STATUS_ACKNOWLEDGED is a comma-separated matching list in this
     -- project. A PUT needs one real ClickUp label, never the whole list.
     COALESCE(NULLIF(BTRIM(SPLIT_PART($6::text, ',', 1)), ''), 'in progress')
-      AS acquisition_status
+      AS acquisition_status,
+    NULLIF($7::text, '')::bigint AS conversation_id
 ),
 authority_lock AS MATERIALIZED (
   SELECT pg_advisory_xact_lock(hashtextextended(
@@ -44,13 +53,24 @@ authority_lock AS MATERIALIZED (
   CROSS JOIN input i
   WHERE l.id = i.lead_id
     AND l.deleted_at IS NULL
+  UNION ALL
+  SELECT pg_advisory_xact_lock(hashtextextended(
+    'chat-authority:' || c.source_number_id::text || ':' || c.phone_number,
+    0
+  ))
+  FROM conversations c
+  CROSS JOIN input i
+  WHERE i.lead_id IS NULL
+    AND c.id = i.conversation_id
+    AND c.deleted_at IS NULL
 ),
 projection AS MATERIALIZED (
   SELECT o.*
   FROM lead_chat_ownerships o
   CROSS JOIN input i
   CROSS JOIN authority_lock
-  WHERE o.lead_id = i.lead_id
+  WHERE (o.lead_id = i.lead_id
+         OR (i.lead_id IS NULL AND o.conversation_id = i.conversation_id))
     AND o.deleted_at IS NULL
   ORDER BY o.id DESC
   LIMIT 1
@@ -60,6 +80,9 @@ classified AS (
   SELECT
     p.id AS previous_ownership_id,
     p.lead_id,
+    p.conversation_id,
+    p.acquired_via,
+    p.owner_seller_id,
     p.clickup_task_id,
     p.previous_clickup_status,
     p.released_at,
@@ -141,11 +164,13 @@ updated_active AS (
 ),
 inserted_reacquisition AS (
   INSERT INTO lead_chat_ownerships (
-    lead_id, clickup_task_id, previous_clickup_status, acquired_at,
+    lead_id, conversation_id, clickup_task_id, previous_clickup_status, acquired_at,
     last_human_message_id, last_human_reply_at, sla_mode, quote_followup_since
   )
   SELECT
-    c.lead_id, c.clickup_task_id, c.previous_clickup_status, i.replied_at,
+    -- Migration 047: a lead lease the CRM took on another conversation keeps
+    -- tracking under it (NULL for every other lead lease).
+    c.lead_id, c.conversation_id, c.clickup_task_id, c.previous_clickup_status, i.replied_at,
     i.message_id, i.replied_at,
     CASE WHEN c.release_reason = 'customer_new_quote' THEN 'quote_followup' ELSE 'standard' END,
     CASE WHEN c.release_reason = 'customer_new_quote' THEN i.replied_at END
@@ -153,7 +178,34 @@ inserted_reacquisition AS (
   CROSS JOIN input i
   WHERE c.outcome = 'late_reply_reacquired'
     AND c.released_at IS NOT NULL
+    AND c.lead_id IS NOT NULL
   ON CONFLICT (lead_id) WHERE released_at IS NULL AND deleted_at IS NULL
+  DO UPDATE SET
+    last_human_message_id = EXCLUDED.last_human_message_id,
+    last_human_reply_at = EXCLUDED.last_human_reply_at,
+    pending_message_id = NULL,
+    pending_message_at = NULL,
+    response_due_at = NULL,
+    updated_at = NOW()
+  RETURNING id, lead_id, clickup_task_id, last_human_message_id,
+            last_human_reply_at, response_due_at
+),
+-- Migration 047: the conversation-keyed late reply. Same seller and the same
+-- CRM acquisition as the released row; no ClickUp task.
+inserted_conversation_reacquisition AS (
+  INSERT INTO lead_chat_ownerships (
+    conversation_id, clickup_task_id, previous_clickup_status, acquired_at,
+    last_human_message_id, last_human_reply_at, sla_mode, acquired_via, owner_seller_id
+  )
+  SELECT
+    c.conversation_id, NULL, NULL, i.replied_at,
+    i.message_id, i.replied_at, 'standard', c.acquired_via, c.owner_seller_id
+  FROM classified c
+  CROSS JOIN input i
+  WHERE c.outcome = 'late_reply_reacquired'
+    AND c.released_at IS NOT NULL
+    AND c.lead_id IS NULL
+  ON CONFLICT (conversation_id) WHERE released_at IS NULL AND deleted_at IS NULL
   DO UPDATE SET
     last_human_message_id = EXCLUDED.last_human_message_id,
     last_human_reply_at = EXCLUDED.last_human_reply_at,
@@ -168,6 +220,8 @@ applied AS (
   SELECT * FROM updated_active
   UNION ALL
   SELECT * FROM inserted_reacquisition
+  UNION ALL
+  SELECT * FROM inserted_conversation_reacquisition
 ),
 reacquire_operation AS (
   INSERT INTO external_operations (
@@ -236,14 +290,15 @@ audit_entry AS (
     ),
     jsonb_build_object(
       'clickup_reacquire_required', c.outcome = 'late_reply_reacquired'
-        AND c.release_reason IS DISTINCT FROM 'customer_new_quote',
+        AND c.release_reason IS DISTINCT FROM 'customer_new_quote'
+        AND c.lead_id IS NOT NULL,
       'clickup_reacquire_operation_key', (
         SELECT operation_key FROM reacquire_operation LIMIT 1
       ),
       'inbound_event_id', i.inbound_event_id
     )
   FROM applied a
-  JOIN classified c ON c.lead_id = a.lead_id
+  JOIN classified c ON c.lead_id IS NOT DISTINCT FROM a.lead_id
   CROSS JOIN input i
   RETURNING id
 )
@@ -255,12 +310,13 @@ SELECT
   a.last_human_reply_at,
   c.outcome,
   (c.outcome = 'late_reply_reacquired'
-    AND c.release_reason IS DISTINCT FROM 'customer_new_quote') AS clickup_reacquire_required,
+    AND c.release_reason IS DISTINCT FROM 'customer_new_quote'
+    AND c.lead_id IS NOT NULL) AS clickup_reacquire_required,
   (SELECT operation_key FROM reacquire_operation LIMIT 1) AS clickup_reacquire_operation_key,
   i.inbound_event_id,
   TRUE AS own_message_handled
 FROM applied a
-JOIN classified c ON c.lead_id = a.lead_id
+JOIN classified c ON c.lead_id IS NOT DISTINCT FROM a.lead_id
 CROSS JOIN input i
 
 UNION ALL

@@ -329,10 +329,14 @@ latest_lead AS (
   ORDER BY l.created_at DESC, l.id DESC
   LIMIT 1
 ),
+-- The newest ownership of the contact's latest lead or, for a conversation
+-- handed off to the CRM without a lead (migration 047), of its latest
+-- conversation. A row is keyed by exactly one of the two.
 latest_chat_ownership AS (
   SELECT
     o.id AS ownership_id,
     o.lead_id AS ownership_lead_id,
+    o.conversation_id AS ownership_conversation_id,
     o.acquired_at,
     o.response_due_at,
     o.released_at,
@@ -342,8 +346,15 @@ latest_chat_ownership AS (
     o.quote_alerted_at,
     o.last_human_reply_at,
     COALESCE(o.released_at, o.response_due_at) AS effective_release_at
-  FROM lead_chat_ownerships o
-  JOIN latest_lead ll ON ll.previous_lead_id = o.lead_id
+  FROM (
+    SELECT lead_ownership.*
+    FROM lead_chat_ownerships lead_ownership
+    JOIN latest_lead ll ON ll.previous_lead_id = lead_ownership.lead_id
+    UNION ALL
+    SELECT conversation_ownership.*
+    FROM lead_chat_ownerships conversation_ownership
+    JOIN latest_conversation lc ON lc.conversation_id = conversation_ownership.conversation_id
+  ) o
   WHERE o.deleted_at IS NULL
   ORDER BY o.id DESC
   LIMIT 1
@@ -368,14 +379,16 @@ chat_authority AS (
       FROM messages m
       JOIN conversations history_conversation
         ON history_conversation.id = m.conversation_id
-      JOIN latest_lead ll ON TRUE
+      -- The contact (latest_lead has its phone and source number); a
+      -- conversation-keyed ownership may have no lead.
+      JOIN input_payload ip ON TRUE
       WHERE m.deleted_at IS NULL
         AND m.direction = 'outgoing'
         AND m.sender_type = 'bot'
         AND m.delivery_status = 'sent'
         AND history_conversation.deleted_at IS NULL
-        AND history_conversation.phone_number = ll.phone_number
-        AND history_conversation.source_number_id = ll.previous_source_number_id
+        AND history_conversation.phone_number = ip.phone_number
+        AND history_conversation.source_number_id = ip.source_number_id
         AND m.created_at >= o.effective_release_at
     ) AS human_arbitration_required,
     -- Migration 037: the quote follow-up notice asked "¿Quieres hacer una
@@ -484,6 +497,7 @@ SELECT
   CASE WHEN lcr.reset_at IS NULL OR ll.previous_lead_created_at > lcr.reset_at THEN ll.lead_status_code END AS previous_lead_status_code,
   ca.ownership_id,
   ca.ownership_lead_id,
+  ca.ownership_conversation_id,
   lct.clickup_task_id AS lead_clickup_task_id,
   lct.clickup_status AS lead_clickup_status,
   COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed,

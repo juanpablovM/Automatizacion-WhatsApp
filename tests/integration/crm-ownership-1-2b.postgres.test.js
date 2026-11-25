@@ -455,7 +455,7 @@ describeIntegration('CRM revision 1.2b: ownership version, events and chat webho
          VALUES ($1, $2, 'outgoing', 'human', 'text', 'te escribo yo', '{}'::jsonb) RETURNING id`,
         [lead.conversationId, lead.leadId],
       );
-      const { rows: [reply] } = await client.query(humanReplySql, [lead.leadId, messageId, null, null, null, 'in progress']);
+      const { rows: [reply] } = await client.query(humanReplySql, [lead.leadId, messageId, null, null, null, 'in progress', null]);
       expect(reply.outcome).toBe('late_reply_reacquired');
       const rows = await ownershipsOf(lead.leadId);
       expect(rows[1]).toMatchObject({ clickup_task_id: null, released_at: null });

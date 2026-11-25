@@ -1,5 +1,5 @@
 // Local mirror of the CRM receiver validator for contract v1, revisions 1.1 and
-// 1.2 ("1.2a" and the 1.2b ownership events, live on CRM dev). Anything the real validator rejects answers
+// 1.2 ("1.2a", the 1.2b ownership events and the 1.2d handoff.created, live on CRM dev). Anything the real validator rejects answers
 // 400, so every event the bot builds must pass these exact rules. Returns the
 // list of violations; an empty list means the CRM would accept the shape.
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -139,6 +139,39 @@ const validateOwnershipReleased = (data, errors) => {
   if (!['seller_released', 'sla_expired', 'customer_new_quote', 'opportunity_closed'].includes(data.reason)) errors.push('data.reason');
 };
 
+// 1.2d: handoff.created. reason snake_case 1-64, priority enum, description
+// nonblank up to 16,000. Revision 1.2: exactly one of crm_opportunity_id or
+// crm_seller_id (both or neither is 400); crm_seller_id requires phone (E.164)
+// and allows name (up to 200); with crm_opportunity_id both are omitted.
+const HANDOFF_KEYS = [
+  'handoff_id', 'kind', 'area', 'reason', 'priority', 'description',
+  'crm_opportunity_id', 'crm_seller_id', 'phone', 'name', 'postventa_type',
+];
+const validateHandoffCreated = (data, revision, errors) => {
+  onlyKeys(errors, 'data', data, HANDOFF_KEYS);
+  if (!(typeof data.handoff_id === 'string' && ID.test(data.handoff_id))) errors.push('data.handoff_id');
+  if (!['commercial', 'operational', 'complaint'].includes(data.kind)) errors.push('data.kind');
+  if ('area' in data && !['sales', 'management', 'finance', 'scheduling', 'claims'].includes(data.area)) errors.push('data.area');
+  if (!(typeof data.reason === 'string' && data.reason.length <= 64 && /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/.test(data.reason))) errors.push('data.reason');
+  if (!['urgente', 'alta', 'media', 'baja'].includes(data.priority)) errors.push('data.priority');
+  if (!isText(data.description, 16000)) errors.push('data.description');
+  if ('crm_opportunity_id' in data && !(typeof data.crm_opportunity_id === 'string' && UUID.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');
+  if (revision !== '1.2') {
+    for (const key of ['crm_seller_id', 'phone', 'name']) if (key in data) errors.push(`data.${key}: requires 1.2`);
+    return;
+  }
+  const hasOpportunity = 'crm_opportunity_id' in data;
+  const hasSeller = 'crm_seller_id' in data;
+  if (hasOpportunity === hasSeller) errors.push('data: exactly one of crm_opportunity_id or crm_seller_id');
+  if (hasSeller) {
+    if (!(typeof data.crm_seller_id === 'string' && UUID.test(data.crm_seller_id))) errors.push('data.crm_seller_id');
+    if (!(typeof data.phone === 'string' && PHONE.test(data.phone))) errors.push('data.phone');
+    if ('name' in data && !isText(data.name, 200)) errors.push('data.name');
+  } else {
+    for (const key of ['phone', 'name']) if (key in data) errors.push(`data.${key}: only with crm_seller_id`);
+  }
+};
+
 const validateCrmEvent = (event) => {
   const errors = [];
   const parsed = typeof event === 'string' ? JSON.parse(event) : event;
@@ -159,6 +192,8 @@ const validateCrmEvent = (event) => {
     if (parsed.protocol_revision !== '1.2') errors.push(`${parsed.type} requires protocol_revision 1.2 in the bot`);
     if (parsed.type === 'ownership.taken') validateOwnershipTaken(parsed.data, errors);
     else validateOwnershipReleased(parsed.data, errors);
+  } else if (parsed.type === 'handoff.created') {
+    validateHandoffCreated(parsed.data, parsed.protocol_revision, errors);
   } else {
     errors.push(`envelope.type: ${parsed.type}`);
   }

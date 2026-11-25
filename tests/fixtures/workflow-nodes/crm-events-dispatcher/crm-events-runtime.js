@@ -7,8 +7,9 @@
 // builders emit exactly the contract keys, in contract order, and the stored
 // body string is what every delivery attempt sends: it is never re-serialized.
 // Revision 1.2 adds the structured lead record and message.new ("1.2a") and
-// ownership.taken / ownership.released ("1.2b"); 1.1 stays the default and its
-// bodies are unchanged.
+// ownership.taken / ownership.released ("1.2b") and handoff.created ("1.2d",
+// behind CRM_EVENTS_HANDOFFS_ENABLED); 1.1 stays the default and its bodies
+// are unchanged.
 // =============================================================================
 
 const CRM_SUPPORTED_PROTOCOL_REVISIONS = ['1.1', '1.2'];
@@ -62,6 +63,9 @@ const readCrmEventsConfig = (env = {}) => {
     max_attempts: crmPositiveInt(env.CRM_EVENTS_MAX_ATTEMPTS, 20),
     timeout_ms: crmPositiveInt(env.CRM_EVENTS_TIMEOUT_MS, 15000),
     phone_allowlist: '',
+    handoffs_enabled: false,
+    handoff_test_phones: '',
+    handoff_test_seller_id: '',
   };
   if (!enabled) return config;
 
@@ -113,6 +117,22 @@ const readCrmEventsConfig = (env = {}) => {
       config.phone_allowlist = null;
       config.errors.push('CRM_EVENTS_PHONE_ALLOWLIST_invalid');
     }
+  }
+
+  // 1.2d (handoff.created) is off by default and exists only under 1.2: the
+  // flag is ignored under 1.1, never an error. A handoff of a test phone goes
+  // to the test seller, read from the same variables as the lead rotation
+  // (LEAD_TEST_PHONE_NUMBERS, LEAD_TEST_SELLER_ID); both are needed, otherwise
+  // everyone rotates.
+  config.handoffs_enabled = config.protocol_revision === '1.2'
+    && String(env.CRM_EVENTS_HANDOFFS_ENABLED ?? '').trim() === 'true';
+  const testPhones = String(env.LEAD_TEST_PHONE_NUMBERS ?? '').split(',')
+    .map((entry) => entry.replace(/\D/g, ''))
+    .filter(Boolean);
+  const testSeller = crmConfigured(env.LEAD_TEST_SELLER_ID) ? String(env.LEAD_TEST_SELLER_ID).trim() : '';
+  if (testPhones.length > 0 && /^[1-9]\d{0,17}$/.test(testSeller)) {
+    config.handoff_test_phones = testPhones.join(',');
+    config.handoff_test_seller_id = testSeller;
   }
   return config;
 };
@@ -591,6 +611,121 @@ const buildOwnershipEvent = (row, config = {}) => {
   return { blocked_reason: null, change_id: changeNumber, event_id: eventId, conversation_id: conversationId, body };
 };
 
+// ---------------------------------------------------------------------------
+// handoff.created (revision 1.2 only, "1.2d").
+// ---------------------------------------------------------------------------
+// One handoff, one owner: the dispatcher routes it once (Select Handoff
+// Candidates, crm_route_handoff in migration 045) to the customer's
+// opportunity or to a seller from the lead rotation, and the body carries
+// exactly that one key. revision is the routing attempt: after a 422
+// invalid_seller the next event keeps handoff_id and gets a new event_id.
+const CRM_REASON_PATTERN = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/;
+const CRM_HANDOFF_PRIORITIES = ['urgente', 'alta', 'media', 'baja'];
+const CRM_HANDOFF_REASON_FALLBACK = 'bot_handoff';
+const CRM_HANDOFF_REASON_LABELS = {
+  talk_human: 'El cliente pide hablar con una persona',
+  human_requested: 'El cliente pide hablar con una persona',
+  complaint: 'El cliente tiene un reclamo',
+  opt_out: 'El cliente pide no ser contactado',
+  frustration: 'El cliente se ve frustrado',
+  frustration_detected: 'El cliente se ve frustrado',
+  abandoned: 'El cliente dejó la conversación sin terminar',
+  bot_cannot_continue: 'El bot no puede continuar la conversación',
+  v3_authorized_handoff: 'El bot derivó la conversación a una persona',
+};
+
+// A value already in the contract's snake_case form is kept as is.
+const crmReasonCode = (value) => {
+  const text = crmText(value).toLowerCase();
+  return text.length <= 64 && CRM_REASON_PATTERN.test(text) ? text : null;
+};
+
+// Anything else is folded to snake_case: accents dropped, every other run of
+// characters becomes one underscore, cut to 64 without a trailing underscore.
+const crmReasonFolded = (value) => {
+  const folded = crmFold(crmText(value)).replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+/, '');
+  const cut = folded.slice(0, 64).replace(/_+$/, '');
+  return CRM_REASON_PATTERN.test(cut) ? cut : null;
+};
+
+const crmHandoffReason = (row) => crmReasonCode(row.escalation_reason)
+  || crmReasonFolded(row.motivo)
+  || crmReasonFolded(row.escalation_reason)
+  || CRM_HANDOFF_REASON_FALLBACK;
+
+const blockedCrmHandoff = (reason, handoffNumber) => ({
+  blocked_reason: reason, handoff_id: handoffNumber, revision: null, event_id: null, conversation_id: null, body: null,
+});
+
+const buildHandoffCreatedEvent = (row, config = {}) => {
+  const handoffNumber = Number(row.handoff_id);
+  if (!Number.isSafeInteger(handoffNumber) || handoffNumber <= 0) return blockedCrmHandoff('invalid_handoff_id', null);
+  if (config.protocol_revision !== '1.2') return blockedCrmHandoff('protocol_revision_unsupported', handoffNumber);
+  const revision = Number(row.revision);
+  if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2147483647) return blockedCrmHandoff('invalid_revision', handoffNumber);
+  const conversationNumber = Number(row.conversation_id);
+  if (row.conversation_id === null || row.conversation_id === undefined || !Number.isSafeInteger(conversationNumber) || conversationNumber <= 0) {
+    return blockedCrmHandoff('conversation_missing', handoffNumber);
+  }
+  const idPrefix = config.id_prefix;
+  if (typeof idPrefix !== 'string' || !CRM_ID_PREFIX_PATTERN.test(idPrefix)) return blockedCrmHandoff('id_prefix_missing', handoffNumber);
+
+  // Exactly one routing key: both or neither is 400 invalid_event.
+  const opportunityId = crmText(row.crm_opportunity_id).toLowerCase();
+  const sellerId = crmText(row.crm_seller_id).toLowerCase();
+  if (opportunityId && sellerId) return blockedCrmHandoff('ambiguous_routing', handoffNumber);
+  if (!opportunityId && !sellerId) return blockedCrmHandoff('not_routed', handoffNumber);
+  if (opportunityId && !CRM_UUID_PATTERN.test(opportunityId)) return blockedCrmHandoff('invalid_opportunity_uuid', handoffNumber);
+  if (sellerId && !CRM_UUID_PATTERN.test(sellerId)) return blockedCrmHandoff('invalid_seller_uuid', handoffNumber);
+  // Without an opportunity the CRM has no customer: phone is required.
+  const phone = sellerId ? normalizeCrmPhone(row.phone_number) : null;
+  if (sellerId && !phone) return blockedCrmHandoff('invalid_phone', handoffNumber);
+  const priority = crmText(row.prioridad);
+  if (!CRM_HANDOFF_PRIORITIES.includes(priority)) return blockedCrmHandoff('invalid_priority', handoffNumber);
+
+  const handoffId = `wa-${idPrefix}-handoff-${handoffNumber}`;
+  const eventId = `${handoffId}-r${revision}`;
+  const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
+  if (![handoffId, eventId, conversationId].every(isValidCrmId)) return blockedCrmHandoff('invalid_id', handoffNumber);
+
+  const isComplaint = crmText(row.area) === 'claims';
+  const reason = crmHandoffReason(row);
+  const label = CRM_HANDOFF_REASON_LABELS[reason] || `Derivación del bot a una persona (${reason})`;
+  const name = sellerId ? crmTruncate(crmText(row.customer_name), 200) : '';
+  let customerText = crmText(row.last_customer_message);
+  const description = () => crmTruncate(
+    customerText ? `${label}.\n\nÚltimo mensaje del cliente: ${customerText}` : `${label}.`,
+    16000,
+  );
+  const serialize = () => JSON.stringify({
+    schema_version: 1,
+    protocol_revision: '1.2',
+    event_id: eventId,
+    type: 'handoff.created',
+    conversation_id: conversationId,
+    data: {
+      handoff_id: handoffId,
+      kind: isComplaint ? 'complaint' : 'commercial',
+      area: isComplaint ? 'claims' : 'sales',
+      reason,
+      priority,
+      description: description(),
+      ...(opportunityId ? { crm_opportunity_id: opportunityId } : {}),
+      ...(sellerId ? { crm_seller_id: sellerId, phone } : {}),
+      ...(name ? { name } : {}),
+    },
+  });
+  let body = serialize();
+  for (let guard = 0; Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES && guard < 50; guard += 1) {
+    const ratio = CRM_MAX_BODY_BYTES / Buffer.byteLength(body, 'utf8');
+    customerText = crmTruncate(customerText, Math.max(0, Math.floor(customerText.length * ratio * 0.95)));
+    body = serialize();
+  }
+  if (Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES) return blockedCrmHandoff('payload_too_large', handoffNumber);
+
+  return { blocked_reason: null, handoff_id: handoffNumber, revision, event_id: eventId, conversation_id: conversationId, body };
+};
+
 // X-WhatsApp-Signature = "v1=" + hex HMAC-SHA256(secret, timestamp + "." + body).
 const signCrmRequest = (body, secret, timestamp, cryptoModule) => {
   const ts = String(timestamp);
@@ -631,6 +766,8 @@ const CRM_RETRYABLE_STATUS = (status) => status === 408 || status === 429 || (st
 // has to look before it is considered delivered.
 const CRM_LEAD_RESULT_STATUSES = ['created', 'updated', 'ignored_stale', 'duplicate'];
 const CRM_MESSAGE_RESULT_STATUSES = ['created', 'duplicate'];
+const CRM_HANDOFF_RESULT_STATUSES = ['associated', 'pending_association', 'operational'];
+const crmUuidOrNull = (value) => value === null || (typeof value === 'string' && CRM_UUID_PATTERN.test(value));
 
 const classifyCrmResponse = (response, eventId, eventType = 'lead.qualified') => {
   if (response?.error) {
@@ -649,6 +786,19 @@ const classifyCrmResponse = (response, eventId, eventType = 'lead.qualified') =>
     // this event id is delivered; nothing is written on the lead.
     if (eventType === 'ownership.taken' || eventType === 'ownership.released') {
       if (!(parsed && parsed.event_id === eventId)) return { ...base, outcome: 'parked', error: 'invalid_success_response' };
+      return { ...base, outcome: 'delivered', error: null };
+    }
+    // handoff.created: 200 {event_id, external_handoff_id, crm_case_id,
+    // crm_opportunity_id, status, routing_status}. Complete CRM Event reads
+    // crm_case_id from the stored response; nothing is written on the lead.
+    if (eventType === 'handoff.created') {
+      const validHandoff = parsed
+        && parsed.event_id === eventId
+        && typeof parsed.external_handoff_id === 'string' && parsed.external_handoff_id.trim() !== ''
+        && crmUuidOrNull(parsed.crm_case_id ?? null)
+        && crmUuidOrNull(parsed.crm_opportunity_id ?? null)
+        && CRM_HANDOFF_RESULT_STATUSES.includes(parsed.status);
+      if (!validHandoff) return { ...base, outcome: 'parked', error: 'invalid_success_response' };
       return { ...base, outcome: 'delivered', error: null };
     }
     if (eventType === 'message.new') {
@@ -704,6 +854,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildLeadQualifiedEvent,
     buildMessageNewEvent,
     buildOwnershipEvent,
+    buildHandoffCreatedEvent,
     crmMessageText,
     normalizeCrmPhone,
     isValidCrmId,

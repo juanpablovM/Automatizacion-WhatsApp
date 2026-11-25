@@ -2553,12 +2553,22 @@ const validateV3AiProposalV3 = (policy, proposal) => {
 // are never item-scoped), so both authorizers call this exact function.
 // Downstream handoff routing (ensure-escalation-handoff.js REASON_TO_MOTIVE)
 // reads `escalation_reason`, so this must not silently differ by version.
-const buildV3EffectCommand = (policy, effect, authorizedMutationCount, operationKeyNamespace) => {
+const buildV3EffectCommand = (policy, effect, authorizedMutationCount, operationKeyNamespace, observations = []) => {
   const payload = {
     conversation_id: policy.turn.conversation_id,
     turn_id: policy.turn.id,
     reason_observation_ids: jsonClone(effect.reason_observation_ids),
   };
+  // CRM 1.2d (S1): a handoff whose reason names an issue description is a
+  // customer complaint, so it is routed to the claims area. Every other
+  // handoff keeps the persisted default (sales) and its payload is unchanged.
+  if (effect.type === 'handoff') {
+    const reasonIds = new Set(effect.reason_observation_ids || []);
+    if ((observations || []).some((observation) => reasonIds.has(observation?.id)
+        && observation.concept === 'issue_description')) {
+      payload.escalation_area = 'claims';
+    }
+  }
   if (effect.type === 'handoff'
       && policy.turn.pending_question_goal_id === 'address'
       && (policy.goals || []).find((goal) => goal.goal_id === 'address')?.guidance?.next_action_without_progress === 'handoff'
@@ -2594,7 +2604,7 @@ const authorizeV3ConversationDecisionV3 = (policy, proposal, validation) => {
   const replySha = sha256(proposal.reply_text);
   const deliveryKey = sha256(`turn_reply/v1\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${replySha}`);
   const effectCommands = validation.authorized_effect_requests.map((effect) => (
-    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3')
+    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3', validation.accepted_observations)
   ));
   return {
     version: V3_CONTRACTS.decision,
@@ -2641,7 +2651,7 @@ const authorizeV3ConversationDecisionV31 = (policy, proposal, validation) => {
   const replySha = sha256(proposal.reply_text);
   const deliveryKey = sha256(`turn_reply/v1\u0000${policy.turn.conversation_id}\u0000${policy.turn.id}\u0000${replySha}`);
   const effectCommands = validation.authorized_effect_requests.map((effect) => (
-    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3.1')
+    buildV3EffectCommand(policy, effect, validation.authorized_mutations.length, 'effect/v3.1', validation.accepted_observations)
   ));
   return {
     version: V3_CONTRACTS.decision_v3_1,

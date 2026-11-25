@@ -313,7 +313,8 @@ describe('crm-inbound-events workflow wiring', () => {
     expect(targets('Is Chat Event To Apply', 0)).toEqual(['Apply CRM Chat Event']);
     expect(targets('Is Chat Event To Apply', 1)).toEqual(['Is Message Send To Claim']);
     expect(targets('Is Message Send To Claim', 0)).toEqual(['Claim CRM Message Send']);
-    expect(targets('Is Message Send To Claim', 1)).toEqual(['Build CRM Event Response']);
+    // 1.2d routes the rest through its own branches (crm-inbound-handoffs.test.js).
+    expect(targets('Is Message Send To Claim', 1)).toEqual(['Is Conversation Chat Event']);
     expect(targets('Claim CRM Message Send')).toEqual(['Should Send CRM Message']);
     expect(targets('Should Send CRM Message', 0)).toEqual(['Send CRM Message']);
     expect(targets('Should Send CRM Message', 1)).toEqual(['Build CRM Event Response']);

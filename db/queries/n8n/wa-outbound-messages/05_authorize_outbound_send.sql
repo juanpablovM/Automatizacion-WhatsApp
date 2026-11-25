@@ -43,8 +43,18 @@ latest_lead AS (
 ownership_authority AS (
   SELECT EXISTS (
     SELECT 1
-    FROM lead_chat_ownerships o
-    JOIN latest_lead l ON l.id = o.lead_id
+    FROM (
+      SELECT lead_ownership.*
+      FROM lead_chat_ownerships lead_ownership
+      JOIN latest_lead l ON l.id = lead_ownership.lead_id
+      UNION ALL
+      -- Migration 047: a conversation handed off to the CRM without a lead is
+      -- held by a conversation-keyed ownership.
+      SELECT conversation_ownership.*
+      FROM lead_chat_ownerships conversation_ownership
+      JOIN target t ON t.conversation_id = conversation_ownership.conversation_id
+      CROSS JOIN contact_lock
+    ) o
     WHERE o.deleted_at IS NULL
       AND o.released_at IS NULL
       AND (o.response_due_at IS NULL OR o.response_due_at > NOW())

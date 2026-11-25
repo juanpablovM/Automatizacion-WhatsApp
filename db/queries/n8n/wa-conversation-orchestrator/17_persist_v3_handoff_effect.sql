@@ -11,7 +11,8 @@
 WITH target AS MATERIALIZED (
   SELECT operation.*, execution.decision_id, execution.inbound_event_id,
          conversation.id AS conversation_id, conversation.phone_number,
-         conversation.source_number_id
+         conversation.source_number_id,
+         (operation.request_payload#>>'{payload,escalation_area}') IS NOT DISTINCT FROM 'claims' AS is_claim
   FROM external_operations operation
   JOIN conversation_turn_executions execution
     ON operation.entity_type = 'conversation_turn_execution'
@@ -52,9 +53,15 @@ WITH target AS MATERIALIZED (
   SELECT target.operation_key, target.conversation_id, target.phone_number,
          target.source_number_id, target.inbound_event_id,
          COALESCE(NULLIF(target.request_payload#>>'{payload,escalation_reason}', ''), 'v3_authorized_handoff'),
-         'sales', 'Ventas', 'alta', 'Equipo Ventas',
+         -- CRM 1.2d (S1): a complaint (payload escalation_area 'claims') goes
+         -- to the claims area with the legacy complaint labels; every other
+         -- v3 handoff stays in sales.
+         CASE WHEN target.is_claim THEN 'claims' ELSE 'sales' END,
+         CASE WHEN target.is_claim THEN 'Reclamos' ELSE 'Ventas' END,
+         CASE WHEN target.is_claim THEN 'urgente' ELSE 'alta' END,
+         CASE WHEN target.is_claim THEN 'Responsable de Reclamos' ELSE 'Equipo Ventas' END,
          'v3_effect', COALESCE(NULLIF(target.request_payload#>>'{payload,escalation_reason}', ''), 'v3_authorized_handoff'),
-         'sales', 'v3_handoff',
+         CASE WHEN target.is_claim THEN 'claims' ELSE 'sales' END, 'v3_handoff',
          jsonb_build_object(
            'decision_id', target.decision_id,
            'payload_digest', $3::TEXT,
