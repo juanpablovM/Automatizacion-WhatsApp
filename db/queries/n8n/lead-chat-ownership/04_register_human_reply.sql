@@ -164,11 +164,13 @@ updated_active AS (
 ),
 inserted_reacquisition AS (
   INSERT INTO lead_chat_ownerships (
-    lead_id, clickup_task_id, previous_clickup_status, acquired_at,
+    lead_id, conversation_id, clickup_task_id, previous_clickup_status, acquired_at,
     last_human_message_id, last_human_reply_at, sla_mode, quote_followup_since
   )
   SELECT
-    c.lead_id, c.clickup_task_id, c.previous_clickup_status, i.replied_at,
+    -- Migration 047: a lead lease the CRM took on another conversation keeps
+    -- tracking under it (NULL for every other lead lease).
+    c.lead_id, c.conversation_id, c.clickup_task_id, c.previous_clickup_status, i.replied_at,
     i.message_id, i.replied_at,
     CASE WHEN c.release_reason = 'customer_new_quote' THEN 'quote_followup' ELSE 'standard' END,
     CASE WHEN c.release_reason = 'customer_new_quote' THEN i.replied_at END

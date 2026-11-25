@@ -153,6 +153,12 @@ describeIntegration('CRM 1.2d conversation-keyed chat ownership (migration 047)'
   const claimedInbound = async (conv, { fromMe = false, externalMessageId = null } = {}) => {
     sequence += 1;
     const token = `conv-token-${sequence}-${crypto.randomUUID()}`;
+    // One event in flight per contact queue: an earlier load's event is done.
+    await client.query(
+      `UPDATE inbound_events SET processing_status = 'processed', processing_token = NULL
+       WHERE phone_number = $1 AND source_number_id = $2 AND processing_status = 'processing'`,
+      [conv.phone, sourceNumberId],
+    );
     const { rows: [row] } = await client.query(`
       INSERT INTO inbound_events (
         instance_name, external_message_id, event_fingerprint, dedupe_key, source_number_id, phone_number,
@@ -451,6 +457,73 @@ describeIntegration('CRM 1.2d conversation-keyed chat ownership (migration 047)'
     expect(await rejected(
       `INSERT INTO lead_chat_ownerships (conversation_id, acquired_via) VALUES ($1, 'crm')`, [conv.conversationId],
     )).toMatch(/uq_lead_chat_ownerships_active_conversation/);
+  });
+
+  // Re-engagement: the handed-off conversation inherited an older lead of the
+  // contact (conversations.lead_id = L, L's own conversation is older). The
+  // bot's silence reads L, so the CRM acts on L's lead-keyed lease.
+  describe('a handed-off conversation that inherited an older lead of the contact', () => {
+    const reengaged = async ({ liveLease }) => {
+      const conv = await handedOffWithoutLead();
+      const { rows: [{ id: olderConversationId }] } = await client.query(
+        `INSERT INTO conversations (phone_number, conversation_status_id, source_number_id, started_at, last_message_at)
+         VALUES ($1, $2, $3, NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days') RETURNING id`,
+        [conv.phone, statusIds.active, sourceNumberId],
+      );
+      const { rows: [{ id: leadId }] } = await client.query(
+        `INSERT INTO leads (whatsapp_name, phone_number, lead_status_id, source_number_id, source_conversation_id,
+                            channel, created_at)
+         VALUES ('Ana', $1, $2, $3, $4, 'whatsapp', NOW() - INTERVAL '3 days') RETURNING id`,
+        [conv.phone, leadStatusId, sourceNumberId, olderConversationId],
+      );
+      await client.query('UPDATE conversations SET lead_id = $1 WHERE id IN ($2, $3)', [leadId, olderConversationId, conv.conversationId]);
+      let ownershipId = null;
+      if (liveLease) {
+        ({ rows: [{ id: ownershipId }] } = await client.query(
+          `INSERT INTO lead_chat_ownerships (lead_id, clickup_task_id, previous_clickup_status, sla_mode)
+           VALUES ($1::bigint, 'task-reengaged-' || $1::text, 'to do', 'standard') RETURNING id`, [leadId],
+        ));
+      }
+      return { ...conv, leadId: String(leadId), ownershipId };
+    };
+
+    test('a live ClickUp lease on the lead: another seller gets 409 and the bot stays silent', async () => {
+      const conv = await reengaged({ liveLease: true });
+      expect((await loadState(conv)).row.bot_suppressed).toBe(true);
+      const answer = await chat(conv, { seller: SELLER_B });
+      expect(answer).toMatchObject({
+        http_status: 409, response: { error: 'ownership_conflict', holder_crm_seller_id: SELLER_A },
+      });
+      expect(await ownershipsOf(conv.conversationId)).toEqual([]);
+      expect((await client.query(
+        'SELECT id FROM lead_chat_ownerships WHERE lead_id = $1 AND released_at IS NULL', [conv.leadId],
+      )).rows).toEqual([{ id: conv.ownershipId }]);
+      expect((await loadState(conv)).row).toMatchObject({ bot_suppressed: true, ownership_lead_id: conv.leadId });
+      expect(await sellerOwned(conv)).toBe(true);
+    });
+
+    test('no live lease: the take holds the lead-keyed lease, silences the bot and reaches the CRM', async () => {
+      const conv = await reengaged({ liveLease: false });
+      const taken = await chat(conv);
+      expect(taken).toMatchObject({ http_status: 200, response: { result: 'applied', ownership_version: 1 } });
+      const live = (await client.query(
+        'SELECT * FROM lead_chat_ownerships WHERE lead_id = $1 AND released_at IS NULL', [conv.leadId],
+      )).rows;
+      expect(live).toMatchObject([{ acquired_via: 'crm', owner_seller_id: String(sellerA) }]);
+      expect((await client.query(
+        'SELECT 1 FROM lead_chat_ownerships WHERE conversation_id = $1 AND lead_id IS NULL', [conv.conversationId],
+      )).rows).toEqual([]);
+      expect((await loadState(conv)).row).toMatchObject({ bot_suppressed: true, ownership_lead_id: conv.leadId });
+      expect(await sellerOwned(conv)).toBe(true);
+      expect(await changesOf(conv.conversationId)).toMatchObject([{ change_kind: 'taken', source: 'crm', lead_id: conv.leadId }]);
+      expect((await client.query('SELECT lead_id FROM crm_inbound_events WHERE event_id = $1', [taken.eventId])).rows[0])
+        .toEqual({ lead_id: conv.leadId });
+
+      expect(await chat(conv, { type: 'chat.release', version: 1 })).toMatchObject({
+        http_status: 200, response: { result: 'applied', ownership_version: 2 },
+      });
+      expect((await loadState(conv)).row.bot_suppressed).toBe(false);
+    });
   });
 
   describe('lead-keyed behavior is unchanged', () => {
