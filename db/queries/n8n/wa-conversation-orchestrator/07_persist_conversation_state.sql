@@ -219,7 +219,9 @@ ownership_deadline AS (
     END,
     updated_at = NOW()
   FROM incoming_message im
-  WHERE o.lead_id = NULLIF($58::text, '')::bigint
+  -- The lead's ownership, or the conversation's when it was handed off to the
+  -- CRM without a lead (migration 047).
+  WHERE (o.lead_id = NULLIF($58::text, '')::bigint OR o.conversation_id = NULLIF($1::text, '')::bigint)
     AND o.released_at IS NULL
     AND o.deleted_at IS NULL
     -- Once the SLA expired, a new customer message must not revive the old
@@ -241,7 +243,7 @@ quote_followup_release AS (
     restoration_state = 'not_required',
     updated_at = NOW()
   FROM incoming_message im
-  WHERE o.lead_id = NULLIF($58::text, '')::bigint
+  WHERE (o.lead_id = NULLIF($58::text, '')::bigint OR o.conversation_id = NULLIF($1::text, '')::bigint)
     AND o.released_at IS NULL
     AND o.deleted_at IS NULL
     AND o.sla_mode = 'quote_followup'

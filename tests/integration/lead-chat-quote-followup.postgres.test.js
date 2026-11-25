@@ -304,7 +304,7 @@ describeIntegration('lead chat ownership: quote follow-up mode', () => {
         [owned.ownershipId]);
 
       const replyId = await seedMessage(owned, 'human', ago(80));
-      const reply = await client.query(humanReplySql, [owned.leadId, replyId, ago(80), null, null, 'en atención']);
+      const reply = await client.query(humanReplySql, [owned.leadId, replyId, ago(80), null, null, 'en atención', null]);
       expect(reply.rows[0].outcome).toBe('reply_registered');
       expect(alertFor((await claimAlerts()).rows, owned.ownershipId)).toBeUndefined();
 
@@ -464,7 +464,7 @@ describeIntegration('lead chat ownership: quote follow-up mode', () => {
         metadata: { response_kind: 'quote_followup_new_quote', release_quote_followup_ownership: true },
       });
       const replyId = await seedMessage(owned, 'human', ago(0));
-      const reply = await client.query(humanReplySql, [owned.leadId, replyId, ago(0), null, null, 'en atención']);
+      const reply = await client.query(humanReplySql, [owned.leadId, replyId, ago(0), null, null, 'en atención', null]);
       expect(reply.rows[0].outcome).toBe('late_reply_reacquired');
 
       const row = await ownershipOf(owned.leadId);

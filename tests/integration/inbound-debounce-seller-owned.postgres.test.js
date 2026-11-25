@@ -41,10 +41,17 @@ const authorityCtes = loadSql
   .slice(loadSql.indexOf('latest_lead AS ('), loadSql.indexOf('follow_up_status AS ('))
   .trim()
   .replace(/,$/, '');
+// Migration 047: the chat authority also reads the latest conversation's own
+// (conversation-keyed) ownership.
+const latestConversationCte = loadSql
+  .slice(loadSql.indexOf('latest_conversation AS ('), loadSql.indexOf('last_persisted_inbound AS ('))
+  .trim()
+  .replace(/,$/, '');
 const orchestratorAuthoritySql = `
   WITH input_payload AS (
     SELECT $1::text AS phone_number, $2::bigint AS source_number_id
   ),
+  ${latestConversationCte},
   ${authorityCtes}
   SELECT COALESCE(ca.bot_suppressed, FALSE) AS bot_suppressed, ca.sla_mode
   FROM input_payload ip
@@ -66,6 +73,7 @@ describeIntegration('no inbound debounce for seller-owned chats', () => {
       BEGIN;
       DELETE FROM lead_chat_ownerships WHERE lead_id IN (
         SELECT id FROM leads WHERE source_number_id IN (${sources}));
+      DELETE FROM conversations WHERE source_number_id IN (${sources});
       DELETE FROM leads WHERE source_number_id IN (${sources});
       DELETE FROM inbound_events WHERE instance_name LIKE '${INSTANCE}%';
       DELETE FROM whatsapp_numbers WHERE instance_name LIKE '${INSTANCE}%';
@@ -131,6 +139,25 @@ describeIntegration('no inbound debounce for seller-owned chats', () => {
     `, [leadId, mode]);
   };
 
+  // Migration 047: a conversation handed off to the CRM without a lead, held
+  // by a conversation-keyed ownership.
+  const insertConversation = async (phone, { startedAgo = '0 seconds', source = sourceNumberId } = {}) => (
+    await client.query(`
+      INSERT INTO conversations (phone_number, source_number_id, conversation_status_id, started_at)
+      VALUES ($1, $2, (SELECT id FROM conversation_statuses WHERE code = 'escalation_required'), NOW() - $3::interval)
+      RETURNING id
+    `, [phone, source, startedAgo])
+  ).rows[0].id;
+
+  const insertConversationOwnership = async (conversationId, {
+    due = "NOW() + INTERVAL '2 hours'", released = 'NULL',
+  } = {}) => {
+    await client.query(`
+      INSERT INTO lead_chat_ownerships (conversation_id, response_due_at, released_at, release_reason, acquired_via)
+      VALUES ($1::bigint, ${due}, ${released}, CASE WHEN ${released} IS NULL THEN NULL ELSE 'manual' END, 'crm')
+    `, [conversationId]);
+  };
+
   const sellerOwned = async (phone, source = sourceNumberId) => (
     await client.query('SELECT inbound_contact_seller_owned($1, $2) AS owned', [source, phone])
   ).rows[0].owned;
@@ -184,6 +211,30 @@ describeIntegration('no inbound debounce for seller-owned chats', () => {
     'an ownership of the same phone on another source number': {
       owned: false,
       setup: async (phone) => insertOwnership(await insertLead(phone, { source: otherSourceNumberId })),
+    },
+    'a live conversation ownership without a lead': {
+      owned: true, setup: async (phone) => insertConversationOwnership(await insertConversation(phone)),
+    },
+    'an expired conversation ownership': {
+      owned: false,
+      setup: async (phone) => insertConversationOwnership(await insertConversation(phone), {
+        due: "NOW() - INTERVAL '1 minute'",
+      }),
+    },
+    'a released conversation ownership': {
+      owned: false,
+      setup: async (phone) => insertConversationOwnership(await insertConversation(phone), { released: 'NOW()' }),
+    },
+    'a conversation ownership on an older conversation of the contact only': {
+      owned: false,
+      setup: async (phone) => {
+        await insertConversationOwnership(await insertConversation(phone, { startedAgo: '1 day' }));
+        await insertConversation(phone);
+      },
+    },
+    'a conversation ownership of the same phone on another source number': {
+      owned: false,
+      setup: async (phone) => insertConversationOwnership(await insertConversation(phone, { source: otherSourceNumberId })),
     },
   };
 

@@ -86,7 +86,9 @@ conversation_context AS (
 -- lead of the phone, so a seller reply in a returning customer's new
 -- conversation reacquired the old lead and reopened its closed ClickUp task.
 -- A reply belongs to the current conversation's lead only; a conversation
--- with no lead yet keeps the message and touches no ownership.
+-- with no lead yet keeps the message and touches no lead's ownership. Its
+-- conversation_id is returned either way: 04_register_human_reply.sql checks
+-- the conversation's own ownership when there is no lead (migration 047).
 lead_context AS (
   SELECT l.id AS lead_id
   FROM conversation_context cc
