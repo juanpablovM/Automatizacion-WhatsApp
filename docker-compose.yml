@@ -168,6 +168,9 @@ services:
       CRM_EVENTS_RETRY_BASE_SECONDS: ${CRM_EVENTS_RETRY_BASE_SECONDS:-30}
       CRM_EVENTS_RETRY_MAX_SECONDS: ${CRM_EVENTS_RETRY_MAX_SECONDS:-3600}
       CRM_EVENTS_MAX_ATTEMPTS: ${CRM_EVENTS_MAX_ATTEMPTS:-20}
+      # CRM_EVENTS_HANDOFFS_ENABLED=true sends contingency handoffs as
+      # handoff.created (revision 1.2d). Ignored unless the protocol is 1.2.
+      CRM_EVENTS_HANDOFFS_ENABLED: ${CRM_EVENTS_HANDOFFS_ENABLED:-false}
       # CRM -> bot webhook (crm-inbound-events, POST /webhook/crm-events,
       # revision 1.2b: chat.take / chat.release). Off by default: every request
       # answers 503 until CRM_INBOUND_ENABLED=true. CRM_INBOUND_HMAC_SECRET signs
@@ -178,6 +181,10 @@ services:
       # default: message.send answers 400 invalid_event until it is "true". It
       # needs CRM_EVENTS_ID_PREFIX, the prefix of the message_id it answers.
       CRM_INBOUND_MESSAGE_SEND_ENABLED: ${CRM_INBOUND_MESSAGE_SEND_ENABLED:-false}
+      # Revision 1.2d: handoff.acknowledged / handoff.resolved and the
+      # conversation_id identity on chat.take, chat.release and message.send.
+      # Off by default: they answer 400 invalid_event until it is "true".
+      CRM_INBOUND_HANDOFFS_ENABLED: ${CRM_INBOUND_HANDOFFS_ENABLED:-false}
       FOLLOW_UP_BATCH_SIZE: ${FOLLOW_UP_BATCH_SIZE:-50}
       FOLLOW_UP_WINDOW_START: ${FOLLOW_UP_WINDOW_START:-09:00}
       FOLLOW_UP_WINDOW_END: ${FOLLOW_UP_WINDOW_END:-20:00}
