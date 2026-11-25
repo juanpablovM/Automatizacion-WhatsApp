@@ -719,6 +719,27 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Apply CRM Conversation Chat Event",
+    "fixture": "db/queries/n8n/crm-inbound-events/04_apply_crm_conversation_chat_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Claim CRM Conversation Message Send",
+    "fixture": "db/queries/n8n/crm-inbound-events/05_claim_crm_conversation_message_send.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Apply CRM Handoff Event",
+    "fixture": "db/queries/n8n/crm-inbound-events/06_apply_crm_handoff_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
     "node": "Build CRM Event Response",
     "fixture": "crm-inbound-events/build-crm-inbound-response.js",
     "runtimes": [
