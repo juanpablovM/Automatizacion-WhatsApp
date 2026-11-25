@@ -561,6 +561,9 @@ handoff while one is still open, after 48 h) goes back to the same seller.
   `crm_opportunity_id` or `conversation_id` (`wa-<prefix>-conversation-<id>`); both or
   neither is `400 invalid_event`. A conversation not handed off by the bot, or one with
   an opportunity, answers `422 unknown_conversation`.
+- The acting `crm_seller_id` must be an active seller, except the seller the handoff was
+  routed to (migration 048): the configured test seller (`LEAD_TEST_SELLER_ID`) stays
+  inactive so the rotation never picks it, yet it owns test-phone handoffs.
 - **No lead needed (migration 047).** A handed-off conversation whose customer has no
   lead keeps its chat ownership in `lead_chat_ownerships` keyed by `conversation_id`
   (`lead_id` NULL, exactly one key). The bot's silence, outbound authority, debounce,
@@ -576,13 +579,13 @@ handoff while one is still open, after 48 h) goes back to the same seller.
 
 #### Switching 1.2d on
 
-1. Apply migrations 044, 045, 046 and 047 (rollbacks in `infra/postgres/rollback/`, in
-   reverse order). Import `crm-events-dispatcher`, `crm-inbound-events`,
+1. Apply migrations 044 to 048 (rollbacks in `infra/postgres/rollback/`, in reverse
+   order). Import `crm-events-dispatcher`, `crm-inbound-events`,
    `wa-conversation-orchestrator`, `wa-inbound-entry` and `wa-outbound-messages`.
 2. With `CRM_EVENTS_PROTOCOL_REVISION=1.2`, set `CRM_EVENTS_HANDOFFS_ENABLED=true` and
    `CRM_INBOUND_HANDOFFS_ENABLED=true`, then restart n8n.
 3. Rollback: both flags `false`, re-import the previous workflows, then the rollbacks
-   047 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
+   048 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
 
 ### Mapping sellers
 

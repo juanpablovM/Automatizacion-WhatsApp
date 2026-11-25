@@ -235,6 +235,32 @@ describeIntegration('CRM 1.2d conversation-keyed chat ownership (migration 047)'
     return { own, reply };
   };
 
+  // Live test 2026-11-25 (finding F2): test-phone handoffs are routed to the
+  // configured test seller, who is inactive in `sellers` to stay out of the
+  // rotation. The seller the bot routed a handoff to may always act on it;
+  // any other inactive seller is still rejected.
+  test('the seller the handoff was routed to may take and send even when inactive', async () => {
+    const conv = await handedOffWithoutLead();
+    await client.query('UPDATE sellers SET is_active = FALSE WHERE id = $1', [sellerA]);
+    const taken = await chat(conv);
+    expect(taken.http_status).toBe(200);
+    expect(taken.response).toMatchObject({ result: 'applied' });
+    const claimed = await send(conv);
+    expect(claimed.http_status).not.toBe(422);
+    expect(claimed.response?.error).not.toBe('invalid_seller');
+  });
+
+  test('an inactive seller the handoff was not routed to is still rejected', async () => {
+    const conv = await handedOffWithoutLead();
+    await client.query('UPDATE sellers SET is_active = FALSE WHERE id = $1', [sellerB]);
+    const taken = await chat(conv, { seller: SELLER_B });
+    expect(taken.http_status).toBe(422);
+    expect(taken.response).toMatchObject({ error: 'invalid_seller' });
+    const claimed = await send(conv, { seller: SELLER_B });
+    expect(claimed.http_status).toBe(422);
+    expect(claimed.response).toMatchObject({ error: 'invalid_seller' });
+  });
+
   test('chat.take without a lead: conversation-keyed lease, 2-hour window, taken change, no lead', async () => {
     const conv = await handedOffWithoutLead();
     const taken = await chat(conv);
