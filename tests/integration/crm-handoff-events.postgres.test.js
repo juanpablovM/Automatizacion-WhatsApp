@@ -183,6 +183,20 @@ describeIntegration('CRM handoff.created (1.2d)', () => {
       expect(await rotation()).toBeUndefined();
     });
 
+    // Same eligibility as the lead rotation (active, with a ClickUp user) plus a
+    // CRM user; a CRM admin or a CRM-only user (no ClickUp, e.g. an admin mapped
+    // as on 2026-11-16) never receives handoffs by rotation (migration 051).
+    test('the rotation skips CRM admins and sellers outside the lead rotation', async () => {
+      await insertSeller('Admin', -2, '5b5b5b5b-0000-4000-8000-00000000ad01', { clickup_user_id: 'cu-admin' });
+      await client.query("UPDATE sellers SET crm_is_admin = TRUE WHERE crm_user_id = '5b5b5b5b-0000-4000-8000-00000000ad01'");
+      await insertSeller('CrmOnly', -1, '5b5b5b5b-0000-4000-8000-00000000ad02', { clickup_user_id: '' });
+      const first = await newHandoff();
+      const second = await newHandoff();
+      await runHandoffs();
+      expect((await handoffOf(first.handoffId)).crm_routing_seller_id).toBe(sellerA);
+      expect((await handoffOf(second.handoffId)).crm_routing_seller_id).toBe(sellerB);
+    });
+
     test('without an opportunity the lead rotation picks the seller and advances the shared pointer', async () => {
       await insertSeller('NoCrm', 0, null);
       const first = await newHandoff();
