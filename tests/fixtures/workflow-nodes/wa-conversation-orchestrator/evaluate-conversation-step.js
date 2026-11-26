@@ -872,6 +872,10 @@ function evaluateConversationStep(row, env = (typeof $env !== 'undefined' ? $env
 
   // 2. HUMANO: solicitud explícita de hablar con persona
   else if (wantsHuman(normalizedText)) {
+    // A closed case is over (owner, 2026-11-26): asking for a person again
+    // opens a new conversation and so a new handoff, instead of reopening the
+    // closed one onto its resolved handoff.
+    if (row.conversation_status_code === 'closed') resetConversationLead = true;
     shouldEscalate = true;
     shouldCreateLead = false;
     escalationReason = 'human_requested';
