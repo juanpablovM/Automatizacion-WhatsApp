@@ -544,6 +544,8 @@ handoff while one is still open, after 48 h) goes back to the same seller.
   3. a test phone (`LEAD_TEST_PHONE_NUMBERS`): `LEAD_TEST_SELLER_ID`;
   4. the lead rotation (same lock, pointer and order as leads), among active sellers
      with a `crm_user_id`: `crm_seller_id` plus `phone` and `name` when known.
+  The rotation step uses the lead rotation's eligibility (active, with a ClickUp user) plus a
+  `crm_user_id`, and never a CRM admin (migration 051).
   All routing takes one lock (`crm-handoff-routing`) before the rotation lock, so two
   overlapping dispatcher passes never deadlock.
 - **Responses.** 200 stores `crm_case_id`. `422 invalid_seller` parks the event and the
@@ -568,7 +570,7 @@ handoff while one is still open, after 48 h) goes back to the same seller.
   the opportunity belongs to an older lead. Ownership changes stay under the opportunity's
   conversation. When the opportunity's lead is the latest lead nothing changes.
 - The acting `crm_seller_id` must be an active seller or a CRM admin (`sellers.crm_is_admin`,
-  migration 051, set by an operator; it never adds the seller to the rotation), except the seller the handoff was
+  migration 051, set by an operator; it never puts the seller in the lead rotation and keeps it out of the handoff rotation), except the seller the handoff was
   routed to (migration 048): the configured test seller (`LEAD_TEST_SELLER_ID`) stays
   inactive so the rotation never picks it, yet it owns test-phone handoffs.
 - **No lead needed (migration 047).** A handed-off conversation whose customer has no
