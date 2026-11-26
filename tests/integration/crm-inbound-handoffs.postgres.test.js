@@ -258,10 +258,23 @@ describeIntegration('CRM 1.2d inbound (migration 046)', () => {
       });
     });
 
+    // Migration 050 (S10): a handoff routed by opportunity, or a lead with an
+    // opportunity, no longer makes the conversation unknown
+    // (crm-conversation-id-any-handoff test).
     test.each([
-      ['no handoff.created delivered for it', { delivered: false }],
       ['its handoff was routed by opportunity', { routeByOpportunity: true }],
       ['its lead has an opportunity', { opportunity: OPPORTUNITY }],
+    ])('accepted when %s: lease on the lead', async (_name, options) => {
+      const conv = await handedOff(options);
+      const answer = await chatByConversation(conv);
+      expect(answer).toMatchObject({ http_status: 200, response: { result: 'applied', ownership_version: 1 } });
+      expect(await ownershipsOf(conv.leadId)).toMatchObject([{ acquired_via: 'crm', owner_seller_id: String(sellerA), released_at: null }]);
+      expect(await botSuppressed(conv.leadId)).toBe(true);
+      expect(await inboxOf(answer.eventId)).toMatchObject({ http_status: 200, lead_id: conv.leadId, conversation_id: conv.conversationId });
+    });
+
+    test.each([
+      ['no handoff.created delivered for it', { delivered: false }],
     ])('422 unknown_conversation when %s, nothing changes', async (_name, options) => {
       const conv = await handedOff(options);
       const answer = await chatByConversation(conv);
