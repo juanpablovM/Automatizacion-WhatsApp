@@ -506,4 +506,20 @@ describeIntegration('conversation_id accepted on any handed-off conversation (mi
       expect(await byConversation(c, { seller: SELLER_B })).toMatchObject({ http_status: 200, response: { result: 'applied' } });
     });
   });
+
+  // Independent verification of T8 (B1): a ClickUp lease (no owner seller) on
+  // a lead with an opportunity must name the same holder whichever key the CRM
+  // uses: the lead's assigned seller, never the handoff's routed seller.
+  test('ClickUp lease on a lead with an opportunity: same holder by opportunity and by conversation_id', async () => {
+    const phone = nextPhone('5695');
+    const only = await qualifiedLead({ phone, opportunity: OPP_NEW, seller: sellerB, status: 'escalation_required', ago: '0 minutes' });
+    await handoff({ conversationId: only.conversationId, phone, routedSeller: sellerA });
+    const c = { phone, conversationId: only.conversationId, ref: `wa-${PREFIX}-conversation-${only.conversationId}`, latest: only };
+    await client.query(acquireSql, [only.taskId, 'nueva', `hist-${crypto.randomUUID()}`, new Date().toISOString(), 'in progress', 'cotización enviada']);
+    const version = await versionOf(c.conversationId);
+    expect(await byOpportunity({ opportunity: OPP_NEW, version })).toMatchObject({ http_status: 409, response: { holder_crm_seller_id: SELLER_B } });
+    expect(await byConversation(c, { version })).toMatchObject({ http_status: 409, response: { holder_crm_seller_id: SELLER_B } });
+    expect(await sendByConversation(c, { version })).toMatchObject({ send: false, http_status: 409 });
+    expect(await byConversation(c, { seller: SELLER_B, version })).toMatchObject({ http_status: 200, response: { result: 'applied' } });
+  });
 });

@@ -219,9 +219,11 @@ BEGIN
       v_current := COALESCE(v_current, 0);
 
       IF v_live THEN
-        -- 050: a handoff routed by opportunity has no routed seller; the
-        -- latest lead's assigned seller holds a ClickUp lease, as in 049.
-        v_holder := COALESCE(v_active.owner_seller_id, v_resolved.routed_seller_id, v_lead.assigned_seller_id);
+        -- 050: a lease without an owner seller (a ClickUp lease) is held by
+        -- the latest lead's assigned seller, exactly as the opportunity path
+        -- (049) reads it, so both keys name the same holder. The routed
+        -- seller holds it only when the customer has no lead.
+        v_holder := COALESCE(v_active.owner_seller_id, v_lead.assigned_seller_id, v_resolved.routed_seller_id);
       END IF;
 
       IF p_ownership_version < v_current THEN
@@ -498,9 +500,11 @@ BEGIN
       v_current := COALESCE(v_current, 0);
 
       IF v_live THEN
-        -- 050: a handoff routed by opportunity has no routed seller; the
-        -- latest lead's assigned seller holds a ClickUp lease, as in 049.
-        v_holder := COALESCE(v_active.owner_seller_id, v_resolved.routed_seller_id, v_lead.assigned_seller_id);
+        -- 050: a lease without an owner seller (a ClickUp lease) is held by
+        -- the latest lead's assigned seller, exactly as the opportunity path
+        -- (049) reads it, so both keys name the same holder. The routed
+        -- seller holds it only when the customer has no lead.
+        v_holder := COALESCE(v_active.owner_seller_id, v_lead.assigned_seller_id, v_resolved.routed_seller_id);
       END IF;
 
       IF v_live AND v_holder IS DISTINCT FROM v_seller.id THEN
