@@ -522,4 +522,42 @@ describeIntegration('conversation_id accepted on any handed-off conversation (mi
     expect(await sendByConversation(c, { version })).toMatchObject({ send: false, http_status: 409 });
     expect(await byConversation(c, { seller: SELLER_B, version })).toMatchObject({ http_status: 200, response: { result: 'applied' } });
   });
+
+  // CRM 1.2d close test (2026-11-26, S11): a CRM admin may act whether or not
+  // it is active in the rotation; an inactive seller that is not an admin is
+  // still rejected, and the holder rules stay the same for admins.
+  const makeAdmin = (sellerId) => client.query(
+    'UPDATE sellers SET is_active = FALSE, crm_is_admin = TRUE WHERE id = $1', [sellerId],
+  );
+
+  test('an inactive CRM admin may take and send by conversation_id and take by opportunity', async () => {
+    const c = await liveCase();
+    await makeAdmin(sellerA);
+    const taken = await byConversation(c);
+    expect(taken).toMatchObject({ http_status: 200, response: { result: 'applied' } });
+    const claimed = await sendByConversation(c, { version: await versionOf(c.conversationId) });
+    expect(claimed).toMatchObject({ send: true });
+    expect(claimed.response?.error).toBeUndefined();
+    expect(await sellerOwned(c)).toBe(true);
+    const released = await byConversation(c, { type: 'chat.release', version: await versionOf(c.conversationId) });
+    expect(released).toMatchObject({ http_status: 200, response: { result: 'applied' } });
+    expect(await byOpportunity({ opportunity: OPP_NEW, version: 99 })).toMatchObject({ http_status: 200 });
+  });
+
+  test('an inactive seller that is not a CRM admin is still rejected on both keys', async () => {
+    const c = await liveCase();
+    await client.query('UPDATE sellers SET is_active = FALSE, crm_is_admin = FALSE WHERE id = $1', [sellerB]);
+    expect(await byConversation(c, { seller: SELLER_B })).toMatchObject({ http_status: 422, response: { error: 'invalid_seller' } });
+    expect(await sendByConversation(c, { seller: SELLER_B })).toMatchObject({ http_status: 422, response: { error: 'invalid_seller' } });
+    expect(await byOpportunity({ opportunity: OPP_NEW, seller: SELLER_B })).toMatchObject({ http_status: 422, response: { error: 'invalid_seller' } });
+    expect(await liveLeasesOf(c.phone)).toHaveLength(0);
+  });
+
+  test('a CRM admin still gets 409 while another seller holds the chat', async () => {
+    const c = await liveCase();
+    expect(await byConversation(c, { seller: SELLER_B })).toMatchObject({ http_status: 200, response: { result: 'applied' } });
+    await makeAdmin(sellerA);
+    expect(await byConversation(c, { version: await versionOf(c.conversationId) }))
+      .toMatchObject({ http_status: 409, response: { holder_crm_seller_id: SELLER_B } });
+  });
 });
