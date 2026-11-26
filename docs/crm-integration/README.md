@@ -583,18 +583,20 @@ handoff while one is still open, after 48 h) goes back to the same seller.
   same transitions as the ClickUp closure (`notified → acknowledged`,
   `notified | acknowledged → resolved`; a delivered `pending` handoff counts as
   `notified`). Resolved closes an `escalation_required` conversation and every other
-  open handoff of it. `200 applied`, `200 duplicate` (state already reached),
+  open handoff of it, and releases the chat the CRM had taken for that customer (migration 052:
+  the bot resumes and `ownership.released` goes out as `seller_released`; ClickUp leases are
+  untouched). `200 applied`, `200 duplicate` (state already reached),
   `409 invalid_transition`, `422 unknown_handoff`.
 
 #### Switching 1.2d on
 
-1. Apply migrations 044 to 051 (rollbacks in `infra/postgres/rollback/`, in reverse
+1. Apply migrations 044 to 052 (rollbacks in `infra/postgres/rollback/`, in reverse
    order). Import `crm-events-dispatcher`, `crm-inbound-events`,
    `wa-conversation-orchestrator`, `wa-inbound-entry` and `wa-outbound-messages`.
 2. With `CRM_EVENTS_PROTOCOL_REVISION=1.2`, set `CRM_EVENTS_HANDOFFS_ENABLED=true` and
    `CRM_INBOUND_HANDOFFS_ENABLED=true`, then restart n8n.
 3. Rollback: both flags `false`, re-import the previous workflows, then the rollbacks
-   051 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
+   052 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
 
 ### Mapping sellers
 
