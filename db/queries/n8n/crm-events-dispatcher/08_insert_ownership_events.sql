@@ -6,7 +6,8 @@
 -- (lead_id NULL, revision 1, ownership_change_id set) and clears any earlier
 -- block of that change. A blocked row records its reason on the change, so the
 -- next pass sees it last and retries it. Unique event_id and
--- ownership_change_id make a re-run or a concurrent pass a no-op.
+-- ownership_change_id make a re-run or a concurrent pass a no-op. A 1.3 body's
+-- root contact_id is stored in crm_events.contact_id (NULL for 1.2 bodies).
 WITH input AS MATERIALIZED (
   SELECT x.change_id, x.event_id, x.conversation_id, x.event_type, x.body, NULLIF(x.blocked_reason, '') AS blocked_reason
   FROM jsonb_to_recordset(COALESCE(NULLIF($1::text, ''), '[]')::jsonb)
@@ -14,8 +15,9 @@ WITH input AS MATERIALIZED (
   JOIN crm_ownership_changes ch ON ch.id = x.change_id
 ),
 inserted AS (
-  INSERT INTO crm_events (event_id, event_type, conversation_id, ownership_change_id, revision, body)
-  SELECT i.event_id, i.event_type, i.conversation_id, i.change_id, 1, i.body
+  INSERT INTO crm_events (event_id, event_type, conversation_id, ownership_change_id, revision, body, contact_id)
+  SELECT i.event_id, i.event_type, i.conversation_id, i.change_id, 1, i.body,
+         substring(i.body::jsonb ->> 'contact_id' FROM '-contact-([0-9]+)$')::bigint
   FROM input i
   WHERE i.blocked_reason IS NULL
     AND i.event_type IN ('ownership.taken', 'ownership.released')

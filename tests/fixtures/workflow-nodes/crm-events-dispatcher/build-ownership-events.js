@@ -1,16 +1,18 @@
-// Build Ownership Events: under revision 1.2 only, turn each pending ownership
+// Build Ownership Events: under revision 1.2 or 1.3, turn each pending ownership
 // change into the exact ownership.taken / ownership.released body to store, or
 // the reason it is blocked. Everything goes to Insert Ownership Events as one
-// JSON array, so a pass is a single statement.
+// JSON array, so a pass is a single statement. Under 1.3 a change whose
+// contact has no contact.upserted yet is dropped.
 const ownershipEventsConfig = readCrmEventsConfig($env);
 if (!ownershipEventsConfig.enabled || ownershipEventsConfig.errors.length > 0) return [];
-if (ownershipEventsConfig.protocol_revision !== '1.2') return [];
+if (!['1.2', '1.3'].includes(ownershipEventsConfig.protocol_revision)) return [];
 
 const ownershipEvents = items
   .map((item) => item.json ?? {})
   .filter((row) => Number.isSafeInteger(Number(row.change_id)) && Number(row.change_id) > 0)
-  .map((row) => {
-    const built = buildOwnershipEvent(row, ownershipEventsConfig);
+  .map((row) => ({ row, built: buildOwnershipEvent(row, ownershipEventsConfig) }))
+  .filter(({ built }) => !isCrmEventDeferred(built))
+  .map(({ row, built }) => {
     return {
       change_id: Number(row.change_id),
       event_id: built.event_id,

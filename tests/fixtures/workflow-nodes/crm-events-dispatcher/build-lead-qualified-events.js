@@ -1,14 +1,17 @@
 // Build Lead Qualified Events: one item per candidate lead, either the exact
 // body to store in crm_events or the reason the lead is blocked. The body is
-// built once here and stored; delivery never rebuilds it.
+// built once here and stored; delivery never rebuilds it. Under 1.3 a lead
+// whose contact has no contact.upserted yet is dropped (not blocked): the lead
+// stays a candidate and is sent on a later pass, after its contact.
 const leadEventsConfig = readCrmEventsConfig($env);
 if (!leadEventsConfig.enabled || leadEventsConfig.errors.length > 0) return [];
 
 return items
   .map((item) => item.json ?? {})
   .filter((row) => Number.isSafeInteger(Number(row.lead_id)) && Number(row.lead_id) > 0)
-  .map((row) => {
-    const built = buildLeadQualifiedEvent(row, leadEventsConfig);
+  .map((row) => ({ row, built: buildLeadQualifiedEvent(row, leadEventsConfig) }))
+  .filter(({ built }) => !isCrmEventDeferred(built))
+  .map(({ row, built }) => {
     return { json: {
       lead_id: Number(row.lead_id),
       revision: built.revision ?? Number(row.revision),
@@ -25,6 +28,6 @@ return items
       // candidate was selected with (Insert re-checks it under the row lock).
       // Both stay null under 1.1, which keeps the requirement rule.
       record_hash: built.record_hash ?? null,
-      source_hash: leadEventsConfig.protocol_revision === '1.2' && row.crm_source_hash ? String(row.crm_source_hash) : null,
+      source_hash: ['1.2', '1.3'].includes(leadEventsConfig.protocol_revision) && row.crm_source_hash ? String(row.crm_source_hash) : null,
     } };
   });

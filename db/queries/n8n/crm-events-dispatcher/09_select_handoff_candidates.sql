@@ -1,5 +1,5 @@
 -- Select and route handoffs to announce to the CRM as handoff.created (stage
--- E, read side; 1.2d). Protocol revision 1.2 with CRM_EVENTS_HANDOFFS_ENABLED
+-- E, read side; 1.2d). Protocol revision 1.2 or 1.3 with CRM_EVENTS_HANDOFFS_ENABLED
 -- only: otherwise p1 is not 'true' and it returns no row and routes nothing.
 -- p1 handoffs enabled ('true'), p2 CRM_EVENTS_SINCE (ISO timestamp), p3 batch
 -- size, p4 CRM_EVENTS_PHONE_ALLOWLIST (comma-separated digits, '' = no
@@ -17,6 +17,11 @@
 -- handoffs go last so they cannot starve the batch. `revision` is only a
 -- proposal: Insert Handoff Events re-checks it under a row lock.
 -- Rows already locked by a concurrent pass are skipped.
+-- Every row also carries the handoff's contact (crm_contact_ref) and the id
+-- prefixes holding its contact.upserted; under 1.3 Build Handoff Events drops a
+-- handoff whose contact was not upserted under the current prefix yet
+-- (ordering rule). Its routing is already stored, so the next pass reuses it.
+-- Under 1.2 the builder ignores both columns.
 WITH scope AS MATERIALIZED (
   SELECT
     h.id,
@@ -95,8 +100,16 @@ SELECT
       AND m.created_at <= h.created_at
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
-  ) AS last_customer_message
+  ) AS last_customer_message,
+  ct.contact_id,
+  (
+    SELECT string_agg(DISTINCT e.id_prefix, ',')
+    FROM crm_events e
+    WHERE e.contact_id = ct.contact_id
+      AND e.event_type = 'contact.upserted'
+  ) AS contact_upserted_prefixes
 FROM routed ro
 JOIN handoffs h ON h.id = ro.id
+CROSS JOIN LATERAL (SELECT crm_contact_ref(h.source_number_id, h.phone_number) AS contact_id) ct
 LEFT JOIN sellers s ON s.id = ro.crm_routing_seller_id
 ORDER BY h.created_at, h.id;

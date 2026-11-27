@@ -9,7 +9,8 @@
 -- parked by 422 invalid_seller. Otherwise a concurrent pass got there first and
 -- the row does nothing. Unique event_id and (handoff_id, revision) back that
 -- up. An enqueued event clears the handoff's crm_blocked_reason; a blocked row
--- records its reason there, so the next pass retries it last.
+-- records its reason there, so the next pass retries it last. A 1.3 body's root
+-- contact_id is stored in crm_events.contact_id (NULL for 1.2 bodies).
 WITH input AS MATERIALIZED (
   SELECT x.handoff_id, x.revision, x.event_id, x.conversation_id, x.body,
          NULLIF(x.blocked_reason, '') AS blocked_reason,
@@ -48,8 +49,9 @@ expected AS MATERIALIZED (
     ), TRUE)
 ),
 inserted AS (
-  INSERT INTO crm_events (event_id, event_type, conversation_id, handoff_id, revision, body)
-  SELECT x.event_id, 'handoff.created', x.conversation_id, x.handoff_id, x.revision, x.body
+  INSERT INTO crm_events (event_id, event_type, conversation_id, handoff_id, revision, body, contact_id)
+  SELECT x.event_id, 'handoff.created', x.conversation_id, x.handoff_id, x.revision, x.body,
+         substring(x.body::jsonb ->> 'contact_id' FROM '-contact-([0-9]+)$')::bigint
   FROM expected x
   WHERE x.blocked_reason IS NULL
     AND NULLIF(x.body, '') IS NOT NULL

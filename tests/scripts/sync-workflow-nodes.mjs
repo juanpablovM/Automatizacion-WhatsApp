@@ -572,6 +572,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Contact Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/11_select_contact_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Contact Events",
+    "fixture": "crm-events-dispatcher/build-contact-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Contact Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/12_insert_contact_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Select Lead Qualified Candidates",
     "fixture": "db/queries/n8n/crm-events-dispatcher/01_select_lead_qualified_candidates.sql",
     "type": "n8n-nodes-base.postgres",

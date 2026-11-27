@@ -1,5 +1,5 @@
 // =============================================================================
-// CRM events runtime (bot -> CRM, contract v1 revisions 1.1 and 1.2).
+// CRM events runtime (bot -> CRM, contract v1 revisions 1.1, 1.2 and 1.3).
 // -----------------------------------------------------------------------------
 // Pure helpers shared by the crm-events-dispatcher Code nodes: configuration,
 // the lead.qualified and message.new body builders, HMAC signing, response
@@ -9,10 +9,20 @@
 // Revision 1.2 adds the structured lead record and message.new ("1.2a") and
 // ownership.taken / ownership.released ("1.2b") and handoff.created ("1.2d",
 // behind CRM_EVENTS_HANDOFFS_ENABLED); 1.1 stays the default and its bodies
-// are unchanged.
+// are unchanged. Revision 1.3 (customer threads) sends every 1.2 event with
+// protocol_revision "1.3" and a root contact_id (`wa-<prefix>-contact-<id>`,
+// one per crm_contacts row), plus contact.upserted; everything else in the
+// body is exactly as in 1.2. Ordering rule: under 1.3 a conversation event is
+// built only once its contact has a contact.upserted event enqueued under the
+// current id prefix; until then the build nodes drop the row (never block it)
+// and the next pass picks it up.
 // =============================================================================
 
-const CRM_SUPPORTED_PROTOCOL_REVISIONS = ['1.1', '1.2'];
+const CRM_SUPPORTED_PROTOCOL_REVISIONS = ['1.1', '1.2', '1.3'];
+// Revisions that carry the 1.2 event set (lead record, message.new,
+// ownership.*, handoff.created). 1.3 adds the contact envelope on top.
+const CRM_STRUCTURED_REVISIONS = ['1.2', '1.3'];
+const crmIsStructuredRevision = (revision) => CRM_STRUCTURED_REVISIONS.includes(revision);
 const CRM_MAX_BODY_BYTES = 65536;
 const CRM_NAME_FALLBACK = 'Cliente WhatsApp';
 const CRM_REQUIREMENT_FALLBACK = 'Sin requerimiento informado';
@@ -99,7 +109,7 @@ const readCrmEventsConfig = (env = {}) => {
     config.errors.push(`CRM_EVENTS_PROTOCOL_REVISION_unsupported:${revision}`);
   } else {
     config.protocol_revision = revision;
-    if (revision === '1.2') {
+    if (crmIsStructuredRevision(revision)) {
       config.deliver_batch_size = crmPositiveInt(env.CRM_EVENTS_DELIVER_BATCH_SIZE, 100);
     }
   }
@@ -119,12 +129,12 @@ const readCrmEventsConfig = (env = {}) => {
     }
   }
 
-  // 1.2d (handoff.created) is off by default and exists only under 1.2: the
-  // flag is ignored under 1.1, never an error. A handoff of a test phone goes
+  // 1.2d (handoff.created) is off by default and exists only under 1.2 and
+  // 1.3: the flag is ignored under 1.1, never an error. A handoff of a test phone goes
   // to the test seller, read from the same variables as the lead rotation
   // (LEAD_TEST_PHONE_NUMBERS, LEAD_TEST_SELLER_ID); both are needed, otherwise
   // everyone rotates.
-  config.handoffs_enabled = config.protocol_revision === '1.2'
+  config.handoffs_enabled = crmIsStructuredRevision(config.protocol_revision)
     && String(env.CRM_EVENTS_HANDOFFS_ENABLED ?? '').trim() === 'true';
   const testPhones = String(env.LEAD_TEST_PHONE_NUMBERS ?? '').split(',')
     .map((entry) => entry.replace(/\D/g, ''))
@@ -184,6 +194,43 @@ const crmLeadTitle = (name, row, qualification) => {
 };
 
 const blockedCrmEvent = (reason) => ({ blocked_reason: reason, event_id: null, conversation_id: null, revision: null, body: null, record_hash: null });
+
+// ---------------------------------------------------------------------------
+// Revision 1.3 contact envelope.
+// ---------------------------------------------------------------------------
+// The reason a build node drops a row instead of storing a block: the contact
+// has no contact.upserted under this prefix yet (see the ordering rule above).
+const CRM_CONTACT_NOT_UPSERTED = 'contact_not_upserted';
+
+// Under 1.3 the selects return contact_id (crm_contact_ref) and
+// contact_upserted_prefixes (comma-separated id prefixes that already hold a
+// contact.upserted event of that contact). Returns { contact_id } with the
+// envelope value, { blocked_reason }, or { contact_id: null } outside 1.3.
+const crmContactEnvelope = (row, config) => {
+  if (config.protocol_revision !== '1.3') return { blocked_reason: null, contact_id: null };
+  const contactNumber = Number(row.contact_id);
+  if (row.contact_id === null || row.contact_id === undefined || row.contact_id === ''
+    || !Number.isSafeInteger(contactNumber) || contactNumber <= 0) {
+    return { blocked_reason: 'contact_missing', contact_id: null };
+  }
+  const prefixes = String(row.contact_upserted_prefixes ?? '').split(',').map((entry) => entry.trim());
+  if (!prefixes.includes(config.id_prefix)) return { blocked_reason: CRM_CONTACT_NOT_UPSERTED, contact_id: null };
+  const contactId = `wa-${config.id_prefix}-contact-${contactNumber}`;
+  if (!isValidCrmId(contactId)) return { blocked_reason: 'invalid_id', contact_id: null };
+  return { blocked_reason: null, contact_id: contactId };
+};
+
+// The envelope keys in contract order: contact_id follows conversation_id and
+// exists only under 1.3, so 1.1/1.2 bodies keep their exact bytes.
+const crmEnvelope = (config, eventId, type, conversationId, contactId, data) => ({
+  schema_version: 1,
+  protocol_revision: config.protocol_revision,
+  event_id: eventId,
+  type,
+  conversation_id: conversationId,
+  ...(contactId ? { contact_id: contactId } : {}),
+  data,
+});
 
 // ---------------------------------------------------------------------------
 // Revision 1.2 lead record. Every optional key is emitted only when the bot
@@ -375,6 +422,8 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
   const eventId = `${leadId}-r${revision}`;
   const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
   if (![leadId, eventId, conversationId].every(isValidCrmId)) return blockedCrmEvent('invalid_id');
+  const contact = crmContactEnvelope(row, config);
+  if (contact.blocked_reason) return blockedCrmEvent(contact.blocked_reason);
 
   const qualification = crmAsObject(row.qualification_context);
   const name = crmTruncate(crmText(row.whatsapp_name), 200) || CRM_NAME_FALLBACK;
@@ -382,7 +431,7 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
   const rut = companyRut && companyRut.length <= 32 ? companyRut : null;
   const title = crmLeadTitle(name, row, qualification);
   let requirement = crmTruncate(crmText(row.requirement), 16000) || CRM_REQUIREMENT_FALLBACK;
-  const isRevision12 = config.protocol_revision === '1.2';
+  const isRevision12 = crmIsStructuredRevision(config.protocol_revision);
   const record12 = isRevision12 ? crmLeadRecord12(row, qualification) : {};
   const aiSummary = isRevision12 ? crmAiSummary(row.advisor_output_payload) : null;
 
@@ -404,6 +453,7 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
     event_id: eventId,
     type: 'lead.qualified',
     conversation_id: conversationId,
+    ...(contact.contact_id ? { contact_id: contact.contact_id } : {}),
     data: dataWith(summary),
   });
   const fits = (text) => Buffer.byteLength(text, 'utf8') <= CRM_MAX_BODY_BYTES;
@@ -486,7 +536,7 @@ const blockedCrmMessage = (reason, messageNumber) => ({
 const buildMessageNewEvent = (row, config = {}) => {
   const messageNumber = Number(row.message_id);
   if (!Number.isSafeInteger(messageNumber) || messageNumber <= 0) return blockedCrmMessage('invalid_message_id', null);
-  if (config.protocol_revision !== '1.2') return blockedCrmMessage('protocol_revision_unsupported', messageNumber);
+  if (!crmIsStructuredRevision(config.protocol_revision)) return blockedCrmMessage('protocol_revision_unsupported', messageNumber);
   const conversationNumber = Number(row.conversation_id);
   if (row.conversation_id === null || row.conversation_id === undefined || !Number.isSafeInteger(conversationNumber) || conversationNumber <= 0) {
     return blockedCrmMessage('conversation_missing', messageNumber);
@@ -520,23 +570,18 @@ const buildMessageNewEvent = (row, config = {}) => {
   const eventId = `${messageId}-e1`;
   const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
   if (![messageId, eventId, conversationId].every(isValidCrmId)) return blockedCrmMessage('invalid_id', messageNumber);
+  const contact = crmContactEnvelope(row, config);
+  if (contact.blocked_reason) return blockedCrmMessage(contact.blocked_reason, messageNumber);
 
   let text = crmMessageText(row);
-  const serialize = () => JSON.stringify({
-    schema_version: 1,
-    protocol_revision: '1.2',
-    event_id: eventId,
-    type: 'message.new',
-    conversation_id: conversationId,
-    data: {
-      message_id: messageId,
-      direction: sender === 'customer' ? 'inbound' : 'outbound',
-      text,
-      sent_at: sentAt,
-      sender,
-      ...(sellerId ? { crm_seller_id: sellerId } : {}),
-    },
-  });
+  const serialize = () => JSON.stringify(crmEnvelope(config, eventId, 'message.new', conversationId, contact.contact_id, {
+    message_id: messageId,
+    direction: sender === 'customer' ? 'inbound' : 'outbound',
+    text,
+    sent_at: sentAt,
+    sender,
+    ...(sellerId ? { crm_seller_id: sellerId } : {}),
+  }));
   let body = serialize();
   for (let guard = 0; Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES && guard < 50; guard += 1) {
     const ratio = CRM_MAX_BODY_BYTES / Buffer.byteLength(body, 'utf8');
@@ -565,7 +610,7 @@ const blockedCrmOwnership = (reason, changeNumber) => ({
 const buildOwnershipEvent = (row, config = {}) => {
   const changeNumber = Number(row.change_id);
   if (!Number.isSafeInteger(changeNumber) || changeNumber <= 0) return blockedCrmOwnership('invalid_change_id', null);
-  if (config.protocol_revision !== '1.2') return blockedCrmOwnership('protocol_revision_unsupported', changeNumber);
+  if (!crmIsStructuredRevision(config.protocol_revision)) return blockedCrmOwnership('protocol_revision_unsupported', changeNumber);
   const conversationNumber = Number(row.conversation_id);
   if (row.conversation_id === null || row.conversation_id === undefined || !Number.isSafeInteger(conversationNumber) || conversationNumber <= 0) {
     return blockedCrmOwnership('conversation_missing', changeNumber);
@@ -600,14 +645,9 @@ const buildOwnershipEvent = (row, config = {}) => {
   const eventId = `wa-${idPrefix}-ownership-${conversationNumber}-v${version}`;
   const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
   if (![eventId, conversationId].every(isValidCrmId)) return blockedCrmOwnership('invalid_id', changeNumber);
-  const body = JSON.stringify({
-    schema_version: 1,
-    protocol_revision: '1.2',
-    event_id: eventId,
-    type,
-    conversation_id: conversationId,
-    data,
-  });
+  const contact = crmContactEnvelope(row, config);
+  if (contact.blocked_reason) return blockedCrmOwnership(contact.blocked_reason, changeNumber);
+  const body = JSON.stringify(crmEnvelope(config, eventId, type, conversationId, contact.contact_id, data));
   return { blocked_reason: null, change_id: changeNumber, event_id: eventId, conversation_id: conversationId, body };
 };
 
@@ -660,7 +700,7 @@ const blockedCrmHandoff = (reason, handoffNumber) => ({
 const buildHandoffCreatedEvent = (row, config = {}) => {
   const handoffNumber = Number(row.handoff_id);
   if (!Number.isSafeInteger(handoffNumber) || handoffNumber <= 0) return blockedCrmHandoff('invalid_handoff_id', null);
-  if (config.protocol_revision !== '1.2') return blockedCrmHandoff('protocol_revision_unsupported', handoffNumber);
+  if (!crmIsStructuredRevision(config.protocol_revision)) return blockedCrmHandoff('protocol_revision_unsupported', handoffNumber);
   const revision = Number(row.revision);
   if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2147483647) return blockedCrmHandoff('invalid_revision', handoffNumber);
   const conversationNumber = Number(row.conversation_id);
@@ -687,6 +727,8 @@ const buildHandoffCreatedEvent = (row, config = {}) => {
   const eventId = `${handoffId}-r${revision}`;
   const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
   if (![handoffId, eventId, conversationId].every(isValidCrmId)) return blockedCrmHandoff('invalid_id', handoffNumber);
+  const contact = crmContactEnvelope(row, config);
+  if (contact.blocked_reason) return blockedCrmHandoff(contact.blocked_reason, handoffNumber);
 
   const isComplaint = crmText(row.area) === 'claims';
   const reason = crmHandoffReason(row);
@@ -697,24 +739,17 @@ const buildHandoffCreatedEvent = (row, config = {}) => {
     customerText ? `${label}.\n\nÚltimo mensaje del cliente: ${customerText}` : `${label}.`,
     16000,
   );
-  const serialize = () => JSON.stringify({
-    schema_version: 1,
-    protocol_revision: '1.2',
-    event_id: eventId,
-    type: 'handoff.created',
-    conversation_id: conversationId,
-    data: {
-      handoff_id: handoffId,
-      kind: isComplaint ? 'complaint' : 'commercial',
-      area: isComplaint ? 'claims' : 'sales',
-      reason,
-      priority,
-      description: description(),
-      ...(opportunityId ? { crm_opportunity_id: opportunityId } : {}),
-      ...(sellerId ? { crm_seller_id: sellerId, phone } : {}),
-      ...(name ? { name } : {}),
-    },
-  });
+  const serialize = () => JSON.stringify(crmEnvelope(config, eventId, 'handoff.created', conversationId, contact.contact_id, {
+    handoff_id: handoffId,
+    kind: isComplaint ? 'complaint' : 'commercial',
+    area: isComplaint ? 'claims' : 'sales',
+    reason,
+    priority,
+    description: description(),
+    ...(opportunityId ? { crm_opportunity_id: opportunityId } : {}),
+    ...(sellerId ? { crm_seller_id: sellerId, phone } : {}),
+    ...(name ? { name } : {}),
+  }));
   let body = serialize();
   for (let guard = 0; Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES && guard < 50; guard += 1) {
     const ratio = CRM_MAX_BODY_BYTES / Buffer.byteLength(body, 'utf8');
@@ -724,6 +759,45 @@ const buildHandoffCreatedEvent = (row, config = {}) => {
   if (Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES) return blockedCrmHandoff('payload_too_large', handoffNumber);
 
   return { blocked_reason: null, handoff_id: handoffNumber, revision, event_id: eventId, conversation_id: conversationId, body };
+};
+
+// ---------------------------------------------------------------------------
+// contact.upserted (revision 1.3 only).
+// ---------------------------------------------------------------------------
+// One event per change of a contact's phone or name, per id prefix. revision
+// is proposed by Select Contact Candidates (the last enqueued one under this
+// prefix + 1) and re-checked by Insert Contact Events under a row lock. The
+// body has no conversation_id: a contact is the thread, not an episode.
+const blockedCrmContact = (reason, contactNumber) => ({
+  blocked_reason: reason, contact_id: contactNumber, revision: null, event_id: null, body: null,
+});
+
+const buildContactUpsertedEvent = (row, config = {}) => {
+  const contactNumber = Number(row.contact_id);
+  if (row.contact_id === null || row.contact_id === undefined || !Number.isSafeInteger(contactNumber) || contactNumber <= 0) {
+    return blockedCrmContact('invalid_contact_id', null);
+  }
+  if (config.protocol_revision !== '1.3') return blockedCrmContact('protocol_revision_unsupported', contactNumber);
+  const revision = Number(row.revision);
+  if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2147483647) return blockedCrmContact('invalid_revision', contactNumber);
+  const idPrefix = config.id_prefix;
+  if (typeof idPrefix !== 'string' || !CRM_ID_PREFIX_PATTERN.test(idPrefix)) return blockedCrmContact('id_prefix_missing', contactNumber);
+  const phone = normalizeCrmPhone(row.phone_number);
+  if (!phone) return blockedCrmContact('invalid_phone', contactNumber);
+
+  const contactId = `wa-${idPrefix}-contact-${contactNumber}`;
+  const eventId = `${contactId}-r${revision}`;
+  if (![contactId, eventId].every(isValidCrmId)) return blockedCrmContact('invalid_id', contactNumber);
+  const name = crmTruncate(crmText(row.name), 200) || null;
+  const body = JSON.stringify({
+    schema_version: 1,
+    protocol_revision: '1.3',
+    event_id: eventId,
+    type: 'contact.upserted',
+    contact_id: contactId,
+    data: { revision, phone, name },
+  });
+  return { blocked_reason: null, contact_id: contactNumber, revision, event_id: eventId, body };
 };
 
 // X-WhatsApp-Signature = "v1=" + hex HMAC-SHA256(secret, timestamp + "." + body).
@@ -767,6 +841,7 @@ const CRM_RETRYABLE_STATUS = (status) => status === 408 || status === 429 || (st
 const CRM_LEAD_RESULT_STATUSES = ['created', 'updated', 'ignored_stale', 'duplicate'];
 const CRM_MESSAGE_RESULT_STATUSES = ['created', 'duplicate'];
 const CRM_HANDOFF_RESULT_STATUSES = ['associated', 'pending_association', 'operational'];
+const CRM_CONTACT_RESULTS = ['applied', 'ignored_stale', 'duplicate'];
 const crmUuidOrNull = (value) => value === null || (typeof value === 'string' && CRM_UUID_PATTERN.test(value));
 
 const classifyCrmResponse = (response, eventId, eventType = 'lead.qualified') => {
@@ -801,12 +876,27 @@ const classifyCrmResponse = (response, eventId, eventType = 'lead.qualified') =>
       if (!validHandoff) return { ...base, outcome: 'parked', error: 'invalid_success_response' };
       return { ...base, outcome: 'delivered', error: null };
     }
+    // contact.* (1.3): 200 {event_id, result}. A stale revision is answered
+    // 200 ignored_stale and is delivered too; nothing is written elsewhere.
+    if (eventType === 'contact.upserted' || eventType === 'contact.state') {
+      if (!(parsed && parsed.event_id === eventId && CRM_CONTACT_RESULTS.includes(parsed.result))) {
+        return { ...base, outcome: 'parked', error: 'invalid_success_response' };
+      }
+      return { ...base, outcome: 'delivered', error: null };
+    }
     if (eventType === 'message.new') {
       const validMessage = parsed
         && parsed.event_id === eventId
         && typeof parsed.crm_message_id === 'string' && parsed.crm_message_id.trim() !== ''
         && CRM_MESSAGE_RESULT_STATUSES.includes(parsed.status);
       if (!validMessage) return { ...base, outcome: 'parked', error: 'invalid_success_response' };
+      return { ...base, outcome: 'delivered', error: null };
+    }
+    // A historical won/lost lead (1.3 backfill) is stored on the contact's
+    // thread only: 200 status historical with both ids null. Delivered, and
+    // no id is written on the lead (Complete CRM Event needs both).
+    if (parsed && parsed.event_id === eventId && parsed.status === 'historical'
+      && parsed.crm_customer_id === null && parsed.crm_opportunity_id === null) {
       return { ...base, outcome: 'delivered', error: null };
     }
     const valid = parsed
@@ -840,6 +930,9 @@ const retryDelaySeconds = (attempt, settings = {}, random = Math.random) => {
 
 // n8n's Postgres node answers an empty claim with one { success: true } item;
 // only a row the claim took carries its id, token and body.
+// A build node drops a deferred row instead of storing it or its block.
+const isCrmEventDeferred = (built) => built?.blocked_reason === CRM_CONTACT_NOT_UPSERTED;
+
 const isClaimedCrmEvent = (row) => {
   const id = Number(row?.crm_event_id);
   return Number.isSafeInteger(id) && id > 0
@@ -855,6 +948,8 @@ if (typeof module !== 'undefined' && module.exports) {
     buildMessageNewEvent,
     buildOwnershipEvent,
     buildHandoffCreatedEvent,
+    buildContactUpsertedEvent,
+    isCrmEventDeferred,
     crmMessageText,
     normalizeCrmPhone,
     isValidCrmId,

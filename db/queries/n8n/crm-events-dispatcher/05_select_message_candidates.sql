@@ -1,5 +1,6 @@
 -- Select chat messages to announce to the CRM as message.new (stage C, read
--- side). Protocol revision 1.2 only: under any other revision it returns no row.
+-- side). Protocol revisions 1.2 and 1.3 only: under any other revision it
+-- returns no row.
 -- p1 protocol revision, p2 CRM_EVENTS_SINCE (ISO timestamp), p3 id prefix,
 -- p4 batch size.
 --
@@ -25,10 +26,14 @@
 -- seller, while the linked conversation has no lead of its own. Once it
 -- re-qualifies into its own lead it is a new quote and follows its own
 -- lead.qualified.
+-- Under 1.3 each row also carries the contact of the conversation it is sent
+-- under (crm_contact_ref) and the id prefixes holding its contact.upserted; a
+-- message whose contact has no contact.upserted under p3 yet is not selected
+-- (ordering rule: the contact is announced first).
 WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
-  WHERE $1::text = '1.2'
+  WHERE $1::text IN ('1.2', '1.3')
     AND e.event_type IN ('lead.qualified', 'handoff.created')
     AND e.status = 'delivered'
     AND e.conversation_id LIKE 'wa-' || $3::text || '-conversation-%'
@@ -66,11 +71,18 @@ SELECT
   CASE
     WHEN m.direction = 'outgoing' AND m.sender_type = 'human'
       THEN COALESCE(om.crm_seller_id::text, s.crm_user_id::text)
-  END AS crm_user_id
+  END AS crm_user_id,
+  ct.contact_id,
+  CASE WHEN ct.contact_id IS NOT NULL THEN $3::text END AS contact_upserted_prefixes
 FROM targets t
 JOIN messages m ON m.conversation_id = t.message_conversation_id
 JOIN conversations c ON c.id = m.conversation_id
 JOIN conversations announced_conversation ON announced_conversation.id = t.announced_conversation_id
+CROSS JOIN LATERAL (
+  SELECT CASE WHEN $1::text = '1.3'
+    THEN crm_contact_ensure(announced_conversation.source_number_id, announced_conversation.phone_number)
+  END AS contact_id
+) ct
 LEFT JOIN leads l ON l.id = COALESCE(c.lead_id, m.lead_id, announced_conversation.lead_id)
 LEFT JOIN sellers s ON s.id = l.assigned_seller_id AND s.deleted_at IS NULL
 LEFT JOIN crm_outbound_messages om ON om.message_id = m.id
@@ -86,6 +98,16 @@ LEFT JOIN crm_message_blocks b ON b.message_id = m.id
 WHERE m.deleted_at IS NULL
   AND m.created_at >= $2::timestamptz
   AND (m.direction = 'incoming' OR (m.direction = 'outgoing' AND m.delivery_status = 'sent'))
+  AND (
+    $1::text <> '1.3'
+    OR EXISTS (
+      SELECT 1
+      FROM crm_events ce
+      WHERE ce.contact_id = ct.contact_id
+        AND ce.event_type = 'contact.upserted'
+        AND ce.id_prefix = $3::text
+    )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM crm_events e

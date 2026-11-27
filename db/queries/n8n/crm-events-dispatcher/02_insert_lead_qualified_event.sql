@@ -15,6 +15,8 @@
 -- correction got there first and this item does nothing (the next pass picks up
 -- whatever is left). Unique event_id and (lead_id, event_type, revision) back
 -- that up, so re-running the stage never duplicates an event.
+-- A 1.3 body carries its contact at the root (`wa-<prefix>-contact-<id>`); the
+-- row stores that id in crm_events.contact_id. Earlier bodies store NULL.
 WITH target AS MATERIALIZED (
   SELECT
     l.id,
@@ -44,8 +46,9 @@ expected AS MATERIALIZED (
     ) = $2::integer - 1
 ),
 inserted AS (
-  INSERT INTO crm_events (event_id, event_type, conversation_id, lead_id, revision, body)
-  SELECT $3::text, 'lead.qualified', $4::text, x.id, $2::integer, $5::text
+  INSERT INTO crm_events (event_id, event_type, conversation_id, lead_id, revision, body, contact_id)
+  SELECT $3::text, 'lead.qualified', $4::text, x.id, $2::integer, $5::text,
+         substring(NULLIF($5::text, '')::jsonb ->> 'contact_id' FROM '-contact-([0-9]+)$')::bigint
   FROM expected x
   WHERE NULLIF($7::text, '') IS NULL
     AND (NULLIF($9::text, '') IS NULL OR x.crm_enqueued_record_hash IS DISTINCT FROM NULLIF($8::text, ''))
