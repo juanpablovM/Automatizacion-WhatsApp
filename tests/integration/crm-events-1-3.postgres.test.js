@@ -300,6 +300,22 @@ describeIntegration('CRM dispatcher, revision 1.3', () => {
   });
 
   describe('ordering rule and contact_id on the other stages', () => {
+    // Independent verification of U3 (B1): a handoff whose contact row is
+    // missing (a skipped contact trigger) is delayed, never lost.
+    test('a handoff whose contact row is missing is delayed, never lost', async () => {
+      const { conversationId, phone } = await insertConversationOnly();
+      const { rows: [{ id: handoffId }] } = await client.query(
+        `INSERT INTO handoffs (idempotency_key, conversation_id, phone_number, source_number_id, motivo, area, area_label,
+                               prioridad, responsable, estado, created_at)
+         VALUES ('crm-13-' || gen_random_uuid(), $1, $2, $3, 'talk_human', 'sales', 'Ventas', 'alta', 'Ejecutiva comercial', 'pending', '2100-01-03T00:00:00Z')
+         RETURNING id`, [conversationId, phone, sourceNumberId]);
+      await client.query('DELETE FROM crm_contacts WHERE source_number_id = $1 AND phone_number = $2', [sourceNumberId, phone]);
+      for (let pass = 0; pass < 3; pass += 1) { await runHandoffs(phone); await runContacts(); }
+      const [event] = await eventsOf('handoff_id = $1', [handoffId]);
+      expect(event).toBeDefined();
+      expect(JSON.parse(event.body).contact_id).toBe(`wa-test-contact-${event.contact_id}`);
+    });
+
     test('a lead waits (not blocked) until its contact is upserted, then carries contact_id', async () => {
       const { leadId, contactId, conversationId } = await insertLead();
       const first = await runLeads();

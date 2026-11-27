@@ -110,6 +110,8 @@ SELECT
   ) AS contact_upserted_prefixes
 FROM routed ro
 JOIN handoffs h ON h.id = ro.id
-CROSS JOIN LATERAL (SELECT crm_contact_ref(h.source_number_id, h.phone_number) AS contact_id) ct
+-- crm_contact_ensure: a handoff whose contact row is missing (a skipped
+-- contact trigger) gets it here, so it is delayed at most one pass, never lost.
+CROSS JOIN LATERAL (SELECT crm_contact_ensure(h.source_number_id, h.phone_number) AS contact_id) ct
 LEFT JOIN sellers s ON s.id = ro.crm_routing_seller_id
 ORDER BY h.created_at, h.id;
