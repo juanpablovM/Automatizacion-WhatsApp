@@ -34,7 +34,11 @@ target AS MATERIALIZED (
   WHERE i.id_prefix IS NOT NULL
     AND (i.event_id IS NULL OR crm_event_id_prefix(i.event_id) = i.id_prefix)
   ORDER BY i.contact_id
-  FOR UPDATE OF ct
+  -- SKIP LOCKED: the dispatcher never waits on a contact row. A lease write
+  -- locks it inside the ownership trigger (056) after its conversation row,
+  -- so waiting here could deadlock a multi-contact release; a skipped contact
+  -- is simply retried on the next pass.
+  FOR UPDATE OF ct SKIP LOCKED
 ),
 classified AS MATERIALIZED (
   SELECT
