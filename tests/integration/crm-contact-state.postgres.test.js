@@ -15,6 +15,7 @@ import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
+const { validateCrmEvent } = require('../support/crm-events-validator.js');
 const { buildContactUpsertedEvent, classifyCrmResponse } = require('../fixtures/workflow-nodes/crm-events-dispatcher/crm-events-runtime.js');
 
 const enabled = process.env.TEST_PG_INTEGRATION === '1';
@@ -173,6 +174,8 @@ describeIntegration('CRM dispatcher, contact.state (1.3)', () => {
         conversation_id: `wa-test-conversation-${conversationId}`,
       });
       expect(body.data.changed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      // The shared receiver model accepts the real body (contract §3).
+      expect(validateCrmEvent(event.body)).toEqual([]);
     });
 
     test.each(['waiting_user', 'out_of_flow'])('%s is qualifying', async (status) => {

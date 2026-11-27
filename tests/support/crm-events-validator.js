@@ -182,6 +182,22 @@ const validateHandoffCreated = (data, revision, errors) => {
 
 // 1.3 contact.upserted: data {revision, phone, name}; revision a growing
 // integer, phone E.164 (required), name optional up to 200 or null.
+// contact.state (1.3, CRM response §3): the bot's state per customer.
+const CONTACT_STATES = ['ready_to_quote', 'handed_off', 'seller_held', 'qualifying', 'idle'];
+const CONTACT_STATE_KEYS = ['state_version', 'state', 'progress', 'stage', 'conversation_id', 'changed_at'];
+function validateContactState(data, errors) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) { errors.push('data: object required'); return; }
+  const keys = Object.keys(data).sort();
+  if (keys.join(',') !== [...CONTACT_STATE_KEYS].sort().join(',')) errors.push(`data: keys must be exactly ${CONTACT_STATE_KEYS.join(', ')}`);
+  if (!Number.isInteger(data.state_version) || data.state_version < 1 || data.state_version > 2147483647) errors.push('data.state_version: integer 1-2147483647');
+  if (!CONTACT_STATES.includes(data.state)) errors.push('data.state: unknown');
+  if (!Number.isInteger(data.progress) || data.progress < 0 || data.progress > 100) errors.push('data.progress: integer 0-100');
+  if (data.stage !== null && !(typeof data.stage === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(data.stage))) errors.push('data.stage: null or snake_case id');
+  if (data.state === 'idle' && data.conversation_id !== null) errors.push('data.conversation_id: null for idle');
+  if (data.conversation_id !== null && !(typeof data.conversation_id === 'string' && data.conversation_id.length > 0)) errors.push('data.conversation_id: id or null');
+  if (!(typeof data.changed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(data.changed_at))) errors.push('data.changed_at: UTC timestamp with seconds');
+}
+
 const validateContactUpserted = (data, errors) => {
   onlyKeys(errors, 'data', data, ['revision', 'phone', 'name']);
   if (!(Number.isInteger(data.revision) && data.revision >= 1 && data.revision <= 2147483647)) errors.push('data.revision');
@@ -214,7 +230,7 @@ const validateCrmEvent = (event) => {
   if (isContact) {
     if (!is13) errors.push(`${parsed.type} requires protocol_revision 1.3`);
     if (parsed.type === 'contact.upserted') validateContactUpserted(parsed.data, errors);
-    else errors.push('envelope.type: contact.state is not modeled yet');
+    else validateContactState(parsed.data, errors);
   } else if (parsed.type === 'lead.qualified') {
     validateLeadQualified(parsed.data, parsed.protocol_revision, errors);
   } else if (parsed.type === 'message.new') {
