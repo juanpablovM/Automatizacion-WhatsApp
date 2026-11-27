@@ -24,6 +24,11 @@
 -- handoff whose contact was not upserted under the current prefix yet
 -- (ordering rule). Its routing is already stored, so the next pass reuses it.
 -- Under 1.2 the builder ignores both columns.
+-- 1.3 backfill (migration 059, U8): a handoff of a contact whose backfill is
+-- still pending is not a candidate (not even routed: the backfill routes it
+-- once the customer's open lead has its opportunity); this stage has no prefix
+-- parameter, so any pending backfill counts. Without a backfill run (1.1/1.2)
+-- there is no such row.
 WITH scope AS MATERIALIZED (
   SELECT
     h.id,
@@ -38,6 +43,16 @@ WITH scope AS MATERIALIZED (
     AND h.created_at >= $2::timestamptz
     AND h.estado IN ('pending', 'notified', 'acknowledged')
     AND ($4::text = '' OR h.phone_number = ANY (string_to_array($4::text, ',')))
+    AND NOT EXISTS (
+      SELECT 1
+      FROM crm_contact_backfills b
+      JOIN crm_contacts bct ON bct.id = b.contact_id
+      WHERE b.status = 'pending'
+        AND bct.phone_number = h.phone_number
+        AND bct.source_number_id = COALESCE(
+          h.source_number_id, (SELECT hc.source_number_id FROM conversations hc WHERE hc.id = h.conversation_id)
+        )
+    )
     AND COALESCE((
       SELECT e.status = 'parked' AND e.last_error = 'http_422:invalid_seller'
       FROM crm_events e
@@ -109,6 +124,7 @@ SELECT
     FROM crm_events e
     WHERE e.contact_id = ct.contact_id
       AND e.event_type = 'contact.upserted'
+      AND NOT crm_contact_backfill_pending(ct.contact_id, e.id_prefix)
   ) AS contact_upserted_prefixes
 FROM routed ro
 JOIN handoffs h ON h.id = ro.id

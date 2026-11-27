@@ -31,6 +31,9 @@
 -- after CRM_EVENTS_SINCE (the rule of Select Contact Candidates) or already a
 -- contact.state under p3 (so a known customer keeps getting its state, for
 -- example idle once its only conversation is gone). Blocked contacts go last.
+-- 1.3 backfill (migration 059, U8): a contact whose backfill under p3 is
+-- pending gets no state yet (the state is the last event of its backfill);
+-- once completed it is in scope whatever its activity.
 WITH catalog AS MATERIALIZED (
   SELECT entries, md5(entries::text) AS catalog_hash
   FROM (
@@ -64,10 +67,15 @@ scope AS MATERIALIZED (
       SELECT 1 FROM crm_events e
       WHERE e.contact_id = ct.id AND e.event_type = 'contact.upserted' AND e.id_prefix = $3::text
     )
+    AND NOT crm_contact_backfill_pending(ct.id, $3::text)
     AND (
       EXISTS (
         SELECT 1 FROM crm_events e
         WHERE e.contact_id = ct.id AND e.event_type = 'contact.state' AND e.id_prefix = $3::text
+      )
+      OR EXISTS (
+        SELECT 1 FROM crm_contact_backfills b
+        WHERE b.contact_id = ct.id AND b.id_prefix = $3::text AND b.status = 'completed'
       )
       OR EXISTS (
         SELECT 1 FROM leads l

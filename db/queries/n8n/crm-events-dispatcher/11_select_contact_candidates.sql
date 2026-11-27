@@ -19,13 +19,17 @@
 -- Ordering rule (1.3): the other stages send a contact's events only once it
 -- has a contact.upserted under p3, so this stage runs first in the pass.
 -- Blocked contacts go last so they cannot starve the batch.
+-- 1.3 backfill (migration 059, U8): a contact whose backfill under p3 is
+-- pending is in scope whatever its activity (its contact.upserted is the
+-- backfill's first step).
 WITH scope AS MATERIALIZED (
   SELECT ct.id, ct.source_number_id, ct.phone_number, ct.crm_blocked_reason
   FROM crm_contacts ct
   WHERE $1::text = '1.3'
     AND ($4::text = '' OR ct.phone_number = ANY (string_to_array($4::text, ',')))
     AND (
-      EXISTS (
+      crm_contact_backfill_pending(ct.id, $3::text)
+      OR EXISTS (
         SELECT 1 FROM leads l
         WHERE l.source_number_id = ct.source_number_id AND l.phone_number = ct.phone_number
           AND l.deleted_at IS NULL AND l.created_at >= $2::timestamptz
