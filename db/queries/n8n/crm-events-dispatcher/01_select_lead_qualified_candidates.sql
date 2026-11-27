@@ -21,6 +21,10 @@
 -- contact.upserted of that contact: Build Lead Qualified Events drops a lead
 -- whose contact was not upserted under the current prefix yet (ordering rule),
 -- and the lead stays a candidate for the next pass.
+-- Under 1.3 it also returns the opportunity the CRM linked to the customer
+-- (contact.opportunity_linked, migration 058) while that link is open, unless
+-- the lead already carries another opportunity: the lead.qualified then
+-- carries that crm_opportunity_id.
 WITH scope AS MATERIALIZED (
   SELECT l.id, s.crm_user_id,
          CASE WHEN $3::text IN ('1.2', '1.3') THEN crm_lead_source_hash(l.id) END AS source_hash
@@ -88,13 +92,18 @@ SELECT
     FROM crm_events e
     WHERE e.contact_id = ct.contact_id
       AND e.event_type = 'contact.upserted'
-  ) END AS contact_upserted_prefixes
+  ) END AS contact_upserted_prefixes,
+  CASE WHEN $3::text = '1.3' AND (l.crm_opportunity_id IS NULL OR l.crm_opportunity_id = lk.crm_opportunity_id)
+    THEN lk.crm_opportunity_id::text END AS crm_linked_opportunity_id
 FROM scope sc
 JOIN leads l ON l.id = sc.id
 LEFT JOIN whatsapp_numbers wn ON wn.id = l.source_number_id
 CROSS JOIN LATERAL (SELECT CASE WHEN $3::text = '1.3'
   THEN crm_contact_ensure(l.source_number_id, l.phone_number)
   ELSE crm_contact_ref(l.source_number_id, l.phone_number) END AS contact_id) ct
+LEFT JOIN LATERAL (
+  SELECT ol.crm_opportunity_id FROM crm_contact_open_link(ct.contact_id) ol WHERE $3::text = '1.3'
+) lk ON TRUE
 WHERE sc.crm_user_id IS NOT NULL
 -- Previously blocked leads (e.g. an invalid phone) go last so they cannot
 -- starve fresh leads out of the batch.

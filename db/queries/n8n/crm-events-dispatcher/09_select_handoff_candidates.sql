@@ -11,7 +11,9 @@
 -- (the same rule as leads), and either has no handoff.created event yet or
 -- its newest one was parked by 422 invalid_seller (the CRM stored nothing, so
 -- the next event, revision + 1 with the same handoff_id, goes to another
--- seller). crm_route_handoff (migration 045) routes each candidate once, in
+-- seller). crm_route_contact_handoff (migration 058: the customer's open
+-- linked opportunity, set only by a 1.3 contact.opportunity_linked, else
+-- crm_route_handoff, 045/051) routes each candidate once, in
 -- creation order, and stores the routing on the handoff; a candidate it cannot
 -- route (no eligible seller left) returns no row and stays blocked. Blocked
 -- handoffs go last so they cannot starve the batch. `revision` is only a
@@ -51,7 +53,7 @@ WITH scope AS MATERIALIZED (
 routed AS MATERIALIZED (
   SELECT sc.id, r.crm_opportunity_id, r.crm_routing_seller_id
   FROM scope sc
-  CROSS JOIN LATERAL crm_route_handoff(sc.id, sc.test_seller_id) r
+  CROSS JOIN LATERAL crm_route_contact_handoff(sc.id, sc.test_seller_id) r
 )
 SELECT
   h.id AS handoff_id,
