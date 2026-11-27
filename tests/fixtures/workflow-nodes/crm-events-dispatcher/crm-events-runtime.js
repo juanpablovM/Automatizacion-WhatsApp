@@ -16,6 +16,10 @@
 // built only once its contact has a contact.upserted event enqueued under the
 // current id prefix; until then the build nodes drop the row (never block it)
 // and the next pass picks it up.
+// The 1.3 backfill (U8) reuses these builders with a third `historical`
+// argument: lead.qualified gets historical / outcome / closed_at,
+// message.new historical, handoff.created historical / resolved_at. Without
+// it (every live stage) the bodies are byte-identical.
 // =============================================================================
 
 const CRM_SUPPORTED_PROTOCOL_REVISIONS = ['1.1', '1.2', '1.3'];
@@ -194,6 +198,34 @@ const crmLeadTitle = (name, row, qualification) => {
 };
 
 const blockedCrmEvent = (reason) => ({ blocked_reason: reason, event_id: null, conversation_id: null, revision: null, body: null, record_hash: null });
+
+// ---------------------------------------------------------------------------
+// 1.3 backfill: historical fields (closed-history contract §2).
+// ---------------------------------------------------------------------------
+const CRM_HISTORICAL_OUTCOMES = ['won', 'lost', 'open'];
+// A UTC timestamp, with optional milliseconds.
+const CRM_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const crmIsUtcTimestamp = (value) => typeof value === 'string'
+  && CRM_UTC_TIMESTAMP_PATTERN.test(value) && !Number.isNaN(Date.parse(value));
+// Returns { blocked_reason } or { data } with the keys to append to the
+// event's data; null `historical` (every live stage) appends nothing.
+const crmHistoricalData = (historical, config, kind) => {
+  if (historical === null || historical === undefined) return { blocked_reason: null, data: {} };
+  if (config.protocol_revision !== '1.3') return { blocked_reason: 'historical_requires_1_3', data: null };
+  if (kind === 'lead') {
+    const outcome = historical.outcome;
+    const closedAt = historical.closed_at ?? null;
+    if (!CRM_HISTORICAL_OUTCOMES.includes(outcome)) return { blocked_reason: 'invalid_historical', data: null };
+    if (outcome === 'open' ? closedAt !== null : !crmIsUtcTimestamp(closedAt)) return { blocked_reason: 'invalid_historical', data: null };
+    return { blocked_reason: null, data: { historical: true, outcome, ...(closedAt ? { closed_at: closedAt } : {}) } };
+  }
+  if (kind === 'handoff') {
+    const resolvedAt = historical.resolved_at ?? null;
+    if (resolvedAt !== null && !crmIsUtcTimestamp(resolvedAt)) return { blocked_reason: 'invalid_historical', data: null };
+    return { blocked_reason: null, data: { historical: true, ...(resolvedAt ? { resolved_at: resolvedAt } : {}) } };
+  }
+  return { blocked_reason: null, data: { historical: true } };
+};
 
 // ---------------------------------------------------------------------------
 // Revision 1.3 contact envelope.
@@ -394,13 +426,16 @@ const crmLeadRecord12 = (row, qualification) => {
 // revision and ai_summary. The builder emits keys in a fixed order, so the
 // serialization is canonical. A different hash is a customer correction.
 const crmRecordHash = (data) => {
-  const { lead_id: _leadId, revision: _revision, ai_summary: _aiSummary, ...business } = data;
+  const {
+    lead_id: _leadId, revision: _revision, ai_summary: _aiSummary,
+    historical: _historical, outcome: _outcome, closed_at: _closedAt, ...business
+  } = data;
   return require('crypto').createHash('sha256').update(JSON.stringify(business), 'utf8').digest('hex');
 };
 
 // Builds the exact lead.qualified body string for one candidate row. Returns
 // blocked_reason instead of a body when the CRM would reject the event.
-const buildLeadQualifiedEvent = (row, config = {}) => {
+const buildLeadQualifiedEvent = (row, config = {}, historical = null) => {
   const leadNumber = Number(row.lead_id);
   const revision = Number(row.revision);
   const conversationNumber = Number(row.conversation_id);
@@ -424,6 +459,8 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
   if (![leadId, eventId, conversationId].every(isValidCrmId)) return blockedCrmEvent('invalid_id');
   const contact = crmContactEnvelope(row, config);
   if (contact.blocked_reason) return blockedCrmEvent(contact.blocked_reason);
+  const history = crmHistoricalData(historical, config, 'lead');
+  if (history.blocked_reason) return blockedCrmEvent(history.blocked_reason);
 
   const qualification = crmAsObject(row.qualification_context);
   const name = crmTruncate(crmText(row.whatsapp_name), 200) || CRM_NAME_FALLBACK;
@@ -453,6 +490,7 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
     requirement,
     ...record12,
     ...(summary ? { ai_summary: summary } : {}),
+    ...history.data,
   });
   const serialize = (summary) => JSON.stringify({
     schema_version: 1,
@@ -540,7 +578,7 @@ const blockedCrmMessage = (reason, messageNumber) => ({
 // incoming -> customer; outgoing bot -> bot, system -> system, human -> seller
 // with the conversation seller's crm_user_id. A human message without a mapped
 // seller is blocked, never relabeled as bot.
-const buildMessageNewEvent = (row, config = {}) => {
+const buildMessageNewEvent = (row, config = {}, historical = null) => {
   const messageNumber = Number(row.message_id);
   if (!Number.isSafeInteger(messageNumber) || messageNumber <= 0) return blockedCrmMessage('invalid_message_id', null);
   if (!crmIsStructuredRevision(config.protocol_revision)) return blockedCrmMessage('protocol_revision_unsupported', messageNumber);
@@ -579,6 +617,8 @@ const buildMessageNewEvent = (row, config = {}) => {
   if (![messageId, eventId, conversationId].every(isValidCrmId)) return blockedCrmMessage('invalid_id', messageNumber);
   const contact = crmContactEnvelope(row, config);
   if (contact.blocked_reason) return blockedCrmMessage(contact.blocked_reason, messageNumber);
+  const history = crmHistoricalData(historical, config, 'message');
+  if (history.blocked_reason) return blockedCrmMessage(history.blocked_reason, messageNumber);
 
   let text = crmMessageText(row);
   const serialize = () => JSON.stringify(crmEnvelope(config, eventId, 'message.new', conversationId, contact.contact_id, {
@@ -588,6 +628,7 @@ const buildMessageNewEvent = (row, config = {}) => {
     sent_at: sentAt,
     sender,
     ...(sellerId ? { crm_seller_id: sellerId } : {}),
+    ...history.data,
   }));
   let body = serialize();
   for (let guard = 0; Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES && guard < 50; guard += 1) {
@@ -710,10 +751,17 @@ const blockedCrmHandoff = (reason, handoffNumber) => ({
   blocked_reason: reason, handoff_id: handoffNumber, revision: null, event_id: null, conversation_id: null, body: null,
 });
 
-const buildHandoffCreatedEvent = (row, config = {}) => {
+// historical (1.3 backfill only): { resolved_at } adds historical: true and,
+// when resolved_at is set, resolved_at; a resolved historical handoff may
+// carry no routing key (closed-history §2). Without resolved_at it is a live
+// handoff and keeps the 1.2d rule of exactly one routing key.
+const buildHandoffCreatedEvent = (row, config = {}, historical = null) => {
   const handoffNumber = Number(row.handoff_id);
   if (!Number.isSafeInteger(handoffNumber) || handoffNumber <= 0) return blockedCrmHandoff('invalid_handoff_id', null);
   if (!crmIsStructuredRevision(config.protocol_revision)) return blockedCrmHandoff('protocol_revision_unsupported', handoffNumber);
+  const history = crmHistoricalData(historical, config, 'handoff');
+  if (history.blocked_reason) return blockedCrmHandoff(history.blocked_reason, handoffNumber);
+  const mayBeUnrouted = Boolean(history.data.resolved_at);
   const revision = Number(row.revision);
   if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2147483647) return blockedCrmHandoff('invalid_revision', handoffNumber);
   const conversationNumber = Number(row.conversation_id);
@@ -727,7 +775,7 @@ const buildHandoffCreatedEvent = (row, config = {}) => {
   const opportunityId = crmText(row.crm_opportunity_id).toLowerCase();
   const sellerId = crmText(row.crm_seller_id).toLowerCase();
   if (opportunityId && sellerId) return blockedCrmHandoff('ambiguous_routing', handoffNumber);
-  if (!opportunityId && !sellerId) return blockedCrmHandoff('not_routed', handoffNumber);
+  if (!opportunityId && !sellerId && !mayBeUnrouted) return blockedCrmHandoff('not_routed', handoffNumber);
   if (opportunityId && !CRM_UUID_PATTERN.test(opportunityId)) return blockedCrmHandoff('invalid_opportunity_uuid', handoffNumber);
   if (sellerId && !CRM_UUID_PATTERN.test(sellerId)) return blockedCrmHandoff('invalid_seller_uuid', handoffNumber);
   // Without an opportunity the CRM has no customer: phone is required.
@@ -762,6 +810,7 @@ const buildHandoffCreatedEvent = (row, config = {}) => {
     ...(opportunityId ? { crm_opportunity_id: opportunityId } : {}),
     ...(sellerId ? { crm_seller_id: sellerId, phone } : {}),
     ...(name ? { name } : {}),
+    ...history.data,
   }));
   let body = serialize();
   for (let guard = 0; Buffer.byteLength(body, 'utf8') > CRM_MAX_BODY_BYTES && guard < 50; guard += 1) {

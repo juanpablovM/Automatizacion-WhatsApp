@@ -25,6 +25,11 @@
 -- (contact.opportunity_linked, migration 058) while that link is open, unless
 -- the lead already carries another opportunity: the lead.qualified then
 -- carries that crm_opportunity_id.
+-- 1.3 backfill (migration 059, U8): a lead whose contact's backfill is still
+-- pending lists no prefix in contact_upserted_prefixes, so the builder drops
+-- it until the backfill completed (its history goes first). A lead the
+-- backfill sent as historical won/lost is never a candidate again: a later
+-- live lead.qualified would turn it into an opportunity.
 WITH scope AS MATERIALIZED (
   SELECT l.id, s.crm_user_id,
          CASE WHEN $3::text IN ('1.2', '1.3') THEN crm_lead_source_hash(l.id) END AS source_hash
@@ -33,6 +38,15 @@ WITH scope AS MATERIALIZED (
   WHERE l.deleted_at IS NULL
     AND l.created_at >= $1::timestamptz
     AND ($4::text = '' OR l.phone_number = ANY(string_to_array($4::text, ',')))
+    AND NOT (
+      $3::text = '1.3'
+      AND EXISTS (
+        SELECT 1 FROM crm_events e
+        WHERE e.lead_id = l.id
+          AND e.event_type = 'lead.qualified'
+          AND (e.body::jsonb #>> '{data,outcome}') IN ('won', 'lost')
+      )
+    )
     AND CASE
       WHEN $3::text IN ('1.2', '1.3') THEN crm_lead_source_hash(l.id) IS DISTINCT FROM l.crm_checked_source_hash
       ELSE l.crm_enqueued_requirement IS DISTINCT FROM COALESCE(l.requirement, '')
@@ -92,6 +106,7 @@ SELECT
     FROM crm_events e
     WHERE e.contact_id = ct.contact_id
       AND e.event_type = 'contact.upserted'
+      AND NOT crm_contact_backfill_pending(ct.contact_id, e.id_prefix)
   ) END AS contact_upserted_prefixes,
   CASE WHEN $3::text = '1.3' AND (l.crm_opportunity_id IS NULL OR l.crm_opportunity_id = lk.crm_opportunity_id)
     THEN lk.crm_opportunity_id::text END AS crm_linked_opportunity_id

@@ -25,6 +25,8 @@
 -- yet is not selected, and that also applies CRM_EVENTS_PHONE_ALLOWLIST (the
 -- contact stage only upserts listed contacts), as the announced gate does
 -- under 1.2. CRM_EVENTS_SINCE is applied directly.
+-- 1.3 backfill (migration 059, U8): nothing of a contact whose backfill under
+-- p3 is still pending; the backfill sends its current holder first.
 WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
@@ -63,12 +65,15 @@ CROSS JOIN LATERAL (
 WHERE ch.changed_at >= $2::timestamptz
   AND (
     $1::text <> '1.3'
-    OR EXISTS (
-      SELECT 1
-      FROM crm_events ce
-      WHERE ce.contact_id = ct.contact_id
-        AND ce.event_type = 'contact.upserted'
-        AND ce.id_prefix = $3::text
+    OR (
+      EXISTS (
+        SELECT 1
+        FROM crm_events ce
+        WHERE ce.contact_id = ct.contact_id
+          AND ce.event_type = 'contact.upserted'
+          AND ce.id_prefix = $3::text
+      )
+      AND NOT crm_contact_backfill_pending(ct.contact_id, $3::text)
     )
   )
   AND NOT EXISTS (

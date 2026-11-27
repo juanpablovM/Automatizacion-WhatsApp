@@ -32,8 +32,9 @@ const ALLOWED_TERMINALS = {
     // Independent stages fed by the same config gate: enqueue contacts and
     // contact states (revision 1.3 only), leads, messages, ownership changes
     // and handoffs (revision 1.2 and 1.3) and deliver. Each enqueue stage is
-    // a self-contained statement whose result nobody reads.
-    'Complete CRM Event', 'Insert Contact Events', 'Insert Contact State Events', 'Insert Handoff Events',
+    // a self-contained statement whose result nobody reads. The 1.3
+    // backfill stage (Insert Backfill Events) is one more of them.
+    'Complete CRM Event', 'Insert Backfill Events', 'Insert Contact Events', 'Insert Contact State Events', 'Insert Handoff Events',
     'Insert Lead Qualified Event', 'Insert Message Events', 'Insert Ownership Events',
   ],
   'ops-handoff-clickup-closure.json': [
