@@ -4,9 +4,11 @@
 -- whose Complete CRM Message Send calls crm_inbound_complete_message_send()
 -- (pre-058 03_complete_crm_message_send.sql), and a crm-events-dispatcher
 -- whose Select Handoff Candidates calls crm_route_handoff() and whose Select
--- Lead Qualified Candidates does not read the link (pre-058 01 and 09), or
--- switch CRM_EVENTS_PROTOCOL_REVISION back to 1.2 (the inbound 1.3 rules then
--- answer 400 and the 058 functions are no longer called) before dropping them.
+-- Lead Qualified Candidates does not read the link (pre-058 01 and 09), before
+-- dropping them. Switching CRM_EVENTS_PROTOCOL_REVISION back to 1.2 is NOT
+-- enough: those three nodes call the 058 functions under every revision, so
+-- without the re-import every dispatcher pass and every message.send
+-- completion fails once this rollback runs.
 -- crm_inbound_handoff_conversation() is restored verbatim from 050. The links
 -- (crm_contacts.crm_opportunity_*) and crm_outbound_messages.contact_id are
 -- dropped; handoffs already routed by a link keep their stored routing, and
