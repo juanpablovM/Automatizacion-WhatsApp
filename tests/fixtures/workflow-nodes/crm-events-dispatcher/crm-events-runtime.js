@@ -433,6 +433,12 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
   let requirement = crmTruncate(crmText(row.requirement), 16000) || CRM_REQUIREMENT_FALLBACK;
   const isRevision12 = crmIsStructuredRevision(config.protocol_revision);
   const record12 = isRevision12 ? crmLeadRecord12(row, qualification) : {};
+  // 1.3 (S7, migration 058): the opportunity the CRM linked to the customer
+  // (contact.opportunity_linked), so the CRM attaches this lead to it. Never
+  // under 1.1/1.2, whose bodies keep their exact bytes.
+  const linkedOpportunity = config.protocol_revision === '1.3'
+    ? crmText(row.crm_linked_opportunity_id).toLowerCase() : '';
+  const opportunity = CRM_UUID_PATTERN.test(linkedOpportunity) ? linkedOpportunity : '';
   const aiSummary = isRevision12 ? crmAiSummary(row.advisor_output_payload) : null;
 
   const dataWith = (summary) => ({
@@ -442,6 +448,7 @@ const buildLeadQualifiedEvent = (row, config = {}) => {
     name,
     ...(rut ? { rut } : {}),
     crm_seller_id: sellerId.toLowerCase(),
+    ...(opportunity ? { crm_opportunity_id: opportunity } : {}),
     title,
     requirement,
     ...record12,

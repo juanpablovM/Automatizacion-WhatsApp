@@ -52,9 +52,13 @@ const SITE_KEYS = ['terrain', 'truck_access', 'debris_removal', 'access_restrict
 const ITEM_KEYS = ['product', 'variant', 'quantity', 'unit', 'measurements'];
 const AI_SUMMARY_KEYS = ['lead_class', 'next_best_action', 'executive_summary', 'pain', 'scope', 'timing', 'obstacle'];
 
+// 1.3 (bot reply §2): a lead of a customer with a CRM-linked opportunity
+// carries that crm_opportunity_id.
 const validateLeadQualified = (data, revision, errors) => {
   const allowed = STRUCTURED.includes(revision) ? [...LEAD_BASE_KEYS, ...LEAD_12_KEYS] : LEAD_BASE_KEYS;
-  onlyKeys(errors, 'data', data, allowed);
+  onlyKeys(errors, 'data', data, revision === '1.3' ? [...allowed, 'crm_opportunity_id'] : allowed);
+  if ('crm_opportunity_id' in data && !(revision === '1.3' && typeof data.crm_opportunity_id === 'string'
+    && UUID.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');
   if (!(typeof data.lead_id === 'string' && ID.test(data.lead_id))) errors.push('data.lead_id');
   if (!(Number.isInteger(data.revision) && data.revision >= 1 && data.revision <= 2147483647)) errors.push('data.revision');
   if (!(typeof data.phone === 'string' && PHONE.test(data.phone))) errors.push('data.phone');
