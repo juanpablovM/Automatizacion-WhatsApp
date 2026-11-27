@@ -4,6 +4,7 @@
 // Feature document: odd/tasks/crm-1-3-customer-threads.md (U1, S2).
 // Every test runs inside a transaction that is rolled back.
 // =============================================================================
+import fs from 'node:fs';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
@@ -190,5 +191,30 @@ describeIntegration('CRM 1.3 contacts (migration 053)', () => {
     await client.query('DELETE FROM conversations WHERE source_number_id = $1', [otherSource]);
     expect(await tryQuery('DELETE FROM whatsapp_numbers WHERE id = $1', [otherSource])).toBeNull();
     expect(await contactsOf(otherSource)).toEqual([]);
+  });
+
+  // Independent verification of U1 (B1): the seed must run after the triggers
+  // exist, or a bot write committed between the two never gets a contact.
+  test('053 creates the triggers before it seeds', () => {
+    const sql = fs.readFileSync('infra/postgres/migrations/053_crm_contacts.sql', 'utf8');
+    const lastTrigger = sql.lastIndexOf('CREATE TRIGGER trg_crm_track_contact');
+    const seedCall = sql.lastIndexOf('SELECT crm_contacts_seed();');
+    expect(lastTrigger).toBeGreaterThan(-1);
+    expect(seedCall).toBeGreaterThan(lastTrigger);
+  });
+
+  // A2: a pair left without a contact (skipped trigger + the other writer
+  // rolled back) gets one when a reader asks for it.
+  test('crm_contact_ensure creates a missing contact once and returns it', async () => {
+    const phone = newPhone();
+    await client.query('ALTER TABLE conversations DISABLE TRIGGER trg_crm_track_contact');
+    await insertConversation(phone);
+    await client.query('ALTER TABLE conversations ENABLE TRIGGER trg_crm_track_contact');
+    expect((await client.query('SELECT crm_contact_ref($1, $2) AS id', [sourceNumberId, phone])).rows[0].id).toBeNull();
+    const first = (await client.query('SELECT crm_contact_ensure($1, $2) AS id', [sourceNumberId, phone])).rows[0].id;
+    const second = (await client.query('SELECT crm_contact_ensure($1, $2) AS id', [sourceNumberId, phone])).rows[0].id;
+    expect(first).not.toBeNull();
+    expect(second).toBe(first);
+    expect((await client.query('SELECT crm_contact_ensure(NULL, $1) AS id', [phone])).rows[0].id).toBeNull();
   });
 });

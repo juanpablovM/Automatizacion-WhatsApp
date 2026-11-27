@@ -94,8 +94,6 @@ BEGIN
 END;
 $$;
 
-SELECT crm_contacts_seed();
-
 -- -----------------------------------------------------------------------------
 -- 3. Keep it complete
 -- -----------------------------------------------------------------------------
@@ -140,5 +138,35 @@ AFTER INSERT OR UPDATE OF source_number_id, phone_number ON handoffs
 FOR EACH ROW
 WHEN (NEW.source_number_id IS NOT NULL)
 EXECUTE FUNCTION crm_track_contact();
+
+-- crm_contact_ensure(): the contact of a pair, created when missing. A trigger
+-- whose work was skipped (lock timeout or deadlock victim while the other
+-- writer rolled back) can leave a pair without a contact; every reader that
+-- needs the contact id calls this instead of crm_contact_ref.
+CREATE OR REPLACE FUNCTION crm_contact_ensure(p_source_number_id BIGINT, p_phone TEXT)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_id BIGINT;
+BEGIN
+  IF p_source_number_id IS NULL OR p_phone IS NULL THEN
+    RETURN NULL;
+  END IF;
+  v_id := crm_contact_ref(p_source_number_id, p_phone);
+  IF v_id IS NULL THEN
+    INSERT INTO crm_contacts (source_number_id, phone_number)
+    VALUES (p_source_number_id, p_phone)
+    ON CONFLICT (source_number_id, phone_number) DO NOTHING;
+    v_id := crm_contact_ref(p_source_number_id, p_phone);
+  END IF;
+  RETURN v_id;
+END;
+$$;
+
+-- The seed runs after the triggers exist. CREATE TRIGGER holds a lock on each
+-- table until COMMIT, so a bot write either committed before it (the seed
+-- sees it) or waits and then fires the trigger: no write falls in a gap.
+SELECT crm_contacts_seed();
 
 COMMIT;

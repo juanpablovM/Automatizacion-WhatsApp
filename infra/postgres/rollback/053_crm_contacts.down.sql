@@ -12,6 +12,7 @@ DROP TRIGGER IF EXISTS trg_crm_track_contact ON leads;
 DROP TRIGGER IF EXISTS trg_crm_track_contact ON conversations;
 DROP FUNCTION IF EXISTS crm_track_contact();
 DROP FUNCTION IF EXISTS crm_contacts_seed();
+DROP FUNCTION IF EXISTS crm_contact_ensure(BIGINT, TEXT);
 DROP FUNCTION IF EXISTS crm_contact_ref(BIGINT, TEXT);
 DROP TABLE IF EXISTS crm_contacts;
 
