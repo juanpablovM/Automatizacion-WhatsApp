@@ -598,6 +598,134 @@ handoff while one is still open, after 48 h) goes back to the same seller.
 3. Rollback: both flags `false`, re-import the previous workflows, then the rollbacks
    052 → 044. Rollback 047 deletes the conversation-keyed ownership rows.
 
+### 1.3 backfill
+
+Sends every WhatsApp customer's history once, to the CRM **production** receiver,
+when 1.3 is switched on there (never the laptop dev receiver). Contract: crm-response
+§5 and crm-closed-history §2. Migration 059; operator script
+`scripts/ops/crm-backfill-1-3.sh`; dispatcher stage *Backfill* (SQL 15/16, node
+*Build Backfill Events*).
+
+**What it sends, per customer, in this order.** Each step starts only once the
+customer's earlier events were delivered or parked (a 503 keeps retrying, as always):
+
+1. `contact.upserted`.
+2. `lead.qualified` and resolved `handoff.created`, oldest first, all with
+   `"historical": true`. Leads carry `outcome` and `closed_at`; resolved handoffs carry
+   `resolved_at` and no routing key.
+3. Open `handoff.created` (`"historical": true`, no `resolved_at`): live handoffs,
+   routed as 1.2d, so one of an open lead carries the `crm_opportunity_id` the CRM
+   returned in step 2.
+4. `message.new` with `"historical": true`, in `sent_at` order.
+5. The current chat holder as `ownership.taken` with the next contact counter, if a
+   seller lease is live.
+6. `contact.state` (the state stage, once the customer is marked completed).
+
+**Outcome of a lead (S11).** ClickUp status `concretada` = `won`; `no concretada` or
+`cerrada` = `lost`, with `closed_at` = `leads.clickup_status_at` (else the lead's last
+message). No status: `open` (an opportunity) if the lead is at most 30 days older than
+the cutoff, else `lost` with `closed_at` = the lead's last message. Only `open` leads
+become opportunities.
+
+**Scope.** Customers in `CRM_EVENTS_PHONE_ALLOWLIST` (all when empty). Test phones
+(`LEAD_TEST_PHONE_NUMBERS`) are never backfilled. History is whatever existed at the
+cutoff (the moment of `--apply`); anything later is sent live. While a customer is
+pending, the live stages send nothing for them, so nothing live overtakes their history.
+
+**Prefix.** The backfill runs under a new `CRM_EVENTS_ID_PREFIX` (the delivery epoch;
+events already sent to CRM dev keep their prefix). `--apply` archives and clears the CRM
+ids the bot learned under earlier prefixes (`leads.crm_customer_id` /
+`crm_opportunity_id`, open handoffs routed to an opportunity, the contact's linked
+opportunity), so production routing never uses a dev id. The production responses fill
+them again.
+
+**Pacing.** One pass per minute: up to `CRM_EVENTS_BATCH_SIZE` customers (default 20)
+and `CRM_EVENTS_MESSAGE_BATCH_SIZE` historical messages (default 100) are enqueued, and
+up to `CRM_EVENTS_DELIVER_BATCH_SIZE` events (default 100) are delivered, so about 100
+events per minute (about an hour for 4,700 messages).
+
+#### Preconditions
+
+- The CRM confirmed its production receiver accepts `protocol_revision: "1.3"` and the
+  historical fields, and the owner approved the switch.
+- Migrations up to 059 applied; `crm-events-dispatcher` and `crm-inbound-events`
+  imported from this branch.
+- Sellers mapped to the production CRM users (*Mapping sellers*).
+- No event exists yet under the new prefix: `--apply` refuses otherwise.
+
+#### Steps
+
+1. Deactivate the `crm-events-dispatcher` workflow in n8n.
+2. Set `CRM_EVENTS_URL` (production receiver), `CRM_EVENTS_HMAC_SECRET`,
+   `CRM_EVENTS_PROTOCOL_REVISION=1.3` and a new `CRM_EVENTS_ID_PREFIX`; restart n8n.
+3. Dry run (writes nothing; counts per event type and a per-customer sample):
+
+   ```sh
+   scripts/ops/crm-backfill-1-3.sh --sample 10
+   ```
+
+4. Apply (one transaction; running it again answers `already_started`):
+
+   ```sh
+   scripts/ops/crm-backfill-1-3.sh --apply
+   ```
+
+5. Activate `crm-events-dispatcher`. Follow it with `--status` until no contact is
+   `pending`.
+
+The script reads the dispatcher's variables from the running n8n container
+(`N8N_CONTAINER`); `--config-from-env` reads them from the shell instead. It refuses to
+run unless `CRM_EVENTS_PROTOCOL_REVISION=1.3`.
+
+#### Monitoring
+
+```sh
+scripts/ops/crm-backfill-1-3.sh --status
+```
+
+```sql
+-- Customers still waiting, and why (their oldest unfinished event)
+SELECT b.contact_id, e.event_type, e.status, e.attempt_count, e.last_error
+FROM crm_contact_backfills b
+LEFT JOIN LATERAL (
+  SELECT * FROM crm_events x
+  WHERE x.contact_id = b.contact_id AND x.id_prefix = b.id_prefix AND x.status IN ('pending', 'processing')
+  ORDER BY x.id LIMIT 1
+) e ON TRUE
+WHERE b.id_prefix = '<prefix>' AND b.status = 'pending' ORDER BY b.contact_id;
+
+-- Items the builders blocked (for example a lead whose seller has no CRM user)
+SELECT kind, entity_id, contact_id, reason FROM crm_backfill_blocks WHERE id_prefix = '<prefix>';
+
+-- Parked backfill events
+SELECT event_id, event_type, last_http_status, last_error
+FROM crm_events WHERE id_prefix = '<prefix>' AND status = 'parked' ORDER BY id;
+```
+
+A parked event does not stop its customer: the next step goes on. Fix the cause and
+re-send it with the *Ops queries* statement below. A blocked item is skipped and
+stays in `crm_backfill_blocks`; the customer still completes, usually within one or two
+passes. A blocked lead whose outcome is won or lost is never sent later, not even after
+its seller is mapped, so it can never become an opportunity. A blocked open lead is
+sent live once its cause is fixed (for example mapping the seller).
+
+#### Rollback
+
+Before the CRM production receiver has data, or to go back to the previous prefix:
+
+1. Deactivate `crm-events-dispatcher`; restore the previous `CRM_EVENTS_ID_PREFIX` (and
+   receiver), restart n8n.
+2. Restore the archived CRM ids and drop the run (the live stages stop waiting; the
+   enqueued `crm_events` rows stay as history):
+
+   ```sql
+   SELECT * FROM crm_backfill_abandon('<prefix>');
+   ```
+
+3. To remove 059 itself: re-import the pre-059 `crm-events-dispatcher` first (its
+   stages call 059's functions), then apply
+   `infra/postgres/rollback/059_crm_backfill.down.sql`.
+
 ### Mapping sellers
 
 Set each seller's CRM `usuarios.id`:

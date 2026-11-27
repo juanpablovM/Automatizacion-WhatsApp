@@ -7,8 +7,11 @@
 -- outgoing seller message (or adopts the row its fromMe echo already stored)
 -- and answers 200 {event_id, result: "sent", message_id, ownership_version};
 -- 'failed' and 'unknown' answer 503. Only the attempt still 'sending' moves.
+-- It runs through crm_inbound_complete_contact_message_send() (migration 058):
+-- an intent claimed by a 1.3 message.send answers the contact counter (056)
+-- as ownership_version; every other intent gets the 041/047 answer unchanged.
 SELECT http_status, response
-FROM crm_inbound_complete_message_send(
+FROM crm_inbound_complete_contact_message_send(
   NULLIF($1::text, '')::bigint,
   NULLIF($2::text, '')::integer,
   NULLIF($3::text, ''),

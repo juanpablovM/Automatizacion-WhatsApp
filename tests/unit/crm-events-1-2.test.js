@@ -106,8 +106,8 @@ describe('readCrmEventsConfig under 1.2', () => {
   test('accepts 1.2 and still defaults to 1.1', () => {
     expect(readCrmEventsConfig(ENV_12)).toMatchObject({ errors: [], protocol_revision: '1.2' });
     expect(readCrmEventsConfig({ ...ENV_12, CRM_EVENTS_PROTOCOL_REVISION: '' }).protocol_revision).toBe('1.1');
-    expect(readCrmEventsConfig({ ...ENV_12, CRM_EVENTS_PROTOCOL_REVISION: '1.3' }).errors)
-      .toEqual(['CRM_EVENTS_PROTOCOL_REVISION_unsupported:1.3']);
+    expect(readCrmEventsConfig({ ...ENV_12, CRM_EVENTS_PROTOCOL_REVISION: '1.4' }).errors)
+      .toEqual(['CRM_EVENTS_PROTOCOL_REVISION_unsupported:1.4']);
   });
 
   test('delivers 100 events per pass under 1.2 so message bursts do not lag; 1.1 keeps 20', () => {

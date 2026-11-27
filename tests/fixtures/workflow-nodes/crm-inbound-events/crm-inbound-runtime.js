@@ -53,6 +53,21 @@ const CRM_INBOUND_HANDOFF_DATA_KEYS = ['handoff_id', 'crm_seller_id'];
 // At most 18 digits, so the id always fits a PostgreSQL bigint.
 const CRM_INBOUND_CONVERSATION_ID_PATTERN = /^wa-([a-z0-9]{1,16})-conversation-([1-9][0-9]{0,17})$/;
 const CRM_INBOUND_HANDOFF_ID_PATTERN = /^wa-([a-z0-9]{1,16})-handoff-([1-9][0-9]{0,17})$/;
+// 1.3 (customer threads, .orca/drops/whatsapp-events-1.3-crm-response.md
+// §4.1-§4.4), on when the bot speaks 1.3 (CRM_EVENTS_PROTOCOL_REVISION=1.3)
+// and the 1.2d identities are on (CRM_INBOUND_HANDOFFS_ENABLED=true). Only a
+// request with protocol_revision "1.3" takes these rules; 1.2 requests keep
+// theirs:
+//   * chat.take / chat.release / message.send carry exactly one of
+//     crm_opportunity_id, conversation_id or contact_id
+//     ("wa-<prefix>-contact-<id>"); every key acts on the customer;
+//   * contact.opportunity_linked {contact_id, crm_opportunity_id,
+//     crm_seller_id} keeps a CRM-created opportunity on the customer.
+// Feature document: odd/tasks/crm-1-3-customer-threads.md (S6-S8).
+const CRM_INBOUND_IDENTITY_KEYS_13 = ['crm_opportunity_id', 'conversation_id', 'contact_id'];
+const CRM_INBOUND_CONTACT_LINK_TYPE = 'contact.opportunity_linked';
+const CRM_INBOUND_CONTACT_LINK_DATA_KEYS = ['contact_id', 'crm_opportunity_id', 'crm_seller_id'];
+const CRM_INBOUND_CONTACT_ID_PATTERN = /^wa-([a-z0-9]{1,16})-contact-([1-9][0-9]{0,17})$/;
 
 const crmInboundConfigured = (value) => {
   const text = String(value ?? '').trim();
@@ -106,6 +121,16 @@ const readCrmHandoffsConfig = (env = {}) => {
   else if (!CRM_INBOUND_ID_PREFIX_PATTERN.test(idPrefix)) config.errors.push('CRM_EVENTS_ID_PREFIX_invalid');
   else config.id_prefix = idPrefix;
   return config;
+};
+
+// 1.3 has no switch of its own: it is on when the bot sends 1.3
+// (CRM_EVENTS_PROTOCOL_REVISION) and the 1.2d identities are on. It reuses
+// their CRM_EVENTS_ID_PREFIX: without a valid one the 1.3 paths answer 503.
+const readCrmContactsConfig = (env = {}) => {
+  const handoffs = readCrmHandoffsConfig(env);
+  const enabled = handoffs.enabled && String(env.CRM_EVENTS_PROTOCOL_REVISION ?? '').trim() === '1.3';
+  if (!enabled) return { enabled: false, id_prefix: null, errors: [] };
+  return { enabled: true, id_prefix: handoffs.id_prefix, errors: handoffs.errors };
 };
 
 const crmInboundRespond = (httpStatus, response) => ({ action: 'respond', http_status: httpStatus, response });
@@ -165,8 +190,9 @@ const crmInboundOwnId = (value, pattern, idPrefix) => {
 // (chat.take / chat.release, message.send when enabled, and the 1.2d identity
 // and closure types when enabled). Field names only: values are never echoed
 // back.
-const validateCrmInboundEnvelope = (parsed, { messageSend = false, handoffs = false } = {}) => {
+const validateCrmInboundEnvelope = (parsed, { messageSend = false, handoffs = false, contacts = false } = {}) => {
   if (!crmInboundIsObject(parsed)) return ['envelope'];
+  if (contacts && parsed.protocol_revision === '1.3') return validateCrmInboundEnvelope13(parsed, { messageSend });
   const errors = [];
   for (const key of Object.keys(parsed)) {
     if (!CRM_INBOUND_ENVELOPE_KEYS.includes(key)) errors.push(`envelope.${key}: unknown`);
@@ -217,6 +243,64 @@ const validateCrmInboundEnvelope = (parsed, { messageSend = false, handoffs = fa
   return errors;
 };
 
+// Revision 1.3 (only with the contacts switch on): the 1.2 envelope with
+// protocol_revision "1.3", the three identities and contact.opportunity_linked.
+function validateCrmInboundEnvelope13(parsed, { messageSend }) {
+  const errors = [];
+  for (const key of Object.keys(parsed)) {
+    if (!CRM_INBOUND_ENVELOPE_KEYS.includes(key)) errors.push(`envelope.${key}: unknown`);
+  }
+  for (const key of CRM_INBOUND_ENVELOPE_KEYS) if (!(key in parsed)) errors.push(`envelope.${key}: missing`);
+  if (parsed.schema_version !== 1) errors.push('envelope.schema_version');
+  if (!(typeof parsed.event_id === 'string' && CRM_INBOUND_ID_PATTERN.test(parsed.event_id))) errors.push('envelope.event_id');
+  if (!crmInboundRealInstant(parsed.occurred_at)) errors.push('envelope.occurred_at');
+  const isMessageSend = messageSend && parsed.type === CRM_INBOUND_MESSAGE_SEND_TYPE;
+  const isHandoff = CRM_INBOUND_HANDOFF_TYPES.includes(parsed.type);
+  const isLink = parsed.type === CRM_INBOUND_CONTACT_LINK_TYPE;
+  if (!CRM_INBOUND_CHAT_TYPES.includes(parsed.type) && !isMessageSend && !isHandoff && !isLink) errors.push('envelope.type: unsupported');
+  if (!crmInboundIsObject(parsed.data)) return [...errors, 'envelope.data'];
+  const data = parsed.data;
+  const contactValid = () => typeof data.contact_id === 'string' && CRM_INBOUND_CONTACT_ID_PATTERN.test(data.contact_id);
+  const uuidValid = (key) => typeof data[key] === 'string' && CRM_INBOUND_UUID_PATTERN.test(data[key]);
+  if (isHandoff) {
+    for (const key of Object.keys(data)) {
+      if (!CRM_INBOUND_HANDOFF_DATA_KEYS.includes(key)) errors.push(`data.${key}: unknown`);
+    }
+    if (!(typeof data.handoff_id === 'string' && CRM_INBOUND_ID_PATTERN.test(data.handoff_id))) errors.push('data.handoff_id');
+    if (!uuidValid('crm_seller_id')) errors.push('data.crm_seller_id');
+    return errors;
+  }
+  if (isLink) {
+    for (const key of Object.keys(data)) {
+      if (!CRM_INBOUND_CONTACT_LINK_DATA_KEYS.includes(key)) errors.push(`data.${key}: unknown`);
+    }
+    if (!contactValid()) errors.push('data.contact_id');
+    if (!uuidValid('crm_opportunity_id')) errors.push('data.crm_opportunity_id');
+    if (!uuidValid('crm_seller_id')) errors.push('data.crm_seller_id');
+    return errors;
+  }
+  const identities = CRM_INBOUND_IDENTITY_KEYS_13.filter((key) => key in data);
+  const dataKeys = [
+    ...(isMessageSend ? CRM_INBOUND_MESSAGE_SEND_DATA_KEYS : CRM_INBOUND_CHAT_DATA_KEYS), 'conversation_id', 'contact_id',
+  ];
+  for (const key of Object.keys(data)) {
+    if (!dataKeys.includes(key)) errors.push(`data.${key}: unknown`);
+  }
+  if (identities.length !== 1) {
+    errors.push('data: exactly one of crm_opportunity_id, conversation_id or contact_id');
+  } else if (identities[0] === 'contact_id') {
+    if (!contactValid()) errors.push('data.contact_id');
+  } else if (identities[0] === 'conversation_id') {
+    if (!(typeof data.conversation_id === 'string' && CRM_INBOUND_CONVERSATION_ID_PATTERN.test(data.conversation_id))) {
+      errors.push('data.conversation_id');
+    }
+  } else if (!uuidValid('crm_opportunity_id')) {
+    errors.push('data.crm_opportunity_id');
+  }
+  errors.push(...validateCrmInboundCommonData(data, isMessageSend));
+  return errors;
+}
+
 // The data rules every chat.take / chat.release / message.send shares, after
 // its identity (in this order, so the details keep their order).
 function validateCrmInboundCommonData(data, isMessageSend) {
@@ -252,13 +336,18 @@ const verifyCrmInboundRequest = ({ rawBody, headers, env, now, crypto: cryptoMod
   }
   const messageSendConfig = readCrmMessageSendConfig(env);
   const handoffsConfig = readCrmHandoffsConfig(env);
+  const contactsConfig = readCrmContactsConfig(env);
   const errors = validateCrmInboundEnvelope(parsed, {
     messageSend: messageSendConfig.enabled,
     handoffs: handoffsConfig.enabled,
+    contacts: contactsConfig.enabled,
   });
   if (errors.length > 0) return crmInboundInvalid(errors);
 
   const bodySha256 = cryptoModule.createHash('sha256').update(rawBody).digest('hex');
+  if (contactsConfig.enabled && parsed.protocol_revision === '1.3' && !CRM_INBOUND_HANDOFF_TYPES.includes(parsed.type)) {
+    return crmInboundContactAction(parsed, bodySha256, contactsConfig, messageSendConfig);
+  }
   if (CRM_INBOUND_HANDOFF_TYPES.includes(parsed.type)) {
     if (handoffsConfig.errors.length > 0) return crmInboundRespond(503, { error: 'receiver_unavailable' });
     return {
@@ -320,6 +409,38 @@ const verifyCrmInboundRequest = ({ rawBody, headers, env, now, crypto: cryptoMod
     ownership_version: String(parsed.data.ownership_version),
   };
 };
+
+// A verified 1.3 chat.take / chat.release / message.send or
+// contact.opportunity_linked: one item for Apply CRM Contact Event or Claim
+// CRM Contact Message Send. Every identity column is present ('' when absent),
+// and the numeric ids are '' when the id carries another prefix (well formed,
+// but not ours: the database answers 422).
+function crmInboundContactAction(parsed, bodySha256, contactsConfig, messageSendConfig) {
+  const isSend = parsed.type === CRM_INBOUND_MESSAGE_SEND_TYPE;
+  if (contactsConfig.errors.length > 0 || (isSend && messageSendConfig.errors.length > 0)) {
+    return crmInboundRespond(503, { error: 'receiver_unavailable' });
+  }
+  const data = parsed.data;
+  const prefix = contactsConfig.id_prefix;
+  const action = {
+    action: isSend ? 'send_contact' : 'apply_contact',
+    event_id: parsed.event_id,
+    event_type: parsed.type,
+    body_sha256: bodySha256,
+    crm_opportunity_id: typeof data.crm_opportunity_id === 'string' ? data.crm_opportunity_id.toLowerCase() : '',
+    conversation_ref: typeof data.conversation_id === 'string' ? data.conversation_id : '',
+    conversation_id: typeof data.conversation_id === 'string'
+      ? crmInboundOwnId(data.conversation_id, CRM_INBOUND_CONVERSATION_ID_PATTERN, prefix) : '',
+    contact_ref: typeof data.contact_id === 'string' ? data.contact_id : '',
+    contact_id: typeof data.contact_id === 'string'
+      ? crmInboundOwnId(data.contact_id, CRM_INBOUND_CONTACT_ID_PATTERN, prefix) : '',
+    id_prefix: prefix,
+    crm_seller_id: data.crm_seller_id.toLowerCase(),
+    ownership_version: parsed.type === CRM_INBOUND_CONTACT_LINK_TYPE ? '' : String(data.ownership_version),
+  };
+  if (!isSend) return action;
+  return { ...action, client_message_id: data.client_message_id.toLowerCase(), text: crmInboundMessageText(data.text) };
+}
 
 // One shape for the Respond node, whichever branch produced the item: a
 // validation answer, the database result, or a database failure (the Postgres
@@ -418,6 +539,7 @@ if (typeof module !== 'undefined' && module.exports) {
     readCrmInboundConfig,
     readCrmMessageSendConfig,
     readCrmHandoffsConfig,
+    readCrmContactsConfig,
     validateCrmInboundEnvelope,
     verifyCrmInboundRequest,
     shapeCrmInboundResponse,

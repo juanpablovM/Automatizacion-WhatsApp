@@ -1,5 +1,5 @@
 -- Select and route handoffs to announce to the CRM as handoff.created (stage
--- E, read side; 1.2d). Protocol revision 1.2 with CRM_EVENTS_HANDOFFS_ENABLED
+-- E, read side; 1.2d). Protocol revision 1.2 or 1.3 with CRM_EVENTS_HANDOFFS_ENABLED
 -- only: otherwise p1 is not 'true' and it returns no row and routes nothing.
 -- p1 handoffs enabled ('true'), p2 CRM_EVENTS_SINCE (ISO timestamp), p3 batch
 -- size, p4 CRM_EVENTS_PHONE_ALLOWLIST (comma-separated digits, '' = no
@@ -11,12 +11,24 @@
 -- (the same rule as leads), and either has no handoff.created event yet or
 -- its newest one was parked by 422 invalid_seller (the CRM stored nothing, so
 -- the next event, revision + 1 with the same handoff_id, goes to another
--- seller). crm_route_handoff (migration 045) routes each candidate once, in
+-- seller). crm_route_contact_handoff (migration 058: the customer's open
+-- linked opportunity, set only by a 1.3 contact.opportunity_linked, else
+-- crm_route_handoff, 045/051) routes each candidate once, in
 -- creation order, and stores the routing on the handoff; a candidate it cannot
 -- route (no eligible seller left) returns no row and stays blocked. Blocked
 -- handoffs go last so they cannot starve the batch. `revision` is only a
 -- proposal: Insert Handoff Events re-checks it under a row lock.
 -- Rows already locked by a concurrent pass are skipped.
+-- Every row also carries the handoff's contact (crm_contact_ref) and the id
+-- prefixes holding its contact.upserted; under 1.3 Build Handoff Events drops a
+-- handoff whose contact was not upserted under the current prefix yet
+-- (ordering rule). Its routing is already stored, so the next pass reuses it.
+-- Under 1.2 the builder ignores both columns.
+-- 1.3 backfill (migration 059, U8): a handoff of a contact whose backfill is
+-- still pending is not a candidate (not even routed: the backfill routes it
+-- once the customer's open lead has its opportunity); this stage has no prefix
+-- parameter, so any pending backfill counts. Without a backfill run (1.1/1.2)
+-- there is no such row.
 WITH scope AS MATERIALIZED (
   SELECT
     h.id,
@@ -31,6 +43,16 @@ WITH scope AS MATERIALIZED (
     AND h.created_at >= $2::timestamptz
     AND h.estado IN ('pending', 'notified', 'acknowledged')
     AND ($4::text = '' OR h.phone_number = ANY (string_to_array($4::text, ',')))
+    AND NOT EXISTS (
+      SELECT 1
+      FROM crm_contact_backfills b
+      JOIN crm_contacts bct ON bct.id = b.contact_id
+      WHERE b.status = 'pending'
+        AND bct.phone_number = h.phone_number
+        AND bct.source_number_id = COALESCE(
+          h.source_number_id, (SELECT hc.source_number_id FROM conversations hc WHERE hc.id = h.conversation_id)
+        )
+    )
     AND COALESCE((
       SELECT e.status = 'parked' AND e.last_error = 'http_422:invalid_seller'
       FROM crm_events e
@@ -46,7 +68,7 @@ WITH scope AS MATERIALIZED (
 routed AS MATERIALIZED (
   SELECT sc.id, r.crm_opportunity_id, r.crm_routing_seller_id
   FROM scope sc
-  CROSS JOIN LATERAL crm_route_handoff(sc.id, sc.test_seller_id) r
+  CROSS JOIN LATERAL crm_route_contact_handoff(sc.id, sc.test_seller_id) r
 )
 SELECT
   h.id AS handoff_id,
@@ -95,8 +117,19 @@ SELECT
       AND m.created_at <= h.created_at
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
-  ) AS last_customer_message
+  ) AS last_customer_message,
+  ct.contact_id,
+  (
+    SELECT string_agg(DISTINCT e.id_prefix, ',')
+    FROM crm_events e
+    WHERE e.contact_id = ct.contact_id
+      AND e.event_type = 'contact.upserted'
+      AND NOT crm_contact_backfill_pending(ct.contact_id, e.id_prefix)
+  ) AS contact_upserted_prefixes
 FROM routed ro
 JOIN handoffs h ON h.id = ro.id
+-- crm_contact_ensure: a handoff whose contact row is missing (a skipped
+-- contact trigger) gets it here, so it is delayed at most one pass, never lost.
+CROSS JOIN LATERAL (SELECT crm_contact_ensure(h.source_number_id, h.phone_number) AS contact_id) ct
 LEFT JOIN sellers s ON s.id = ro.crm_routing_seller_id
 ORDER BY h.created_at, h.id;

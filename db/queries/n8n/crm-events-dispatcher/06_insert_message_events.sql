@@ -6,7 +6,8 @@
 -- (lead_id NULL, revision 1) and clears any earlier block of that message. A
 -- blocked row is recorded in crm_message_blocks instead, so the next pass sees
 -- it last and retries it. Unique event_id and (message_id, event_type) make a
--- re-run or a concurrent pass a no-op, never a duplicate.
+-- re-run or a concurrent pass a no-op, never a duplicate. A 1.3 body's root
+-- contact_id is stored in crm_events.contact_id (NULL for 1.2 bodies).
 WITH input AS MATERIALIZED (
   SELECT x.message_id, x.event_id, x.conversation_id, x.body, NULLIF(x.blocked_reason, '') AS blocked_reason
   FROM jsonb_to_recordset(COALESCE(NULLIF($1::text, ''), '[]')::jsonb)
@@ -14,8 +15,9 @@ WITH input AS MATERIALIZED (
   JOIN messages m ON m.id = x.message_id
 ),
 inserted AS (
-  INSERT INTO crm_events (event_id, event_type, conversation_id, message_id, revision, body)
-  SELECT i.event_id, 'message.new', i.conversation_id, i.message_id, 1, i.body
+  INSERT INTO crm_events (event_id, event_type, conversation_id, message_id, revision, body, contact_id)
+  SELECT i.event_id, 'message.new', i.conversation_id, i.message_id, 1, i.body,
+         substring(i.body::jsonb ->> 'contact_id' FROM '-contact-([0-9]+)$')::bigint
   FROM input i
   WHERE i.blocked_reason IS NULL
     AND NULLIF(i.body, '') IS NOT NULL

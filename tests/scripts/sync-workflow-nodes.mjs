@@ -572,6 +572,53 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Contact Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/11_select_contact_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Contact Events",
+    "fixture": "crm-events-dispatcher/build-contact-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Contact Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/12_insert_contact_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Contact State Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/13_select_contact_state_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Contact State Events",
+    "fixture": "crm-events-dispatcher/build-contact-state-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js",
+      "shared/v3-line-items.js",
+      "shared/v3-policy-builder.js",
+      "crm-events-dispatcher/contact-state-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Contact State Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/14_insert_contact_state_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Select Lead Qualified Candidates",
     "fixture": "db/queries/n8n/crm-events-dispatcher/01_select_lead_qualified_candidates.sql",
     "type": "n8n-nodes-base.postgres",
@@ -660,6 +707,28 @@ const NODES = [
   },
   {
     "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Select Backfill Candidates",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/15_select_backfill_candidates.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Build Backfill Events",
+    "fixture": "crm-events-dispatcher/build-backfill-events.js",
+    "runtimes": [
+      "crm-events-dispatcher/crm-events-runtime.js"
+    ]
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
+    "node": "Insert Backfill Events",
+    "fixture": "db/queries/n8n/crm-events-dispatcher/16_insert_backfill_events.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-events-dispatcher.json",
     "node": "Claim CRM Events",
     "fixture": "db/queries/n8n/crm-events-dispatcher/03_claim_crm_events.sql",
     "type": "n8n-nodes-base.postgres",
@@ -735,6 +804,20 @@ const NODES = [
     "workflow": "n8n/workflows/crm-inbound-events.json",
     "node": "Apply CRM Handoff Event",
     "fixture": "db/queries/n8n/crm-inbound-events/06_apply_crm_handoff_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Apply CRM Contact Event",
+    "fixture": "db/queries/n8n/crm-inbound-events/07_apply_crm_contact_event.sql",
+    "type": "n8n-nodes-base.postgres",
+    "parameter": "query"
+  },
+  {
+    "workflow": "n8n/workflows/crm-inbound-events.json",
+    "node": "Claim CRM Contact Message Send",
+    "fixture": "db/queries/n8n/crm-inbound-events/08_claim_crm_contact_message_send.sql",
     "type": "n8n-nodes-base.postgres",
     "parameter": "query"
   },

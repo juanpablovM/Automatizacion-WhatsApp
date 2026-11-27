@@ -1,12 +1,34 @@
-// Local mirror of the CRM receiver validator for contract v1, revisions 1.1 and
-// 1.2 ("1.2a", the 1.2b ownership events and the 1.2d handoff.created, live on CRM dev). Anything the real validator rejects answers
+// Local mirror of the CRM receiver validator for contract v1, revisions 1.1,
+// 1.2 ("1.2a", the 1.2b ownership events and the 1.2d handoff.created, live on
+// CRM dev) and 1.3 (customer threads: a root contact_id on every event,
+// conversation_id only on conversation events, contact.upserted; agreed in
+// .orca/drops/whatsapp-events-1.3-crm-response.md §1-§2). Anything the real validator rejects answers
 // 400, so every event the bot builds must pass these exact rules. Returns the
 // list of violations; an empty list means the CRM would accept the shape.
+// 1.3 backfill (.orca/drops/whatsapp-events-1.3-crm-closed-history.md §2 and
+// crm-response §5): `historical: true` on lead.qualified (with outcome
+// won|lost|open and closed_at for won/lost only), message.new and
+// handoff.created (optional resolved_at; with it no routing key is required),
+// accepted only under 1.3.
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PHONE = /^\+[1-9][0-9]{7,14}$/;
 const SENT_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const isUtcTimestamp = (value) => typeof value === 'string' && SENT_AT.test(value) && !Number.isNaN(Date.parse(value));
+const HISTORICAL_KEYS = ['historical'];
+// historical must be exactly true, only under 1.3.
+const checkHistorical = (data, revision, errors) => {
+  if (!('historical' in data)) return false;
+  if (revision !== '1.3') return false;
+  if (data.historical !== true) errors.push('data.historical');
+  return data.historical === true;
+};
 const ENVELOPE_KEYS = ['schema_version', 'protocol_revision', 'event_id', 'conversation_id', 'type', 'data'];
+// 1.3: contact_id is accepted (and required) only with protocol_revision 1.3.
+const ENVELOPE_KEYS_13 = [...ENVELOPE_KEYS, 'contact_id'];
+const CONTACT_TYPES = ['contact.upserted', 'contact.state'];
+// Revisions with the 1.2 event set; 1.3 keeps every 1.2 data rule.
+const STRUCTURED = ['1.2', '1.3'];
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isText = (value, max) => typeof value === 'string'
@@ -44,9 +66,26 @@ const SITE_KEYS = ['terrain', 'truck_access', 'debris_removal', 'access_restrict
 const ITEM_KEYS = ['product', 'variant', 'quantity', 'unit', 'measurements'];
 const AI_SUMMARY_KEYS = ['lead_class', 'next_best_action', 'executive_summary', 'pain', 'scope', 'timing', 'obstacle'];
 
+// 1.3 (bot reply §2): a lead of a customer with a CRM-linked opportunity
+// carries that crm_opportunity_id.
 const validateLeadQualified = (data, revision, errors) => {
-  const allowed = revision === '1.2' ? [...LEAD_BASE_KEYS, ...LEAD_12_KEYS] : LEAD_BASE_KEYS;
-  onlyKeys(errors, 'data', data, allowed);
+  const allowed = STRUCTURED.includes(revision) ? [...LEAD_BASE_KEYS, ...LEAD_12_KEYS] : LEAD_BASE_KEYS;
+  onlyKeys(errors, 'data', data, revision === '1.3'
+    ? [...allowed, 'crm_opportunity_id', ...HISTORICAL_KEYS, 'outcome', 'closed_at'] : allowed);
+  const historical = checkHistorical(data, revision, errors);
+  if (revision === '1.3') {
+    if (!historical) {
+      for (const key of ['outcome', 'closed_at']) if (key in data) errors.push(`data.${key}: only with historical`);
+    } else if (!['won', 'lost', 'open'].includes(data.outcome)) {
+      errors.push('data.outcome');
+    } else if (data.outcome === 'open') {
+      if ('closed_at' in data) errors.push('data.closed_at: not allowed for open');
+    } else if (!isUtcTimestamp(data.closed_at)) {
+      errors.push('data.closed_at');
+    }
+  }
+  if ('crm_opportunity_id' in data && !(revision === '1.3' && typeof data.crm_opportunity_id === 'string'
+    && UUID.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');
   if (!(typeof data.lead_id === 'string' && ID.test(data.lead_id))) errors.push('data.lead_id');
   if (!(Number.isInteger(data.revision) && data.revision >= 1 && data.revision <= 2147483647)) errors.push('data.revision');
   if (!(typeof data.phone === 'string' && PHONE.test(data.phone))) errors.push('data.phone');
@@ -55,7 +94,7 @@ const validateLeadQualified = (data, revision, errors) => {
   if (!isText(data.title, 200)) errors.push('data.title');
   if (!isText(data.requirement, 16000)) errors.push('data.requirement');
   if ('rut' in data && !isText(data.rut, 32)) errors.push('data.rut');
-  if (revision !== '1.2') return;
+  if (!STRUCTURED.includes(revision)) return;
 
   for (const [key, max] of Object.entries(OPTIONAL_TEXT)) {
     if (key in data && !isText(data[key], max)) errors.push(`data.${key}`);
@@ -107,8 +146,10 @@ const validateLeadQualified = (data, revision, errors) => {
   }
 };
 
-const validateMessageNew = (data, errors) => {
-  onlyKeys(errors, 'data', data, ['message_id', 'direction', 'text', 'sent_at', 'sender', 'crm_seller_id']);
+const validateMessageNew = (data, revision, errors) => {
+  const keys = ['message_id', 'direction', 'text', 'sent_at', 'sender', 'crm_seller_id'];
+  onlyKeys(errors, 'data', data, revision === '1.3' ? [...keys, ...HISTORICAL_KEYS] : keys);
+  checkHistorical(data, revision, errors);
   if (!(typeof data.message_id === 'string' && ID.test(data.message_id))) errors.push('data.message_id');
   if (!['inbound', 'outbound'].includes(data.direction)) errors.push('data.direction');
   if (!isText(data.text, 16000)) errors.push('data.text');
@@ -148,7 +189,13 @@ const HANDOFF_KEYS = [
   'crm_opportunity_id', 'crm_seller_id', 'phone', 'name', 'postventa_type',
 ];
 const validateHandoffCreated = (data, revision, errors) => {
-  onlyKeys(errors, 'data', data, HANDOFF_KEYS);
+  onlyKeys(errors, 'data', data, revision === '1.3' ? [...HANDOFF_KEYS, ...HISTORICAL_KEYS, 'resolved_at'] : HANDOFF_KEYS);
+  const historical = checkHistorical(data, revision, errors);
+  if ('resolved_at' in data && revision === '1.3') {
+    if (!historical) errors.push('data.resolved_at: only with historical');
+    else if (!isUtcTimestamp(data.resolved_at)) errors.push('data.resolved_at');
+  }
+  const resolvedHistory = historical && 'resolved_at' in data;
   if (!(typeof data.handoff_id === 'string' && ID.test(data.handoff_id))) errors.push('data.handoff_id');
   if (!['commercial', 'operational', 'complaint'].includes(data.kind)) errors.push('data.kind');
   if ('area' in data && !['sales', 'management', 'finance', 'scheduling', 'claims'].includes(data.area)) errors.push('data.area');
@@ -156,13 +203,14 @@ const validateHandoffCreated = (data, revision, errors) => {
   if (!['urgente', 'alta', 'media', 'baja'].includes(data.priority)) errors.push('data.priority');
   if (!isText(data.description, 16000)) errors.push('data.description');
   if ('crm_opportunity_id' in data && !(typeof data.crm_opportunity_id === 'string' && UUID.test(data.crm_opportunity_id))) errors.push('data.crm_opportunity_id');
-  if (revision !== '1.2') {
+  if (!STRUCTURED.includes(revision)) {
     for (const key of ['crm_seller_id', 'phone', 'name']) if (key in data) errors.push(`data.${key}: requires 1.2`);
     return;
   }
   const hasOpportunity = 'crm_opportunity_id' in data;
   const hasSeller = 'crm_seller_id' in data;
-  if (hasOpportunity === hasSeller) errors.push('data: exactly one of crm_opportunity_id or crm_seller_id');
+  if (hasOpportunity && hasSeller) errors.push('data: exactly one of crm_opportunity_id or crm_seller_id');
+  else if (!hasOpportunity && !hasSeller && !resolvedHistory) errors.push('data: exactly one of crm_opportunity_id or crm_seller_id');
   if (hasSeller) {
     if (!(typeof data.crm_seller_id === 'string' && UUID.test(data.crm_seller_id))) errors.push('data.crm_seller_id');
     if (!(typeof data.phone === 'string' && PHONE.test(data.phone))) errors.push('data.phone');
@@ -172,24 +220,64 @@ const validateHandoffCreated = (data, revision, errors) => {
   }
 };
 
+// 1.3 contact.upserted: data {revision, phone, name}; revision a growing
+// integer, phone E.164 (required), name optional up to 200 or null.
+// contact.state (1.3, CRM response §3): the bot's state per customer.
+const CONTACT_STATES = ['ready_to_quote', 'handed_off', 'seller_held', 'qualifying', 'idle'];
+const CONTACT_STATE_KEYS = ['state_version', 'state', 'progress', 'stage', 'conversation_id', 'changed_at'];
+function validateContactState(data, errors) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) { errors.push('data: object required'); return; }
+  const keys = Object.keys(data).sort();
+  if (keys.join(',') !== [...CONTACT_STATE_KEYS].sort().join(',')) errors.push(`data: keys must be exactly ${CONTACT_STATE_KEYS.join(', ')}`);
+  if (!Number.isInteger(data.state_version) || data.state_version < 1 || data.state_version > 2147483647) errors.push('data.state_version: integer 1-2147483647');
+  if (!CONTACT_STATES.includes(data.state)) errors.push('data.state: unknown');
+  if (!Number.isInteger(data.progress) || data.progress < 0 || data.progress > 100) errors.push('data.progress: integer 0-100');
+  if (data.stage !== null && !(typeof data.stage === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(data.stage))) errors.push('data.stage: null or snake_case id');
+  if (data.state === 'idle' && data.conversation_id !== null) errors.push('data.conversation_id: null for idle');
+  if (data.conversation_id !== null && !(typeof data.conversation_id === 'string' && data.conversation_id.length > 0)) errors.push('data.conversation_id: id or null');
+  if (!(typeof data.changed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(data.changed_at))) errors.push('data.changed_at: UTC timestamp with seconds');
+}
+
+const validateContactUpserted = (data, errors) => {
+  onlyKeys(errors, 'data', data, ['revision', 'phone', 'name']);
+  if (!(Number.isInteger(data.revision) && data.revision >= 1 && data.revision <= 2147483647)) errors.push('data.revision');
+  if (!(typeof data.phone === 'string' && PHONE.test(data.phone))) errors.push('data.phone');
+  if ('name' in data && data.name !== null && !isText(data.name, 200)) errors.push('data.name');
+};
+
 const validateCrmEvent = (event) => {
   const errors = [];
   const parsed = typeof event === 'string' ? JSON.parse(event) : event;
   if (!isObject(parsed)) return ['envelope: not an object'];
-  onlyKeys(errors, 'envelope', parsed, ENVELOPE_KEYS);
-  for (const key of ENVELOPE_KEYS) if (!(key in parsed)) errors.push(`envelope.${key}: missing`);
+  const is13 = parsed.protocol_revision === '1.3';
+  const isContact = CONTACT_TYPES.includes(parsed.type);
+  onlyKeys(errors, 'envelope', parsed, is13 ? ENVELOPE_KEYS_13 : ENVELOPE_KEYS);
+  // 1.3: contact_id on every event; conversation_id on conversation events
+  // only, never on contact.*. Earlier revisions keep their rules.
+  const required = ENVELOPE_KEYS.filter((key) => !(is13 && isContact && key === 'conversation_id'));
+  if (is13) required.push('contact_id');
+  for (const key of required) if (!(key in parsed)) errors.push(`envelope.${key}: missing`);
   if (parsed.schema_version !== 1) errors.push('envelope.schema_version');
-  if (!['1.1', '1.2'].includes(parsed.protocol_revision)) errors.push('envelope.protocol_revision');
+  if (!['1.1', '1.2', '1.3'].includes(parsed.protocol_revision)) errors.push('envelope.protocol_revision');
   if (!(typeof parsed.event_id === 'string' && ID.test(parsed.event_id))) errors.push('envelope.event_id');
-  if (!(typeof parsed.conversation_id === 'string' && ID.test(parsed.conversation_id))) errors.push('envelope.conversation_id');
+  if (is13 && isContact) {
+    if ('conversation_id' in parsed) errors.push(`envelope.conversation_id: not allowed on ${parsed.type}`);
+  } else if (!(typeof parsed.conversation_id === 'string' && ID.test(parsed.conversation_id))) {
+    errors.push('envelope.conversation_id');
+  }
+  if (is13 && 'contact_id' in parsed && !(typeof parsed.contact_id === 'string' && ID.test(parsed.contact_id))) errors.push('envelope.contact_id');
   if (!isObject(parsed.data)) return [...errors, 'envelope.data'];
-  if (parsed.type === 'lead.qualified') {
+  if (isContact) {
+    if (!is13) errors.push(`${parsed.type} requires protocol_revision 1.3`);
+    if (parsed.type === 'contact.upserted') validateContactUpserted(parsed.data, errors);
+    else validateContactState(parsed.data, errors);
+  } else if (parsed.type === 'lead.qualified') {
     validateLeadQualified(parsed.data, parsed.protocol_revision, errors);
   } else if (parsed.type === 'message.new') {
-    if (parsed.protocol_revision !== '1.2') errors.push('message.new requires protocol_revision 1.2');
-    validateMessageNew(parsed.data, errors);
+    if (!STRUCTURED.includes(parsed.protocol_revision)) errors.push('message.new requires protocol_revision 1.2');
+    validateMessageNew(parsed.data, parsed.protocol_revision, errors);
   } else if (parsed.type === 'ownership.taken' || parsed.type === 'ownership.released') {
-    if (parsed.protocol_revision !== '1.2') errors.push(`${parsed.type} requires protocol_revision 1.2 in the bot`);
+    if (!STRUCTURED.includes(parsed.protocol_revision)) errors.push(`${parsed.type} requires protocol_revision 1.2 in the bot`);
     if (parsed.type === 'ownership.taken') validateOwnershipTaken(parsed.data, errors);
     else validateOwnershipReleased(parsed.data, errors);
   } else if (parsed.type === 'handoff.created') {
