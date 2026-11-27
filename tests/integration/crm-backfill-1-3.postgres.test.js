@@ -94,6 +94,12 @@ describeIntegration('CRM 1.3 backfill', () => {
   let sellerId;
   let sourceNumberId;
   let sequence = 0;
+  // Integration files run in parallel and some commit their fixtures, while
+  // crm_backfill_start and the dispatcher stages see every committed customer.
+  // Each test scopes the run and the stages to the phones it created, through
+  // the allowlist, so other files' committed rows never enter it.
+  let ownPhones = [];
+  const own = () => ownPhones.join(',');
   let delivered = [];
 
   beforeAll(async () => { await client.connect(); });
@@ -101,6 +107,7 @@ describeIntegration('CRM 1.3 backfill', () => {
 
   beforeEach(async () => {
     delivered = [];
+    ownPhones = [];
     await client.query('BEGIN');
     const { rows } = await client.query('SELECT id, code FROM conversation_statuses');
     for (const { id, code } of rows) statusIds[code] = id;
@@ -122,7 +129,9 @@ describeIntegration('CRM 1.3 backfill', () => {
 
   const nextPhone = () => {
     sequence += 1;
-    return `5695${String(1000000 + sequence).slice(-7)}`;
+    const phone = `5695${String(1000000 + sequence).slice(-7)}`;
+    ownPhones.push(phone);
+    return phone;
   };
 
   const insertConversation = async ({ phone = nextPhone(), at = '2100-05-01T00:00:00Z', status = 'active', leadId = null } = {}) => {
@@ -166,7 +175,7 @@ describeIntegration('CRM 1.3 backfill', () => {
      VALUES ($1::bigint, NOW() + INTERVAL '2 hours', 'crm', $2)`, [conversationId, sellerId],
   );
 
-  const start = async ({ prefix = PREFIX, allowlist = '', testPhones = '', cutoff = CUTOFF } = {}) => (await client.query(
+  const start = async ({ prefix = PREFIX, allowlist = own(), testPhones = '', cutoff = CUTOFF } = {}) => (await client.query(
     'SELECT * FROM crm_backfill_start($1, $2, $3, $4::timestamptz)', [prefix, allowlist, testPhones, cutoff],
   )).rows[0];
 
@@ -174,7 +183,7 @@ describeIntegration('CRM 1.3 backfill', () => {
   // One dispatcher pass, in the workflow's branch order.
   // ---------------------------------------------------------------------------
   const runContacts = async (cfg) => {
-    const { rows } = await client.query(SQL.selectContacts, [cfg.protocol_revision, SINCE, cfg.id_prefix, '', '500']);
+    const { rows } = await client.query(SQL.selectContacts, [cfg.protocol_revision, SINCE, cfg.id_prefix, own(), '500']);
     const events = rows.map((row) => {
       const built = buildContactUpsertedEvent(row, cfg);
       return { contact_id: Number(row.contact_id), revision: built.revision ?? Number(row.revision), event_id: built.event_id, body: built.body, blocked_reason: built.blocked_reason };
@@ -182,7 +191,7 @@ describeIntegration('CRM 1.3 backfill', () => {
     await client.query(SQL.insertContacts, [JSON.stringify(events)]);
   };
   const runLeads = async (cfg) => {
-    const { rows } = await client.query(SQL.selectLeads, [SINCE, '200', cfg.protocol_revision, '']);
+    const { rows } = await client.query(SQL.selectLeads, [SINCE, '200', cfg.protocol_revision, own()]);
     for (const row of rows) {
       const event = buildLeadQualifiedEvent(row, cfg);
       if (isCrmEventDeferred(event)) continue;
@@ -207,7 +216,7 @@ describeIntegration('CRM 1.3 backfill', () => {
     await client.query(SQL.insertOwnership, [JSON.stringify(events)]);
   };
   const runHandoffs = async (cfg) => {
-    const { rows } = await client.query(SQL.selectHandoffs, ['true', SINCE, '200', '', '', '']);
+    const { rows } = await client.query(SQL.selectHandoffs, ['true', SINCE, '200', own(), '', '']);
     const events = rows.map((row) => ({ row, built: buildHandoffCreatedEvent(row, cfg) }))
       .filter(({ built }) => !isCrmEventDeferred(built))
       .map(({ row, built }) => ({
@@ -224,7 +233,7 @@ describeIntegration('CRM 1.3 backfill', () => {
     return { rows, result: (await client.query(SQL.insertBackfill, [out[0].json.events_json])).rows[0] };
   };
   const runStates = async (cfg) => {
-    const { rows } = await client.query(SQL.selectStates, [cfg.protocol_revision, SINCE, cfg.id_prefix, '', '500']);
+    const { rows } = await client.query(SQL.selectStates, [cfg.protocol_revision, SINCE, cfg.id_prefix, own(), '500']);
     const out = await buildStateNode(rows.map((json) => ({ json })), envFor(cfg.id_prefix, cfg.protocol_revision));
     if (out.length > 0) await client.query(SQL.insertStates, [out[0].json.events_json]);
   };
@@ -570,7 +579,7 @@ describeIntegration('CRM 1.3 backfill', () => {
       const t = await insertConversation();
       await insertMessage(t.conversationId, { at: '2100-05-02T00:00:00Z' });
       const plan = opsSql('plan.sql')
-        .replaceAll(":'id_prefix'", `'${PREFIX}'`).replaceAll(":'allowlist'", "''")
+        .replaceAll(":'id_prefix'", `'${PREFIX}'`).replaceAll(":'allowlist'", `'${own()}'`)
         .replaceAll(":'test_phones'", `'${t.phone}'`).replaceAll(":'cutoff'", `'${CUTOFF}'`)
         .replaceAll(":'handoffs_enabled'", "'true'");
       const { rows } = await client.query(plan);
