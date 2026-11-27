@@ -599,6 +599,9 @@ const buildMessageNewEvent = (row, config = {}) => {
 // One event per row of crm_ownership_changes (migration 040): every change of
 // chat ownership advances the conversation's ownership_version, whatever caused
 // it (ClickUp, CRM, SLA expiry, customer new quote), so the CRM can order them.
+// Under 1.3 (contract §4.4, migration 056) data.version is the contact's
+// counter (row.contact_version, one per contact_id) and the event id is
+// unique per contact version: wa-<prefix>-ownership-c<contact>-v<version>.
 const CRM_OWNERSHIP_SOURCES = ['clickup', 'crm'];
 const CRM_OWNERSHIP_RELEASE_REASONS = ['seller_released', 'sla_expired', 'customer_new_quote', 'opportunity_closed'];
 const CRM_OWNERSHIP_MAX_VERSION = 2147483647;
@@ -617,7 +620,8 @@ const buildOwnershipEvent = (row, config = {}) => {
   }
   const idPrefix = config.id_prefix;
   if (typeof idPrefix !== 'string' || !CRM_ID_PREFIX_PATTERN.test(idPrefix)) return blockedCrmOwnership('id_prefix_missing', changeNumber);
-  const version = Number(row.ownership_version);
+  const perContact = config.protocol_revision === '1.3';
+  const version = Number(perContact ? row.contact_version : row.ownership_version);
   if (!Number.isSafeInteger(version) || version < 1 || version > CRM_OWNERSHIP_MAX_VERSION) {
     return blockedCrmOwnership('invalid_version', changeNumber);
   }
@@ -642,11 +646,13 @@ const buildOwnershipEvent = (row, config = {}) => {
     return blockedCrmOwnership('invalid_change_kind', changeNumber);
   }
 
-  const eventId = `wa-${idPrefix}-ownership-${conversationNumber}-v${version}`;
-  const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
-  if (![eventId, conversationId].every(isValidCrmId)) return blockedCrmOwnership('invalid_id', changeNumber);
   const contact = crmContactEnvelope(row, config);
   if (contact.blocked_reason) return blockedCrmOwnership(contact.blocked_reason, changeNumber);
+  const eventId = perContact
+    ? `wa-${idPrefix}-ownership-c${Number(row.contact_id)}-v${version}`
+    : `wa-${idPrefix}-ownership-${conversationNumber}-v${version}`;
+  const conversationId = `wa-${idPrefix}-conversation-${conversationNumber}`;
+  if (![eventId, conversationId].every(isValidCrmId)) return blockedCrmOwnership('invalid_id', changeNumber);
   const body = JSON.stringify(crmEnvelope(config, eventId, type, conversationId, contact.contact_id, data));
   return { blocked_reason: null, change_id: changeNumber, event_id: eventId, conversation_id: conversationId, body };
 };

@@ -5,8 +5,9 @@
 -- filter), p5 batch size.
 --
 -- A contact (crm_contacts, migration 053) is in scope when it has activity at
--- or after CRM_EVENTS_SINCE (a lead, handoff or conversation created, or a
--- message received or sent, since then) and, with a non-empty allowlist, its
+-- or after CRM_EVENTS_SINCE (a lead, handoff or conversation created, a
+-- message received or sent, or a chat ownership change of one of its
+-- conversations, since then) and, with a non-empty allowlist, its
 -- phone is listed (the same rule as leads). It is a candidate while it has no
 -- contact.upserted under p3 yet, or the phone or name its newest one under p3
 -- carried differs from the current ones. name is the newest live lead's
@@ -45,6 +46,13 @@ WITH scope AS MATERIALIZED (
         JOIN messages m ON m.conversation_id = c.id
         WHERE c.source_number_id = ct.source_number_id AND c.phone_number = ct.phone_number
           AND c.deleted_at IS NULL AND m.deleted_at IS NULL AND m.created_at >= $2::timestamptz
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM conversations c
+        JOIN crm_ownership_changes ch ON ch.conversation_id = c.id
+        WHERE c.source_number_id = ct.source_number_id AND c.phone_number = ct.phone_number
+          AND ch.changed_at >= $2::timestamptz
       )
     )
 ),

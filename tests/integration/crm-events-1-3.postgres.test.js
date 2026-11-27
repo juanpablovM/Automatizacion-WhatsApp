@@ -1,5 +1,5 @@
 // =============================================================================
-// CRM dispatcher under protocol revision 1.3 (U3: S2, S3, S10): the
+// CRM dispatcher under protocol revision 1.3 (U3: S2, S3, S10; U4: S5): the
 // contact.upserted stage (select 11, insert 12, migration 055), the ordering
 // rule (a contact's other 1.3 events wait for its contact.upserted under the
 // current id prefix), the root contact_id on every 1.3 body and in
@@ -347,8 +347,8 @@ describeIntegration('CRM dispatcher, revision 1.3', () => {
       await deliverAll();
       const messageId = await insertMessage(conversationId);
       await client.query(
-        `INSERT INTO crm_ownership_changes (conversation_id, ownership_version, change_kind, seller_id, source, changed_at)
-         VALUES ($1, 1, 'taken', $2, 'crm', '2100-01-03T00:00:00Z')`, [conversationId, sellerId],
+        `INSERT INTO crm_ownership_changes (conversation_id, ownership_version, change_kind, seller_id, source, changed_at, contact_id, contact_version)
+         VALUES ($1, 1, 'taken', $2, 'crm', '2100-01-03T00:00:00Z', $3, 1)`, [conversationId, sellerId, contactId],
       );
       await runMessages();
       await runOwnership();
@@ -362,7 +362,7 @@ describeIntegration('CRM dispatcher, revision 1.3', () => {
     });
 
     test('messages and ownership of a contact not upserted under this prefix are not selected', async () => {
-      const { conversationId } = await insertLead();
+      const { conversationId, contactId } = await insertLead();
       await runContacts(config('1.3', 'prodx'));
       // Announce the conversation under 'test' without a contact.upserted there.
       await client.query(
@@ -372,8 +372,8 @@ describeIntegration('CRM dispatcher, revision 1.3', () => {
       );
       await insertMessage(conversationId);
       await client.query(
-        `INSERT INTO crm_ownership_changes (conversation_id, ownership_version, change_kind, seller_id, source, changed_at)
-         VALUES ($1, 1, 'taken', $2, 'crm', '2100-01-03T00:00:00Z')`, [conversationId, sellerId],
+        `INSERT INTO crm_ownership_changes (conversation_id, ownership_version, change_kind, seller_id, source, changed_at, contact_id, contact_version)
+         VALUES ($1, 1, 'taken', $2, 'crm', '2100-01-03T00:00:00Z', $3, 1)`, [conversationId, sellerId, contactId],
       );
       expect(await runMessages()).toEqual([]);
       expect(await runOwnership()).toEqual([]);
@@ -402,6 +402,93 @@ describeIntegration('CRM dispatcher, revision 1.3', () => {
       expect(String(event.contact_id)).toBe(contactId);
       expect(JSON.parse(event.body)).toMatchObject({ protocol_revision: '1.3', contact_id: `wa-test-contact-${contactId}` });
       expect(validateCrmEvent(event.body)).toEqual([]);
+    });
+  });
+
+  // U4 (S5): under 1.3 every customer reaches the CRM. The announced gate is
+  // gone; the ordering rule (contact.upserted under the prefix first) still
+  // holds and carries the allowlist; CRM_EVENTS_SINCE is applied directly.
+  describe('every conversation under 1.3 (U4)', () => {
+    // A CRM take of a conversation-keyed chat through the tracking trigger,
+    // moved into the test window (changed_at defaults to NOW()).
+    const take = async (conversationId) => {
+      await client.query(`INSERT INTO lead_chat_ownerships (conversation_id, acquired_via) VALUES ($1, 'crm')`, [conversationId]);
+      await client.query(`UPDATE crm_ownership_changes SET changed_at = '2100-01-03T00:00:00Z' WHERE conversation_id = $1`, [conversationId]);
+    };
+
+    test('messages and ownership of a conversation never announced are sent after its contact.upserted', async () => {
+      const { conversationId, contactId } = await insertConversationOnly();
+      const messageId = await insertMessage(conversationId);
+      await take(conversationId);
+      expect(await runMessages()).toEqual([]);
+      expect(await runOwnership()).toEqual([]);
+
+      await runContacts();
+      await runMessages();
+      await runOwnership();
+      const [message] = await eventsOf("message_id = $1 AND event_type = 'message.new'", [messageId]);
+      const [ownership] = await eventsOf("event_type = 'ownership.taken' AND contact_id = $1", [contactId]);
+      for (const event of [message, ownership]) {
+        expect(event).toBeDefined();
+        expect(String(event.contact_id)).toBe(contactId);
+        expect(event.conversation_id).toBe(`wa-test-conversation-${conversationId}`);
+        expect(JSON.parse(event.body)).toMatchObject({ protocol_revision: '1.3', contact_id: `wa-test-contact-${contactId}`, conversation_id: `wa-test-conversation-${conversationId}` });
+        expect(validateCrmEvent(event.body)).toEqual([]);
+      }
+    });
+
+    test('a continuation conversation is sent under its own conversation_id (no 1.2 mapping)', async () => {
+      const { conversationId: announcedId, contactId, phone } = await insertLead();
+      const { rows: [{ id: linkedId }] } = await client.query(
+        `INSERT INTO conversations (phone_number, conversation_status_id, source_number_id, continues_conversation_id, created_at)
+         VALUES ($1, $2, $3, $4, '2100-01-02T00:00:00Z') RETURNING id`,
+        [phone, conversationStatusId, sourceNumberId, announcedId],
+      );
+      const messageId = await insertMessage(linkedId);
+      await runContacts();
+      await runMessages();
+      const [event] = await eventsOf("message_id = $1 AND event_type = 'message.new'", [messageId]);
+      expect(event.conversation_id).toBe(`wa-test-conversation-${linkedId}`);
+      expect(String(event.contact_id)).toBe(contactId);
+    });
+
+    test('a contact outside the allowlist is never sent; CRM_EVENTS_SINCE is applied', async () => {
+      const listed = await insertConversationOnly();
+      const other = await insertConversationOnly();
+      const listedMessage = await insertMessage(listed.conversationId);
+      const otherMessage = await insertMessage(other.conversationId);
+      const { rows: [{ id: oldMessage }] } = await client.query(
+        `INSERT INTO messages (conversation_id, direction, sender_type, message_type, text_body, raw_payload, created_at)
+         VALUES ($1, 'incoming', 'customer', 'text', 'old', '{}'::jsonb, '2099-06-01T00:00:00Z') RETURNING id`,
+        [listed.conversationId],
+      );
+      await take(other.conversationId);
+      await runContacts(C13, listed.phone);
+      await runMessages();
+      await runOwnership();
+      expect(await eventsOf('message_id = $1', [listedMessage])).toHaveLength(1);
+      expect(await eventsOf('message_id = $1', [otherMessage])).toHaveLength(0);
+      expect(await eventsOf('message_id = $1', [oldMessage])).toHaveLength(0);
+      expect(await eventsOf('contact_id = $1', [other.contactId])).toHaveLength(0);
+    });
+
+    test('1.2 is still gated by the announced conversation', async () => {
+      const { conversationId } = await insertConversationOnly();
+      await insertMessage(conversationId);
+      await client.query(
+        `INSERT INTO crm_ownership_changes (conversation_id, ownership_version, change_kind, seller_id, source, changed_at)
+         VALUES ($1, 1, 'taken', $2, 'crm', '2100-01-03T00:00:00Z')`, [conversationId, sellerId],
+      );
+      expect(await runMessages(C12)).toEqual([]);
+      expect(await runOwnership(C12)).toEqual([]);
+    });
+
+    test('stage 11 picks a contact whose only new activity is an ownership change (A4)', async () => {
+      const { conversationId, contactId } = await insertConversationOnly({ createdAt: '2099-06-01T00:00:00Z' });
+      expect((await runContacts()).candidates).toEqual([]);
+      await take(conversationId);
+      const { candidates } = await runContacts();
+      expect(candidates.map((row) => String(row.contact_id))).toEqual([contactId]);
     });
   });
 

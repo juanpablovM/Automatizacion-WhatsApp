@@ -76,7 +76,7 @@ const message = (overrides = {}) => ({
 });
 const ownership = (overrides = {}) => ({
   change_id: 31, conversation_id: 7, ownership_version: 2, change_kind: 'taken', source: 'crm', reason: null,
-  crm_user_id: SELLER_UUID, ...CONTACT, ...overrides,
+  crm_user_id: SELLER_UUID, contact_version: 5, ...CONTACT, ...overrides,
 });
 const handoff = (overrides = {}) => ({
   handoff_id: 77, revision: 1, conversation_id: 7, area: 'sales', motivo: 'Quiere hablar con alguien',
@@ -130,10 +130,15 @@ describe('1.3 envelope: protocol_revision "1.3" and a root contact_id (S2)', () 
     expect(validateCrmEvent(built.body)).toEqual([]);
   });
 
-  test.each(cases)('%s under 1.3 differs from 1.2 only in protocol_revision and contact_id', (_type, build) => {
+  // ownership.* also differ in event_id and data.version: under 1.3 they carry
+  // the per-contact counter (U6, S8); the 1.2 row is rebuilt with the same
+  // version so the rest of the body still compares.
+  test.each(cases)('%s under 1.3 differs from 1.2 only in protocol_revision and contact_id (ownership: also the counter id)', (_type, build) => {
     const built13 = parsed(build());
+    const isOwnership = built13.type.startsWith('ownership.');
     const config12Body = (() => {
       const { protocol_revision: _r, contact_id: _c, ...rest } = built13;
+      if (isOwnership) delete rest.event_id;
       return rest;
     })();
     expect(config12Body.data).toBeDefined();
@@ -141,11 +146,16 @@ describe('1.3 envelope: protocol_revision "1.3" and a root contact_id (S2)', () 
     const rebuilt = {
       'lead.qualified': () => buildLeadQualifiedEvent(lead(), CONFIG_12),
       'message.new': () => buildMessageNewEvent(message(), CONFIG_12),
-      'ownership.taken': () => buildOwnershipEvent(ownership(), CONFIG_12),
-      'ownership.released': () => buildOwnershipEvent(ownership({ change_kind: 'released', reason: 'seller_released', source: null }), CONFIG_12),
+      'ownership.taken': () => buildOwnershipEvent(ownership({ ownership_version: 5 }), CONFIG_12),
+      'ownership.released': () => buildOwnershipEvent(ownership({ change_kind: 'released', reason: 'seller_released', source: null, ownership_version: 5 }), CONFIG_12),
       'handoff.created': () => buildHandoffCreatedEvent(handoff(), CONFIG_12),
     }[built13.type]();
     const { protocol_revision: revision12, ...rest12 } = parsed(rebuilt);
+    if (isOwnership) {
+      expect(built13.event_id).toBe(`wa-test-ownership-c9-v${built13.data.version}`);
+      expect(rest12.event_id).toBe('wa-test-ownership-7-v5');
+      delete rest12.event_id;
+    }
     expect(revision12).toBe('1.2');
     expect(rest12).toEqual(config12Body);
   });
@@ -172,6 +182,27 @@ describe('1.3 envelope: protocol_revision "1.3" and a root contact_id (S2)', () 
       expect(buildHandoffCreatedEvent(handoff({ contact_upserted_prefixes: prefixes }), CONFIG_13).blocked_reason).toBe('contact_not_upserted');
     }
     expect(buildLeadQualifiedEvent(lead({ contact_upserted_prefixes: 'prod,test' }), CONFIG_13).blocked_reason).toBeNull();
+  });
+});
+
+describe('1.3 ownership carries the per-contact counter (S8, contract §4.4)', () => {
+  test('data.version is contact_version and the event id is unique per contact version', () => {
+    const taken = buildOwnershipEvent(ownership(), CONFIG_13);
+    expect(taken).toMatchObject({ blocked_reason: null, event_id: 'wa-test-ownership-c9-v5', conversation_id: 'wa-test-conversation-7' });
+    expect(parsed(taken).data).toEqual({ version: 5, crm_seller_id: SELLER_UUID, source: 'crm' });
+    const released = buildOwnershipEvent(ownership({ change_kind: 'released', reason: 'seller_released', contact_version: 6 }), CONFIG_13);
+    expect(parsed(released)).toMatchObject({ event_id: 'wa-test-ownership-c9-v6', data: { version: 6, reason: 'seller_released' } });
+    expect(validateCrmEvent(released.body)).toEqual([]);
+  });
+
+  test('a change without a contact counter is blocked under 1.3 and ignored by 1.2', () => {
+    for (const contactVersion of [null, undefined, 0, 'x']) {
+      expect(buildOwnershipEvent(ownership({ contact_version: contactVersion }), CONFIG_13).blocked_reason).toBe('invalid_version');
+    }
+    const under12 = buildOwnershipEvent(ownership({ contact_version: null }), CONFIG_12);
+    expect(under12).toEqual(buildOwnershipEvent(ownership(), CONFIG_12));
+    expect(under12).toMatchObject({ event_id: 'wa-test-ownership-7-v2' });
+    expect(parsed(under12).data.version).toBe(2);
   });
 });
 

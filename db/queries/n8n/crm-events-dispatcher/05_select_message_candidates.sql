@@ -4,7 +4,7 @@
 -- p1 protocol revision, p2 CRM_EVENTS_SINCE (ISO timestamp), p3 id prefix,
 -- p4 batch size.
 --
--- A message is a candidate when its conversation was already announced to the
+-- Under 1.2 a message is a candidate when its conversation was already announced to the
 -- CRM by a delivered lead.qualified or handoff.created (1.2d) event (so the CRM
 -- knows the conversation),
 -- it was created at or after CRM_EVENTS_SINCE, it is not deleted, and it has no
@@ -26,14 +26,21 @@
 -- seller, while the linked conversation has no lead of its own. Once it
 -- re-qualifies into its own lead it is a new quote and follows its own
 -- lead.qualified.
--- Under 1.3 each row also carries the contact of the conversation it is sent
--- under (crm_contact_ref) and the id prefixes holding its contact.upserted; a
--- message whose contact has no contact.upserted under p3 yet is not selected
--- (ordering rule: the contact is announced first).
+-- The announced gate and the continuation mapping above are 1.2 only.
+-- Under 1.3 (U4; feature odd/tasks/crm-1-3-customer-threads.md S5) every
+-- live conversation's messages are candidates, each sent under its own
+-- conversation: contact_id is the customer's thread, so a returning customer's
+-- new conversation needs no mapping. Each row carries the contact of its
+-- conversation (crm_contact_ensure) and the id prefixes holding its
+-- contact.upserted; a message whose contact has no contact.upserted under p3
+-- yet is not selected (ordering rule: the contact is announced first). That
+-- rule also applies CRM_EVENTS_PHONE_ALLOWLIST (the contact stage only upserts
+-- listed contacts), as the announced gate does under 1.2. CRM_EVENTS_SINCE is
+-- applied directly.
 WITH announced AS MATERIALIZED (
   SELECT DISTINCT substring(e.conversation_id FROM '-conversation-([0-9]+)$')::bigint AS conversation_id
   FROM crm_events e
-  WHERE $1::text IN ('1.2', '1.3')
+  WHERE $1::text = '1.2'
     AND e.event_type IN ('lead.qualified', 'handoff.created')
     AND e.status = 'delivered'
     AND e.conversation_id LIKE 'wa-' || $3::text || '-conversation-%'
@@ -53,6 +60,11 @@ WITH announced AS MATERIALIZED (
       WHERE own_lead.source_conversation_id = linked.id
         AND own_lead.deleted_at IS NULL
     )
+  UNION ALL
+  SELECT own.id, own.id
+  FROM conversations own
+  WHERE $1::text = '1.3'
+    AND own.deleted_at IS NULL
 )
 SELECT
   m.id AS message_id,
