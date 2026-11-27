@@ -703,9 +703,11 @@ FROM crm_events WHERE id_prefix = '<prefix>' AND status = 'parked' ORDER BY id;
 ```
 
 A parked event does not stop its customer: the next step goes on. Fix the cause and
-re-send it with the *Ops queries* statement below. A blocked item is skipped; after
-fixing it (for example mapping the seller), delete its `crm_backfill_blocks` row while
-the customer is still pending and the next pass sends it.
+re-send it with the *Ops queries* statement below. A blocked item is skipped and
+stays in `crm_backfill_blocks`; the customer still completes, usually within one or two
+passes. A blocked lead whose outcome is won or lost is never sent later, not even after
+its seller is mapped, so it can never become an opportunity. A blocked open lead is
+sent live once its cause is fixed (for example mapping the seller).
 
 #### Rollback
 

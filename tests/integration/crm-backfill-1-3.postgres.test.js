@@ -363,11 +363,34 @@ describeIntegration('CRM 1.3 backfill', () => {
   });
 
   describe('outcome rule (S11)', () => {
+    // Independent verification of U8 (B1): a won/lost lead the backfill
+    // blocked (seller not mapped) must not go out live as an opportunity once
+    // the seller is mapped.
+    test('a closed lead blocked during the backfill never becomes a live opportunity after the seller is mapped', async () => {
+      const c = await insertConversation({ at: '2100-02-01T00:00:00Z', status: 'closed' });
+      await insertLead(c.phone, c.conversationId, { at: '2100-02-01T00:00:00Z', status: 'cerrada', statusAt: '2100-02-10T00:00:00Z' });
+      await insertMessage(c.conversationId, { at: '2100-02-01T10:00:00Z' });
+      await client.query('UPDATE sellers SET crm_user_id = NULL WHERE id = $1', [sellerId]);
+      await start();
+      await passes(6);
+      expect((await backfillRow(c.contactId)).status).toBe('completed');
+      await client.query('UPDATE sellers SET crm_user_id = $2 WHERE id = $1', [sellerId, SELLER_UUID]);
+      await passes(2);
+      const data = (await eventsOf(c.contactId)).filter((e) => e.event_type === 'lead.qualified').map((e) => JSON.parse(e.body).data);
+      expect(data.every((d) => d.historical === true && d.outcome === 'lost')).toBe(true);
+    });
+
     const outcome = async (status, statusAt, createdAt, lastActivity) => (await client.query(
       `SELECT outcome, to_char(closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS closed_at
        FROM crm_backfill_lead_outcome($1, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::timestamptz)`,
       [status, statusAt, createdAt, lastActivity, CUTOFF],
     )).rows[0];
+
+    // A6: an age-cutoff loss never closes after the run's cutoff.
+    test('an age-cutoff loss closes no later than the cutoff', async () => {
+      expect(await outcome(null, null, '2100-02-01T00:00:00Z', '2100-06-03T00:00:00Z'))
+        .toEqual({ outcome: 'lost', closed_at: '2100-06-01T00:00:00Z' });
+    });
 
     test('each ClickUp status', async () => {
       expect(await outcome('concretada', '2100-03-01T00:00:00Z', '2100-02-01T00:00:00Z', '2100-04-01T00:00:00Z'))

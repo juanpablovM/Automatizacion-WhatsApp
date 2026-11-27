@@ -47,6 +47,23 @@ WITH scope AS MATERIALIZED (
           AND (e.body::jsonb #>> '{data,outcome}') IN ('won', 'lost')
       )
     )
+    -- Nor a lead the backfill blocked (for example seller_not_mapped) whose
+    -- S11 outcome at that run's cutoff is won or lost: mapping the seller later
+    -- must not send it live as an opportunity.
+    AND NOT (
+      $3::text = '1.3'
+      AND EXISTS (
+        SELECT 1
+        FROM crm_backfill_blocks b
+        JOIN crm_backfill_runs r ON r.id_prefix = b.id_prefix
+        CROSS JOIN LATERAL crm_backfill_lead_outcome(
+          l.clickup_status, l.clickup_status_at, l.created_at, crm_lead_last_activity_at(l.id), r.cutoff_at
+        ) o
+        WHERE b.kind = 'lead'
+          AND b.entity_id = l.id
+          AND o.outcome IN ('won', 'lost')
+      )
+    )
     AND CASE
       WHEN $3::text IN ('1.2', '1.3') THEN crm_lead_source_hash(l.id) IS DISTINCT FROM l.crm_checked_source_hash
       ELSE l.crm_enqueued_requirement IS DISTINCT FROM COALESCE(l.requirement, '')

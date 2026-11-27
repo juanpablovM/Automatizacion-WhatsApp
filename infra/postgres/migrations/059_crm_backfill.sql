@@ -141,7 +141,8 @@ AS $$
     CASE
       WHEN s.status_outcome IS NOT NULL THEN COALESCE(p_clickup_status_at, p_last_activity_at, p_created_at)
       WHEN p_created_at >= p_cutoff_at - INTERVAL '30 days' THEN NULL
-      ELSE COALESCE(p_last_activity_at, p_created_at)
+      -- An age-cutoff loss is decided at the cutoff, so it closes no later.
+      ELSE LEAST(COALESCE(p_last_activity_at, p_created_at), p_cutoff_at)
     END
   FROM (
     SELECT CASE lower(regexp_replace(btrim(COALESCE(p_clickup_status, '')), '\s+', ' ', 'g'))
